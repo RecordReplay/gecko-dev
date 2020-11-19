@@ -1775,10 +1775,10 @@ function reloadAndRecordTab(gBrowser) {
 
 let gFinishedRecordingWaiter;
 
-Services.ppmm.addMessageListener("RecordingSaved", {
-  async receiveMessage(msg) {
+Services.ppmm.addMessageListener("RecordingFinished", {
+  receiveMessage() {
     if (gFinishedRecordingWaiter) {
-      gFinishedRecordingWaiter(msg.data);
+      gFinishedRecordingWaiter(null);
     }
   },
 });
@@ -1786,22 +1786,27 @@ Services.ppmm.addMessageListener("RecordingSaved", {
 Services.ppmm.addMessageListener("RecordingUnusable", {
   async receiveMessage(msg) {
     if (gFinishedRecordingWaiter) {
-      gFinishedRecordingWaiter(null);
+      gFinishedRecordingWaiter(msg.data);
     }
-    const { why } = msg.data;
-    const { gBrowser } = Services.wm.getMostRecentWindow("navigator:browser");
-    gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, {
-      recordExecution: undefined,
-      newFrameloader: true,
-      remoteType: E10SUtils.WEB_REMOTE_TYPE,
-    });
-    const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-    gBrowser.loadURI(`about:replay?error=${why}`, { triggeringPrincipal });
   },
 });
 
 function waitForFinishedRecording() {
   return new Promise((resolve) => (gFinishedRecordingWaiter = resolve));
+}
+
+let gSavedRecordingWaiter;
+
+Services.ppmm.addMessageListener("RecordingSaved", {
+  async receiveMessage(msg) {
+    if (gSavedRecordingWaiter) {
+      gSavedRecordingWaiter(msg.data);
+    }
+  },
+});
+
+function waitForSavedRecording() {
+  return new Promise((resolve) => (gSavedRecordingWaiter = resolve));
 }
 
 async function reloadAndStopRecordingTab(gBrowser) {
@@ -1811,14 +1816,32 @@ async function reloadAndStopRecordingTab(gBrowser) {
   }
 
   recordReplayLog(`WaitForFinishedRecording`);
+  const unusableError = await waitForFinishedRecording();
 
-  const data = await waitForFinishedRecording();
-  if (!data) {
-    // The recording is unusable.
+  const oldURL = gBrowser.currentURI.spec;
+  const urlLoadOpts = {
+    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+    oldRecordedURL: oldURL,
+  };
+  gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, {
+    recordExecution: undefined,
+    newFrameloader: true,
+    remoteType: E10SUtils.WEB_REMOTE_TYPE,
+  });
+
+  if (unusableError) {
+    const { why } = unusableError;
+    gBrowser.loadURI(`about:replay?error=${why}`, urlLoadOpts);
     return;
   }
 
-  const recordingId = data.id;
+  // The recording has finished, so we need to navigate somewhere or else
+  // the user will be shown the tab-crash page while we wait for the recording
+  // to finish saving.
+  gBrowser.loadURI(`about:blank`, urlLoadOpts);
+
+  recordReplayLog(`WaitForSavedRecording`);
+  const recordingId = (await waitForSavedRecording()).id;
 
   // When the submitTestRecordings pref is set we don't load the viewer,
   // but show a simple page that the recording was submitted, to make things
@@ -1826,16 +1849,9 @@ async function reloadAndStopRecordingTab(gBrowser) {
   if (
     Services.prefs.getBoolPref("devtools.recordreplay.submitTestRecordings")
   ) {
-    const url = gBrowser.currentURI.spec;
-    fetch(`https://test-inbox.replay.io/${recordingId}:${url}`);
+    fetch(`https://test-inbox.replay.io/${recordingId}:${oldURL}`);
     const why = `Test recording added: ${recordingId}`;
-    const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-    gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, {
-      recordExecution: undefined,
-      newFrameloader: true,
-      remoteType: E10SUtils.WEB_REMOTE_TYPE,
-    });
-    gBrowser.loadURI(`about:replay?submitted=${why}`, { triggeringPrincipal });
+    gBrowser.loadURI(`about:replay?submitted=${why}`, urlLoadOpts);
     return;
   }
 
@@ -1869,16 +1885,7 @@ async function reloadAndStopRecordingTab(gBrowser) {
     extra += `&test=1`;
   }
 
-  const oldURL = gBrowser.currentURI.spec;
-  const url = `${viewHost}/view?id=${recordingId}${extra}`;
-
-  gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, {
-    recordExecution: undefined,
-    newFrameloader: true,
-    remoteType: E10SUtils.WEB_REMOTE_TYPE,
-  });
-  const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-  gBrowser.loadURI(url, { triggeringPrincipal, oldRecordedURL: oldURL });
+  gBrowser.loadURI(`${viewHost}/view?id=${recordingId}${extra}`, urlLoadOpts);
 }
 
 // See also aboutRecordings.js
