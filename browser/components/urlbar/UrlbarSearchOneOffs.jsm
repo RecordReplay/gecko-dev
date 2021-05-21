@@ -52,6 +52,9 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
    *   True to enable, false to disable.
    */
   enable(enable) {
+    // [Replay] Suppress one-off search suggestions in the UrlBar
+    enable = false;
+
     if (enable) {
       this.telemetryOrigin = "urlbar";
       this.style.display = "";
