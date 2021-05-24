@@ -22,6 +22,7 @@ pref("app.update.url.details", "https://replay.io");
 
 // Adding a trailing # to support appending targeted help from "Learn more" links
 pref('replay.support.baseURL', 'https://www.notion.so/Replay-Docs-56758667f53a4d51b7c6fc7a641adb02#');
+pref("startup.homepage_welcome_url", "https://replay.io/welcome-to-replay");
 
 pref('app.feedback.baseURL', 'https://www.notion.so/Join-our-community-5f13db877e3c40e6878dd92465c8203a');
 
