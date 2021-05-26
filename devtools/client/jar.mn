@@ -282,6 +282,7 @@ devtools.jar:
     skin/images/command-responsivemode.svg (themes/images/command-responsivemode.svg)
     skin/images/command-signin-fill.svg (themes/images/command-signin-fill.svg)
     skin/images/command-record-fill.svg (themes/images/command-record-fill.svg)
+    skin/images/command-record-wait.svg (themes/images/command-record-wait.svg)
     skin/images/command-stop-fill.svg (themes/images/command-stop-fill.svg)
     skin/images/command-pick.svg (themes/images/command-pick.svg)
     skin/images/command-pick-accessibility.svg (themes/images/command-pick-accessibility.svg)

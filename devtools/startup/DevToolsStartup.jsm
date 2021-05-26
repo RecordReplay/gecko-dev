@@ -1443,22 +1443,29 @@ function createRecordingButton() {
     type: "button",
     tooltiptext: "record-button.tooltiptext2",
     onClick(evt) {
-      if (getConnectionStatus() || !gHasRecordingDriver) {
+      const { target: node } = evt;
+      if (getConnectionStatus() || !gHasRecordingDriver || node.classList.contains('waiting')) {
         return;
       }
 
-      const { target: node } = evt;
       const { gBrowser } = node.ownerDocument.defaultView;
       const recording = gBrowser.selectedBrowser.hasAttribute(
         "recordExecution"
       ) || isRecordingAllTabs();
 
-      if (recording) {
-        reloadAndStopRecordingTab(gBrowser);
-      } else {
-        reloadAndRecordTab(gBrowser);
-      }
-      node.refreshStatus();
+      node.classList.add('waiting');
+      // Some sort of delay seems required to allow the chrome to update the
+      // button to show the spinner. It might be possible to lower the timeout
+      // but < 50ms was never enough but 100ms seems to be always enough.
+      setTimeout(() => {
+        if (recording) {
+          reloadAndStopRecordingTab(gBrowser);
+        } else {
+          reloadAndRecordTab(gBrowser);
+          node.classList.remove('waiting');
+        }
+        node.refreshStatus();
+      }, 100);
     },
     onCreated(node) {
       function selectedBrowserHasAttribute(attr) {
@@ -1789,6 +1796,11 @@ function reloadAndRecordTab(tabbrowser) {
 }
 
 function reloadAndClearRecordingState(browser, aboutURL = null) {
+  const recordButton = browser.ownerDocument.querySelector('#record-button');
+  if (recordButton) {
+    recordButton.classList.remove('waiting');
+  }
+
   if (isRecordingAllTabs()) {
     return;
   }

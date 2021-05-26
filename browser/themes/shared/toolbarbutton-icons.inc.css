@@ -264,12 +264,34 @@ toolbar[brighttext] {
   display: none !important;
 }
 
+@keyframes spinner {
+  0% {
+    transform: rotate(0);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
 #record-button {
   list-style-image: url("chrome://devtools/skin/images/command-record-fill.svg");
+  position: relative;
 }
 
 #record-button.recording {
   list-style-image: url("chrome://devtools/skin/images/command-stop-fill.svg");
+}
+
+#record-button.waiting {
+  list-style-image: none;
+  height: 24px;
+  width: 24px;
+  margin-inline: 16px;
+  background-image: url("chrome://devtools/skin/images/command-record-wait.svg");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  animation: spinner 1s linear infinite reverse;
 }
 
 #record-button.hidden {
