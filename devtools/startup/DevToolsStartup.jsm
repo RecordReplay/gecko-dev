@@ -79,6 +79,11 @@ ChromeUtils.defineModuleGetter(
   "PanelMultiView",
   "resource:///modules/PanelMultiView.jsm"
 );
+ChromeUtils.defineModuleGetter(
+  this,
+  "SessionStore",
+  "resource:///modules/sessionstore/SessionStore.jsm"
+);
 
 const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
 const {
@@ -1734,8 +1739,10 @@ async function updateRecordingDriver() {
 setTimeout(updateRecordingDriver, 0);
 setInterval(updateRecordingDriver, 1000 * 60 * 20);
 
-function reloadAndRecordTab(gBrowser) {
-  let url = gBrowser.currentURI.spec;
+function reloadAndRecordTab(tabbrowser) {
+  const tab = tabbrowser.selectedTab;
+  const browser = tabbrowser.selectedBrowser;
+  let url = browser.currentURI.spec;
 
   // Don't preprocess recordings if we will be submitting them for testing.
   try {
@@ -1764,15 +1771,54 @@ function reloadAndRecordTab(gBrowser) {
     remoteType = E10SUtils.WEB_REMOTE_TYPE;
   }
 
-  gBrowser.updateBrowserRemoteness(gBrowser.selectedBrowser, {
+  const state = SessionStore.getTabState(tab);
+  tabbrowser.updateBrowserRemoteness(browser, {
     recordExecution: getDispatchServer(url),
     newFrameloader: true,
     remoteType,
   });
 
-  gBrowser.loadURI(url, {
-    triggeringPrincipal: gBrowser.selectedBrowser.contentPrincipal,
+  browser.loadURI(url, {
+    triggeringPrincipal: browser.contentPrincipal,
   });
+
+  // Creating a new frameloader will destroy the tab's session history so we
+  // need to restore it, and we need to do this _after_ `loadURI` so that
+  // it doesn't add a new entry to the history.
+  SessionStore.setTabState(tab, state);
+}
+
+function reloadAndClearRecordingState(browser, aboutURL = null) {
+  if (isRecordingAllTabs()) {
+    return;
+  }
+
+  const tabbrowser = browser.getTabBrowser();
+  const tab = tabbrowser.getTabForBrowser(browser);
+
+  const contentPrincipal = browser.contentPrincipal;
+  const contentUrl = browser.currentURI.spec;
+
+  const state = SessionStore.getTabState(tab);
+  tabbrowser.updateBrowserRemoteness(browser, {
+    recordExecution: undefined,
+    newFrameloader: true,
+    remoteType: E10SUtils.WEB_REMOTE_TYPE,
+  });
+
+  if (!aboutURL) {
+    browser.loadURI(contentUrl, { triggeringPrincipal: contentPrincipal });
+  }
+
+  // Creating a new frameloader will destroy the tab's session history so we
+  // need to restore it.
+  SessionStore.setTabState(tab, state);
+
+  if (aboutURL) {
+    browser.loadURI(aboutURL, {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
+    });
+  }
 }
 
 // Return whether all tabs are automatically being recorded.
@@ -1816,32 +1862,13 @@ function onRecordingStarted(recording) {
     return browser;
   }
 
-  let oldURL;
-  let urlLoadOpts;
-
-  function clearRecordingState() {
-    if (isRecordingAllTabs()) {
-      return;
-    }
-    getBrowser().getTabBrowser().updateBrowserRemoteness(getBrowser(), {
-      recordExecution: undefined,
-      newFrameloader: true,
-      remoteType: E10SUtils.WEB_REMOTE_TYPE,
-    });
-  }
   recording.on("unusable", function(name, data) {
-    clearRecordingState();
+    const browser = getBrowser();
 
-    const { why } = data;
-    getBrowser().loadURI(`about:replay?error=${why}`, { triggeringPrincipal });
+    reloadAndClearRecordingState(browser, `about:replay?error=${data.why}`);
   });
   recording.on("finished", function(name, data) {
-    oldURL = getBrowser().currentURI.spec;
-    urlLoadOpts = { triggeringPrincipal, oldRecordedURL: oldURL };
-
-    clearRecordingState();
-    getBrowser().loadURI(oldURL, urlLoadOpts);
-
+    const browser = getBrowser();
     const recordingId = data.id;
 
     // When the submitTestRecordings pref is set we don't load the viewer,
@@ -1850,11 +1877,13 @@ function onRecordingStarted(recording) {
     if (
       Services.prefs.getBoolPref("devtools.recordreplay.submitTestRecordings")
     ) {
-      fetch(`https://test-inbox.replay.io/${recordingId}:${oldURL}`);
+      fetch(`https://test-inbox.replay.io/${recordingId}:${browser.currentURI.spec}`);
       const why = `Test recording added: ${recordingId}`;
-      getBrowser().loadURI(`about:replay?submitted=${why}`, urlLoadOpts);
+      reloadAndClearRecordingState(browser, `about:replay?submitted=${why}`);
       return;
     }
+
+    reloadAndClearRecordingState(browser);
 
     recordReplayLog(`FinishedRecording ${recordingId}`);
 
@@ -1878,7 +1907,7 @@ function onRecordingStarted(recording) {
       extra += `&test=1`;
     }
 
-    const tabbrowser = getBrowser().getTabBrowser();
+    const tabbrowser = browser.getTabBrowser();
     const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
     const tab = tabbrowser.addTab(
       `${getViewURL()}?id=${recordingId}${extra}`,
