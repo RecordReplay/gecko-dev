@@ -85,6 +85,7 @@ ChromeUtils.defineModuleGetter(
   "resource:///modules/sessionstore/SessionStore.jsm"
 );
 
+const { AboutNewTab } = ChromeUtils.import("resource:///modules/AboutNewTab.jsm");
 const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
 const {
   ContentProcessListener,
@@ -1934,6 +1935,7 @@ Services.obs.addObserver(
   "recordreplay-recording-started"
 );
 
+AboutNewTab.newTabURL = "https://replay.io/new-tab";
 Services.ppmm.loadProcessScript("resource://devtools/server/actors/replay/globals.js", true);
 
 function getViewURL() {
