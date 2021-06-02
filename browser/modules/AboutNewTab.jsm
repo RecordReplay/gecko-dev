@@ -19,9 +19,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
     "resource://gre/modules/remotepagemanager/RemotePageManagerParent.jsm",
 });
 
-// [Replay] - Set custom about:newtab url. Also set _newTabURLOverridden to
-// ensure it is preloaded by NewTabPagePreloading.jsm
-const ABOUT_URL = "https://replay.io/new-tab";
+const ABOUT_URL = "about:newtab";
 const PREF_ACTIVITY_STREAM_DEBUG = "browser.newtabpage.activity-stream.debug";
 const TOPIC_APP_QUIT = "quit-application-granted";
 const BROWSER_READY_NOTIFICATION = "sessionstore-windows-restored";
@@ -44,7 +42,7 @@ const AboutNewTab = {
   activityStreamDebug: false,
 
   _newTabURL: ABOUT_URL,
-  _newTabURLOverridden: true,
+  _newTabURLOverridden: false,
 
   /**
    * init - Initializes an instance of Activity Stream if one doesn't exist already
