@@ -1881,7 +1881,7 @@ function onRecordingStarted(recording) {
     reloadAndClearRecordingState(browser, `about:replay?error=${data.why}`);
   });
   recording.on("finished", function(name, data) {
-    const browser = getBrowser();
+    browser = getBrowser();
     const recordingId = data.id;
 
     // When the submitTestRecordings pref is set we don't load the viewer,
@@ -1899,6 +1899,15 @@ function onRecordingStarted(recording) {
     reloadAndClearRecordingState(browser);
 
     recordReplayLog(`FinishedRecording ${recordingId}`);
+  });
+
+  recording.on("saved", function(name, data) {
+    const recordingId = data.id;
+
+    // suppress launching new tab for test recordings
+    if (Services.prefs.getBoolPref("devtools.recordreplay.submitTestRecordings")) {
+      return;
+    }
 
     // Find the dispatcher to connect to.
     const dispatchAddress = getDispatchServer();
@@ -1927,6 +1936,8 @@ function onRecordingStarted(recording) {
       { triggeringPrincipal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
     );
     tabbrowser.selectedTab = tab;
+
+    recordReplayLog(`SavedRecording ${recordingId}`);
   });
 }
 
