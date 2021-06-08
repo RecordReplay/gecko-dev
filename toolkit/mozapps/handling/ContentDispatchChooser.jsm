@@ -227,6 +227,23 @@ let ContentDispatchChooserTelemetry = {
   },
 };
 
+const replaySchemeMap = {
+  library: 'https://replay.io/view'
+};
+
+function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
+  if (aURI.scheme.toLowerCase() === 'replay') {
+    const newUrl = replaySchemeMap[aURI.filePath];
+    
+    if (newUrl) {
+      const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
+      tabBrowser.loadURI(newUrl, { triggeringPrincipal: aPrincipal });
+    
+      return true;
+    }
+  }
+}
+
 class nsContentDispatchChooser {
   /**
    * Prompt the user to open an external application.
@@ -240,6 +257,11 @@ class nsContentDispatchChooser {
    * @param {BrowsingContext} [aBrowsingContext] - Context of the load.
    */
   async handleURI(aHandler, aURI, aPrincipal, aBrowsingContext) {
+    // [Replay] - Patching in support for replay:// URL Scheme
+    if (mayRedirectToReplayBrowser(aURI, aPrincipal, aBrowsingContext)) {
+      return;
+    }
+
     let callerHasPermission = this._hasProtocolHandlerPermission(
       aHandler.type,
       aPrincipal
