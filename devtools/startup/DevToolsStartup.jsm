@@ -38,6 +38,9 @@ const { XPCOMUtils } = ChromeUtils.import(
 const { getConnectionStatus, setConnectionStatusChangeCallback } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/connection.js"
 );
+const { pingTelemetry } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/telemetry.js"
+);
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -89,7 +92,6 @@ ChromeUtils.defineModuleGetter(
   "TabStateFlusher",
   "resource:///modules/sessionstore/TabStateFlusher.jsm"
 );
-
 const { AboutNewTab } = ChromeUtils.import("resource:///modules/AboutNewTab.jsm");
 const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
 const {
@@ -1459,6 +1461,8 @@ function createRecordingButton() {
         "recordExecution"
       ) || isRecordingAllTabs();
 
+      pingTelemetry('record-button', recording ? 'stop' : 'start', {recording});
+
       node.classList.add('waiting');
       // Some sort of delay seems required to allow the chrome to update the
       // button to show the spinner. It might be possible to lower the timeout
@@ -1887,6 +1891,8 @@ function onRecordingStarted(recording) {
   }
 
   recording.on("unusable", function(name, data) {
+    pingTelemetry('record-button', 'unusable', data);
+
     // Log the reason so we can see in our CI logs when something went wrong.
     console.error("Unstable recording: " + data.why);
     const browser = getBrowser();
@@ -1894,6 +1900,8 @@ function onRecordingStarted(recording) {
     reloadAndClearRecordingState(browser, `https://replay.io/browser/error?message=${data.why}`);
   });
   recording.on("finished", function(name, data) {
+    pingTelemetry('record-button', 'finished', {...data, recordingId: data.id});
+
     browser = getBrowser();
     const recordingId = data.id;
 
@@ -1915,6 +1923,8 @@ function onRecordingStarted(recording) {
   });
 
   recording.on("saved", function(name, data) {
+    pingTelemetry('record-button', 'saved', {...data, recordingId: data.id});
+
     const recordingId = data.id;
 
     // suppress launching new tab for test recordings
@@ -1922,33 +1932,37 @@ function onRecordingStarted(recording) {
       return;
     }
 
-    // Find the dispatcher to connect to.
-    const dispatchAddress = getDispatchServer();
+    try {
+      // Find the dispatcher to connect to.
+      const dispatchAddress = getDispatchServer();
 
-    let extra = "";
+      let extra = "";
 
-    // Specify the dispatch address if it is not the default.
-    if (dispatchAddress != "wss://dispatch.replay.io") {
-      extra += `&dispatch=${dispatchAddress}`;
+      // Specify the dispatch address if it is not the default.
+      if (dispatchAddress != "wss://dispatch.replay.io") {
+        extra += `&dispatch=${dispatchAddress}`;
+      }
+
+      // For testing, allow specifying a test script to load in the tab.
+      const localTest = env.get("RECORD_REPLAY_LOCAL_TEST");
+      if (localTest) {
+        extra += `&test=${localTest}`;
+      } else if (!isAuthenticationEnabled()) {
+        // Adding this urlparam disables checks in the devtools that the user has
+        // permission to view the recording.
+        extra += `&test=1`;
+      }
+
+      const tabbrowser = browser.getTabBrowser();
+      const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
+      const tab = tabbrowser.addTab(
+        `${getViewURL()}?id=${recordingId}${extra}`,
+        { triggeringPrincipal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
+      );
+      tabbrowser.selectedTab = tab;
+    } catch (e) {
+      pingTelemetry('record-button', 'save-error', {...data, recordingId: data.id, error: e});
     }
-
-    // For testing, allow specifying a test script to load in the tab.
-    const localTest = env.get("RECORD_REPLAY_LOCAL_TEST");
-    if (localTest) {
-      extra += `&test=${localTest}`;
-    } else if (!isAuthenticationEnabled()) {
-      // Adding this urlparam disables checks in the devtools that the user has
-      // permission to view the recording.
-      extra += `&test=1`;
-    }
-
-    const tabbrowser = browser.getTabBrowser();
-    const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
-    const tab = tabbrowser.addTab(
-      `${getViewURL()}?id=${recordingId}${extra}`,
-      { triggeringPrincipal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
-    );
-    tabbrowser.selectedTab = tab;
 
     recordReplayLog(`SavedRecording ${recordingId}`);
   });

@@ -13,6 +13,7 @@ DevToolsModules(
     'connection.js',
     'globals.js',
     'module.js',
+    'telemetry.js',
 )
 
 XPIDL_MODULE = 'devtools_rr'

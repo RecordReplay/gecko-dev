@@ -44,3 +44,7 @@ pref("browser.urlbar.suggest.searches",             false);
 pref("browser.urlbar.suggest.topsites",             false);
 pref("browser.urlbar.suggest.engines",              false);
 pref("browser.urlbar.suggest.quicksuggest",         false);
+
+// Telemetry
+pref('replay.telemetry.url', 'https://telemetry.replay.io');
+pref('replay.telemetry.enabled', true);
