@@ -227,8 +227,18 @@ let ContentDispatchChooserTelemetry = {
   },
 };
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  MigrationUtils: "resource:///modules/MigrationUtils.jsm",
+});
+
 const replaySchemeMap = {
-  library: 'https://replay.io/view'
+  library: 'https://replay.io/view',
+  migrate: (uri, principal, browsingContext) => {
+    const win = browsingContext.topFrameElement.getTabBrowser().owerGlobal;
+    MigrationUtils.showMigrationWizard(win, [
+      MigrationUtils.MIGRATION_ENTRYPOINT_UNKNOWN,
+    ]);
+  },
 };
 
 function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
@@ -236,9 +246,13 @@ function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
     const newUrl = replaySchemeMap[aURI.filePath];
     
     if (newUrl) {
-      const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
-      tabBrowser.loadURI(newUrl, { triggeringPrincipal: aPrincipal });
-    
+      if (typeof newUrl === 'function') {
+        newUrl(aURI, aPrincipal, aBrowsingContext);
+      } else if (typeof newURL === 'string') {
+        const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
+        tabBrowser.loadURI(newUrl, { triggeringPrincipal: aPrincipal });
+      }
+
       return true;
     }
   }
