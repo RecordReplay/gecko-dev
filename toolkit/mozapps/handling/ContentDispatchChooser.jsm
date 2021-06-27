@@ -248,7 +248,7 @@ function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
     if (newUrl) {
       if (typeof newUrl === 'function') {
         newUrl(aURI, aPrincipal, aBrowsingContext);
-      } else if (typeof newURL === 'string') {
+      } else if (typeof newUrl === 'string') {
         const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
         tabBrowser.loadURI(newUrl, { triggeringPrincipal: aPrincipal });
       }
