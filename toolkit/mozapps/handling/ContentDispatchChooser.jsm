@@ -231,8 +231,10 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   MigrationUtils: "resource:///modules/MigrationUtils.jsm",
 });
 
+// [Replay] - Mapping of replay: URL scheme values to destinations. Can either
+// be a URL or a function which invokes arbitrary browser-chrome functionality
 const replaySchemeMap = {
-  library: 'https://replay.io/view',
+  library: 'https://app.replay.io/',
   migrate: (uri, principal, browsingContext) => {
     const win = browsingContext.topFrameElement.getTabBrowser().owerGlobal;
     MigrationUtils.showMigrationWizard(win, [
