@@ -4,7 +4,8 @@ mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/rr-opt
 mk_add_options MOZ_MAKE_FLAGS="-j12"
 mk_add_options AUTOCLOBBER=1
 
-ac_add_options --with-macos-sdk=$topsrcdir/MacOSX10.12.sdk
+ac_add_options --target=x86_64-apple-darwin
+ac_add_options --with-macos-sdk=$topsrcdir/MacOSX11.1.sdk
 ac_add_options --with-branding=browser/branding/recordreplay
 ac_add_options --with-app-name=replay
 ac_add_options --with-app-basename=Replay

@@ -194,7 +194,8 @@ class OSXBootstrapper(BaseBootstrapper):
                 "Bootstrap is not supported on Apple Silicon yet.\n"
                 "Please see instructions at https://bit.ly/36bUmEx in the meanwhile"
             )
-            sys.exit(1)
+            # [Replay] - Seems to build okay with 11.1 SDK Headers as of 7/9/2021
+            # sys.exit(1)
 
         self.minor_version = version.split(".")[1]
 

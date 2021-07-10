@@ -164,9 +164,8 @@ lextab.py
 !.vscode/extensions.json
 !.vscode/tasks.json
 
-MacOSX10.11.sdk
-MacOSX10.12.sdk
-MacOSX10.12.sdk.tar.xz
+MacOSX*.sdk
+MacOSX*.sdk.tar.xz
 wr-opt/
 
 # Ignore various raptor performance framework files
