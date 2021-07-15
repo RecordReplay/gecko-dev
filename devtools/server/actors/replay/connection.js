@@ -184,10 +184,16 @@ class Recording extends EventEmitter {
   }
 
   async _onFinished(data) {
+    const recordingMetadata = {
+      id: data.id,
+      url: data.url,
+      title: data.title,
+      duration: data.duration,
+    };
     try {
       const authId = getLoggedInUserAuthId();
 
-      this.emit("finished", data);
+      this.emit("finished", recordingMetadata);
 
       // Upload the metadata without the screenshot earlier to unblock the
       // upload screen
@@ -196,7 +202,7 @@ class Recording extends EventEmitter {
         recordingData: {...data, lastScreenData: "", lastScreenMimeType: ""},
       });
 
-      this.emit("saved", data);
+      this.emit("saved", recordingMetadata);
 
       // If we locked the recording because of sourcemaps, we should wait
       // that the lock to be initialized before emitting the event so that
