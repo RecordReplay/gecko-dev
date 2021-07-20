@@ -20,12 +20,68 @@ const { CryptoUtils } = ChromeUtils.import(
   "resource://services-crypto/utils.js"
 );
 
+const { pingTelemetry } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/telemetry.js"
+);
+
+ChromeUtils.defineModuleGetter(
+  this,
+  "TabStateFlusher",
+  "resource:///modules/sessionstore/TabStateFlusher.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
+  "SessionStore",
+  "resource:///modules/sessionstore/SessionStore.jsm"
+);
+
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppUpdater: "resource:///modules/AppUpdater.jsm",
+  E10SUtils: "resource://gre/modules/E10SUtils.jsm",
 });
 
 let updateStatusCallback = null;
 let connectionStatus = "cloudConnecting.label";
+
+function getenv(name) {
+  const env = Cc["@mozilla.org/process/environment;1"].getService(
+    Ci.nsIEnvironment
+  );
+  return env.get(name);
+}
+
+function setenv(name, value) {
+  const env = Cc["@mozilla.org/process/environment;1"].getService(
+    Ci.nsIEnvironment
+  );
+  return env.set(name, value);
+}
+
+// Return whether all tabs are automatically being recorded.
+function isRecordingAllTabs() {
+  return getenv("RECORD_ALL_CONTENT")
+      || Services.prefs.getBoolPref("devtools.recordreplay.alwaysRecord");
+}
+
+// See also GetRecordReplayDispatchServer in ContentParent.cpp
+function getDispatchServer() {
+  const address = getenv("RECORD_REPLAY_SERVER");
+  if (address) {
+    return address;
+  }
+  return Services.prefs.getStringPref("devtools.recordreplay.cloudServer");
+}
+
+function getViewURL() {
+  let viewHost = "https://replay.io";
+
+  // For testing, allow overriding the host for the view page.
+  const hostOverride = getenv("RECORD_REPLAY_VIEW_HOST");
+  if (hostOverride) {
+    viewHost = hostOverride;
+  }
+  return `${viewHost}/view`;
+}
 
 function setConnectionStatusChangeCallback(callback) {
   updateStatusCallback = callback;
@@ -44,15 +100,7 @@ gWorker.addEventListener("message", (evt) => {
   }
 });
 
-let address = Services.prefs.getStringPref(
-  "devtools.recordreplay.cloudServer"
-);
-
-const override = getenv("RECORD_REPLAY_SERVER");
-if (override) {
-  address = override;
-}
-
+const address = getDispatchServer();
 const gMainChannelId = 1;
 gWorker.postMessage({ kind: "openChannel", id: gMainChannelId, address });
 
@@ -68,13 +116,6 @@ function onMessage(evt) {
       onCommandResponse(evt.data.msg);
       break;
   }
-}
-
-function getenv(name) {
-  const env = Cc["@mozilla.org/process/environment;1"].getService(
-    Ci.nsIEnvironment
-  );
-  return env.get(name);
 }
 
 // Map recording process ID to information about its upload progress.
@@ -238,6 +279,322 @@ class Recording extends EventEmitter {
 
     this.emit("unusable", data);
   }
+}
+
+const RecordingState = {
+  READY: 0,
+  STARTING: 1,
+  RECORDING: 2,
+  STOPPING: 3
+};
+
+const recordings = new Map();
+
+function getRecordingKey(browser) {
+  return browser.frameLoader;
+}
+
+function getRecordingBrowser(key) {
+  return key.ownerElement;
+}
+
+function setRecordingState(key, state) {
+  recordings.set(key, {
+    state
+  });
+
+  Services.obs.notifyObservers({
+    browser: getRecordingBrowser(key),
+    state
+  }, "recordreplay-recording-changed");
+}
+
+function getRecordingState(browser) {
+  const {state} = recordings.get(getRecordingKey(browser)) || {state: RecordingState.READY};
+
+  return state;
+}
+
+// If an action invalidates the key (like updateBrowserRemoteness), we need to
+// remap the state from the old key to the new key.
+function remapRecordingState(browser, key) {
+  const newKey = getRecordingKey(browser);
+
+  if (recordings.has(key)) {
+    const entry = recordings.get(key);
+    recordings.delete(key);
+    recordings.set(newKey, entry);
+  }
+
+  return newKey;
+}
+
+function isRecording(browser) {
+  const {state} = getRecordingState(getRecordingKey(browser));
+
+  return state === RecordingState.RECORDING || browser.hasAttribute(
+    "recordExecution"
+  ) || isRecordingAllTabs();
+}
+
+function toggleRecording(browser) {
+  const key = getRecordingKey(browser);
+
+  let state = RecordingState.READY;
+  if (recordings.has(key)) {
+    state = recordings.get(key).state;
+  } else {
+    recordings.set(key, {
+      state: RecordingState.READY
+    });
+  }
+
+  // Some sort of delay seems required to allow the chrome to update the
+  // button to show the spinner. It might be possible to lower the timeout
+  // but < 50ms was never enough but 100ms seems to be always enough.
+  if (state === RecordingState.READY) {
+    pingTelemetry('recording', 'start');
+    setRecordingState(key, RecordingState.STARTING);
+    setTimeout(() => startRecording(browser), 100);
+  } else if (state === RecordingState.RECORDING) {
+    pingTelemetry('recording', 'stop');
+    setRecordingState(key, RecordingState.STOPPING);
+    setTimeout(() => stopRecording(browser), 100);
+  }
+}
+
+async function startRecording(browser) {    
+  let key = getRecordingKey(browser);
+  const {state} = recordings.get(key) || {};
+
+  if (!browser || state !== RecordingState.STARTING) {
+    setRecordingState(key, RecordingState.READY);
+    return;
+  }
+
+  const tabbrowser = browser.getTabBrowser();
+  const tab = tabbrowser.selectedTab;
+
+  let url = browser.currentURI.spec;
+
+  // Don't preprocess recordings if we will be submitting them for testing.
+  try {
+    if (
+      Services.prefs.getBoolPref("devtools.recordreplay.submitTestRecordings")
+    ) {
+      setenv("RECORD_REPLAY_DONT_PROCESS_RECORDINGS", "1");
+    }
+  } catch (e) {}
+
+  // The recording process uses this env var when printing out the recording ID.
+  setenv("RECORD_REPLAY_URL", url);
+
+  let remoteType = E10SUtils.getRemoteTypeForURI(
+    url,
+    /* aMultiProcess */ true,
+    /* aRemoteSubframes */ false,
+    /* aPreferredRemoteType */ undefined,
+    /* aCurrentUri */ null
+  );
+  if (
+    remoteType != E10SUtils.WEB_REMOTE_TYPE &&
+    remoteType != E10SUtils.FILE_REMOTE_TYPE
+  ) {
+    url = "about:blank";
+    remoteType = E10SUtils.WEB_REMOTE_TYPE;
+  }
+
+  // Before reading the tab state, we need to be sure that the parent process
+  // has full session state. The user (or more likely automated tests), could
+  // easily have begin recording while the initial page was still loading,
+  // in which case the parent may not have initialized the session fully yet.
+  await TabStateFlusher.flush(browser);
+
+  const tabState = SessionStore.getTabState(tab);
+  tabbrowser.updateBrowserRemoteness(browser, {
+    recordExecution: getDispatchServer(url),
+    newFrameloader: true,
+    remoteType,
+  });
+
+  browser.loadURI(url, {
+    triggeringPrincipal: browser.contentPrincipal,
+  });
+
+  // Creating a new frameloader will destroy the tab's session history so we
+  // need to restore it, and we need to do this _after_ `loadURI` so that
+  // it doesn't add a new entry to the history.
+  SessionStore.setTabState(tab, tabState);
+
+  key = remapRecordingState(browser, key);
+  setRecordingState(key, RecordingState.RECORDING);
+}
+
+function stopRecording(browser) {
+  const key = getRecordingKey(browser);
+  const {state} = recordings.get(key) || {};
+  
+  if (!browser || state !== RecordingState.STOPPING)  {
+    setRecordingState(key, RecordingState.READY);
+    return;
+  }
+
+  const remoteTab = browser.frameLoader.remoteTab;
+  if (!remoteTab || !remoteTab.finishRecording()) {
+    setRecordingState(key, RecordingState.READY);
+    return;
+  }
+
+  ChromeUtils.recordReplayLog(`WaitForFinishedRecording`);
+}
+
+function setRecordingFinished(browser, url) {
+  const key = getRecordingKey(browser);
+
+  if (isRecordingAllTabs()) {
+    return;
+  }
+
+  const tabbrowser = browser.getTabBrowser();
+  const tab = tabbrowser.getTabForBrowser(browser);
+  const contentPrincipal = browser.contentPrincipal;
+
+  const state = SessionStore.getTabState(tab);
+  tabbrowser.updateBrowserRemoteness(browser, {
+    recordExecution: undefined,
+    newFrameloader: true,
+    remoteType: E10SUtils.WEB_REMOTE_TYPE,
+  });
+
+  if (!url) {
+    const contentUrl = browser.currentURI.spec;
+
+    browser.loadURI(contentUrl, { triggeringPrincipal: contentPrincipal });
+  }
+
+  // Creating a new frameloader will destroy the tab's session history so we
+  // need to restore it.
+  SessionStore.setTabState(tab, state);
+
+  if (url) {
+    browser.loadURI(url, {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
+    });
+  }
+
+  remapRecordingState(browser, key);
+}
+
+function setRecordingSaved(browser, recordingId) {
+  // suppress launching new tab for test recordings
+  if (Services.prefs.getBoolPref("devtools.recordreplay.submitTestRecordings")) {
+    return;
+  }
+
+  // Find the dispatcher to connect to.
+  const dispatchAddress = getDispatchServer();
+  const key = getRecordingKey(browser);
+
+  let extra = "";
+
+  // Specify the dispatch address if it is not the default.
+  if (dispatchAddress != "wss://dispatch.replay.io") {
+    extra += `&dispatch=${dispatchAddress}`;
+  }
+
+  // For testing, allow specifying a test script to load in the tab.
+  const localTest = getenv("RECORD_REPLAY_LOCAL_TEST");
+  if (localTest) {
+    extra += `&test=${localTest}`;
+  } else if (!isAuthenticationEnabled()) {
+    // Adding this urlparam disables checks in the devtools that the user has
+    // permission to view the recording.
+    extra += `&test=1`;
+  }
+
+  const tabbrowser = browser.getTabBrowser();
+  const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
+  const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
+  const tab = tabbrowser.addTab(
+    `${getViewURL()}?id=${recordingId}${extra}`,
+    { triggeringPrincipal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
+  );
+  tabbrowser.selectedTab = tab;
+
+  // defer setting the state until the end so that the new tab has opened before the spinner disappears.
+  setRecordingState(key, RecordingState.READY);
+}
+
+function handleRecordingStarted(pmm) {
+  const recording = new Recording(pmm);
+
+  // There can occasionally be times when the browser isn't found when the
+  // recording begins, so we lazily look it up the first time it is needed.
+  let _browser = null;
+  function getBrowser() {
+    for (let frameLoader of recordings.keys()) {
+      if (frameLoader.remoteTab && frameLoader.remoteTab.osPid === pmm.osPid) {
+        _browser = frameLoader.ownerElement;
+        break;
+      }
+    }
+    return _browser;
+  }
+
+  recording.on("unusable", function(name, data) {
+    pingTelemetry('recording', 'unusable', data);
+
+    // Log the reason so we can see in our CI logs when something went wrong.
+    console.error("Unstable recording: " + data.why);
+    const browser = getBrowser();
+    const key = getRecordingKey(browser);
+
+    setRecordingFinished(browser, `https://replay.io/browser/error?message=${data.why}`);
+    setRecordingState(key, RecordingState.READY);
+  });
+
+  recording.on("finished", function(name, data) {
+    const recordingId = data.id;
+
+    pingTelemetry('recording', 'finished', {...data, recordingId});
+
+    try {
+      const browser = getBrowser();
+      let url;
+
+      // When the submitTestRecordings pref is set we don't load the viewer,
+      // but show a simple page that the recording was submitted, to make things
+      // simpler for QA and provide feedback that the pref was set correctly.
+      if (
+        Services.prefs.getBoolPref("devtools.recordreplay.submitTestRecordings")
+      ) {
+        fetch(`https://test-inbox.replay.io/${recordingId}:${browser.currentURI.spec}`);
+        const why = `Test recording added: ${recordingId}`;
+        url = `about:replay?submitted=${why}`;
+      }
+
+      setRecordingFinished(browser, url);
+    } catch (e) {
+      pingTelemetry('recording', 'finished-error', {...data, recordingId, error: e});
+    }
+
+    ChromeUtils.recordReplayLog(`FinishedRecording ${recordingId}`);
+  });
+
+  recording.on("saved", function(name, data) {
+    const recordingId = data.id;
+
+    pingTelemetry('recording', 'saved', {...data, recordingId});
+    
+    try {
+      const browser = getBrowser();
+      setRecordingSaved(browser, recordingId);
+    } catch (e) {
+      pingTelemetry('recording', 'save-error', {...data, recordingId, error: e});
+    }
+
+    ChromeUtils.recordReplayLog(`SavedRecording ${recordingId}`);
+  });
 }
 
 function uploadSourceMap(
@@ -497,9 +854,9 @@ class CommandError extends Error {
 
 Services.ppmm.addMessageListener("RecordingStarting", {
   receiveMessage(msg) {
-    Services.obs.notifyObservers(new Recording(msg.target), "recordreplay-recording-started");
+    handleRecordingStarted(msg.target);
   },
 });
 
 // eslint-disable-next-line no-unused-vars
-var EXPORTED_SYMBOLS = ["setConnectionStatusChangeCallback", "getConnectionStatus"];
+var EXPORTED_SYMBOLS = ["setConnectionStatusChangeCallback", "getConnectionStatus", "getDispatchServer", "isRecordingAllTabs", "isRecording", "toggleRecording", "getRecordingState", "RecordingState"];
