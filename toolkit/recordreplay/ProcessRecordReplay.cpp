@@ -68,6 +68,7 @@ static InfallibleVector<JSFilter> gExecutionAsserts;
 static InfallibleVector<JSFilter> gJSAsserts;
 
 static void (*gAttach)(const char* dispatch, const char* buildId);
+static void (*gSetApiKey)(const char* apiKey);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
 static void (*gRecordReplayBytes)(const char* why, void* buf, size_t size);
@@ -219,6 +220,18 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   }
   MOZ_RELEASE_ASSERT(dispatchAddress.isSome());
 
+  Maybe<std::string> apiKey;
+  const char* val = getenv("RECORD_REPLAY_API_KEY");
+  if (val) {
+    apiKey.emplace(val);
+    // Unsetting the env var will make the variable unavailable via
+    // getenv and such, and also mutates the 'environ' global, so
+    // by the time gAttach runs, it will have no idea that this value
+    // existed and won't capture it in the recording itself, which
+    // is ideal for security.
+    MOZ_RELEASE_ASSERT(!unsetenv("RECORD_REPLAY_API_KEY"));
+  }
+
   gDriverHandle = OpenDriverHandle();
   if (!gDriverHandle) {
     fprintf(stderr, "Loading driver failed, crashing.\n");
@@ -226,6 +239,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   }
 
   LoadSymbol("RecordReplayAttach", gAttach);
+  LoadSymbol("RecordReplaySetApiKey", gSetApiKey);
   LoadSymbol("RecordReplayRecordCommandLineArguments",
              gRecordCommandLineArguments);
   LoadSymbol("RecordReplayValue", gRecordReplayValue);
@@ -261,6 +275,10 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplaySetCrashReasonCallback", gSetCrashReasonCallback);
   LoadSymbol("RecordReplayInvalidateRecording", gInvalidateRecording);
   LoadSymbol("RecordReplaySetCrashNote", gSetCrashNote, /* aOptional */ true);
+
+  if (apiKey) {
+    gSetApiKey(apiKey->c_str());
+  }
 
   char buildId[128];
   snprintf(buildId, sizeof(buildId), "%s-gecko-%s", GetPlatformKind(), PlatformBuildID());
