@@ -92,45 +92,114 @@ function getConnectionStatus() {
 }
 
 const gWorker = new Worker("connection-worker.js");
-gWorker.addEventListener("message", (evt) => {
+gWorker.addEventListener("message", ({ data }) => {
   try {
-    onMessage(evt);
+    switch (data.kind) {
+      case "stateChange": {
+        const { channelId, state } = data;
+        gSockets.get(channelId)?._onStateChange(state);
+        break;
+      }
+      case "commandResponse": {
+        const { channelId, commandId, result, error } = data;
+        gSockets.get(channelId)?._onCommandResponse(commandId, result, error);
+        break;
+      }
+    }
   } catch (e) {
     ChromeUtils.recordReplayLog(`RecordReplaySocketError ${e} ${e.stack}`);
   }
 });
 
-const address = getDispatchServer();
-const gMainChannelId = 1;
-gWorker.postMessage({ kind: "openChannel", id: gMainChannelId, address });
+let gChannelId = 1;
+const gSockets = new Map();
 
-function onMessage(evt) {
-  switch (evt.data.kind) {
-    case "updateStatus":
-      connectionStatus = evt.data.status;
-      if (updateStatusCallback) {
-        updateStatusCallback(connectionStatus);
-      }
-      break;
-    case "commandResponse":
-      onCommandResponse(evt.data.msg);
-      break;
+class ProtocolSocket {
+  constructor(address) {
+    this._channelId = gChannelId++;
+    this._state = "connecting";
+    this._onStateChangeCallback = null;
+    this._commandId = 1;
+    this._handlers = new Map();
+
+    gWorker.postMessage({ kind: "openChannel", channelId: this._channelId, address });
+    gSockets.set(this._channelId, this);
+  }
+
+  get onStateChange() {
+    return this._onStateChangeCallback;
+  }
+
+  set onStateChange(callback) {
+    this._onStateChangeCallback = callback;
+    this._notifyStateChange();
+  }
+
+  _onStateChange(state) {
+    this._state = state;
+    this._notifyStateChange();
+  }
+  _notifyStateChange() {
+    this._onStateChangeCallback?.(this._state);
+  }
+
+  _onCommandResponse(commandId, result, error) {
+    const resolve = this._handlers.get(commandId);
+    this._handlers.delete(commandId);
+    resolve({ result, error });
+  }
+
+  async sendCommand(method, params) {
+    const commandId = this._commandId++;
+    gWorker.postMessage({ kind: "sendCommand", channelId: this._channelId, commandId, method, params });
+    const response = await new Promise(resolve => this._handlers.set(commandId, resolve));
+
+    if (response.error) {
+      throw new CommandError(response.error.message, response.error.code);
+    }
+
+    return response.result;
+  }
+
+  close() {
+    gSockets.delete(this._channelId);
+    gWorker.postMessage({ kind: "closeChannel", channelId: this._channelId });
   }
 }
 
-// Map recording process ID to information about its upload progress.
-const gRecordings = new Map();
+const gCommandSocket = new ProtocolSocket(getDispatchServer());
+gCommandSocket.onStateChange = state => {
+  let label;
+  switch (state) {
+    case "open":
+      label = "";
+      break;
+    case "connecting":
+      label = "cloudConnecting.label";
+      break;
+    case "error":
+      label = "cloudError.label";
+      break;
+    case "close":
+      label = "";
+      break;
+  }
 
-let gNextMessageId = 1;
+  connectionStatus = label;
+  if (updateStatusCallback) {
+    updateStatusCallback(connectionStatus);
+  }
+}
 
-function sendCommand(method, params = {}) {
-  const id = gNextMessageId++;
-  gWorker.postMessage({
-    kind: "sendCommand",
-    id: gMainChannelId,
-    command: { id, method, params },
-  });
-  return waitForCommandResult(id);
+async function sendCommand(method, params) {
+  return gCommandSocket.sendCommand(method, params);
+}
+
+class CommandError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+  }
 }
 
 // Resolve hooks for promises waiting on a recording to be created.
@@ -363,7 +432,7 @@ function toggleRecording(browser) {
   }
 }
 
-async function startRecording(browser) {    
+async function startRecording(browser) {
   let key = getRecordingKey(browser);
   const {state} = recordings.get(key) || {};
 
@@ -433,7 +502,7 @@ async function startRecording(browser) {
 function stopRecording(browser) {
   const key = getRecordingKey(browser);
   const {state} = recordings.get(key) || {};
-  
+
   if (!browser || state !== RecordingState.STOPPING)  {
     setRecordingState(key, RecordingState.READY);
     return;
@@ -585,7 +654,7 @@ function handleRecordingStarted(pmm) {
     const recordingId = data.id;
 
     pingTelemetry('recording', 'saved', {...data, recordingId});
-    
+
     try {
       const browser = getBrowser();
       setRecordingSaved(browser, recordingId);
@@ -823,33 +892,6 @@ function getLoggedInUserAuthId() {
 
   const user = JSON.parse(userPref);
   return user == "" ? "" : user.sub;
-}
-
-const gResultWaiters = new Map();
-
-function waitForCommandResult(id) {
-  return new Promise((resolve, reject) => gResultWaiters.set(id, { resolve, reject }));
-}
-
-function onCommandResponse(msg) {
-  const { id } = msg;
-  if (gResultWaiters.has(id)) {
-    const { resolve, reject } = gResultWaiters.get(id);
-    gResultWaiters.delete(id);
-
-    if (msg.error) {
-      reject(new CommandError(msg.error.message, msg.error.code));
-    } else {
-      resolve(msg.result);
-    }
-  }
-}
-
-class CommandError extends Error {
-  constructor(message, code) {
-    super(message);
-    this.code = code;
-  }
 }
 
 Services.ppmm.addMessageListener("RecordingStarting", {
