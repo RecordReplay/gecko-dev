@@ -1555,7 +1555,7 @@ Services.obs.addObserver(
   "recordreplay-recording-changed"
 );
 
-AboutNewTab.newTabURL = "https://replay.io/new-tab";
+AboutNewTab.newTabURL = Services.prefs.getStringPref("replay.newtab.url");
 Services.ppmm.loadProcessScript("resource://devtools/server/actors/replay/globals.js", true);
 
 function viewRecordings(evt) {
