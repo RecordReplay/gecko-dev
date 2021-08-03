@@ -515,9 +515,11 @@ function getRecordingBrowser(key) {
 }
 
 function setRecordingState(key, state) {
-  recordings.set(key, {
-    state
-  });
+  if (state === RecordingState.READY) {
+    recordings.delete(key);
+  } else {
+    recordings.set(key, { state });
+  }
 
   Services.obs.notifyObservers({
     browser: getRecordingBrowser(key),
@@ -759,10 +761,9 @@ function handleRecordingStarted(pmm) {
     // Log the reason so we can see in our CI logs when something went wrong.
     console.error("Unstable recording: " + data.why);
     const browser = getBrowser();
-    const key = getRecordingKey(browser);
 
     setRecordingFinished(browser, `https://replay.io/browser/error?message=${data.why}`);
-    setRecordingState(key, RecordingState.READY);
+    setRecordingState(getRecordingKey(browser), RecordingState.READY);
   });
 
   recording.on("finished", function(name, data) {
