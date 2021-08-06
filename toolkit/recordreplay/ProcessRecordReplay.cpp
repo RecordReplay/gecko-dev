@@ -98,6 +98,7 @@ static void (*gOrderedLock)(int aLock);
 static void (*gOrderedUnlock)(int aLock);
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
 static void (*gOnMouseEvent)(const char* aKind, size_t aClientX, size_t aClientY);
+static void (*gOnKeyEvent)(const char* aKind, const char* aKey);
 static void (*gSetRecordingIdCallback)(void (*aCallback)(const char*));
 static void (*gProcessRecording)();
 static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
@@ -270,6 +271,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayOrderedUnlock", gOrderedUnlock);
   LoadSymbol("RecordReplayAddOrderedPthreadMutex", gAddOrderedPthreadMutex);
   LoadSymbol("RecordReplayOnMouseEvent", gOnMouseEvent);
+  LoadSymbol("RecordReplayOnKeyEvent", gOnKeyEvent);
   LoadSymbol("RecordReplaySetRecordingIdCallback", gSetRecordingIdCallback);
   LoadSymbol("RecordReplayProcessRecording", gProcessRecording);
   LoadSymbol("RecordReplaySetCrashReasonCallback", gSetCrashReasonCallback);
@@ -635,7 +637,7 @@ bool IsTearingDownProcess() {
   return gTearingDown;
 }
 
-void OnWidgetEvent(dom::BrowserChild* aChild, const WidgetMouseEvent& aEvent) {
+void OnMouseEvent(dom::BrowserChild* aChild, const WidgetMouseEvent& aEvent) {
   if (!gHasCheckpoint) {
     return;
   }
@@ -649,6 +651,28 @@ void OnWidgetEvent(dom::BrowserChild* aChild, const WidgetMouseEvent& aEvent) {
 
   if (kind) {
     gOnMouseEvent(kind, aEvent.mRefPoint.x, aEvent.mRefPoint.y);
+  }
+}
+
+void OnKeyboardEvent(dom::BrowserChild* aChild, const WidgetKeyboardEvent& aEvent) {
+  if (!gHasCheckpoint) {
+    return;
+  }
+
+  const char* kind = nullptr;
+  if (aEvent.mMessage == eKeyPress) {
+    kind = "keypress";
+  } else if (aEvent.mMessage == eKeyDown) {
+    kind = "keydown";
+  } else if (aEvent.mMessage == eKeyUp) {
+    kind = "keyup";
+  }
+
+  if (kind) {
+    nsAutoString key;
+    aEvent.GetDOMKeyName(key);
+
+    gOnKeyEvent(kind, PromiseFlatCString(NS_ConvertUTF16toUTF8(key)).get());
   }
 }
 

@@ -171,7 +171,8 @@ using mozilla::layers::GeckoContentController;
 namespace mozilla {
   namespace recordreplay {
     void CreateCheckpoint();
-    void OnWidgetEvent(BrowserChild* aChild, const WidgetMouseEvent& aEvent);
+    void OnMouseEvent(BrowserChild* aChild, const WidgetMouseEvent& aEvent);
+    void OnKeyboardEvent(BrowserChild* aChild, const WidgetKeyboardEvent& aEvent);
   }
 }
 
@@ -1550,7 +1551,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvRealMouseMoveEvent(
     const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
     const uint64_t& aInputBlockId) {
   if (recordreplay::IsRecordingOrReplaying()) {
-    recordreplay::OnWidgetEvent(this, aEvent);
+    recordreplay::OnMouseEvent(this, aEvent);
   }
 
   if (mCoalesceMouseMoveEvents && mCoalescedMouseEventFlusher) {
@@ -1623,7 +1624,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvRealMouseButtonEvent(
     const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
     const uint64_t& aInputBlockId) {
   if (recordreplay::IsRecordingOrReplaying()) {
-    recordreplay::OnWidgetEvent(this, aEvent);
+    recordreplay::OnMouseEvent(this, aEvent);
   }
 
   if (mCoalesceMouseMoveEvents && mCoalescedMouseEventFlusher &&
@@ -2015,6 +2016,10 @@ void BrowserChild::UpdateRepeatedKeyEventEndTime(
 
 mozilla::ipc::IPCResult BrowserChild::RecvRealKeyEvent(
     const WidgetKeyboardEvent& aEvent) {
+  if (recordreplay::IsRecordingOrReplaying()) {
+    recordreplay::OnKeyboardEvent(this, aEvent);
+  }
+
   if (SkipRepeatedKeyEvent(aEvent)) {
     return IPC_OK();
   }

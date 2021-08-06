@@ -520,7 +520,7 @@ class WidgetKeyboardEvent : public WidgetInputEvent {
     }
   }
 
-  void GetDOMKeyName(nsAString& aKeyName) {
+  void GetDOMKeyName(nsAString& aKeyName) const {
     if (mKeyNameIndex == KEY_NAME_INDEX_USE_STRING) {
       aKeyName = mKeyValue;
       return;
