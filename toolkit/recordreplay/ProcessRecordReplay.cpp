@@ -99,7 +99,7 @@ static void (*gOrderedUnlock)(int aLock);
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
 static void (*gOnMouseEvent)(const char* aKind, size_t aClientX, size_t aClientY);
 static void (*gOnKeyEvent)(const char* aKind, const char* aKey);
-static void (*gOnNavigation)(const char* aUrl);
+static void (*gOnNavigationEvent)(const char* aKind, const char* aUrl);
 static void (*gSetRecordingIdCallback)(void (*aCallback)(const char*));
 static void (*gProcessRecording)();
 static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
@@ -273,7 +273,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayAddOrderedPthreadMutex", gAddOrderedPthreadMutex);
   LoadSymbol("RecordReplayOnMouseEvent", gOnMouseEvent);
   LoadSymbol("RecordReplayOnKeyEvent", gOnKeyEvent);
-  LoadSymbol("RecordReplayOnNavigation", gOnNavigation);
+  LoadSymbol("RecordReplayOnNavigationEvent", gOnNavigationEvent);
   LoadSymbol("RecordReplaySetRecordingIdCallback", gSetRecordingIdCallback);
   LoadSymbol("RecordReplayProcessRecording", gProcessRecording);
   LoadSymbol("RecordReplaySetCrashReasonCallback", gSetCrashReasonCallback);
@@ -725,8 +725,7 @@ void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFl
     return;
   }
 
-  printf("NAVIGATING %s\n", url.get());
-  gOnNavigation(url.get());
+  gOnNavigationEvent(nullptr, url.get());
   gLastLocationURL = url;
 }
 
