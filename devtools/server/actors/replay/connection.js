@@ -624,7 +624,7 @@ async function startRecording(browser) {
 
   // Before reading the tab state, we need to be sure that the parent process
   // has full session state. The user (or more likely automated tests), could
-  // easily have begin recording while the initial page was still loading,
+  // easily have begun recording while the initial page was still loading,
   // in which case the parent may not have initialized the session fully yet.
   await TabStateFlusher.flush(browser);
 
@@ -635,13 +635,9 @@ async function startRecording(browser) {
     remoteType,
   });
 
-  browser.loadURI(url, {
-    triggeringPrincipal: browser.contentPrincipal,
-  });
-
   // Creating a new frameloader will destroy the tab's session history so we
-  // need to restore it, and we need to do this _after_ `loadURI` so that
-  // it doesn't add a new entry to the history.
+  // need to restore it. This also instructs the new child proocess to load
+  // the target URL, which would otherwise require a browser.loadURI() call.
   SessionStore.setTabState(tab, tabState);
 
   key = remapRecordingState(browser, key);

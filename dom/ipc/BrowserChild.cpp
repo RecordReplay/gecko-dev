@@ -173,6 +173,7 @@ namespace mozilla {
     void CreateCheckpoint();
     void OnMouseEvent(BrowserChild* aChild, const WidgetMouseEvent& aEvent);
     void OnKeyboardEvent(BrowserChild* aChild, const WidgetKeyboardEvent& aEvent);
+    void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFlags);
   }
 }
 
@@ -3696,6 +3697,11 @@ NS_IMETHODIMP BrowserChild::OnLocationChange(nsIWebProgress* aWebProgress,
   MOZ_TRY(webNav->GetCanGoForward(&canGoForward));
 
   if (aWebProgress && webProgressData->isTopLevel()) {
+    // Record top-level document navigation in the browser child.
+    if (recordreplay::IsRecordingOrReplaying()) {
+      recordreplay::OnLocationChange(this, aLocation, aFlags);
+    }
+
     locationChangeData.emplace();
 
     document->GetContentType(locationChangeData->contentType());

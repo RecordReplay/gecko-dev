@@ -99,6 +99,7 @@ static void (*gOrderedUnlock)(int aLock);
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
 static void (*gOnMouseEvent)(const char* aKind, size_t aClientX, size_t aClientY);
 static void (*gOnKeyEvent)(const char* aKind, const char* aKey);
+static void (*gOnNavigation)(const char* aUrl);
 static void (*gSetRecordingIdCallback)(void (*aCallback)(const char*));
 static void (*gProcessRecording)();
 static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
@@ -272,6 +273,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayAddOrderedPthreadMutex", gAddOrderedPthreadMutex);
   LoadSymbol("RecordReplayOnMouseEvent", gOnMouseEvent);
   LoadSymbol("RecordReplayOnKeyEvent", gOnKeyEvent);
+  LoadSymbol("RecordReplayOnNavigation", gOnNavigation);
   LoadSymbol("RecordReplaySetRecordingIdCallback", gSetRecordingIdCallback);
   LoadSymbol("RecordReplayProcessRecording", gProcessRecording);
   LoadSymbol("RecordReplaySetCrashReasonCallback", gSetCrashReasonCallback);
@@ -674,6 +676,58 @@ void OnKeyboardEvent(dom::BrowserChild* aChild, const WidgetKeyboardEvent& aEven
 
     gOnKeyEvent(kind, PromiseFlatCString(NS_ConvertUTF16toUTF8(key)).get());
   }
+}
+
+static nsCString gLastLocationURL;
+
+void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFlags) {
+  if (!gHasCheckpoint) {
+    return;
+  }
+
+  nsCString url;
+  if (NS_FAILED(aLocation->GetSpec(url))) {
+    return;
+  }
+
+  // When beginning recording, this function is generally called in the
+  // following pattern:
+  // 1. Session history is applied from previous non-recording process.
+  // 2. An initial about:blank page is loaded into the document
+  // 3. Navigation notifications as you'd expect then begin to happen.
+  //
+  // Since we only care about that third step, we explicitly ignore
+  // all location changes before about:blank, and also ignore about: URLs
+  // entirely.
+  if (gLastLocationURL.IsEmpty()) {
+    if (!url.EqualsLiteral("about:blank")) {
+      return;
+    }
+
+    gLastLocationURL = url;
+  }
+
+  // All browser children load with an initial "about:blank" page before loading
+  // the overall document. There also also cases like "about:neterror" that may
+  // pop up if the browser tries and fails to navigate for some reason.
+  // Rather than restrict specifically those, we broadly reject all about: URLs
+  // since they shouldn't come up often anyway.
+  if (aLocation->SchemeIs("about")) {
+    return;
+  }
+
+  // The browser internally may do replaceState with the same URL, so we want to
+  // filter those out. This means we also won't register location changes for
+  // explicit replaceState calls, but that's probably closer to what users will
+  // expect anyway.
+  if ((aFlags & nsIWebProgressListener::LOCATION_CHANGE_SAME_DOCUMENT) &&
+      gLastLocationURL.Equals(url)) {
+    return;
+  }
+
+  printf("NAVIGATING %s\n", url.get());
+  gOnNavigation(url.get());
+  gLastLocationURL = url;
 }
 
 static void RecordingIdCallback(const char* aRecordingId) {
