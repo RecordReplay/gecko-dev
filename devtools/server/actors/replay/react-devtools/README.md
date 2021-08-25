@@ -2,7 +2,7 @@
 
 The files in this directory are from the React Devtools (https://github.com/facebook/react/tree/master/packages/react-devtools), and are loaded into recording processes so that the devtools hooks will be detected by any React application on the page and allow events to be sent to the driver and from there on to any clients viewing the recording.
 
-From the base React revision 0203b6567c6fd6274866c853ef938241d24551ec, the other files are as follows:
+From the base React revision b9964684bd8c909fc3d88f1cd47aa1f45ea7ba32, the other files are as follows:
 
 ### contentScript.js
 
@@ -23,8 +23,8 @@ After building React, this is modified from the generated file `packages/react-d
  /******/ (function(modules) { // webpackBootstrap
  /******/ 	// The module cache
  /******/ 	var installedModules = {};
-@@ -9738,6 +9740,18 @@
-     bridge.send('isSynchronousXHRSupported', Object(utils["g" /* isSynchronousXHRSupported */])());
+@@ -10498,6 +10500,18 @@
+     bridge.send('isSynchronousXHRSupported', Object(utils["h" /* isSynchronousXHRSupported */])());
      setupHighlighter(bridge, this);
      TraceUpdates_initialize(this);
 +
@@ -42,8 +42,8 @@ After building React, this is modified from the generated file `packages/react-d
    }
  
    get rendererInterfaces() {
-@@ -10469,7 +10483,7 @@
- // This is to avoid issues like: https://github.com/facebook/react-devtools/issues/1039
+@@ -11444,7 +11458,7 @@
+ 
  
  function welcome(event) {
 -  if (event.source !== window || event.data.source !== 'react-devtools-content-script') {
@@ -51,7 +51,7 @@ After building React, this is modified from the generated file `packages/react-d
      return;
    }
  
-@@ -10511,13 +10525,8 @@
+@@ -11487,13 +11501,8 @@
      },
  
      send(event, payload, transferable) {
@@ -67,7 +67,8 @@ After building React, this is modified from the generated file `packages/react-d
      }
  
    });
-@@ -14460,3 +14469,7 @@
+@@ -15243,4 +15252,8 @@
+ }
  
  /***/ })
  /******/ ]);
@@ -76,3 +77,18 @@ After building React, this is modified from the generated file `packages/react-d
 +
 +exports.reactDevtoolsBackend = reactDevtoolsBackend;
 ```
+
+## Updating to a newer version of React Devtools
+
+* clone the React repository and build the firefox extension: 
+  ```
+  git clone https://github.com/facebook/react.git
+  cd react
+  yarn
+  yarn build-for-devtools
+  cd packages/react-devtools-extensions/
+  yarn build:firefox
+  ```
+* copy `packages/react-devtools-extensions/firefox/build/unpacked/build/react_devtools_backend.js` to this folder and apply the modifications from the patch above
+* check if there have been any changes in `packages/react-devtools-shared/src/hook.js` since the last update and apply them to the file in this folder
+* update the React revision and the patch in this file

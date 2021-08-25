@@ -91,6 +91,65 @@ function reactDevtoolsBackend(window) {
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "e", function() { return ElementTypeClass; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "f", function() { return ElementTypeContext; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "h", function() { return ElementTypeFunction; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "g", function() { return ElementTypeForwardRef; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "i", function() { return ElementTypeHostComponent; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "j", function() { return ElementTypeMemo; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "k", function() { return ElementTypeOtherOrUnknown; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "l", function() { return ElementTypeProfiler; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "m", function() { return ElementTypeRoot; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "n", function() { return ElementTypeSuspense; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "o", function() { return ElementTypeSuspenseList; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "b", function() { return ComponentFilterElementType; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "a", function() { return ComponentFilterDisplayName; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "d", function() { return ComponentFilterLocation; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "c", function() { return ComponentFilterHOC; });
+/**
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ * 
+ */
+// WARNING
+// The values below are referenced by ComponentFilters (which are saved via localStorage).
+// Do not change them or it will break previously saved user customizations.
+// If new element types are added, use new numbers rather than re-ordering existing ones.
+//
+// Changing these types is also a backwards breaking change for the standalone shell,
+// since the frontend and backend must share the same values-
+// and the backend is embedded in certain environments (like React Native).
+const ElementTypeClass = 1;
+const ElementTypeContext = 2;
+const ElementTypeFunction = 5;
+const ElementTypeForwardRef = 6;
+const ElementTypeHostComponent = 7;
+const ElementTypeMemo = 8;
+const ElementTypeOtherOrUnknown = 9;
+const ElementTypeProfiler = 10;
+const ElementTypeRoot = 11;
+const ElementTypeSuspense = 12;
+const ElementTypeSuspenseList = 13; // Different types of elements displayed in the Elements tree.
+// These types may be used to visually distinguish types,
+// or to enable/disable certain functionality.
+
+// WARNING
+// The values below are referenced by ComponentFilters (which are saved via localStorage).
+// Do not change them or it will break previously saved user customizations.
+// If new filter types are added, use new numbers rather than re-ordering existing ones.
+const ComponentFilterElementType = 1;
+const ComponentFilterDisplayName = 2;
+const ComponentFilterLocation = 3;
+const ComponentFilterHOC = 4;
+
+/***/ }),
+/* 1 */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
 
 // EXPORTS
 __webpack_require__.d(__webpack_exports__, "c", function() { return /* binding */ getAllEnumerableKeys; });
@@ -190,7 +249,7 @@ function getIteratorFn(maybeIterable) {
 var constants = __webpack_require__(2);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/types.js
-var types = __webpack_require__(1);
+var types = __webpack_require__(0);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/storage.js
 var storage = __webpack_require__(5);
@@ -640,7 +699,13 @@ function getDataType(data) {
         // but this seems kind of awkward and expensive.
         return 'array_buffer';
       } else if (typeof data[Symbol.iterator] === 'function') {
-        return data[Symbol.iterator]() === data ? 'opaque_iterator' : 'iterator';
+        const iterator = data[Symbol.iterator]();
+
+        if (!iterator) {// Proxies might break assumptoins about iterators.
+          // See github.com/facebook/react/issues/21654
+        } else {
+          return iterator === data ? 'opaque_iterator' : 'iterator';
+        }
       } else if (data.constructor && data.constructor.name === 'RegExp') {
         return 'regexp';
       } else {
@@ -934,65 +999,6 @@ function formatDataForPreview(data, showFormattedValue) {
 }
 
 /***/ }),
-/* 1 */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "e", function() { return ElementTypeClass; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "f", function() { return ElementTypeContext; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "h", function() { return ElementTypeFunction; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "g", function() { return ElementTypeForwardRef; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "i", function() { return ElementTypeHostComponent; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "j", function() { return ElementTypeMemo; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "k", function() { return ElementTypeOtherOrUnknown; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "l", function() { return ElementTypeProfiler; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "m", function() { return ElementTypeRoot; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "n", function() { return ElementTypeSuspense; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "o", function() { return ElementTypeSuspenseList; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "b", function() { return ComponentFilterElementType; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "a", function() { return ComponentFilterDisplayName; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "d", function() { return ComponentFilterLocation; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "c", function() { return ComponentFilterHOC; });
-/**
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- *
- * 
- */
-// WARNING
-// The values below are referenced by ComponentFilters (which are saved via localStorage).
-// Do not change them or it will break previously saved user customizations.
-// If new element types are added, use new numbers rather than re-ordering existing ones.
-//
-// Changing these types is also a backwards breaking change for the standalone shell,
-// since the frontend and backend must share the same values-
-// and the backend is embedded in certain environments (like React Native).
-const ElementTypeClass = 1;
-const ElementTypeContext = 2;
-const ElementTypeFunction = 5;
-const ElementTypeForwardRef = 6;
-const ElementTypeHostComponent = 7;
-const ElementTypeMemo = 8;
-const ElementTypeOtherOrUnknown = 9;
-const ElementTypeProfiler = 10;
-const ElementTypeRoot = 11;
-const ElementTypeSuspense = 12;
-const ElementTypeSuspenseList = 13; // Different types of elements displayed in the Elements tree.
-// These types may be used to visually distinguish types,
-// or to enable/disable certain functionality.
-
-// WARNING
-// The values below are referenced by ComponentFilters (which are saved via localStorage).
-// Do not change them or it will break previously saved user customizations.
-// If new filter types are added, use new numbers rather than re-ordering existing ones.
-const ComponentFilterElementType = 1;
-const ComponentFilterDisplayName = 2;
-const ComponentFilterLocation = 3;
-const ComponentFilterHOC = 4;
-
-/***/ }),
 /* 2 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
@@ -1006,6 +1012,7 @@ const ComponentFilterHOC = 4;
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "j", function() { return TREE_OPERATION_REMOVE_ROOT; });
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "a", function() { return LOCAL_STORAGE_FILTER_PREFERENCES_KEY; });
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "e", function() { return SESSION_STORAGE_LAST_SELECTION_KEY; });
+/* unused harmony export LOCAL_STORAGE_PARSE_HOOK_NAMES_KEY */
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "f", function() { return SESSION_STORAGE_RECORD_CHANGE_DESCRIPTIONS_KEY; });
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "g", function() { return SESSION_STORAGE_RELOAD_AND_PROFILE_KEY; });
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "b", function() { return LOCAL_STORAGE_SHOULD_BREAK_ON_CONSOLE_ERRORS; });
@@ -1016,6 +1023,7 @@ const ComponentFilterHOC = 4;
 /* unused harmony export CHANGE_LOG_URL */
 /* unused harmony export UNSUPPORTED_VERSION_URL */
 /* unused harmony export REACT_DEVTOOLS_WORKPLACE_URL */
+/* unused harmony export THEME_STYLES */
 /* unused harmony export COMFORTABLE_LINE_HEIGHT */
 /* unused harmony export COMPACT_LINE_HEIGHT */
 /**
@@ -1036,6 +1044,7 @@ const TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS = 5;
 const TREE_OPERATION_REMOVE_ROOT = 6;
 const LOCAL_STORAGE_FILTER_PREFERENCES_KEY = 'React::DevTools::componentFilters';
 const SESSION_STORAGE_LAST_SELECTION_KEY = 'React::DevTools::lastSelection';
+const LOCAL_STORAGE_PARSE_HOOK_NAMES_KEY = 'React::DevTools::parseHookNames';
 const SESSION_STORAGE_RECORD_CHANGE_DESCRIPTIONS_KEY = 'React::DevTools::recordChangeDescriptions';
 const SESSION_STORAGE_RELOAD_AND_PROFILE_KEY = 'React::DevTools::reloadAndProfile';
 const LOCAL_STORAGE_SHOULD_BREAK_ON_CONSOLE_ERRORS = 'React::DevTools::breakOnConsoleErrors';
@@ -1043,37 +1052,312 @@ const LOCAL_STORAGE_SHOULD_PATCH_CONSOLE_KEY = 'React::DevTools::appendComponent
 const LOCAL_STORAGE_SHOW_INLINE_WARNINGS_AND_ERRORS_KEY = 'React::DevTools::showInlineWarningsAndErrors';
 const LOCAL_STORAGE_TRACE_UPDATES_ENABLED_KEY = 'React::DevTools::traceUpdatesEnabled';
 const PROFILER_EXPORT_VERSION = 5;
-const CHANGE_LOG_URL = 'https://github.com/facebook/react/blob/master/packages/react-devtools/CHANGELOG.md';
+const CHANGE_LOG_URL = 'https://github.com/facebook/react/blob/main/packages/react-devtools/CHANGELOG.md';
 const UNSUPPORTED_VERSION_URL = 'https://reactjs.org/blog/2019/08/15/new-react-devtools.html#how-do-i-get-the-old-version-back';
-const REACT_DEVTOOLS_WORKPLACE_URL = 'https://fburl.com/react-devtools-workplace-group'; // HACK
+const REACT_DEVTOOLS_WORKPLACE_URL = 'https://fburl.com/react-devtools-workplace-group';
+const THEME_STYLES = {
+  light: {
+    '--color-attribute-name': '#ef6632',
+    '--color-attribute-name-not-editable': '#23272f',
+    '--color-attribute-name-inverted': 'rgba(255, 255, 255, 0.7)',
+    '--color-attribute-value': '#1a1aa6',
+    '--color-attribute-value-inverted': '#ffffff',
+    '--color-attribute-editable-value': '#1a1aa6',
+    '--color-background': '#ffffff',
+    '--color-background-hover': 'rgba(0, 136, 250, 0.1)',
+    '--color-background-inactive': '#e5e5e5',
+    '--color-background-invalid': '#fff0f0',
+    '--color-background-selected': '#0088fa',
+    '--color-button-background': '#ffffff',
+    '--color-button-background-focus': '#ededed',
+    '--color-button': '#5f6673',
+    '--color-button-disabled': '#cfd1d5',
+    '--color-button-active': '#0088fa',
+    '--color-button-focus': '#23272f',
+    '--color-button-hover': '#23272f',
+    '--color-border': '#eeeeee',
+    '--color-commit-did-not-render-fill': '#cfd1d5',
+    '--color-commit-did-not-render-fill-text': '#000000',
+    '--color-commit-did-not-render-pattern': '#cfd1d5',
+    '--color-commit-did-not-render-pattern-text': '#333333',
+    '--color-commit-gradient-0': '#37afa9',
+    '--color-commit-gradient-1': '#63b19e',
+    '--color-commit-gradient-2': '#80b393',
+    '--color-commit-gradient-3': '#97b488',
+    '--color-commit-gradient-4': '#abb67d',
+    '--color-commit-gradient-5': '#beb771',
+    '--color-commit-gradient-6': '#cfb965',
+    '--color-commit-gradient-7': '#dfba57',
+    '--color-commit-gradient-8': '#efbb49',
+    '--color-commit-gradient-9': '#febc38',
+    '--color-commit-gradient-text': '#000000',
+    '--color-component-name': '#6a51b2',
+    '--color-component-name-inverted': '#ffffff',
+    '--color-component-badge-background': 'rgba(0, 0, 0, 0.1)',
+    '--color-component-badge-background-inverted': 'rgba(255, 255, 255, 0.25)',
+    '--color-component-badge-count': '#777d88',
+    '--color-component-badge-count-inverted': 'rgba(255, 255, 255, 0.7)',
+    '--color-console-error-badge-text': '#ffffff',
+    '--color-console-error-background': '#fff0f0',
+    '--color-console-error-border': '#ffd6d6',
+    '--color-console-error-icon': '#eb3941',
+    '--color-console-error-text': '#fe2e31',
+    '--color-console-warning-badge-text': '#000000',
+    '--color-console-warning-background': '#fffbe5',
+    '--color-console-warning-border': '#fff5c1',
+    '--color-console-warning-icon': '#f4bd00',
+    '--color-console-warning-text': '#64460c',
+    '--color-context-background': 'rgba(0,0,0,.9)',
+    '--color-context-background-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-context-background-selected': '#178fb9',
+    '--color-context-border': '#3d424a',
+    '--color-context-text': '#ffffff',
+    '--color-context-text-selected': '#ffffff',
+    '--color-dim': '#777d88',
+    '--color-dimmer': '#cfd1d5',
+    '--color-dimmest': '#eff0f1',
+    '--color-error-background': 'hsl(0, 100%, 97%)',
+    '--color-error-border': 'hsl(0, 100%, 92%)',
+    '--color-error-text': '#ff0000',
+    '--color-expand-collapse-toggle': '#777d88',
+    '--color-link': '#0000ff',
+    '--color-modal-background': 'rgba(255, 255, 255, 0.75)',
+    '--color-bridge-version-npm-background': '#eff0f1',
+    '--color-bridge-version-npm-text': '#000000',
+    '--color-bridge-version-number': '#0088fa',
+    '--color-primitive-hook-badge-background': '#e5e5e5',
+    '--color-primitive-hook-badge-text': '#5f6673',
+    '--color-record-active': '#fc3a4b',
+    '--color-record-hover': '#3578e5',
+    '--color-record-inactive': '#0088fa',
+    '--color-resize-bar': '#eeeeee',
+    '--color-resize-bar-active': '#dcdcdc',
+    '--color-resize-bar-border': '#d1d1d1',
+    '--color-resize-bar-dot': '#333333',
+    '--color-scheduling-profiler-native-event': '#ccc',
+    '--color-scheduling-profiler-native-event-hover': '#aaa',
+    '--color-scheduling-profiler-network-primary': '#fcf3dc',
+    '--color-scheduling-profiler-network-primary-hover': '#f0e7d1',
+    '--color-scheduling-profiler-network-secondary': '#efc457',
+    '--color-scheduling-profiler-network-secondary-hover': '#e3ba52',
+    '--color-scheduling-profiler-priority-background': '#f6f6f6',
+    '--color-scheduling-profiler-priority-border': '#eeeeee',
+    '--color-scheduling-profiler-user-timing': '#c9cacd',
+    '--color-scheduling-profiler-user-timing-hover': '#93959a',
+    '--color-scheduling-profiler-react-idle': '#d3e5f6',
+    '--color-scheduling-profiler-react-idle-hover': '#c3d9ef',
+    '--color-scheduling-profiler-react-render': '#9fc3f3',
+    '--color-scheduling-profiler-react-render-hover': '#83afe9',
+    '--color-scheduling-profiler-react-render-text': '#11365e',
+    '--color-scheduling-profiler-react-commit': '#c88ff0',
+    '--color-scheduling-profiler-react-commit-hover': '#b281d6',
+    '--color-scheduling-profiler-react-commit-text': '#3e2c4a',
+    '--color-scheduling-profiler-react-layout-effects': '#b281d6',
+    '--color-scheduling-profiler-react-layout-effects-hover': '#9d71bd',
+    '--color-scheduling-profiler-react-layout-effects-text': '#3e2c4a',
+    '--color-scheduling-profiler-react-passive-effects': '#b281d6',
+    '--color-scheduling-profiler-react-passive-effects-hover': '#9d71bd',
+    '--color-scheduling-profiler-react-passive-effects-text': '#3e2c4a',
+    '--color-scheduling-profiler-react-schedule': '#9fc3f3',
+    '--color-scheduling-profiler-react-schedule-hover': '#2683E2',
+    '--color-scheduling-profiler-react-suspense-rejected': '#f1cc14',
+    '--color-scheduling-profiler-react-suspense-rejected-hover': '#ffdf37',
+    '--color-scheduling-profiler-react-suspense-resolved': '#a6e59f',
+    '--color-scheduling-profiler-react-suspense-resolved-hover': '#89d281',
+    '--color-scheduling-profiler-react-suspense-unresolved': '#c9cacd',
+    '--color-scheduling-profiler-react-suspense-unresolved-hover': '#93959a',
+    '--color-scheduling-profiler-text-color': '#000000',
+    '--color-scheduling-profiler-text-dim-color': '#ccc',
+    '--color-scheduling-profiler-react-work-border': '#ffffff',
+    '--color-search-match': 'yellow',
+    '--color-search-match-current': '#f7923b',
+    '--color-selected-tree-highlight-active': 'rgba(0, 136, 250, 0.1)',
+    '--color-selected-tree-highlight-inactive': 'rgba(0, 0, 0, 0.05)',
+    '--color-scroll-caret': 'rgba(150, 150, 150, 0.5)',
+    '--color-tab-selected-border': '#0088fa',
+    '--color-text': '#000000',
+    '--color-text-invalid': '#ff0000',
+    '--color-text-selected': '#ffffff',
+    '--color-toggle-background-invalid': '#fc3a4b',
+    '--color-toggle-background-on': '#0088fa',
+    '--color-toggle-background-off': '#cfd1d5',
+    '--color-toggle-text': '#ffffff',
+    '--color-warning-background': '#fb3655',
+    '--color-warning-background-hover': '#f82042',
+    '--color-warning-text-color': '#ffffff',
+    '--color-warning-text-color-inverted': '#fd4d69',
+    // The styles below should be kept in sync with 'root.css'
+    // They are repeated there because they're used by e.g. tooltips or context menus
+    // which get rendered outside of the DOM subtree (where normal theme/styles are written).
+    '--color-scroll-thumb': '#c2c2c2',
+    '--color-scroll-track': '#fafafa',
+    '--color-tooltip-background': 'rgba(0, 0, 0, 0.9)',
+    '--color-tooltip-text': '#ffffff'
+  },
+  dark: {
+    '--color-attribute-name': '#9d87d2',
+    '--color-attribute-name-not-editable': '#ededed',
+    '--color-attribute-name-inverted': '#282828',
+    '--color-attribute-value': '#cedae0',
+    '--color-attribute-value-inverted': '#ffffff',
+    '--color-attribute-editable-value': 'yellow',
+    '--color-background': '#282c34',
+    '--color-background-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-background-inactive': '#3d424a',
+    '--color-background-invalid': '#5c0000',
+    '--color-background-selected': '#178fb9',
+    '--color-button-background': '#282c34',
+    '--color-button-background-focus': '#3d424a',
+    '--color-button': '#afb3b9',
+    '--color-button-active': '#61dafb',
+    '--color-button-disabled': '#4f5766',
+    '--color-button-focus': '#a2e9fc',
+    '--color-button-hover': '#ededed',
+    '--color-border': '#3d424a',
+    '--color-commit-did-not-render-fill': '#777d88',
+    '--color-commit-did-not-render-fill-text': '#000000',
+    '--color-commit-did-not-render-pattern': '#666c77',
+    '--color-commit-did-not-render-pattern-text': '#ffffff',
+    '--color-commit-gradient-0': '#37afa9',
+    '--color-commit-gradient-1': '#63b19e',
+    '--color-commit-gradient-2': '#80b393',
+    '--color-commit-gradient-3': '#97b488',
+    '--color-commit-gradient-4': '#abb67d',
+    '--color-commit-gradient-5': '#beb771',
+    '--color-commit-gradient-6': '#cfb965',
+    '--color-commit-gradient-7': '#dfba57',
+    '--color-commit-gradient-8': '#efbb49',
+    '--color-commit-gradient-9': '#febc38',
+    '--color-commit-gradient-text': '#000000',
+    '--color-component-name': '#61dafb',
+    '--color-component-name-inverted': '#282828',
+    '--color-component-badge-background': 'rgba(255, 255, 255, 0.25)',
+    '--color-component-badge-background-inverted': 'rgba(0, 0, 0, 0.25)',
+    '--color-component-badge-count': '#8f949d',
+    '--color-component-badge-count-inverted': 'rgba(255, 255, 255, 0.7)',
+    '--color-console-error-badge-text': '#000000',
+    '--color-console-error-background': '#290000',
+    '--color-console-error-border': '#5c0000',
+    '--color-console-error-icon': '#eb3941',
+    '--color-console-error-text': '#fc7f7f',
+    '--color-console-warning-badge-text': '#000000',
+    '--color-console-warning-background': '#332b00',
+    '--color-console-warning-border': '#665500',
+    '--color-console-warning-icon': '#f4bd00',
+    '--color-console-warning-text': '#f5f2ed',
+    '--color-context-background': 'rgba(255,255,255,.95)',
+    '--color-context-background-hover': 'rgba(0, 136, 250, 0.1)',
+    '--color-context-background-selected': '#0088fa',
+    '--color-context-border': '#eeeeee',
+    '--color-context-text': '#000000',
+    '--color-context-text-selected': '#ffffff',
+    '--color-dim': '#8f949d',
+    '--color-dimmer': '#777d88',
+    '--color-dimmest': '#4f5766',
+    '--color-error-background': '#200',
+    '--color-error-border': '#900',
+    '--color-error-text': '#f55',
+    '--color-expand-collapse-toggle': '#8f949d',
+    '--color-link': '#61dafb',
+    '--color-modal-background': 'rgba(0, 0, 0, 0.75)',
+    '--color-bridge-version-npm-background': 'rgba(0, 0, 0, 0.25)',
+    '--color-bridge-version-npm-text': '#ffffff',
+    '--color-bridge-version-number': 'yellow',
+    '--color-primitive-hook-badge-background': 'rgba(0, 0, 0, 0.25)',
+    '--color-primitive-hook-badge-text': 'rgba(255, 255, 255, 0.7)',
+    '--color-record-active': '#fc3a4b',
+    '--color-record-hover': '#a2e9fc',
+    '--color-record-inactive': '#61dafb',
+    '--color-resize-bar': '#282c34',
+    '--color-resize-bar-active': '#31363f',
+    '--color-resize-bar-border': '#3d424a',
+    '--color-resize-bar-dot': '#cfd1d5',
+    '--color-scheduling-profiler-native-event': '#b2b2b2',
+    '--color-scheduling-profiler-native-event-hover': '#949494',
+    '--color-scheduling-profiler-network-primary': '#fcf3dc',
+    '--color-scheduling-profiler-network-primary-hover': '#e3dbc5',
+    '--color-scheduling-profiler-network-secondary': '#efc457',
+    '--color-scheduling-profiler-network-secondary-hover': '#d6af4d',
+    '--color-scheduling-profiler-priority-background': '#1d2129',
+    '--color-scheduling-profiler-priority-border': '#282c34',
+    '--color-scheduling-profiler-user-timing': '#c9cacd',
+    '--color-scheduling-profiler-user-timing-hover': '#93959a',
+    '--color-scheduling-profiler-react-idle': '#3d485b',
+    '--color-scheduling-profiler-react-idle-hover': '#465269',
+    '--color-scheduling-profiler-react-render': '#2683E2',
+    '--color-scheduling-profiler-react-render-hover': '#1a76d4',
+    '--color-scheduling-profiler-react-render-text': '#11365e',
+    '--color-scheduling-profiler-react-commit': '#731fad',
+    '--color-scheduling-profiler-react-commit-hover': '#611b94',
+    '--color-scheduling-profiler-react-commit-text': '#e5c1ff',
+    '--color-scheduling-profiler-react-layout-effects': '#611b94',
+    '--color-scheduling-profiler-react-layout-effects-hover': '#51167a',
+    '--color-scheduling-profiler-react-layout-effects-text': '#e5c1ff',
+    '--color-scheduling-profiler-react-passive-effects': '#611b94',
+    '--color-scheduling-profiler-react-passive-effects-hover': '#51167a',
+    '--color-scheduling-profiler-react-passive-effects-text': '#e5c1ff',
+    '--color-scheduling-profiler-react-schedule': '#2683E2',
+    '--color-scheduling-profiler-react-schedule-hover': '#1a76d4',
+    '--color-scheduling-profiler-react-suspense-rejected': '#f1cc14',
+    '--color-scheduling-profiler-react-suspense-rejected-hover': '#e4c00f',
+    '--color-scheduling-profiler-react-suspense-resolved': '#a6e59f',
+    '--color-scheduling-profiler-react-suspense-resolved-hover': '#89d281',
+    '--color-scheduling-profiler-react-suspense-unresolved': '#c9cacd',
+    '--color-scheduling-profiler-react-suspense-unresolved-hover': '#93959a',
+    '--color-scheduling-profiler-text-color': '#282c34',
+    '--color-scheduling-profiler-text-dim-color': '#555b66',
+    '--color-scheduling-profiler-react-work-border': '#ffffff',
+    '--color-search-match': 'yellow',
+    '--color-search-match-current': '#f7923b',
+    '--color-selected-tree-highlight-active': 'rgba(23, 143, 185, 0.15)',
+    '--color-selected-tree-highlight-inactive': 'rgba(255, 255, 255, 0.05)',
+    '--color-scroll-caret': '#4f5766',
+    '--color-shadow': 'rgba(0, 0, 0, 0.5)',
+    '--color-tab-selected-border': '#178fb9',
+    '--color-text': '#ffffff',
+    '--color-text-invalid': '#ff8080',
+    '--color-text-selected': '#ffffff',
+    '--color-toggle-background-invalid': '#fc3a4b',
+    '--color-toggle-background-on': '#178fb9',
+    '--color-toggle-background-off': '#777d88',
+    '--color-toggle-text': '#ffffff',
+    '--color-warning-background': '#ee1638',
+    '--color-warning-background-hover': '#da1030',
+    '--color-warning-text-color': '#ffffff',
+    '--color-warning-text-color-inverted': '#ee1638',
+    // The styles below should be kept in sync with 'root.css'
+    // They are repeated there because they're used by e.g. tooltips or context menus
+    // which get rendered outside of the DOM subtree (where normal theme/styles are written).
+    '--color-scroll-thumb': '#afb3b9',
+    '--color-scroll-track': '#313640',
+    '--color-tooltip-background': 'rgba(255, 255, 255, 0.95)',
+    '--color-tooltip-text': '#000000'
+  },
+  compact: {
+    '--font-size-monospace-small': '9px',
+    '--font-size-monospace-normal': '11px',
+    '--font-size-monospace-large': '15px',
+    '--font-size-sans-small': '10px',
+    '--font-size-sans-normal': '12px',
+    '--font-size-sans-large': '14px',
+    '--line-height-data': '18px'
+  },
+  comfortable: {
+    '--font-size-monospace-small': '10px',
+    '--font-size-monospace-normal': '13px',
+    '--font-size-monospace-large': '17px',
+    '--font-size-sans-small': '12px',
+    '--font-size-sans-normal': '14px',
+    '--font-size-sans-large': '16px',
+    '--line-height-data': '22px'
+  }
+}; // HACK
 //
-// Extracting during build time avoids a temporarily invalid state for the inline target.
 // Sometimes the inline target is rendered before root styles are applied,
 // which would result in e.g. NaN itemSize being passed to react-window list.
-//
 
-let COMFORTABLE_LINE_HEIGHT;
-let COMPACT_LINE_HEIGHT;
-
-try {
-  // $FlowFixMe
-  const rawStyleString = __webpack_require__(22).default;
-
-  const extractVar = varName => {
-    const regExp = new RegExp(`${varName}: ([0-9]+)`);
-    const match = rawStyleString.match(regExp);
-    return parseInt(match[1], 10);
-  };
-
-  COMFORTABLE_LINE_HEIGHT = extractVar('comfortable-line-height-data');
-  COMPACT_LINE_HEIGHT = extractVar('compact-line-height-data');
-} catch (error) {
-  // We can't use the Webpack loader syntax in the context of Jest,
-  // so tests need some reasonably meaningful fallback value.
-  COMFORTABLE_LINE_HEIGHT = 15;
-  COMPACT_LINE_HEIGHT = 10;
-}
-
+const COMFORTABLE_LINE_HEIGHT = parseInt(THEME_STYLES.comfortable['--line-height-data'], 10);
+const COMPACT_LINE_HEIGHT = parseInt(THEME_STYLES.compact['--line-height-data'], 10);
 
 
 /***/ }),
@@ -1320,46 +1604,49 @@ function serializeToString(data) {
 // Implements s, d, i and f placeholders
 
 function format(maybeMessage, ...inputArgs) {
-  if (typeof maybeMessage !== 'string') {
-    return [maybeMessage, ...inputArgs].join(' ');
-  }
+  const args = inputArgs.slice(); // Symbols cannot be concatenated with Strings.
 
-  const re = /(%?)(%([jds]))/g;
-  const args = inputArgs.slice();
-  let formatted = maybeMessage;
+  let formatted = typeof maybeMessage === 'symbol' ? maybeMessage.toString() : '' + maybeMessage; // If the first argument is a string, check for substitutions.
+
+  if (typeof maybeMessage === 'string') {
+    if (args.length) {
+      const REGEXP = /(%?)(%([jds]))/g;
+      formatted = formatted.replace(REGEXP, (match, escaped, ptn, flag) => {
+        let arg = args.shift();
+
+        switch (flag) {
+          case 's':
+            arg += '';
+            break;
+
+          case 'd':
+          case 'i':
+            arg = parseInt(arg, 10).toString();
+            break;
+
+          case 'f':
+            arg = parseFloat(arg).toString();
+            break;
+        }
+
+        if (!escaped) {
+          return arg;
+        }
+
+        args.unshift(arg);
+        return match;
+      });
+    }
+  } // Arguments that remain after formatting.
+
 
   if (args.length) {
-    formatted = formatted.replace(re, (match, escaped, ptn, flag) => {
-      let arg = args.shift();
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]; // Symbols cannot be concatenated with Strings.
 
-      switch (flag) {
-        case 's':
-          arg += '';
-          break;
-
-        case 'd':
-        case 'i':
-          arg = parseInt(arg, 10).toString();
-          break;
-
-        case 'f':
-          arg = parseFloat(arg).toString();
-          break;
-      }
-
-      if (!escaped) {
-        return arg;
-      }
-
-      args.unshift(arg);
-      return match;
-    });
-  } // arguments remain after formatting
-
-
-  if (args.length) {
-    formatted += ' ' + args.join(' ');
-  } // update escaped %% values
+      formatted += ' ' + (typeof arg === 'symbol' ? arg.toString() : arg);
+    }
+  } // Update escaped %% values.
 
 
   formatted = formatted.replace(/%{2,2}/g, '%');
@@ -1431,7 +1718,7 @@ function sessionStorageSetItem(key, value) {
 
 
 if (true) {
-  module.exports = __webpack_require__(26);
+  module.exports = __webpack_require__(25);
 } else {}
 
 /***/ }),
@@ -1544,7 +1831,7 @@ module.exports = shouldUseNative() ? Object.assign : function (target, source) {
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "a", function() { return dehydrate; });
 /* unused harmony export fillInPath */
 /* unused harmony export hydrate */
-/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(0);
+/* harmony import */ var _utils__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(1);
 /**
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
@@ -1644,7 +1931,13 @@ function dehydrate(data, cleaned, unserializable, path, isPathAllowed, level = 0
       };
 
     case 'string':
-      return data.length <= 500 ? data : data.slice(0, 500) + '...';
+      isPathAllowedCheck = isPathAllowed(path);
+
+      if (isPathAllowedCheck) {
+        return data;
+      } else {
+        return data.length <= 500 ? data : data.slice(0, 500) + '...';
+      }
 
     case 'bigint':
       cleaned.push(path);
@@ -2525,7 +2818,7 @@ function patch({
               try {
                 if (shouldShowInlineWarningsAndErrors) {
                   // patch() is called by two places: (1) the hook and (2) the renderer backend.
-                  // The backend is what impliments a message queue, so it's the only one that injects onErrorOrWarning.
+                  // The backend is what implements a message queue, so it's the only one that injects onErrorOrWarning.
                   if (typeof onErrorOrWarning === 'function') {
                     onErrorOrWarning(current, method, // Copy args before we mutate them (e.g. adding the component stack)
                     args.slice());
@@ -4127,7 +4420,7 @@ function coerce(version, options) {
 
   return parse(match[2] + '.' + (match[3] || '0') + '.' + (match[4] || '0'), options);
 }
-/* WEBPACK VAR INJECTION */}.call(this, __webpack_require__(23)))
+/* WEBPACK VAR INJECTION */}.call(this, __webpack_require__(22)))
 
 /***/ }),
 /* 12 */
@@ -4687,10 +4980,10 @@ __webpack_require__.d(__webpack_exports__, "a", function() { return /* binding *
 var semver = __webpack_require__(11);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/types.js
-var types = __webpack_require__(1);
+var types = __webpack_require__(0);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/utils.js + 1 modules
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(1);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/storage.js
 var storage = __webpack_require__(5);
@@ -4725,7 +5018,7 @@ var ReactSymbols = __webpack_require__(3);
  * It should never be imported directly!
  * It should always be imported from "react-devtools-feature-flags".
  ************************************************************************/
-const enableProfilerChangedHookIndices = false;
+const enableProfilerChangedHookIndices = true;
 const isInternalFacebookBuild = false;
 /************************************************************************
  * Do not edit the code below.
@@ -4790,6 +5083,7 @@ function getFiberFlags(fiber) {
 const getCurrentTime = typeof performance === 'object' && typeof performance.now === 'function' ? () => performance.now() : () => Date.now();
 function getInternalReactConstants(version) {
   const ReactTypeOfSideEffect = {
+    DidCapture: 0b10000000,
     NoFlags: 0b00,
     PerformedWork: 0b01,
     Placement: 0b10,
@@ -4908,7 +5202,7 @@ function getInternalReactConstants(version) {
   } else if (Object(semver["gte"])(version, '16.6.0-beta.0')) {
     ReactTypeOfWork = {
       CacheComponent: -1,
-      // Doens't exist yet
+      // Doesn't exist yet
       ClassComponent: 1,
       ContextConsumer: 9,
       ContextProvider: 10,
@@ -4946,7 +5240,7 @@ function getInternalReactConstants(version) {
   } else if (Object(semver["gte"])(version, '16.4.3-alpha')) {
     ReactTypeOfWork = {
       CacheComponent: -1,
-      // Doens't exist yet
+      // Doesn't exist yet
       ClassComponent: 2,
       ContextConsumer: 11,
       ContextProvider: 12,
@@ -4988,7 +5282,7 @@ function getInternalReactConstants(version) {
   } else {
     ReactTypeOfWork = {
       CacheComponent: -1,
-      // Doens't exist yet
+      // Doesn't exist yet
       ClassComponent: 2,
       ContextConsumer: 12,
       ContextProvider: 13,
@@ -5079,6 +5373,7 @@ function getInternalReactConstants(version) {
 
   function getDisplayNameForFiber(fiber) {
     const {
+      elementType,
       type,
       tag
     } = fiber;
@@ -5125,7 +5420,7 @@ function getInternalReactConstants(version) {
 
       case MemoComponent:
       case SimpleMemoComponent:
-        return Object(utils["f" /* getDisplayName */])(resolvedType, 'Anonymous');
+        return elementType && elementType.displayName || type && type.displayName || Object(utils["f" /* getDisplayName */])(resolvedType, 'Anonymous');
 
       case SuspenseComponent:
         return 'Suspense';
@@ -5215,6 +5510,7 @@ function attach(hook, rendererID, renderer, global) {
     ReactTypeOfSideEffect
   } = getInternalReactConstants(version);
   const {
+    DidCapture,
     Incomplete,
     NoFlags,
     PerformedWork,
@@ -5234,6 +5530,7 @@ function attach(hook, rendererID, renderer, global) {
     HostText,
     IncompleteClassComponent,
     IndeterminateComponent,
+    LegacyHiddenComponent,
     MemoComponent,
     OffscreenComponent,
     SimpleMemoComponent,
@@ -5255,52 +5552,93 @@ function attach(hook, rendererID, renderer, global) {
     overrideProps,
     overridePropsDeletePath,
     overridePropsRenamePath,
+    scheduleRefresh,
+    setErrorHandler,
     setSuspenseHandler,
     scheduleUpdate
   } = renderer;
-  const supportsTogglingSuspense = typeof setSuspenseHandler === 'function' && typeof scheduleUpdate === 'function'; // Set of Fibers (IDs) with recently changed number of error/warning messages.
+  const supportsTogglingError = typeof setErrorHandler === 'function' && typeof scheduleUpdate === 'function';
+  const supportsTogglingSuspense = typeof setSuspenseHandler === 'function' && typeof scheduleUpdate === 'function';
 
-  const fibersWithChangedErrorOrWarningCounts = new Set(); // Mapping of fiber IDs to error/warning messages and counts.
+  if (typeof scheduleRefresh === 'function') {
+    // When Fast Refresh updates a component, the frontend may need to purge cached information.
+    // For example, ASTs cached for the component (for named hooks) may no longer be valid.
+    // Send a signal to the frontend to purge this cached information.
+    // The "fastRefreshScheduled" dispatched is global (not Fiber or even Renderer specific).
+    // This is less effecient since it means the front-end will need to purge the entire cache,
+    // but this is probably an okay trade off in order to reduce coupling between the DevTools and Fast Refresh.
+    renderer.scheduleRefresh = (...args) => {
+      try {
+        hook.emit('fastRefreshScheduled');
+      } finally {
+        return scheduleRefresh(...args);
+      }
+    };
+  } // Tracks Fibers with recently changed number of error/warning messages.
+  // These collections store the Fiber rather than the ID,
+  // in order to avoid generating an ID for Fibers that never get mounted
+  // (due to e.g. Suspense or error boundaries).
+  // onErrorOrWarning() adds Fibers and recordPendingErrorsAndWarnings() later clears them.
 
-  const fiberToErrorsMap = new Map();
-  const fiberToWarningsMap = new Map();
+
+  const fibersWithChangedErrorOrWarningCounts = new Set();
+  const pendingFiberToErrorsMap = new Map();
+  const pendingFiberToWarningsMap = new Map(); // Mapping of fiber IDs to error/warning messages and counts.
+
+  const fiberIDToErrorsMap = new Map();
+  const fiberIDToWarningsMap = new Map();
 
   function clearErrorsAndWarnings() {
     // eslint-disable-next-line no-for-of-loops/no-for-of-loops
-    for (const id of fiberToErrorsMap.keys()) {
-      fibersWithChangedErrorOrWarningCounts.add(id);
-      updateMostRecentlyInspectedElementIfNecessary(id);
+    for (const id of fiberIDToErrorsMap.keys()) {
+      const fiber = idToArbitraryFiberMap.get(id);
+
+      if (fiber != null) {
+        fibersWithChangedErrorOrWarningCounts.add(fiber);
+        updateMostRecentlyInspectedElementIfNecessary(id);
+      }
     } // eslint-disable-next-line no-for-of-loops/no-for-of-loops
 
 
-    for (const id of fiberToWarningsMap.keys()) {
-      fibersWithChangedErrorOrWarningCounts.add(id);
-      updateMostRecentlyInspectedElementIfNecessary(id);
+    for (const id of fiberIDToWarningsMap.keys()) {
+      const fiber = idToArbitraryFiberMap.get(id);
+
+      if (fiber != null) {
+        fibersWithChangedErrorOrWarningCounts.add(fiber);
+        updateMostRecentlyInspectedElementIfNecessary(id);
+      }
     }
 
-    fiberToErrorsMap.clear();
-    fiberToWarningsMap.clear();
+    fiberIDToErrorsMap.clear();
+    fiberIDToWarningsMap.clear();
     flushPendingEvents();
   }
 
-  function clearErrorsForFiberID(id) {
-    if (fiberToErrorsMap.has(id)) {
-      fiberToErrorsMap.delete(id);
-      fibersWithChangedErrorOrWarningCounts.add(id);
-      flushPendingEvents();
-    }
+  function clearMessageCountHelper(fiberID, pendingFiberToMessageCountMap, fiberIDToMessageCountMap) {
+    const fiber = idToArbitraryFiberMap.get(fiberID);
 
-    updateMostRecentlyInspectedElementIfNecessary(id);
+    if (fiber != null) {
+      // Throw out any pending changes.
+      pendingFiberToErrorsMap.delete(fiber);
+
+      if (fiberIDToMessageCountMap.has(fiberID)) {
+        fiberIDToMessageCountMap.delete(fiberID); // If previous flushed counts have changed, schedule an update too.
+
+        fibersWithChangedErrorOrWarningCounts.add(fiber);
+        flushPendingEvents();
+        updateMostRecentlyInspectedElementIfNecessary(fiberID);
+      } else {
+        fibersWithChangedErrorOrWarningCounts.delete(fiber);
+      }
+    }
   }
 
-  function clearWarningsForFiberID(id) {
-    if (fiberToWarningsMap.has(id)) {
-      fiberToWarningsMap.delete(id);
-      fibersWithChangedErrorOrWarningCounts.add(id);
-      flushPendingEvents();
-    }
+  function clearErrorsForFiberID(fiberID) {
+    clearMessageCountHelper(fiberID, pendingFiberToErrorsMap, fiberIDToErrorsMap);
+  }
 
-    updateMostRecentlyInspectedElementIfNecessary(id);
+  function clearWarningsForFiberID(fiberID) {
+    clearMessageCountHelper(fiberID, pendingFiberToWarningsMap, fiberIDToWarningsMap);
   }
 
   function updateMostRecentlyInspectedElementIfNecessary(fiberID) {
@@ -5311,35 +5649,38 @@ function attach(hook, rendererID, renderer, global) {
 
 
   function onErrorOrWarning(fiber, type, args) {
-    const message = Object(backend_utils["f" /* format */])(...args); // Note that by calling these functions we may be creating the ID for the first time.
-    // If the Fiber is then never mounted, we are responsible for cleaning up after ourselves.
-    // This is important because getPrimaryFiber() stores a Fiber in the primaryFibers Set.
-    // If a Fiber never mounts, and we don't clean up after this code, we could leak.
-    // Fortunately we would only leak Fibers that have errors/warnings associated with them,
-    // which is hopefully only a small set and only in DEV mode– but this is still not great.
-    // We should clean up Fibers like this when flushing; see recordPendingErrorsAndWarnings().
+    if (type === 'error') {
+      const maybeID = getFiberIDUnsafe(fiber); // if this is an error simulated by us to trigger error boundary, ignore
 
-    const fiberID = getFiberID(getPrimaryFiber(fiber)); // Mark this Fiber as needed its warning/error count updated during the next flush.
+      if (maybeID != null && forceErrorForFiberIDs.get(maybeID) === true) {
+        return;
+      }
+    }
 
-    fibersWithChangedErrorOrWarningCounts.add(fiberID); // Update the error/warning messages and counts for the Fiber.
+    const message = Object(backend_utils["f" /* format */])(...args);
 
-    const fiberMap = type === 'error' ? fiberToErrorsMap : fiberToWarningsMap;
-    const messageMap = fiberMap.get(fiberID);
+    if (constants["n" /* __DEBUG__ */]) {
+      debug('onErrorOrWarning', fiber, null, `${type}: "${message}"`);
+    } // Mark this Fiber as needed its warning/error count updated during the next flush.
+
+
+    fibersWithChangedErrorOrWarningCounts.add(fiber); // Track the warning/error for later.
+
+    const fiberMap = type === 'error' ? pendingFiberToErrorsMap : pendingFiberToWarningsMap;
+    const messageMap = fiberMap.get(fiber);
 
     if (messageMap != null) {
       const count = messageMap.get(message) || 0;
       messageMap.set(message, count + 1);
     } else {
-      fiberMap.set(fiberID, new Map([[message, 1]]));
-    } // If this Fiber is currently being inspected, mark it as needing an udpate as well.
-
-
-    updateMostRecentlyInspectedElementIfNecessary(fiberID); // Passive effects may trigger errors or warnings too;
+      fiberMap.set(fiber, new Map([[message, 1]]));
+    } // Passive effects may trigger errors or warnings too;
     // In this case, we should wait until the rest of the passive effects have run,
     // but we shouldn't wait until the next commit because that might be a long time.
     // This would also cause "tearing" between an inspected Component and the tree view.
     // Then again we don't want to flush too soon because this could be an error during async rendering.
     // Use a debounce technique to ensure that we'll eventually flush.
+
 
     flushPendingErrorsAndWarningsAfterDelay();
   } // Patching the console enables DevTools to do a few useful things:
@@ -5370,13 +5711,12 @@ function attach(hook, rendererID, renderer, global) {
   const debug = (name, fiber, parentFiber, extraString = '') => {
     if (constants["n" /* __DEBUG__ */]) {
       const displayName = fiber.tag + ':' + (getDisplayNameForFiber(fiber) || 'null');
-      const id = getFiberID(fiber);
+      const maybeID = getFiberIDUnsafe(fiber) || '<no id>';
       const parentDisplayName = parentFiber ? parentFiber.tag + ':' + (getDisplayNameForFiber(parentFiber) || 'null') : '';
-      const parentID = parentFiber ? getFiberID(parentFiber) : ''; // NOTE: calling getFiberID or getPrimaryFiber is unsafe here
-      // because it will put them in the map. For now, we'll omit them.
-      // TODO: better debugging story for this.
-
-      console.log(`[renderer] %c${name} %c${displayName} (${id}) %c${parentFiber ? `${parentDisplayName} (${parentID})` : ''} %c${extraString}`, 'color: red; font-weight: bold;', 'color: blue;', 'color: purple;', 'color: black;');
+      const maybeParentID = parentFiber ? getFiberIDUnsafe(parentFiber) || '<no-id>' : '';
+      console.groupCollapsed(`[renderer] %c${name} %c${displayName} (${maybeID}) %c${parentFiber ? `${parentDisplayName} (${maybeParentID})` : ''} %c${extraString}`, 'color: red; font-weight: bold;', 'color: blue;', 'color: purple;', 'color: black;');
+      console.log(new Error().stack.split('\n').slice(1).join('\n'));
+      console.groupEnd();
     }
   }; // Configurable Components tree filters.
 
@@ -5454,7 +5794,7 @@ function attach(hook, rendererID, renderer, global) {
 
 
     hook.getFiberRoots(rendererID).forEach(root => {
-      currentRootID = getFiberID(getPrimaryFiber(root.current)); // The TREE_OPERATION_REMOVE_ROOT operation serves two purposes:
+      currentRootID = getOrGenerateFiberID(root.current); // The TREE_OPERATION_REMOVE_ROOT operation serves two purposes:
       // 1. It avoids sending unnecessary bridge traffic to clear a root.
       // 2. It preserves Fiber IDs when remounting (below) which in turn ID to error/warning mapping.
 
@@ -5467,7 +5807,7 @@ function attach(hook, rendererID, renderer, global) {
     rootDisplayNameCounter.clear(); // Recursively re-mount all roots with new filter criteria applied.
 
     hook.getFiberRoots(rendererID).forEach(root => {
-      currentRootID = getFiberID(getPrimaryFiber(root.current));
+      currentRootID = getOrGenerateFiberID(root.current);
       setRootPseudoKey(currentRootID, root.current);
       mountFiberRecursively(root.current, null, false, false);
       flushPendingEvents(root);
@@ -5498,6 +5838,7 @@ function attach(hook, rendererID, renderer, global) {
       case HostPortal:
       case HostText:
       case Fragment:
+      case LegacyHiddenComponent:
       case OffscreenComponent:
         return true;
 
@@ -5626,32 +5967,17 @@ function attach(hook, rendererID, renderer, global) {
         }
 
     }
-  } // This is a slightly annoying indirection.
-  // It is currently necessary because DevTools wants to use unique objects as keys for instances.
-  // However fibers have two versions.
-  // We use this set to remember first encountered fiber for each conceptual instance.
+  } // Map of one or more Fibers in a pair to their unique id number.
+  // We track both Fibers to support Fast Refresh,
+  // which may forcefully replace one of the pair as part of hot reloading.
+  // In that case it's still important to be able to locate the previous ID during subsequent renders.
 
 
-  function getPrimaryFiber(fiber) {
-    if (primaryFibers.has(fiber)) {
-      return fiber;
-    }
+  const fiberToIDMap = new Map(); // Map of id to one (arbitrary) Fiber in a pair.
+  // This Map is used to e.g. get the display name for a Fiber or schedule an update,
+  // operations that should be the same whether the current and work-in-progress Fiber is used.
 
-    const {
-      alternate
-    } = fiber;
-
-    if (alternate != null && primaryFibers.has(alternate)) {
-      return alternate;
-    }
-
-    primaryFibers.add(fiber);
-    return fiber;
-  }
-
-  const fiberToIDMap = new Map();
-  const idToFiberMap = new Map();
-  const primaryFibers = new Set(); // When profiling is supported, we store the latest tree base durations for each Fiber.
+  const idToArbitraryFiberMap = new Map(); // When profiling is supported, we store the latest tree base durations for each Fiber.
   // This is so that we can quickly capture a snapshot of those values if profiling starts.
   // If we didn't store these values, we'd have to crawl the tree when profiling started,
   // and use a slow path to find each of the current Fibers.
@@ -5661,16 +5987,155 @@ function attach(hook, rendererID, renderer, global) {
 
   const idToRootMap = new Map(); // When a mount or update is in progress, this value tracks the root that is being operated on.
 
-  let currentRootID = -1;
+  let currentRootID = -1; // Returns the unique ID for a Fiber or generates and caches a new one if the Fiber hasn't been seen before.
+  // Once this method has been called for a Fiber, untrackFiberID() should always be called later to avoid leaking.
 
-  function getFiberID(primaryFiber) {
-    if (!fiberToIDMap.has(primaryFiber)) {
-      const id = Object(utils["i" /* getUID */])();
-      fiberToIDMap.set(primaryFiber, id);
-      idToFiberMap.set(id, primaryFiber);
+  function getOrGenerateFiberID(fiber) {
+    let id = null;
+
+    if (fiberToIDMap.has(fiber)) {
+      id = fiberToIDMap.get(fiber);
+    } else {
+      const {
+        alternate
+      } = fiber;
+
+      if (alternate !== null && fiberToIDMap.has(alternate)) {
+        id = fiberToIDMap.get(alternate);
+      }
     }
 
-    return fiberToIDMap.get(primaryFiber);
+    let didGenerateID = false;
+
+    if (id === null) {
+      didGenerateID = true;
+      id = Object(utils["i" /* getUID */])();
+    } // This refinement is for Flow purposes only.
+
+
+    const refinedID = id; // Make sure we're tracking this Fiber
+    // e.g. if it just mounted or an error was logged during initial render.
+
+    if (!fiberToIDMap.has(fiber)) {
+      fiberToIDMap.set(fiber, refinedID);
+      idToArbitraryFiberMap.set(refinedID, fiber);
+    } // Also make sure we're tracking its alternate,
+    // e.g. in case this is the first update after mount.
+
+
+    const {
+      alternate
+    } = fiber;
+
+    if (alternate !== null) {
+      if (!fiberToIDMap.has(alternate)) {
+        fiberToIDMap.set(alternate, refinedID);
+      }
+    }
+
+    if (constants["n" /* __DEBUG__ */]) {
+      if (didGenerateID) {
+        debug('getOrGenerateFiberID()', fiber, fiber.return, 'Generated a new UID');
+      }
+    }
+
+    return refinedID;
+  } // Returns an ID if one has already been generated for the Fiber or throws.
+
+
+  function getFiberIDThrows(fiber) {
+    const maybeID = getFiberIDUnsafe(fiber);
+
+    if (maybeID !== null) {
+      return maybeID;
+    }
+
+    throw Error(`Could not find ID for Fiber "${getDisplayNameForFiber(fiber) || ''}"`);
+  } // Returns an ID if one has already been generated for the Fiber or null if one has not been generated.
+  // Use this method while e.g. logging to avoid over-retaining Fibers.
+
+
+  function getFiberIDUnsafe(fiber) {
+    if (fiberToIDMap.has(fiber)) {
+      return fiberToIDMap.get(fiber);
+    } else {
+      const {
+        alternate
+      } = fiber;
+
+      if (alternate !== null && fiberToIDMap.has(alternate)) {
+        return fiberToIDMap.get(alternate);
+      }
+    }
+
+    return null;
+  } // Removes a Fiber (and its alternate) from the Maps used to track their id.
+  // This method should always be called when a Fiber is unmounting.
+
+
+  function untrackFiberID(fiber) {
+    if (constants["n" /* __DEBUG__ */]) {
+      debug('untrackFiberID()', fiber, fiber.return, 'schedule after delay');
+    } // Untrack Fibers after a slight delay in order to support a Fast Refresh edge case:
+    // 1. Component type is updated and Fast Refresh schedules an update+remount.
+    // 2. flushPendingErrorsAndWarningsAfterDelay() runs, sees the old Fiber is no longer mounted
+    //    (it's been disconnected by Fast Refresh), and calls untrackFiberID() to clear it from the Map.
+    // 3. React flushes pending passive effects before it runs the next render,
+    //    which logs an error or warning, which causes a new ID to be generated for this Fiber.
+    // 4. DevTools now tries to unmount the old Component with the new ID.
+    //
+    // The underlying problem here is the premature clearing of the Fiber ID,
+    // but DevTools has no way to detect that a given Fiber has been scheduled for Fast Refresh.
+    // (The "_debugNeedsRemount" flag won't necessarily be set.)
+    //
+    // The best we can do is to delay untracking by a small amount,
+    // and give React time to process the Fast Refresh delay.
+
+
+    untrackFibersSet.add(fiber);
+
+    if (untrackFibersTimeoutID === null) {
+      untrackFibersTimeoutID = setTimeout(untrackFibers, 1000);
+    }
+  }
+
+  const untrackFibersSet = new Set();
+  let untrackFibersTimeoutID = null;
+
+  function untrackFibers() {
+    if (untrackFibersTimeoutID !== null) {
+      clearTimeout(untrackFibersTimeoutID);
+      untrackFibersTimeoutID = null;
+    }
+
+    untrackFibersSet.forEach(fiber => {
+      const fiberID = getFiberIDUnsafe(fiber);
+
+      if (fiberID !== null) {
+        idToArbitraryFiberMap.delete(fiberID); // Also clear any errors/warnings associated with this fiber.
+
+        clearErrorsForFiberID(fiberID);
+        clearWarningsForFiberID(fiberID);
+      }
+
+      fiberToIDMap.delete(fiber);
+      const {
+        alternate
+      } = fiber;
+
+      if (alternate !== null) {
+        fiberToIDMap.delete(alternate);
+      }
+
+      if (forceErrorForFiberIDs.has(fiberID)) {
+        forceErrorForFiberIDs.delete(fiberID);
+
+        if (forceErrorForFiberIDs.size === 0 && setErrorHandler != null) {
+          setErrorHandler(shouldErrorFiberAlwaysNull);
+        }
+      }
+    });
+    untrackFibersSet.clear();
   }
 
   function getChangeDescription(prevFiber, nextFiber) {
@@ -5714,9 +6179,10 @@ function attach(hook, rendererID, renderer, global) {
 
   function updateContextsForFiber(fiber) {
     switch (getElementTypeForFiber(fiber)) {
+      case types["h" /* ElementTypeFunction */]:
       case types["e" /* ElementTypeClass */]:
         if (idToContextsMap !== null) {
-          const id = getFiberID(getPrimaryFiber(fiber));
+          const id = getFiberIDThrows(fiber);
           const contexts = getContextsForFiber(fiber);
 
           if (contexts !== null) {
@@ -5735,11 +6201,12 @@ function attach(hook, rendererID, renderer, global) {
   const NO_CONTEXT = {};
 
   function getContextsForFiber(fiber) {
+    let legacyContext = NO_CONTEXT;
+    let modernContext = NO_CONTEXT;
+
     switch (getElementTypeForFiber(fiber)) {
       case types["e" /* ElementTypeClass */]:
         const instance = fiber.stateNode;
-        let legacyContext = NO_CONTEXT;
-        let modernContext = NO_CONTEXT;
 
         if (instance != null) {
           if (instance.constructor && instance.constructor.contextType != null) {
@@ -5751,6 +6218,15 @@ function attach(hook, rendererID, renderer, global) {
               legacyContext = NO_CONTEXT;
             }
           }
+        }
+
+        return [legacyContext, modernContext];
+
+      case types["h" /* ElementTypeFunction */]:
+        const dependencies = fiber.dependencies;
+
+        if (dependencies && dependencies.firstContext) {
+          modernContext = dependencies.firstContext;
         }
 
         return [legacyContext, modernContext];
@@ -5774,31 +6250,52 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function getContextChangedKeys(fiber) {
-    switch (getElementTypeForFiber(fiber)) {
-      case types["e" /* ElementTypeClass */]:
-        if (idToContextsMap !== null) {
-          const id = getFiberID(getPrimaryFiber(fiber));
-          const prevContexts = idToContextsMap.has(id) ? idToContextsMap.get(id) : null;
-          const nextContexts = getContextsForFiber(fiber);
+    if (idToContextsMap !== null) {
+      const id = getFiberIDThrows(fiber);
+      const prevContexts = idToContextsMap.has(id) ? idToContextsMap.get(id) : null;
+      const nextContexts = getContextsForFiber(fiber);
 
-          if (prevContexts == null || nextContexts == null) {
-            return null;
+      if (prevContexts == null || nextContexts == null) {
+        return null;
+      }
+
+      const [prevLegacyContext, prevModernContext] = prevContexts;
+      const [nextLegacyContext, nextModernContext] = nextContexts;
+
+      switch (getElementTypeForFiber(fiber)) {
+        case types["e" /* ElementTypeClass */]:
+          if (prevContexts && nextContexts) {
+            if (nextLegacyContext !== NO_CONTEXT) {
+              return getChangedKeys(prevLegacyContext, nextLegacyContext);
+            } else if (nextModernContext !== NO_CONTEXT) {
+              return prevModernContext !== nextModernContext;
+            }
           }
 
-          const [prevLegacyContext, prevModernContext] = prevContexts;
-          const [nextLegacyContext, nextModernContext] = nextContexts;
+          break;
 
-          if (nextLegacyContext !== NO_CONTEXT) {
-            return getChangedKeys(prevLegacyContext, nextLegacyContext);
-          } else if (nextModernContext !== NO_CONTEXT) {
-            return prevModernContext !== nextModernContext;
+        case types["h" /* ElementTypeFunction */]:
+          if (nextModernContext !== NO_CONTEXT) {
+            let prevContext = prevModernContext;
+            let nextContext = nextModernContext;
+
+            while (prevContext && nextContext) {
+              if (!shared_objectIs(prevContext.memoizedValue, nextContext.memoizedValue)) {
+                return true;
+              }
+
+              prevContext = prevContext.next;
+              nextContext = nextContext.next;
+            }
+
+            return false;
           }
-        }
 
-        break;
+          break;
 
-      default:
-        break;
+        default:
+          break;
+      }
     }
 
     return null;
@@ -5821,7 +6318,15 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function isEffect(memoizedState) {
-    return memoizedState !== null && typeof memoizedState === 'object' && memoizedState.hasOwnProperty('tag') && memoizedState.hasOwnProperty('create') && memoizedState.hasOwnProperty('destroy') && memoizedState.hasOwnProperty('deps') && (memoizedState.deps === null || Object(isArray["a" /* default */])(memoizedState.deps)) && memoizedState.hasOwnProperty('next');
+    if (memoizedState === null || typeof memoizedState !== 'object') {
+      return false;
+    }
+
+    const {
+      deps
+    } = memoizedState;
+    const hasOwnProperty = Object.prototype.hasOwnProperty.bind(memoizedState);
+    return hasOwnProperty('create') && hasOwnProperty('destroy') && hasOwnProperty('deps') && hasOwnProperty('next') && hasOwnProperty('tag') && (deps === null || Object(isArray["a" /* default */])(deps));
   }
 
   function didHookChange(prev, next) {
@@ -5998,56 +6503,72 @@ function attach(hook, rendererID, renderer, global) {
 
   function reevaluateErrorsAndWarnings() {
     fibersWithChangedErrorOrWarningCounts.clear();
-    fiberToErrorsMap.forEach((countMap, fiberID) => {
-      fibersWithChangedErrorOrWarningCounts.add(fiberID);
+    fiberIDToErrorsMap.forEach((countMap, fiberID) => {
+      const fiber = idToArbitraryFiberMap.get(fiberID);
+
+      if (fiber != null) {
+        fibersWithChangedErrorOrWarningCounts.add(fiber);
+      }
     });
-    fiberToWarningsMap.forEach((countMap, fiberID) => {
-      fibersWithChangedErrorOrWarningCounts.add(fiberID);
+    fiberIDToWarningsMap.forEach((countMap, fiberID) => {
+      const fiber = idToArbitraryFiberMap.get(fiberID);
+
+      if (fiber != null) {
+        fibersWithChangedErrorOrWarningCounts.add(fiber);
+      }
     });
     recordPendingErrorsAndWarnings();
   }
 
+  function mergeMapsAndGetCountHelper(fiber, fiberID, pendingFiberToMessageCountMap, fiberIDToMessageCountMap) {
+    let newCount = 0;
+    let messageCountMap = fiberIDToMessageCountMap.get(fiberID);
+    const pendingMessageCountMap = pendingFiberToMessageCountMap.get(fiber);
+
+    if (pendingMessageCountMap != null) {
+      if (messageCountMap == null) {
+        messageCountMap = pendingMessageCountMap;
+        fiberIDToMessageCountMap.set(fiberID, pendingMessageCountMap);
+      } else {
+        // This Flow refinement should not be necessary and yet...
+        const refinedMessageCountMap = messageCountMap;
+        pendingMessageCountMap.forEach((pendingCount, message) => {
+          const previousCount = refinedMessageCountMap.get(message) || 0;
+          refinedMessageCountMap.set(message, previousCount + pendingCount);
+        });
+      }
+    }
+
+    if (!shouldFilterFiber(fiber)) {
+      if (messageCountMap != null) {
+        messageCountMap.forEach(count => {
+          newCount += count;
+        });
+      }
+    }
+
+    pendingFiberToMessageCountMap.delete(fiber);
+    return newCount;
+  }
+
   function recordPendingErrorsAndWarnings() {
     clearPendingErrorsAndWarningsAfterDelay();
-    fibersWithChangedErrorOrWarningCounts.forEach(fiberID => {
-      const fiber = idToFiberMap.get(fiberID);
+    fibersWithChangedErrorOrWarningCounts.forEach(fiber => {
+      const fiberID = getFiberIDUnsafe(fiber);
 
-      if (fiber != null) {
-        // Don't send updates for Fibers that didn't mount due to e.g. Suspense or an error boundary.
-        // We may also need to clean up after ourselves to avoid leaks.
-        // See inline comments in onErrorOrWarning() for more info.
-        if (isFiberMountedImpl(fiber) !== MOUNTED) {
-          fiberToIDMap.delete(fiber);
-          idToFiberMap.delete(fiberID);
-          primaryFibers.delete(fiber);
-          return;
-        }
-
-        let errorCount = 0;
-        let warningCount = 0;
-
-        if (!shouldFilterFiber(fiber)) {
-          const errorCountsMap = fiberToErrorsMap.get(fiberID);
-          const warningCountsMap = fiberToWarningsMap.get(fiberID);
-
-          if (errorCountsMap != null) {
-            errorCountsMap.forEach(count => {
-              errorCount += count;
-            });
-          }
-
-          if (warningCountsMap != null) {
-            warningCountsMap.forEach(count => {
-              warningCount += count;
-            });
-          }
-        }
-
+      if (fiberID === null) {// Don't send updates for Fibers that didn't mount due to e.g. Suspense or an error boundary.
+      } else {
+        const errorCount = mergeMapsAndGetCountHelper(fiber, fiberID, pendingFiberToErrorsMap, fiberIDToErrorsMap);
+        const warningCount = mergeMapsAndGetCountHelper(fiber, fiberID, pendingFiberToWarningsMap, fiberIDToWarningsMap);
         pushOperation(constants["l" /* TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS */]);
         pushOperation(fiberID);
         pushOperation(errorCount);
         pushOperation(warningCount);
-      }
+      } // Always clean up so that we don't leak.
+
+
+      pendingFiberToErrorsMap.delete(fiber);
+      pendingFiberToWarningsMap.delete(fiber);
     });
     fibersWithChangedErrorOrWarningCounts.clear();
   }
@@ -6168,12 +6689,13 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function recordMount(fiber, parentFiber) {
+    const isRoot = fiber.tag === HostRoot;
+    const id = getOrGenerateFiberID(fiber);
+
     if (constants["n" /* __DEBUG__ */]) {
       debug('recordMount()', fiber, parentFiber);
     }
 
-    const isRoot = fiber.tag === HostRoot;
-    const id = getFiberID(getPrimaryFiber(fiber));
     const hasOwnerMetadata = fiber.hasOwnProperty('_debugOwner');
     const isProfilingSupported = fiber.hasOwnProperty('treeBaseDuration');
 
@@ -6197,9 +6719,14 @@ function attach(hook, rendererID, renderer, global) {
       const elementType = getElementTypeForFiber(fiber);
       const {
         _debugOwner
-      } = fiber;
-      const ownerID = _debugOwner != null ? getFiberID(getPrimaryFiber(_debugOwner)) : 0;
-      const parentID = parentFiber ? getFiberID(getPrimaryFiber(parentFiber)) : 0;
+      } = fiber; // Ideally we should call getFiberIDThrows() for _debugOwner,
+      // since owners are almost always higher in the tree (and so have already been processed),
+      // but in some (rare) instances reported in open source, a descendant mounts before an owner.
+      // Since this is a DEV only field it's probably okay to also just lazily generate and ID here if needed.
+      // See https://github.com/facebook/react/issues/21445
+
+      const ownerID = _debugOwner != null ? getOrGenerateFiberID(_debugOwner) : 0;
+      const parentID = parentFiber ? getFiberIDThrows(parentFiber) : 0;
       const displayNameStringID = getStringID(displayName); // This check is a guard to handle a React element that has been modified
       // in such a way as to bypass the default stringification of the "key" property.
 
@@ -6234,22 +6761,22 @@ function attach(hook, rendererID, renderer, global) {
       }
     }
 
-    const isRoot = fiber.tag === HostRoot;
-    const primaryFiber = getPrimaryFiber(fiber);
+    const unsafeID = getFiberIDUnsafe(fiber);
 
-    if (!fiberToIDMap.has(primaryFiber)) {
+    if (unsafeID === null) {
       // If we've never seen this Fiber, it might be inside of a legacy render Suspense fragment (so the store is not even aware of it).
       // In that case we can just ignore it or it will cause errors later on.
       // One example of this is a Lazy component that never resolves before being unmounted.
       //
-      // TODO: This is fragile and can obscure actual bugs.
+      // This also might indicate a Fast Refresh force-remount scenario.
       //
-      // Calling getPrimaryFiber() lazily adds fibers to the Map, so clean up after ourselves before returning.
-      primaryFibers.delete(primaryFiber);
+      // TODO: This is fragile and can obscure actual bugs.
       return;
-    }
+    } // Flow refinement.
 
-    const id = getFiberID(primaryFiber);
+
+    const id = unsafeID;
+    const isRoot = fiber.tag === HostRoot;
 
     if (isRoot) {
       // Roots must be removed only after all children (pending and simulated) have been removed.
@@ -6266,14 +6793,14 @@ function attach(hook, rendererID, renderer, global) {
       }
     }
 
-    fiberToIDMap.delete(primaryFiber);
-    idToFiberMap.delete(id);
-    primaryFibers.delete(primaryFiber);
-    const isProfilingSupported = fiber.hasOwnProperty('treeBaseDuration');
+    if (!fiber._debugNeedsRemount) {
+      untrackFiberID(fiber);
+      const isProfilingSupported = fiber.hasOwnProperty('treeBaseDuration');
 
-    if (isProfilingSupported) {
-      idToRootMap.delete(id);
-      idToTreeBaseDurationMap.delete(id);
+      if (isProfilingSupported) {
+        idToRootMap.delete(id);
+        idToTreeBaseDurationMap.delete(id);
+      }
     }
   }
 
@@ -6283,6 +6810,9 @@ function attach(hook, rendererID, renderer, global) {
     let fiber = firstChild;
 
     while (fiber !== null) {
+      // Generate an ID even for filtered Fibers, in case it's needed later (e.g. for Profiling).
+      getOrGenerateFiberID(fiber);
+
       if (constants["n" /* __DEBUG__ */]) {
         debug('mountFiberRecursively()', fiber, parentFiber);
       } // If we have the tree selection from previous reload, try to match this Fiber.
@@ -6384,7 +6914,7 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function recordProfilingDurations(fiber) {
-    const id = getFiberID(getPrimaryFiber(fiber));
+    const id = getFiberIDThrows(fiber);
     const {
       actualDuration,
       treeBaseDuration
@@ -6472,7 +7002,7 @@ function attach(hook, rendererID, renderer, global) {
     }
 
     pushOperation(constants["k" /* TREE_OPERATION_REORDER_CHILDREN */]);
-    pushOperation(getFiberID(getPrimaryFiber(fiber)));
+    pushOperation(getFiberIDThrows(fiber));
     pushOperation(numChildren);
 
     for (let i = 0; i < nextChildren.length; i++) {
@@ -6482,7 +7012,7 @@ function attach(hook, rendererID, renderer, global) {
 
   function findReorderedChildrenRecursively(fiber, nextChildren) {
     if (!shouldFilterFiber(fiber)) {
-      nextChildren.push(getFiberID(getPrimaryFiber(fiber)));
+      nextChildren.push(getFiberIDThrows(fiber));
     } else {
       let child = fiber.child;
       const isTimedOutSuspense = fiber.tag === SuspenseComponent && fiber.memoizedState !== null;
@@ -6509,6 +7039,8 @@ function attach(hook, rendererID, renderer, global) {
 
 
   function updateFiberRecursively(nextFiber, prevFiber, parentFiber, traceNearestHostComponentUpdate) {
+    const id = getOrGenerateFiberID(nextFiber);
+
     if (constants["n" /* __DEBUG__ */]) {
       debug('updateFiberRecursively()', nextFiber, parentFiber);
     }
@@ -6523,14 +7055,14 @@ function attach(hook, rendererID, renderer, global) {
           traceNearestHostComponentUpdate = false;
         }
       } else {
-        if (elementType === types["h" /* ElementTypeFunction */] || elementType === types["e" /* ElementTypeClass */] || elementType === types["f" /* ElementTypeContext */]) {
+        if (elementType === types["h" /* ElementTypeFunction */] || elementType === types["e" /* ElementTypeClass */] || elementType === types["f" /* ElementTypeContext */] || elementType === types["j" /* ElementTypeMemo */] || elementType === types["g" /* ElementTypeForwardRef */]) {
           // Otherwise if this is a traced ancestor, flag for the nearest host descendant(s).
           traceNearestHostComponentUpdate = didFiberRender(prevFiber, nextFiber);
         }
       }
     }
 
-    if (mostRecentlyInspectedElement !== null && mostRecentlyInspectedElement.id === getFiberID(getPrimaryFiber(nextFiber)) && didFiberRender(prevFiber, nextFiber)) {
+    if (mostRecentlyInspectedElement !== null && mostRecentlyInspectedElement.id === id && didFiberRender(prevFiber, nextFiber)) {
       // If this Fiber has updated, clear cached inspected data.
       // If it is inspected again, it may need to be re-run to obtain updated hooks values.
       hasElementUpdatedSinceLastInspected = true;
@@ -6643,7 +7175,7 @@ function attach(hook, rendererID, renderer, global) {
           // If we're tracing updates and we've bailed out before reaching a host node,
           // we should fall back to recursively marking the nearest host descendants for highlight.
           if (traceNearestHostComponentUpdate) {
-            const hostFibers = findAllCurrentHostFibers(getFiberID(getPrimaryFiber(nextFiber)));
+            const hostFibers = findAllCurrentHostFibers(getFiberIDThrows(nextFiber));
             hostFibers.forEach(hostFiber => {
               traceUpdatesForNodes.add(hostFiber.stateNode);
             });
@@ -6724,7 +7256,7 @@ function attach(hook, rendererID, renderer, global) {
 
 
       hook.getFiberRoots(rendererID).forEach(root => {
-        currentRootID = getFiberID(getPrimaryFiber(root.current));
+        currentRootID = getOrGenerateFiberID(root.current);
         setRootPseudoKey(currentRootID, root.current); // Handle multi-renderer edge-case where only some v16 renderers support profiling.
 
         if (isProfiling && rootSupportsProfiling(root)) {
@@ -6775,8 +7307,11 @@ function attach(hook, rendererID, renderer, global) {
 
   function handleCommitFiberRoot(root, priorityLevel) {
     const current = root.current;
-    const alternate = current.alternate;
-    currentRootID = getFiberID(getPrimaryFiber(current)); // Before the traversals, remember to start tracking
+    const alternate = current.alternate; // Flush any pending Fibers that we are untracking before processing the new commit.
+    // If we don't do this, we might end up double-deleting Fibers in some cases (like Legacy Suspense).
+
+    untrackFibers();
+    currentRootID = getOrGenerateFiberID(current); // Before the traversals, remember to start tracking
     // our path in case we have selection to restore.
 
     if (trackedPath !== null) {
@@ -6921,7 +7456,7 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function getDisplayNameForFiberID(id) {
-    const fiber = idToFiberMap.get(id);
+    const fiber = idToArbitraryFiberMap.get(id);
     return fiber != null ? getDisplayNameForFiber(fiber) : null;
   }
 
@@ -6935,7 +7470,7 @@ function attach(hook, rendererID, renderer, global) {
         }
       }
 
-      return getFiberID(getPrimaryFiber(fiber));
+      return getFiberIDThrows(fiber);
     }
 
     return null;
@@ -6944,7 +7479,7 @@ function attach(hook, rendererID, renderer, global) {
   const MOUNTING = 1;
   const MOUNTED = 2;
   const UNMOUNTED = 3; // This function is copied from React and should be kept in sync:
-  // https://github.com/facebook/react/blob/master/packages/react-reconciler/src/ReactFiberTreeReflection.js
+  // https://github.com/facebook/react/blob/main/packages/react-reconciler/src/ReactFiberTreeReflection.js
 
   function isFiberMountedImpl(fiber) {
     let node = fiber;
@@ -7004,13 +7539,13 @@ function attach(hook, rendererID, renderer, global) {
 
     return UNMOUNTED;
   } // This function is copied from React and should be kept in sync:
-  // https://github.com/facebook/react/blob/master/packages/react-reconciler/src/ReactFiberTreeReflection.js
+  // https://github.com/facebook/react/blob/main/packages/react-reconciler/src/ReactFiberTreeReflection.js
   // It would be nice if we updated React to inject this function directly (vs just indirectly via findDOMNode).
   // BEGIN copied code
 
 
   function findCurrentFiberUsingSlowPathById(id) {
-    const fiber = idToFiberMap.get(id);
+    const fiber = idToArbitraryFiberMap.get(id);
 
     if (fiber == null) {
       console.warn(`Could not find Fiber with id "${id}"`);
@@ -7189,7 +7724,7 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function prepareViewElementSource(id) {
-    const fiber = idToFiberMap.get(id);
+    const fiber = idToArbitraryFiberMap.get(id);
 
     if (fiber == null) {
       console.warn(`Could not find Fiber with id "${id}"`);
@@ -7228,7 +7763,7 @@ function attach(hook, rendererID, renderer, global) {
   function fiberToSerializedElement(fiber) {
     return {
       displayName: getDisplayNameForFiber(fiber) || 'Anonymous',
-      id: getFiberID(getPrimaryFiber(fiber)),
+      id: getFiberIDThrows(fiber),
       key: fiber.key,
       type: getElementTypeForFiber(fiber)
     };
@@ -7278,6 +7813,37 @@ function attach(hook, rendererID, renderer, global) {
       instance,
       style
     };
+  }
+
+  function isErrorBoundary(fiber) {
+    const {
+      tag,
+      type
+    } = fiber;
+
+    switch (tag) {
+      case ClassComponent:
+      case IncompleteClassComponent:
+        const instance = fiber.stateNode;
+        return typeof type.getDerivedStateFromError === 'function' || instance !== null && typeof instance.componentDidCatch === 'function';
+
+      default:
+        return false;
+    }
+  }
+
+  function getNearestErrorBoundaryID(fiber) {
+    let parent = fiber.return;
+
+    while (parent !== null) {
+      if (isErrorBoundary(parent)) {
+        return getFiberIDUnsafe(parent);
+      }
+
+      parent = parent.return;
+    }
+
+    return null;
   }
 
   function inspectElementRaw(id) {
@@ -7386,7 +7952,8 @@ function attach(hook, rendererID, renderer, global) {
       }
 
       try {
-        hooks = Object(react_debug_tools["inspectHooksOfFiber"])(fiber, renderer.currentDispatcherRef);
+        hooks = Object(react_debug_tools["inspectHooksOfFiber"])(fiber, renderer.currentDispatcherRef, true // Include source location info for hooks
+        );
       } finally {
         // Restore original console functionality.
         for (const method in originalConsoleMethods) {
@@ -7411,8 +7978,21 @@ function attach(hook, rendererID, renderer, global) {
       rootType = fiberRoot._debugRootType;
     }
 
-    const errors = fiberToErrorsMap.get(id) || new Map();
-    const warnings = fiberToWarningsMap.get(id) || new Map();
+    const errors = fiberIDToErrorsMap.get(id) || new Map();
+    const warnings = fiberIDToWarningsMap.get(id) || new Map();
+    const isErrored = (fiber.flags & DidCapture) !== NoFlags || forceErrorForFiberIDs.get(id) === true;
+    let targetErrorBoundaryID;
+
+    if (isErrorBoundary(fiber)) {
+      // if the current inspected element is an error boundary,
+      // either that we want to use it to toggle off error state
+      // or that we allow to force error state on it if it's within another
+      // error boundary
+      targetErrorBoundaryID = isErrored ? id : getNearestErrorBoundaryID(fiber);
+    } else {
+      targetErrorBoundaryID = getNearestErrorBoundaryID(fiber);
+    }
+
     return {
       id,
       // Does the current renderer support editable hooks and function props?
@@ -7423,6 +8003,10 @@ function attach(hook, rendererID, renderer, global) {
       canEditHooksAndRenamePaths: typeof overrideHookStateRenamePath === 'function',
       canEditFunctionPropsDeletePaths: typeof overridePropsDeletePath === 'function',
       canEditFunctionPropsRenamePaths: typeof overridePropsRenamePath === 'function',
+      canToggleError: supportsTogglingError && targetErrorBoundaryID != null,
+      // Is this error boundary in error state.
+      isErrored,
+      targetErrorBoundaryID,
       canToggleSuspense: supportsTogglingSuspense && ( // If it's showing the real content, we can always flip fallback.
       !isTimedOutSuspense || // If it's showing fallback because we previously forced it to,
       // allow toggling it back to remove the fallback override.
@@ -7488,6 +8072,13 @@ function attach(hook, rendererID, renderer, global) {
             return true;
           }
 
+          if (path[path.length - 2] === 'hookSource' && path[path.length - 1] === 'fileName') {
+            // It's important to preserve the full file name (URL) for hook sources
+            // in case the user has enabled the named hooks feature.
+            // Otherwise the frontend may end up with a partial URL which it can't load.
+            return true;
+          }
+
           if (path[path.length - 1] === 'subHooks' || path[path.length - 2] === 'subHooks') {
             // Dehydrating the 'subHooks' property makes the HooksTree UI a lot more complicated,
             // so it's easiest for now if we just don't break on this boundary.
@@ -7525,7 +8116,7 @@ function attach(hook, rendererID, renderer, global) {
       id,
       props
     } = inspectedElement;
-    const fiber = idToFiberMap.get(id);
+    const fiber = idToArbitraryFiberMap.get(id);
 
     if (fiber == null) {
       console.warn(`Could not find Fiber with id "${id}"`);
@@ -7987,7 +8578,7 @@ function attach(hook, rendererID, renderer, global) {
     initialIDToRootMap = new Map(idToRootMap);
     idToContextsMap = new Map();
     hook.getFiberRoots(rendererID).forEach(root => {
-      const rootID = getFiberID(getPrimaryFiber(root.current));
+      const rootID = getFiberIDThrows(root.current);
       displayNamesByRootID.set(rootID, getDisplayNameForRoot(root.current));
 
       if (shouldRecordChangeDescriptions) {
@@ -8011,8 +8602,73 @@ function attach(hook, rendererID, renderer, global) {
   if (Object(storage["c" /* sessionStorageGetItem */])(constants["g" /* SESSION_STORAGE_RELOAD_AND_PROFILE_KEY */]) === 'true') {
     startProfiling(Object(storage["c" /* sessionStorageGetItem */])(constants["f" /* SESSION_STORAGE_RECORD_CHANGE_DESCRIPTIONS_KEY */]) === 'true');
   } // React will switch between these implementations depending on whether
-  // we have any manually suspended Fibers or not.
+  // we have any manually suspended/errored-out Fibers or not.
 
+
+  function shouldErrorFiberAlwaysNull() {
+    return null;
+  } // Map of id and its force error status: true (error), false (toggled off),
+  // null (do nothing)
+
+
+  const forceErrorForFiberIDs = new Map();
+
+  function shouldErrorFiberAccordingToMap(fiber) {
+    if (typeof setErrorHandler !== 'function') {
+      throw new Error('Expected overrideError() to not get called for earlier React versions.');
+    }
+
+    const id = getFiberIDUnsafe(fiber);
+
+    if (id === null) {
+      return null;
+    }
+
+    let status = null;
+
+    if (forceErrorForFiberIDs.has(id)) {
+      status = forceErrorForFiberIDs.get(id);
+
+      if (status === false) {
+        // TRICKY overrideError adds entries to this Map,
+        // so ideally it would be the method that clears them too,
+        // but that would break the functionality of the feature,
+        // since DevTools needs to tell React to act differently than it normally would
+        // (don't just re-render the failed boundary, but reset its errored state too).
+        // So we can only clear it after telling React to reset the state.
+        // Technically this is premature and we should schedule it for later,
+        // since the render could always fail without committing the updated error boundary,
+        // but since this is a DEV-only feature, the simplicity is worth the trade off.
+        forceErrorForFiberIDs.delete(id);
+
+        if (forceErrorForFiberIDs.size === 0) {
+          // Last override is gone. Switch React back to fast path.
+          setErrorHandler(shouldErrorFiberAlwaysNull);
+        }
+      }
+    }
+
+    return status;
+  }
+
+  function overrideError(id, forceError) {
+    if (typeof setErrorHandler !== 'function' || typeof scheduleUpdate !== 'function') {
+      throw new Error('Expected overrideError() to not get called for earlier React versions.');
+    }
+
+    forceErrorForFiberIDs.set(id, forceError);
+
+    if (forceErrorForFiberIDs.size === 1) {
+      // First override is added. Switch React to slower path.
+      setErrorHandler(shouldErrorFiberAccordingToMap);
+    }
+
+    const fiber = idToArbitraryFiberMap.get(id);
+
+    if (fiber != null) {
+      scheduleUpdate(fiber);
+    }
+  }
 
   function shouldSuspendFiberAlwaysFalse() {
     return false;
@@ -8021,8 +8677,8 @@ function attach(hook, rendererID, renderer, global) {
   const forceFallbackForSuspenseIDs = new Set();
 
   function shouldSuspendFiberAccordingToSet(fiber) {
-    const id = getFiberID(getPrimaryFiber(fiber));
-    return forceFallbackForSuspenseIDs.has(id);
+    const maybeID = getFiberIDUnsafe(fiber);
+    return maybeID !== null && forceFallbackForSuspenseIDs.has(maybeID);
   }
 
   function overrideSuspense(id, forceFallback) {
@@ -8046,7 +8702,7 @@ function attach(hook, rendererID, renderer, global) {
       }
     }
 
-    const fiber = idToFiberMap.get(id);
+    const fiber = idToArbitraryFiberMap.get(id);
 
     if (fiber != null) {
       scheduleUpdate(fiber);
@@ -8210,7 +8866,7 @@ function attach(hook, rendererID, renderer, global) {
       case HostRoot:
         // Roots don't have a real displayName, index, or key.
         // Instead, we'll use the pseudo key (childDisplayName:indexWithThatName).
-        const id = getFiberID(getPrimaryFiber(fiber));
+        const id = getFiberIDThrows(fiber);
         const pseudoKey = rootPseudoKeys.get(id);
 
         if (pseudoKey === undefined) {
@@ -8240,7 +8896,7 @@ function attach(hook, rendererID, renderer, global) {
 
 
   function getPathForElement(id) {
-    let fiber = idToFiberMap.get(id);
+    let fiber = idToArbitraryFiberMap.get(id);
 
     if (fiber == null) {
       return null;
@@ -8280,7 +8936,7 @@ function attach(hook, rendererID, renderer, global) {
     }
 
     return {
-      id: getFiberID(getPrimaryFiber(fiber)),
+      id: getFiberIDThrows(fiber),
       isFullMatch: trackedPathMatchDepth === trackedPath.length - 1
     };
   }
@@ -8339,6 +8995,7 @@ function attach(hook, rendererID, renderer, global) {
     logElementToConsole,
     prepareViewAttributeSource,
     prepareViewElementSource,
+    overrideError,
     overrideSuspense,
     overrideValueAtPath,
     renamePath,
@@ -9417,6 +10074,20 @@ class agent_Agent extends events["a" /* default */] {
       }
     });
 
+    _defineProperty(this, "overrideError", ({
+      id,
+      rendererID,
+      forceError
+    }) => {
+      const renderer = this._rendererInterfaces[rendererID];
+
+      if (renderer == null) {
+        console.warn(`Invalid renderer id "${rendererID}" for element "${id}"`);
+      } else {
+        renderer.overrideError(id, forceError);
+      }
+    });
+
     _defineProperty(this, "overrideSuspense", ({
       id,
       rendererID,
@@ -9677,9 +10348,17 @@ class agent_Agent extends events["a" /* default */] {
       this.emit('traceUpdates', nodes);
     });
 
+    _defineProperty(this, "onFastRefreshScheduled", () => {
+      if (constants["n" /* __DEBUG__ */]) {
+        debug('onFastRefreshScheduled');
+      }
+
+      this._bridge.send('fastRefreshScheduled');
+    });
+
     _defineProperty(this, "onHookOperations", operations => {
       if (constants["n" /* __DEBUG__ */]) {
-        debug('onHookOperations', operations);
+        debug('onHookOperations', `(${operations.length}) [${operations.join(', ')}]`);
       } // TODO:
       // The chrome.runtime does not currently support transferables; it forces JSON serialization.
       // See bug https://bugs.chromium.org/p/chromium/issues/detail?id=927134
@@ -9781,6 +10460,7 @@ class agent_Agent extends events["a" /* default */] {
     bridge.addListener('getOwnersList', this.getOwnersList);
     bridge.addListener('inspectElement', this.inspectElement);
     bridge.addListener('logElementToConsole', this.logElementToConsole);
+    bridge.addListener('overrideError', this.overrideError);
     bridge.addListener('overrideSuspense', this.overrideSuspense);
     bridge.addListener('overrideValueAtPath', this.overrideValueAtPath);
     bridge.addListener('reloadAndProfile', this.reloadAndProfile);
@@ -9942,8 +10622,8 @@ const BRIDGE_PROTOCOL = [// This version technically never existed,
 // so the safest guess to downgrade the frontend would be to version 4.10.
 {
   version: 0,
-  minNpmVersion: '<4.11.0',
-  maxNpmVersion: '<4.11.0'
+  minNpmVersion: '"<4.11.0"',
+  maxNpmVersion: '"<4.11.0"'
 }, {
   version: 1,
   minNpmVersion: '4.13.0',
@@ -10123,7 +10803,7 @@ class Bridge extends _events__WEBPACK_IMPORTED_MODULE_0__[/* default */ "a"] {
 "use strict";
  // A linked list to keep track of recently-used-ness
 
-const Yallist = __webpack_require__(24);
+const Yallist = __webpack_require__(23);
 
 const MAX = Symbol('max');
 const LENGTH = Symbol('length');
@@ -10764,7 +11444,7 @@ module.exports = LRUCache;
 
 
 if (true) {
-  module.exports = __webpack_require__(27);
+  module.exports = __webpack_require__(26);
 } else {}
 
 /***/ }),
@@ -10800,9 +11480,9 @@ function setup(hook) {
 
   const {
     initBackend
-  } = __webpack_require__(32);
+  } = __webpack_require__(31);
 
-  const setupNativeStyleEditor = __webpack_require__(33).default;
+  const setupNativeStyleEditor = __webpack_require__(32).default;
 
   const bridge = new Bridge({
     listen(fn) {
@@ -10867,14 +11547,6 @@ module.exports = g;
 
 /***/ }),
 /* 22 */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony default export */ __webpack_exports__["default"] = (":root {\n  /**\n   * IMPORTANT: When new theme variables are added below– also add them to SettingsContext updateThemeVariables()\n   */\n\n  /* Light theme */\n  --light-color-attribute-name: #ef6632;\n  --light-color-attribute-name-not-editable: #23272f;\n  --light-color-attribute-name-inverted: rgba(255, 255, 255, 0.7);\n  --light-color-attribute-value: #1a1aa6;\n  --light-color-attribute-value-inverted: #ffffff;\n  --light-color-attribute-editable-value: #1a1aa6;\n  --light-color-background: #ffffff;\n  --light-color-background-hover: rgba(0, 136, 250, 0.1);\n  --light-color-background-inactive: #e5e5e5;\n  --light-color-background-invalid: #fff0f0;\n  --light-color-background-selected: #0088fa;\n  --light-color-button-background: #ffffff;\n  --light-color-button-background-focus: #ededed;\n  --light-color-button: #5f6673;\n  --light-color-button-disabled: #cfd1d5;\n  --light-color-button-active: #0088fa;\n  --light-color-button-focus: #23272f;\n  --light-color-button-hover: #23272f;\n  --light-color-border: #eeeeee;\n  --light-color-commit-did-not-render-fill: #cfd1d5;\n  --light-color-commit-did-not-render-fill-text: #000000;\n  --light-color-commit-did-not-render-pattern: #cfd1d5;\n  --light-color-commit-did-not-render-pattern-text: #333333;\n  --light-color-commit-gradient-0: #37afa9;\n  --light-color-commit-gradient-1: #63b19e;\n  --light-color-commit-gradient-2: #80b393;\n  --light-color-commit-gradient-3: #97b488;\n  --light-color-commit-gradient-4: #abb67d;\n  --light-color-commit-gradient-5: #beb771;\n  --light-color-commit-gradient-6: #cfb965;\n  --light-color-commit-gradient-7: #dfba57;\n  --light-color-commit-gradient-8: #efbb49;\n  --light-color-commit-gradient-9: #febc38;\n  --light-color-commit-gradient-text: #000000;\n  --light-color-component-name: #6a51b2;\n  --light-color-component-name-inverted: #ffffff;\n  --light-color-component-badge-background: rgba(0, 0, 0, 0.1);\n  --light-color-component-badge-background-inverted: rgba(255, 255, 255, 0.25);\n  --light-color-component-badge-count: #777d88;\n  --light-color-component-badge-count-inverted: rgba(255, 255, 255, 0.7);\n  --light-color-console-error-badge-text: #ffffff;\n  --light-color-console-error-background: #fff0f0;\n  --light-color-console-error-border: #ffd6d6;\n  --light-color-console-error-icon: #eb3941;\n  --light-color-console-error-text: #fe2e31;\n  --light-color-console-warning-badge-text: #000000;\n  --light-color-console-warning-background: #fffbe5;\n  --light-color-console-warning-border: #fff5c1;\n  --light-color-console-warning-icon: #f4bd00;\n  --light-color-console-warning-text: #64460c;\n  --light-color-context-background: rgba(0,0,0,.9);\n  --light-color-context-background-hover: rgba(255, 255, 255, 0.1);\n  --light-color-context-background-selected: #178fb9;\n  --light-color-context-border: #3d424a;\n  --light-color-context-text: #ffffff;\n  --light-color-context-text-selected: #ffffff;\n  --light-color-dim: #777d88;\n  --light-color-dimmer: #cfd1d5;\n  --light-color-dimmest: #eff0f1;\n  --light-color-error-background: hsl(0, 100%, 97%);\n  --light-color-error-border: hsl(0, 100%, 92%);\n  --light-color-error-text: #ff0000;\n  --light-color-expand-collapse-toggle: #777d88;\n  --light-color-link: #0000ff;\n  --light-color-modal-background: rgba(255, 255, 255, 0.75);\n  --light-color-bridge-version-npm-background: #eff0f1;\n  --light-color-bridge-version-npm-text: #000000;\n  --light-color-bridge-version-number: #0088fa;\n  --light-color-primitive-hook-badge-background: #e5e5e5;\n  --light-color-primitive-hook-badge-text: #5f6673;\n  --light-color-record-active: #fc3a4b;\n  --light-color-record-hover: #3578e5;\n  --light-color-record-inactive: #0088fa;\n  --light-color-scroll-thumb: #c2c2c2;\n  --light-color-scroll-track: #fafafa;\n  --light-color-search-match: yellow;\n  --light-color-search-match-current: #f7923b;\n  --light-color-selected-tree-highlight-active: rgba(0, 136, 250, 0.1);\n  --light-color-selected-tree-highlight-inactive: rgba(0, 0, 0, 0.05);\n  --light-color-shadow: rgba(0, 0, 0, 0.25);\n  --light-color-tab-selected-border: #0088fa;\n  --light-color-text: #000000;\n  --light-color-text-invalid: #ff0000;\n  --light-color-text-selected: #ffffff;\n  --light-color-toggle-background-invalid: #fc3a4b;\n  --light-color-toggle-background-on: #0088fa;\n  --light-color-toggle-background-off: #cfd1d5;\n  --light-color-toggle-text: #ffffff;\n  --light-color-tooltip-background: rgba(0, 0, 0, 0.9);\n  --light-color-tooltip-text: #ffffff;\n\n  /* Dark theme */\n  --dark-color-attribute-name: #9d87d2;\n  --dark-color-attribute-name-not-editable: #ededed;\n  --dark-color-attribute-name-inverted: #282828;\n  --dark-color-attribute-value: #cedae0;\n  --dark-color-attribute-value-inverted: #ffffff;\n  --dark-color-attribute-editable-value: yellow;\n  --dark-color-background: #282c34;\n  --dark-color-background-hover: rgba(255, 255, 255, 0.1);\n  --dark-color-background-inactive: #3d424a;\n  --dark-color-background-invalid: #5c0000;\n  --dark-color-background-selected: #178fb9;\n  --dark-color-button-background: #282c34;\n  --dark-color-button-background-focus: #3d424a;\n  --dark-color-button: #afb3b9;\n  --dark-color-button-active: #61dafb;\n  --dark-color-button-disabled: #4f5766;\n  --dark-color-button-focus: #a2e9fc;\n  --dark-color-button-hover: #ededed;\n  --dark-color-border: #3d424a;\n  --dark-color-commit-did-not-render-fill: #777d88;\n  --dark-color-commit-did-not-render-fill-text: #000000;\n  --dark-color-commit-did-not-render-pattern: #666c77;\n  --dark-color-commit-did-not-render-pattern-text: #ffffff;\n  --dark-color-commit-gradient-0: #37afa9;\n  --dark-color-commit-gradient-1: #63b19e;\n  --dark-color-commit-gradient-2: #80b393;\n  --dark-color-commit-gradient-3: #97b488;\n  --dark-color-commit-gradient-4: #abb67d;\n  --dark-color-commit-gradient-5: #beb771;\n  --dark-color-commit-gradient-6: #cfb965;\n  --dark-color-commit-gradient-7: #dfba57;\n  --dark-color-commit-gradient-8: #efbb49;\n  --dark-color-commit-gradient-9: #febc38;\n  --dark-color-commit-gradient-text: #000000;\n  --dark-color-component-name: #61dafb;\n  --dark-color-component-name-inverted: #282828;\n  --dark-color-component-badge-background: rgba(255, 255, 255, 0.25);\n  --dark-color-component-badge-background-inverted: rgba(0, 0, 0, 0.25);\n  --dark-color-component-badge-count: #8f949d;\n  --dark-color-component-badge-count-inverted: rgba(255, 255, 255, 0.7);\n  --dark-color-console-error-badge-text: #000000;\n  --dark-color-console-error-background: #290000;\n  --dark-color-console-error-border: #5c0000;\n  --dark-color-console-error-icon: #eb3941;\n  --dark-color-console-error-text: #fc7f7f;\n  --dark-color-console-warning-badge-text: #000000;\n  --dark-color-console-warning-background: #332b00;\n  --dark-color-console-warning-border: #665500;\n  --dark-color-console-warning-icon: #f4bd00;\n  --dark-color-console-warning-text: #f5f2ed;\n  --dark-color-context-background: rgba(255,255,255,.9);\n  --dark-color-context-background-hover: rgba(0, 136, 250, 0.1);\n  --dark-color-context-background-selected: #0088fa;\n  --dark-color-context-border: #eeeeee;\n  --dark-color-context-text: #000000;\n  --dark-color-context-text-selected: #ffffff;\n  --dark-color-dim: #8f949d;\n  --dark-color-dimmer: #777d88;\n  --dark-color-dimmest: #4f5766;\n  --dark-color-error-background: #200;\n  --dark-color-error-border: #900;\n  --dark-color-error-text: #f55;\n  --dark-color-expand-collapse-toggle: #8f949d;\n  --dark-color-link: #61dafb;\n  --dark-color-modal-background: rgba(0, 0, 0, 0.75);\n  --dark-color-bridge-version-npm-background: rgba(0, 0, 0, 0.25);\n  --dark-color-bridge-version-npm-text: #ffffff;\n  --dark-color-bridge-version-number: yellow;\n  --dark-color-primitive-hook-badge-background: rgba(0, 0, 0, 0.25);\n  --dark-color-primitive-hook-badge-text: rgba(255, 255, 255, 0.7);\n  --dark-color-record-active: #fc3a4b;\n  --dark-color-record-hover: #a2e9fc;\n  --dark-color-record-inactive: #61dafb;\n  --dark-color-scroll-thumb: #afb3b9;\n  --dark-color-scroll-track: #313640;\n  --dark-color-search-match: yellow;\n  --dark-color-search-match-current: #f7923b;\n  --dark-color-selected-tree-highlight-active: rgba(23, 143, 185, 0.15);\n  --dark-color-selected-tree-highlight-inactive: rgba(255, 255, 255, 0.05);\n  --dark-color-shadow: rgba(0, 0, 0, 0.5);\n  --dark-color-tab-selected-border: #178fb9;\n  --dark-color-text: #ffffff;\n  --dark-color-text-invalid: #ff8080;\n  --dark-color-text-selected: #ffffff;\n  --dark-color-toggle-background-invalid: #fc3a4b;\n  --dark-color-toggle-background-on: #178fb9;\n  --dark-color-toggle-background-off: #777d88;\n  --dark-color-toggle-text: #ffffff;\n  --dark-color-tooltip-background: rgba(255, 255, 255, 0.9);\n  --dark-color-tooltip-text: #000000;\n\n  /* Font smoothing */\n  --light-font-smoothing: auto;\n  --dark-font-smoothing: antialiased;\n  --font-smoothing: auto;\n\n  /* Compact density */\n  --compact-font-size-monospace-small: 9px;\n  --compact-font-size-monospace-normal: 11px;\n  --compact-font-size-monospace-large: 15px;\n  --compact-font-size-sans-small: 10px;\n  --compact-font-size-sans-normal: 12px;\n  --compact-font-size-sans-large: 14px;\n  --compact-line-height-data: 18px;\n  --compact-root-font-size: 16px;\n\n  /* Comfortable density */\n  --comfortable-font-size-monospace-small: 10px;\n  --comfortable-font-size-monospace-normal: 13px;\n  --comfortable-font-size-monospace-large: 17px;\n  --comfortable-font-size-sans-small: 12px;\n  --comfortable-font-size-sans-normal: 14px;\n  --comfortable-font-size-sans-large: 16px;\n  --comfortable-line-height-data: 22px;\n  --comfortable-root-font-size: 20px;\n\n  /* GitHub.com system fonts */\n  --font-family-monospace: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo,\n    Courier, monospace;\n  --font-family-sans: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica,\n    Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;\n}\n");
-
-/***/ }),
-/* 23 */
 /***/ (function(module, exports) {
 
 // shim for using process in browser
@@ -11087,7 +11759,7 @@ process.umask = function () {
 };
 
 /***/ }),
-/* 24 */
+/* 23 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -11572,11 +12244,11 @@ function Node(value, prev, next, list) {
 
 try {
   // add if support for Symbol.iterator is present
-  __webpack_require__(25)(Yallist);
+  __webpack_require__(24)(Yallist);
 } catch (er) {}
 
 /***/ }),
-/* 25 */
+/* 24 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -11591,7 +12263,7 @@ module.exports = function (Yallist) {
 };
 
 /***/ }),
-/* 26 */
+/* 25 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -11618,32 +12290,34 @@ var b = 60103,
     n = 60115,
     p = 60116,
     q = 60129,
-    r = 60131,
-    u = 60132;
+    r = 60130,
+    u = 60131,
+    v = 60132;
 
 if ("function" === typeof Symbol && Symbol.for) {
-  var v = Symbol.for;
-  b = v("react.element");
-  c = v("react.portal");
-  d = v("react.fragment");
-  e = v("react.strict_mode");
-  f = v("react.profiler");
-  g = v("react.provider");
-  h = v("react.context");
-  k = v("react.forward_ref");
-  l = v("react.suspense");
-  m = v("react.suspense_list");
-  n = v("react.memo");
-  p = v("react.lazy");
-  q = v("react.debug_trace_mode");
-  r = v("react.legacy_hidden");
-  u = v("react.cache");
+  var w = Symbol.for;
+  b = w("react.element");
+  c = w("react.portal");
+  d = w("react.fragment");
+  e = w("react.strict_mode");
+  f = w("react.profiler");
+  g = w("react.provider");
+  h = w("react.context");
+  k = w("react.forward_ref");
+  l = w("react.suspense");
+  m = w("react.suspense_list");
+  n = w("react.memo");
+  p = w("react.lazy");
+  q = w("react.debug_trace_mode");
+  r = w("react.offscreen");
+  u = w("react.legacy_hidden");
+  v = w("react.cache");
 }
 
-var w = 0;
-"function" === typeof Symbol && (w = Symbol.for("react.module.reference"));
+var x = 0;
+"function" === typeof Symbol && (x = Symbol.for("react.module.reference"));
 
-function x(a) {
+function y(a) {
   if ("object" === typeof a && null !== a) {
     var t = a.$$typeof;
 
@@ -11678,28 +12352,29 @@ function x(a) {
   }
 }
 
-var y = g,
-    z = b,
-    A = k,
-    B = d,
-    C = p,
-    D = n,
-    E = c,
-    F = f,
-    G = e,
-    H = l,
-    I = m;
+var z = g,
+    A = b,
+    B = k,
+    C = d,
+    D = p,
+    E = n,
+    F = c,
+    G = f,
+    H = e,
+    I = l,
+    J = m;
 exports.ContextConsumer = h;
-exports.ContextProvider = y;
-exports.Element = z;
-exports.ForwardRef = A;
-exports.Fragment = B;
-exports.Lazy = C;
-exports.Memo = D;
-exports.Portal = E;
-exports.Profiler = F;
-exports.StrictMode = G;
-exports.Suspense = H;
+exports.ContextProvider = z;
+exports.Element = A;
+exports.ForwardRef = B;
+exports.Fragment = C;
+exports.Lazy = D;
+exports.Memo = E;
+exports.Portal = F;
+exports.Profiler = G;
+exports.StrictMode = H;
+exports.Suspense = I;
+exports.SuspenseList = J;
 
 exports.isAsyncMode = function () {
   return !1;
@@ -11710,11 +12385,11 @@ exports.isConcurrentMode = function () {
 };
 
 exports.isContextConsumer = function (a) {
-  return x(a) === h;
+  return y(a) === h;
 };
 
 exports.isContextProvider = function (a) {
-  return x(a) === g;
+  return y(a) === g;
 };
 
 exports.isElement = function (a) {
@@ -11722,50 +12397,49 @@ exports.isElement = function (a) {
 };
 
 exports.isForwardRef = function (a) {
-  return x(a) === k;
+  return y(a) === k;
 };
 
 exports.isFragment = function (a) {
-  return x(a) === d;
+  return y(a) === d;
 };
 
 exports.isLazy = function (a) {
-  return x(a) === p;
+  return y(a) === p;
 };
 
 exports.isMemo = function (a) {
-  return x(a) === n;
+  return y(a) === n;
 };
 
 exports.isPortal = function (a) {
-  return x(a) === c;
+  return y(a) === c;
 };
 
 exports.isProfiler = function (a) {
-  return x(a) === f;
+  return y(a) === f;
 };
 
 exports.isStrictMode = function (a) {
-  return x(a) === e;
+  return y(a) === e;
 };
 
 exports.isSuspense = function (a) {
-  return x(a) === l;
+  return y(a) === l;
+};
+
+exports.isSuspenseList = function (a) {
+  return y(a) === m;
 };
 
 exports.isValidElementType = function (a) {
-  return "string" === typeof a || "function" === typeof a || a === d || a === f || a === q || a === e || a === l || a === m || a === r || a === u || "object" === typeof a && null !== a && (a.$$typeof === p || a.$$typeof === n || a.$$typeof === g || a.$$typeof === h || a.$$typeof === k || a.$$typeof === w || void 0 !== a.getModuleId) ? !0 : !1;
+  return "string" === typeof a || "function" === typeof a || a === d || a === f || a === q || a === e || a === l || a === m || a === u || a === r || a === v || "object" === typeof a && null !== a && (a.$$typeof === p || a.$$typeof === n || a.$$typeof === g || a.$$typeof === h || a.$$typeof === k || a.$$typeof === x || void 0 !== a.getModuleId) ? !0 : !1;
 };
 
-exports.typeOf = x;
-exports.unstable_SuspenseList = I;
-
-exports.unstable_isSuspenseList = function (a) {
-  return x(a) === m;
-};
+exports.typeOf = y;
 
 /***/ }),
-/* 27 */
+/* 26 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -11779,75 +12453,75 @@ exports.unstable_isSuspenseList = function (a) {
  */
 
 
-var g = __webpack_require__(7),
-    h = __webpack_require__(28);
+var k = __webpack_require__(7),
+    p = __webpack_require__(27);
 
-function n(a) {
-  for (var b = "https://reactjs.org/docs/error-decoder.html?invariant=" + a, c = 1; c < arguments.length; c++) b += "&args[]=" + encodeURIComponent(arguments[c]);
+function r(a) {
+  for (var b = "https://reactjs.org/docs/error-decoder.html?invariant=" + a, e = 1; e < arguments.length; e++) b += "&args[]=" + encodeURIComponent(arguments[e]);
 
   return "Minified React error #" + a + "; visit " + b + " for the full message or use the non-minified dev environment for full errors and additional helpful warnings.";
 }
 
-var v = __webpack_require__(30).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
-    w = 60128;
+var w = __webpack_require__(29).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
+    x = 60128;
 
 if ("function" === typeof Symbol && Symbol.for) {
-  var x = Symbol.for;
-  w = x("react.opaque.id");
+  var y = Symbol.for;
+  x = y("react.opaque.id");
 }
 
-var y = [],
-    z = null,
-    A = null;
+var z = [],
+    A = null,
+    B = null;
 
-function B() {
-  if (null === z) {
+function C() {
+  if (null === A) {
     var a = new Map();
 
     try {
-      C.useContext({
+      D.useContext({
         _currentValue: null
-      }), C.useState(null), C.useReducer(function (a) {
+      }), D.useState(null), D.useReducer(function (a) {
         return a;
-      }, null), C.useRef(null), "function" === typeof C.useCacheRefresh && C.useCacheRefresh(), C.useLayoutEffect(function () {}), C.useEffect(function () {}), C.useImperativeHandle(void 0, function () {
+      }, null), D.useRef(null), "function" === typeof D.useCacheRefresh && D.useCacheRefresh(), D.useLayoutEffect(function () {}), D.useEffect(function () {}), D.useImperativeHandle(void 0, function () {
         return null;
-      }), C.useDebugValue(null), C.useCallback(function () {}), C.useMemo(function () {
+      }), D.useDebugValue(null), D.useCallback(function () {}), D.useMemo(function () {
         return null;
       });
     } finally {
-      var b = y;
-      y = [];
+      var b = z;
+      z = [];
     }
 
-    for (var c = 0; c < b.length; c++) {
-      var d = b[c];
-      a.set(d.primitive, h.parse(d.stackError));
+    for (var e = 0; e < b.length; e++) {
+      var f = b[e];
+      a.set(f.primitive, p.parse(f.stackError));
     }
 
-    z = a;
+    A = a;
   }
 
-  return z;
+  return A;
 }
 
-var D = null;
+var E = null;
 
-function E() {
-  var a = D;
-  null !== a && (D = a.next);
+function F() {
+  var a = E;
+  null !== a && (E = a.next);
   return a;
 }
 
-var C = {
+var D = {
   getCacheForType: function () {
-    throw Error(n(248));
+    throw Error(r(248));
   },
   readContext: function (a) {
     return a._currentValue;
   },
   useCacheRefresh: function () {
-    var a = E();
-    y.push({
+    var a = F();
+    z.push({
       primitive: "CacheRefresh",
       stackError: Error(),
       value: null !== a ? a.memoizedState : function () {}
@@ -11855,8 +12529,8 @@ var C = {
     return function () {};
   },
   useCallback: function (a) {
-    var b = E();
-    y.push({
+    var b = F();
+    z.push({
       primitive: "Callback",
       stackError: Error(),
       value: null !== b ? b.memoizedState[0] : a
@@ -11864,7 +12538,7 @@ var C = {
     return a;
   },
   useContext: function (a) {
-    y.push({
+    z.push({
       primitive: "Context",
       stackError: Error(),
       value: a._currentValue
@@ -11872,52 +12546,52 @@ var C = {
     return a._currentValue;
   },
   useEffect: function (a) {
-    E();
-    y.push({
+    F();
+    z.push({
       primitive: "Effect",
       stackError: Error(),
       value: a
     });
   },
   useImperativeHandle: function (a) {
-    E();
+    F();
     var b = void 0;
     null !== a && "object" === typeof a && (b = a.current);
-    y.push({
+    z.push({
       primitive: "ImperativeHandle",
       stackError: Error(),
       value: b
     });
   },
   useDebugValue: function (a, b) {
-    y.push({
+    z.push({
       primitive: "DebugValue",
       stackError: Error(),
       value: "function" === typeof b ? b(a) : a
     });
   },
   useLayoutEffect: function (a) {
-    E();
-    y.push({
+    F();
+    z.push({
       primitive: "LayoutEffect",
       stackError: Error(),
       value: a
     });
   },
   useMemo: function (a) {
-    var b = E();
+    var b = F();
     a = null !== b ? b.memoizedState[0] : a();
-    y.push({
+    z.push({
       primitive: "Memo",
       stackError: Error(),
       value: a
     });
     return a;
   },
-  useReducer: function (a, b, c) {
-    a = E();
-    b = null !== a ? a.memoizedState : void 0 !== c ? c(b) : b;
-    y.push({
+  useReducer: function (a, b, e) {
+    a = F();
+    b = null !== a ? a.memoizedState : void 0 !== e ? e(b) : b;
+    z.push({
       primitive: "Reducer",
       stackError: Error(),
       value: b
@@ -11925,11 +12599,11 @@ var C = {
     return [b, function () {}];
   },
   useRef: function (a) {
-    var b = E();
+    var b = F();
     a = null !== b ? b.memoizedState : {
       current: a
     };
-    y.push({
+    z.push({
       primitive: "Ref",
       stackError: Error(),
       value: a.current
@@ -11937,9 +12611,9 @@ var C = {
     return a;
   },
   useState: function (a) {
-    var b = E();
+    var b = F();
     a = null !== b ? b.memoizedState : "function" === typeof a ? a() : a;
-    y.push({
+    z.push({
       primitive: "State",
       stackError: Error(),
       value: a
@@ -11947,22 +12621,22 @@ var C = {
     return [a, function () {}];
   },
   useTransition: function () {
-    E();
-    E();
-    y.push({
+    F();
+    F();
+    z.push({
       primitive: "Transition",
       stackError: Error(),
       value: void 0
     });
-    return [function () {}, !1];
+    return [!1, function () {}];
   },
   useMutableSource: function (a, b) {
-    E();
-    E();
-    E();
-    E();
+    F();
+    F();
+    F();
+    F();
     a = b(a._source);
-    y.push({
+    z.push({
       primitive: "MutableSource",
       stackError: Error(),
       value: a
@@ -11970,9 +12644,9 @@ var C = {
     return a;
   },
   useDeferredValue: function (a) {
-    E();
-    E();
-    y.push({
+    F();
+    F();
+    z.push({
       primitive: "DeferredValue",
       stackError: Error(),
       value: a
@@ -11980,10 +12654,10 @@ var C = {
     return a;
   },
   useOpaqueIdentifier: function () {
-    var a = E();
-    A && 0 === A.mode && E();
-    (a = null === a ? void 0 : a.memoizedState) && a.$$typeof === w && (a = void 0);
-    y.push({
+    var a = F();
+    B && 0 === B.mode && F();
+    (a = null === a ? void 0 : a.memoizedState) && a.$$typeof === x && (a = void 0);
+    z.push({
       primitive: "OpaqueIdentifier",
       stackError: Error(),
       value: a
@@ -11991,196 +12665,203 @@ var C = {
     return a;
   }
 },
-    F = 0;
+    G = 0;
 
-function G(a, b, c) {
-  var d = b[c].source,
-      e = 0;
+function H(a, b, e) {
+  var f = b[e].source,
+      c = 0;
 
-  a: for (; e < a.length; e++) if (a[e].source === d) {
-    for (var p = c + 1, q = e + 1; p < b.length && q < a.length; p++, q++) if (a[q].source !== b[p].source) continue a;
+  a: for (; c < a.length; c++) if (a[c].source === f) {
+    for (var l = e + 1, q = c + 1; l < b.length && q < a.length; l++, q++) if (a[q].source !== b[l].source) continue a;
 
-    return e;
+    return c;
   }
 
   return -1;
 }
 
-function H(a, b) {
+function I(a, b) {
   if (!a) return !1;
   b = "use" + b;
   return a.length < b.length ? !1 : a.lastIndexOf(b) === a.length - b.length;
 }
 
-function I(a) {
-  if (!a) return "";
-  var b = a.lastIndexOf(".");
-  -1 === b && (b = 0);
-  "use" === a.substr(b, 3) && (b += 3);
-  return a.substr(b);
-}
-
-function J(a, b) {
-  for (var c = [], d = null, e = c, p = 0, q = [], u = 0; u < b.length; u++) {
-    var t = b[u];
-    var f = a;
-    var k = h.parse(t.stackError);
+function J(a, b, e) {
+  for (var f = [], c = null, l = f, q = 0, t = [], v = 0; v < b.length; v++) {
+    var u = b[v];
+    var d = a;
+    var h = p.parse(u.stackError);
 
     b: {
-      var m = k,
-          r = G(m, f, F);
-      if (-1 !== r) f = r;else {
-        for (var l = 0; l < f.length && 5 > l; l++) if (r = G(m, f, l), -1 !== r) {
-          F = l;
-          f = r;
+      var m = h,
+          n = H(m, d, G);
+      if (-1 !== n) d = n;else {
+        for (var g = 0; g < d.length && 5 > g; g++) if (n = H(m, d, g), -1 !== n) {
+          G = g;
+          d = n;
           break b;
         }
 
-        f = -1;
+        d = -1;
       }
     }
 
     b: {
-      m = k;
-      r = B().get(t.primitive);
-      if (void 0 !== r) for (l = 0; l < r.length && l < m.length; l++) if (r[l].source !== m[l].source) {
-        l < m.length - 1 && H(m[l].functionName, t.primitive) && l++;
-        l < m.length - 1 && H(m[l].functionName, t.primitive) && l++;
-        m = l;
+      m = h;
+      n = C().get(u.primitive);
+      if (void 0 !== n) for (g = 0; g < n.length && g < m.length; g++) if (n[g].source !== m[g].source) {
+        g < m.length - 1 && I(m[g].functionName, u.primitive) && g++;
+        g < m.length - 1 && I(m[g].functionName, u.primitive) && g++;
+        m = g;
         break b;
       }
       m = -1;
     }
 
-    k = -1 === f || -1 === m || 2 > f - m ? null : k.slice(m, f - 1);
+    h = -1 === d || -1 === m || 2 > d - m ? null : h.slice(m, d - 1);
 
-    if (null !== k) {
-      f = 0;
+    if (null !== h) {
+      d = 0;
 
-      if (null !== d) {
-        for (; f < k.length && f < d.length && k[k.length - f - 1].source === d[d.length - f - 1].source;) f++;
+      if (null !== c) {
+        for (; d < h.length && d < c.length && h[h.length - d - 1].source === c[c.length - d - 1].source;) d++;
 
-        for (d = d.length - 1; d > f; d--) e = q.pop();
+        for (c = c.length - 1; c > d; c--) l = t.pop();
       }
 
-      for (d = k.length - f - 1; 1 <= d; d--) f = [], e.push({
+      for (c = h.length - d - 1; 1 <= c; c--) d = [], m = h[c], (n = h[c - 1].functionName) ? (g = n.lastIndexOf("."), -1 === g && (g = 0), "use" === n.substr(g, 3) && (g += 3), n = n.substr(g)) : n = "", n = {
         id: null,
         isStateEditable: !1,
-        name: I(k[d - 1].functionName),
+        name: n,
         value: void 0,
-        subHooks: f
-      }), q.push(e), e = f;
+        subHooks: d
+      }, e && (n.hookSource = {
+        lineNumber: m.lineNumber,
+        columnNumber: m.columnNumber,
+        functionName: m.functionName,
+        fileName: m.fileName
+      }), l.push(n), t.push(l), l = d;
 
-      d = k;
+      c = h;
     }
 
-    k = t.primitive;
-    f = "Context" === k || "DebugValue" === k ? null : p++;
-    e.push({
-      id: f,
-      isStateEditable: "Reducer" === k || "State" === k,
-      name: k,
-      value: t.value,
+    d = u.primitive;
+    u = {
+      id: "Context" === d || "DebugValue" === d ? null : q++,
+      isStateEditable: "Reducer" === d || "State" === d,
+      name: d,
+      value: u.value,
       subHooks: []
-    });
+    };
+    e && (d = {
+      lineNumber: null,
+      functionName: null,
+      fileName: null,
+      columnNumber: null
+    }, h && 1 <= h.length && (h = h[0], d.lineNumber = h.lineNumber, d.functionName = h.functionName, d.fileName = h.fileName, d.columnNumber = h.columnNumber), u.hookSource = d);
+    l.push(u);
   }
 
-  K(c, null);
-  return c;
+  K(f, null);
+  return f;
 }
 
 function K(a, b) {
-  for (var c = [], d = 0; d < a.length; d++) {
-    var e = a[d];
-    "DebugValue" === e.name && 0 === e.subHooks.length ? (a.splice(d, 1), d--, c.push(e)) : K(e.subHooks, e);
+  for (var e = [], f = 0; f < a.length; f++) {
+    var c = a[f];
+    "DebugValue" === c.name && 0 === c.subHooks.length ? (a.splice(f, 1), f--, e.push(c)) : K(c.subHooks, c);
   }
 
-  null !== b && (1 === c.length ? b.value = c[0].value : 1 < c.length && (b.value = c.map(function (a) {
+  null !== b && (1 === e.length ? b.value = e[0].value : 1 < e.length && (b.value = e.map(function (a) {
     return a.value;
   })));
 }
 
-function L(a, b, c) {
-  null == c && (c = v.ReactCurrentDispatcher);
-  var d = c.current;
-  c.current = C;
+function L(a, b, e) {
+  var f = 3 < arguments.length && void 0 !== arguments[3] ? arguments[3] : !1;
+  null == e && (e = w.ReactCurrentDispatcher);
+  var c = e.current;
+  e.current = D;
 
   try {
-    var e = Error();
+    var l = Error();
     a(b);
   } finally {
-    a = y, y = [], c.current = d;
+    var q = z;
+    z = [];
+    e.current = c;
   }
 
-  c = h.parse(e);
-  return J(c, a);
+  c = p.parse(l);
+  return J(c, q, f);
 }
 
 function M(a) {
-  a.forEach(function (a, c) {
-    return c._currentValue = a;
+  a.forEach(function (a, e) {
+    return e._currentValue = a;
   });
 }
 
 exports.inspectHooks = L;
 
 exports.inspectHooksOfFiber = function (a, b) {
-  null == b && (b = v.ReactCurrentDispatcher);
-  A = a;
+  var e = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : !1;
+  null == b && (b = w.ReactCurrentDispatcher);
+  B = a;
   if (0 !== a.tag && 15 !== a.tag && 11 !== a.tag) throw Error("Unknown Fiber. Needs to be a function component to inspect hooks.");
-  B();
-  var c = a.type,
-      d = a.memoizedProps;
+  C();
+  var f = a.type,
+      c = a.memoizedProps;
 
-  if (c !== a.elementType && c && c.defaultProps) {
-    d = g({}, d);
-    var e = c.defaultProps;
+  if (f !== a.elementType && f && f.defaultProps) {
+    c = k({}, c);
+    var l = f.defaultProps;
 
-    for (p in e) void 0 === d[p] && (d[p] = e[p]);
+    for (q in l) void 0 === c[q] && (c[q] = l[q]);
   }
 
-  D = a.memoizedState;
-  var p = new Map();
+  E = a.memoizedState;
+  var q = new Map();
 
   try {
-    for (e = a; e;) {
-      if (10 === e.tag) {
-        var q = e.type._context;
-        p.has(q) || (p.set(q, q._currentValue), q._currentValue = e.memoizedProps.value);
+    for (l = a; l;) {
+      if (10 === l.tag) {
+        var t = l.type._context;
+        q.has(t) || (q.set(t, t._currentValue), t._currentValue = l.memoizedProps.value);
       }
 
-      e = e.return;
+      l = l.return;
     }
 
     if (11 === a.tag) {
-      var u = c.render;
-      c = d;
-      var t = a.ref;
-      a = b;
-      var f = a.current;
-      a.current = C;
+      var v = f.render;
+      f = c;
+      var u = a.ref;
+      t = b;
+      var d = t.current;
+      t.current = D;
 
       try {
-        var k = Error();
-        u(c, t);
+        var h = Error();
+        v(f, u);
       } finally {
-        var m = y;
-        y = [];
-        a.current = f;
+        var m = z;
+        z = [];
+        t.current = d;
       }
 
-      var r = h.parse(k);
-      return J(r, m);
+      var n = p.parse(h);
+      return J(n, m, e);
     }
 
-    return L(c, d, b);
+    return L(f, c, b, e);
   } finally {
-    D = null, M(p);
+    E = null, M(q);
   }
 };
 
 /***/ }),
-/* 28 */
+/* 27 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;(function (root, factory) {
@@ -12189,7 +12870,7 @@ var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_
   /* istanbul ignore next */
 
   if (true) {
-    !(__WEBPACK_AMD_DEFINE_ARRAY__ = [__webpack_require__(29)], __WEBPACK_AMD_DEFINE_FACTORY__ = (factory),
+    !(__WEBPACK_AMD_DEFINE_ARRAY__ = [__webpack_require__(28)], __WEBPACK_AMD_DEFINE_FACTORY__ = (factory),
 				__WEBPACK_AMD_DEFINE_RESULT__ = (typeof __WEBPACK_AMD_DEFINE_FACTORY__ === 'function' ?
 				(__WEBPACK_AMD_DEFINE_FACTORY__.apply(exports, __WEBPACK_AMD_DEFINE_ARRAY__)) : __WEBPACK_AMD_DEFINE_FACTORY__),
 				__WEBPACK_AMD_DEFINE_RESULT__ !== undefined && (module.exports = __WEBPACK_AMD_DEFINE_RESULT__));
@@ -12368,7 +13049,7 @@ var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_
 });
 
 /***/ }),
-/* 29 */
+/* 28 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;(function (root, factory) {
@@ -12521,18 +13202,18 @@ var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_
 });
 
 /***/ }),
-/* 30 */
+/* 29 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 if (true) {
-  module.exports = __webpack_require__(31);
+  module.exports = __webpack_require__(30);
 } else {}
 
 /***/ }),
-/* 31 */
+/* 30 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -12557,10 +13238,11 @@ var q = 60109,
     r = 60110,
     t = 60112;
 exports.Suspense = 60113;
-exports.unstable_SuspenseList = 60120;
+exports.SuspenseList = 60120;
 var u = 60115,
     v = 60116;
 exports.unstable_DebugTracingMode = 60129;
+exports.unstable_Offscreen = 60130;
 exports.unstable_LegacyHidden = 60131;
 exports.unstable_Cache = 60132;
 
@@ -12575,10 +13257,11 @@ if ("function" === typeof Symbol && Symbol.for) {
   r = w("react.context");
   t = w("react.forward_ref");
   exports.Suspense = w("react.suspense");
-  exports.unstable_SuspenseList = w("react.suspense_list");
+  exports.SuspenseList = w("react.suspense_list");
   u = w("react.memo");
   v = w("react.lazy");
   exports.unstable_DebugTracingMode = w("react.debug_trace_mode");
+  exports.unstable_Offscreen = w("react.offscreen");
   exports.unstable_LegacyHidden = w("react.legacy_hidden");
   exports.unstable_Cache = w("react.cache");
 }
@@ -12640,23 +13323,24 @@ var F = E.prototype = new D();
 F.constructor = E;
 l(F, C.prototype);
 F.isPureReactComponent = !0;
-var G = {
-  current: null
-},
+var G = Array.isArray,
     H = Object.prototype.hasOwnProperty,
     I = {
+  current: null
+},
+    J = {
   key: !0,
   ref: !0,
   __self: !0,
   __source: !0
 };
 
-function J(a, b, c) {
+function K(a, b, c) {
   var e,
       d = {},
       k = null,
       h = null;
-  if (null != b) for (e in void 0 !== b.ref && (h = b.ref), void 0 !== b.key && (k = "" + b.key), b) H.call(b, e) && !I.hasOwnProperty(e) && (d[e] = b[e]);
+  if (null != b) for (e in void 0 !== b.ref && (h = b.ref), void 0 !== b.key && (k = "" + b.key), b) H.call(b, e) && !J.hasOwnProperty(e) && (d[e] = b[e]);
   var g = arguments.length - 2;
   if (1 === g) d.children = c;else if (1 < g) {
     for (var f = Array(g), n = 0; n < g; n++) f[n] = arguments[n + 2];
@@ -12670,11 +13354,11 @@ function J(a, b, c) {
     key: k,
     ref: h,
     props: d,
-    _owner: G.current
+    _owner: I.current
   };
 }
 
-function K(a, b) {
+function L(a, b) {
   return {
     $$typeof: m,
     type: a.type,
@@ -12685,7 +13369,7 @@ function K(a, b) {
   };
 }
 
-function L(a) {
+function M(a) {
   return "object" === typeof a && null !== a && a.$$typeof === m;
 }
 
@@ -12699,13 +13383,13 @@ function escape(a) {
   });
 }
 
-var M = /\/+/g;
+var N = /\/+/g;
 
-function N(a, b) {
+function O(a, b) {
   return "object" === typeof a && null !== a && null != a.key ? escape("" + a.key) : b.toString(36);
 }
 
-function O(a, b, c, e, d) {
+function P(a, b, c, e, d) {
   var k = typeof a;
   if ("undefined" === k || "boolean" === k) a = null;
   var h = !1;
@@ -12723,88 +13407,84 @@ function O(a, b, c, e, d) {
       }
 
   }
-  if (h) return h = a, d = d(h), a = "" === e ? "." + N(h, 0) : e, Array.isArray(d) ? (c = "", null != a && (c = a.replace(M, "$&/") + "/"), O(d, b, c, "", function (a) {
+  if (h) return h = a, d = d(h), a = "" === e ? "." + O(h, 0) : e, G(d) ? (c = "", null != a && (c = a.replace(N, "$&/") + "/"), P(d, b, c, "", function (a) {
     return a;
-  })) : null != d && (L(d) && (d = K(d, c + (!d.key || h && h.key === d.key ? "" : ("" + d.key).replace(M, "$&/") + "/") + a)), b.push(d)), 1;
+  })) : null != d && (M(d) && (d = L(d, c + (!d.key || h && h.key === d.key ? "" : ("" + d.key).replace(N, "$&/") + "/") + a)), b.push(d)), 1;
   h = 0;
   e = "" === e ? "." : e + ":";
-  if (Array.isArray(a)) for (var g = 0; g < a.length; g++) {
+  if (G(a)) for (var g = 0; g < a.length; g++) {
     k = a[g];
-    var f = e + N(k, g);
-    h += O(k, b, c, f, d);
-  } else if (f = y(a), "function" === typeof f) for (a = f.call(a), g = 0; !(k = a.next()).done;) k = k.value, f = e + N(k, g++), h += O(k, b, c, f, d);else if ("object" === k) throw b = "" + a, Error(z(31, "[object Object]" === b ? "object with keys {" + Object.keys(a).join(", ") + "}" : b));
+    var f = e + O(k, g);
+    h += P(k, b, c, f, d);
+  } else if (f = y(a), "function" === typeof f) for (a = f.call(a), g = 0; !(k = a.next()).done;) k = k.value, f = e + O(k, g++), h += P(k, b, c, f, d);else if ("object" === k) throw b = "" + a, Error(z(31, "[object Object]" === b ? "object with keys {" + Object.keys(a).join(", ") + "}" : b));
   return h;
 }
 
-function P(a, b, c) {
+function Q(a, b, c) {
   if (null == a) return a;
   var e = [],
       d = 0;
-  O(a, e, "", "", function (a) {
+  P(a, e, "", "", function (a) {
     return b.call(c, a, d++);
   });
   return e;
 }
 
-function Q(a) {
+function R(a) {
   if (-1 === a._status) {
     var b = a._result;
     b = b();
-    a._status = 0;
-    a._result = b;
     b.then(function (b) {
-      0 === a._status && (b = b.default, a._status = 1, a._result = b);
+      if (0 === a._status || -1 === a._status) a._status = 1, a._result = b;
     }, function (b) {
-      0 === a._status && (a._status = 2, a._result = b);
+      if (0 === a._status || -1 === a._status) a._status = 2, a._result = b;
     });
+    -1 === a._status && (a._status = 0, a._result = b);
   }
 
-  if (1 === a._status) return a._result;
+  if (1 === a._status) return a._result.default;
   throw a._result;
 }
 
-var R = {
+var S = {
   current: null
 },
-    S = {
+    T = {
   transition: 0
 },
-    T = {
-  ReactCurrentDispatcher: R,
-  ReactCurrentBatchConfig: S,
-  ReactCurrentOwner: G,
-  IsSomeRendererActing: {
-    current: !1
-  },
+    U = {
+  ReactCurrentDispatcher: S,
+  ReactCurrentBatchConfig: T,
+  ReactCurrentOwner: I,
   assign: l
 };
 exports.Children = {
-  map: P,
+  map: Q,
   forEach: function (a, b, c) {
-    P(a, function () {
+    Q(a, function () {
       b.apply(this, arguments);
     }, c);
   },
   count: function (a) {
     var b = 0;
-    P(a, function () {
+    Q(a, function () {
       b++;
     });
     return b;
   },
   toArray: function (a) {
-    return P(a, function (a) {
+    return Q(a, function (a) {
       return a;
     }) || [];
   },
   only: function (a) {
-    if (!L(a)) throw Error(z(143));
+    if (!M(a)) throw Error(z(143));
     return a;
   }
 };
 exports.Component = C;
 exports.PureComponent = E;
-exports.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = T;
+exports.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = U;
 
 exports.cloneElement = function (a, b, c) {
   if (null === a || void 0 === a) throw Error(z(267, a));
@@ -12814,11 +13494,11 @@ exports.cloneElement = function (a, b, c) {
       h = a._owner;
 
   if (null != b) {
-    void 0 !== b.ref && (k = b.ref, h = G.current);
+    void 0 !== b.ref && (k = b.ref, h = I.current);
     void 0 !== b.key && (d = "" + b.key);
     if (a.type && a.type.defaultProps) var g = a.type.defaultProps;
 
-    for (f in b) H.call(b, f) && !I.hasOwnProperty(f) && (e[f] = void 0 === b[f] && void 0 !== g ? g[f] : b[f]);
+    for (f in b) H.call(b, f) && !J.hasOwnProperty(f) && (e[f] = void 0 === b[f] && void 0 !== g ? g[f] : b[f]);
   }
 
   var f = arguments.length - 2;
@@ -12839,11 +13519,9 @@ exports.cloneElement = function (a, b, c) {
   };
 };
 
-exports.createContext = function (a, b) {
-  void 0 === b && (b = null);
+exports.createContext = function (a) {
   a = {
     $$typeof: r,
-    _calculateChangedBits: b,
     _currentValue: a,
     _currentValue2: a,
     _threadCount: 0,
@@ -12857,10 +13535,10 @@ exports.createContext = function (a, b) {
   return a.Consumer = a;
 };
 
-exports.createElement = J;
+exports.createElement = K;
 
 exports.createFactory = function (a) {
-  var b = J.bind(null, a);
+  var b = K.bind(null, a);
   b.type = a;
   return b;
 };
@@ -12878,7 +13556,7 @@ exports.forwardRef = function (a) {
   };
 };
 
-exports.isValidElement = L;
+exports.isValidElement = M;
 
 exports.lazy = function (a) {
   return {
@@ -12887,7 +13565,7 @@ exports.lazy = function (a) {
       _status: -1,
       _result: a
     },
-    _init: Q
+    _init: R
   };
 };
 
@@ -12897,6 +13575,21 @@ exports.memo = function (a, b) {
     type: a,
     compare: void 0 === b ? null : b
   };
+};
+
+exports.startTransition = function (a) {
+  var b = T.transition;
+  T.transition = 1;
+
+  try {
+    a();
+  } finally {
+    T.transition = b;
+  }
+};
+
+exports.unstable_act = function () {
+  throw Error(z(406));
 };
 
 exports.unstable_createMutableSource = function (a, b) {
@@ -12909,82 +13602,71 @@ exports.unstable_createMutableSource = function (a, b) {
 };
 
 exports.unstable_getCacheForType = function (a) {
-  return R.current.getCacheForType(a);
-};
-
-exports.unstable_startTransition = function (a) {
-  var b = S.transition;
-  S.transition = 1;
-
-  try {
-    a();
-  } finally {
-    S.transition = b;
-  }
+  return S.current.getCacheForType(a);
 };
 
 exports.unstable_useCacheRefresh = function () {
-  return R.current.useCacheRefresh();
-};
-
-exports.unstable_useDeferredValue = function (a) {
-  return R.current.useDeferredValue(a);
+  return S.current.useCacheRefresh();
 };
 
 exports.unstable_useMutableSource = function (a, b, c) {
-  return R.current.useMutableSource(a, b, c);
+  return S.current.useMutableSource(a, b, c);
 };
 
 exports.unstable_useOpaqueIdentifier = function () {
-  return R.current.useOpaqueIdentifier();
-};
-
-exports.unstable_useTransition = function () {
-  return R.current.useTransition();
+  return S.current.useOpaqueIdentifier();
 };
 
 exports.useCallback = function (a, b) {
-  return R.current.useCallback(a, b);
+  return S.current.useCallback(a, b);
 };
 
-exports.useContext = function (a, b) {
-  return R.current.useContext(a, b);
+exports.useContext = function (a) {
+  return S.current.useContext(a);
 };
 
 exports.useDebugValue = function () {};
 
+exports.useDeferredValue = function (a) {
+  return S.current.useDeferredValue(a);
+};
+
 exports.useEffect = function (a, b) {
-  return R.current.useEffect(a, b);
+  return S.current.useEffect(a, b);
 };
 
 exports.useImperativeHandle = function (a, b, c) {
-  return R.current.useImperativeHandle(a, b, c);
+  return S.current.useImperativeHandle(a, b, c);
 };
 
 exports.useLayoutEffect = function (a, b) {
-  return R.current.useLayoutEffect(a, b);
+  return S.current.useLayoutEffect(a, b);
 };
 
 exports.useMemo = function (a, b) {
-  return R.current.useMemo(a, b);
+  return S.current.useMemo(a, b);
 };
 
 exports.useReducer = function (a, b, c) {
-  return R.current.useReducer(a, b, c);
+  return S.current.useReducer(a, b, c);
 };
 
 exports.useRef = function (a) {
-  return R.current.useRef(a);
+  return S.current.useRef(a);
 };
 
 exports.useState = function (a) {
-  return R.current.useState(a);
+  return S.current.useState(a);
 };
 
-exports.version = "17.0.2";
+exports.useTransition = function () {
+  return S.current.useTransition();
+};
+
+exports.version = "17.0.3";
 
 /***/ }),
-/* 32 */
+/* 31 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -13001,10 +13683,10 @@ var backend_agent = __webpack_require__(15);
 var backend_renderer = __webpack_require__(14);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/types.js
-var types = __webpack_require__(1);
+var types = __webpack_require__(0);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/utils.js + 1 modules
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(1);
 
 // EXTERNAL MODULE: ../react-devtools-shared/src/backend/utils.js
 var backend_utils = __webpack_require__(4);
@@ -13772,6 +14454,10 @@ function attach(hook, rendererID, renderer, global) {
       canEditHooksAndRenamePaths: false,
       canEditFunctionPropsDeletePaths: false,
       canEditFunctionPropsRenamePaths: false,
+      // Toggle error boundary did not exist in legacy versions
+      canToggleError: false,
+      isErrored: false,
+      targetErrorBoundaryID: null,
       // Suspense did not exist in legacy versions
       canToggleSuspense: false,
       // Can view component source location.
@@ -13982,6 +14668,10 @@ function attach(hook, rendererID, renderer, global) {
     throw new Error('handlePostCommitFiberRoot not supported by this renderer');
   };
 
+  const overrideError = () => {
+    throw new Error('overrideError not supported by this renderer');
+  };
+
   const overrideSuspense = () => {
     throw new Error('overrideSuspense not supported by this renderer');
   };
@@ -14049,6 +14739,7 @@ function attach(hook, rendererID, renderer, global) {
     handlePostCommitFiberRoot,
     inspectElement,
     logElementToConsole,
+    overrideError,
     overrideSuspense,
     overrideValueAtPath,
     renamePath,
@@ -14092,7 +14783,7 @@ function initBackend(hook, agent, global) {
     rendererInterface.flushInitialOperations();
   }), hook.sub('unsupported-renderer-version', id => {
     agent.onUnsupportedRenderer(id);
-  }), hook.sub('operations', agent.onHookOperations), hook.sub('traceUpdates', agent.onTraceUpdates) // TODO Add additional subscriptions required for profiling mode
+  }), hook.sub('fastRefreshScheduled', agent.onFastRefreshScheduled), hook.sub('operations', agent.onHookOperations), hook.sub('traceUpdates', agent.onTraceUpdates) // TODO Add additional subscriptions required for profiling mode
   ];
 
   const attachRenderer = (id, renderer) => {
@@ -14158,7 +14849,7 @@ function initBackend(hook, agent, global) {
 }
 
 /***/ }),
-/* 33 */
+/* 32 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
