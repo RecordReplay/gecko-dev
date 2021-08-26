@@ -266,12 +266,6 @@ class CommandError extends Error {
 const gRecordingCreateWaiters = [];
 
 function isLoggedIn() {
-  if (isRunningTest()) {
-    // Tests always behave as if they are logged in because we hardcode the authid
-    // to send when tests are running.
-    return true;
-  }
-
   return !!Services.prefs.getStringPref("devtools.recordreplay.user-token") || !!gOriginalApiKey;
 }
 
@@ -292,12 +286,6 @@ function clearUserToken() {
 const gOriginalApiKey = getenv("RECORD_REPLAY_API_KEY");
 if (gOriginalApiKey) {
   setAccessToken(gOriginalApiKey, true /* isAPIKey */);
-} else if (isRunningTest()) {
-  // The record button is force-enabled when running tests, and if there
-  // is no API key, we'll send the authId as part of setRecordingMetadata,
-  // so for now we don't do anything with the user token.
-  // Eventually we should switch our tests to use API keys and then we'll
-  // be able to delete some of this.
 } else {
   let gExpirationTimer;
 
@@ -335,15 +323,6 @@ if (gOriginalApiKey) {
     ensureAccessTokenStateSynchronized();
   });
   ensureAccessTokenStateSynchronized();
-}
-
-function getLoggedInUserAuthId() {
-  // Tests currently don't have an API key, so the only way to assign test recordings
-  // to the test user is to pass in the auth ID.
-  if (isRunningTest() && !getenv("RECORD_REPLAY_API_KEY")) {
-    return "auth0|5f6e41315c863800757cdf74";
-  }
-  return undefined;
 }
 
 function getTokenExpiration(token) {
@@ -448,14 +427,12 @@ class Recording extends EventEmitter {
       duration: data.duration,
     };
     try {
-      const authId = getLoggedInUserAuthId();
-
       this.emit("finished", recordingMetadata);
 
       // Upload the metadata without the screenshot earlier to unblock the
       // upload screen
       await sendCommand("Internal.setRecordingMetadata", {
-        authId,
+        authId: undefined,
         recordingData: {...data, lastScreenData: "", lastScreenMimeType: ""},
       });
 
@@ -467,7 +444,7 @@ class Recording extends EventEmitter {
       await this._recordingResourcesUpload;
 
       await sendCommand("Internal.setRecordingMetadata", {
-        authId,
+        authId: undefined,
         recordingData: data,
       });
     } catch (err) {
