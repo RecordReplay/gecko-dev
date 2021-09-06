@@ -231,16 +231,44 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   MigrationUtils: "resource:///modules/MigrationUtils.jsm",
 });
 
+const { toggleRecording } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/connection.js"
+);
+
 // [Replay] - Mapping of replay: URL scheme values to destinations. Can either
 // be a URL or a function which invokes arbitrary browser-chrome functionality
 const replaySchemeMap = {
   library: 'https://app.replay.io/',
   migrate: (uri, principal, browsingContext) => {
-    const win = browsingContext.topFrameElement.getTabBrowser().owerGlobal;
+    const win = browsingContext.topFrameElement.getTabBrowser().ownerGlobal;
     MigrationUtils.showMigrationWizard(win, [
       MigrationUtils.MIGRATION_ENTRYPOINT_UNKNOWN,
     ]);
   },
+  record: (url, principal, browsingContext) => {
+    const parts = new URLSearchParams(url.query);
+    const target = parts.get("url");
+    const newtab = parts.has("newtab") ? parts.get("newtab").toLowerCase() === "true" : false;
+
+    if (!target) return;
+
+    const browser = browsingContext.topFrameElement;
+    if (newtab) {
+      const tabbrowser = browser.getTabBrowser();
+      const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
+      const tab = tabbrowser.addTab(
+        target,
+        { triggeringPrincipal: principal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
+      );
+      tabbrowser.selectedTab = tab;
+    } else {
+      browser.loadURI(target, {
+        triggeringPrincipal: principal
+      });
+    }
+
+    toggleRecording(browser.ownerDocument.defaultView.gBrowser.selectedBrowser);
+  }
 };
 
 function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
