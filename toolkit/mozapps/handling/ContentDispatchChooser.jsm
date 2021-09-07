@@ -267,7 +267,9 @@ const replaySchemeMap = {
       });
     }
 
-    toggleRecording(browser.ownerDocument.defaultView.gBrowser.selectedBrowser);
+    new Promise(resolve => setTimeout(resolve, 500)).then(() => {
+      toggleRecording(browser.ownerDocument.defaultView.gBrowser.selectedBrowser);
+    });
   }
 };
 
