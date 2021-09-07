@@ -8,6 +8,9 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
+const { setTimeout } = ChromeUtils.import(
+  "resource://gre/modules/Timer.jsm"
+);
 
 const DIALOG_URL_APP_CHOOSER =
   "chrome://mozapps/content/handling/appChooser.xhtml";
@@ -253,8 +256,8 @@ const replaySchemeMap = {
     if (!target) return;
 
     const browser = browsingContext.topFrameElement;
+    const tabbrowser = browser.getTabBrowser();
     if (newtab) {
-      const tabbrowser = browser.getTabBrowser();
       const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
       const tab = tabbrowser.addTab(
         target,
@@ -262,7 +265,7 @@ const replaySchemeMap = {
       );
       tabbrowser.selectedTab = tab;
     } else {
-      browser.loadURI(target, {
+      tabbrowser.loadURI(target, {
         triggeringPrincipal: principal
       });
     }
