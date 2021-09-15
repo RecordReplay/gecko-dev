@@ -97,7 +97,8 @@ description > .text-link:focus {
   padding: 0;
 }
 
-#submit-feedback {
+#submit-feedback,
+#support-email {
   padding-inline-start: 10px;
 }
 

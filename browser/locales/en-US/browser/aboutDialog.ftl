@@ -40,6 +40,7 @@ warningDesc-version = { -brand-short-name } is experimental and may be unstable.
 
 aboutdialog-help-user = { -brand-product-name } Help
 aboutdialog-submit-feedback = Submit Feedback
+aboutdialog-email-support = Email Support
 
 community-exp = <label data-l10n-name="community-exp-mozillaLink">{ -vendor-short-name }</label> is a <label data-l10n-name="community-exp-creditsLink">global community</label> working together to keep the Web open, public and accessible to all.
 
