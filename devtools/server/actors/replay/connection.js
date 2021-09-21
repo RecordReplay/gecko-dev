@@ -480,19 +480,19 @@ function getRecordingBrowser(key) {
   return key.ownerElement;
 }
 
-function makeRecordingStateObject(key, state) {
+function updateRecordingState(key, state) {
   const current = recordings.get(key);
   const timestamps = current && current.timestamps || {};
   timestamps[state] = Date.now();
 
-  return { state, timestamps };
+  return recordings.set(key, { state, timestamps };
 }
 
 function setRecordingState(key, state) {
   if (state === RecordingState.READY) {
     recordings.delete(key);
   } else {
-    recordings.set(key, makeRecordingStateObject(key, state));
+    updateRecordingState(key, state);
   }
 
   Services.obs.notifyObservers({
@@ -549,7 +549,7 @@ function toggleRecording(browser) {
   if (recordings.has(key)) {
     state = recordings.get(key).state;
   } else {
-    recordings.set(key, makeRecordingStateObject(key, RecordingState.READY));
+    updateRecordingState(key, RecordingState.READY);
   }
 
   // Some sort of delay seems required to allow the chrome to update the
