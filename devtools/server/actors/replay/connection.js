@@ -485,7 +485,7 @@ function updateRecordingState(key, state) {
   const timestamps = current && current.timestamps || {};
   timestamps[state] = Date.now();
 
-  return recordings.set(key, { state, timestamps };
+  return recordings.set(key, { state, timestamps });
 }
 
 function setRecordingState(key, state) {
