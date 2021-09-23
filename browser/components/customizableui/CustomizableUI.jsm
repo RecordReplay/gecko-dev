@@ -222,12 +222,6 @@ var CustomizableUIInternal = {
       let addons = await AddonManager.getAddonsByTypes(["theme"]);
       gDefaultTheme = addons.find(addon => addon.id == kDefaultThemeID);
       gSelectedTheme = addons.find(addon => addon.isActive) || gDefaultTheme;
-
-      // [REPLAY] Coerce theme to be the replay theme on startup
-      if(!gDefaultTheme.isActive) {
-        await gDefaultTheme.enable();
-        gSelectedTheme = gDefaultTheme;
-      }
     });
 
     this.addListener(this);
