@@ -471,10 +471,12 @@
 #else
                           />
 #endif
+<!-- [Replay] - Hiding Tour for now
                 <menuitem id="menu_openTour"
                           oncommand="openTourPage();"
                           data-l10n-id="menu-help-show-tour"
                           appmenu-data-l10n-id="appmenu-help-show-tour"/>
+-->
                 <menuitem id="help_importFromAnotherBrowser"
                           command="cmd_help_importFromAnotherBrowser"
                           data-l10n-id="menu-help-import-from-another-browser"
