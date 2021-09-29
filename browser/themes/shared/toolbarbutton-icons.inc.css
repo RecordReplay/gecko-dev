@@ -294,6 +294,10 @@ toolbar[brighttext] {
   animation: spinner 1s linear infinite reverse;
 }
 
+html[lwthemetextcolor="bright"] #record-button.waiting {
+  background-image: url("chrome://devtools/skin/images/command-record-wait-dark.svg");
+}
+
 #record-button.hidden {
   display: none !important;
 }
