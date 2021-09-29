@@ -1478,7 +1478,12 @@ function createRecordingButton() {
       const url = "https://app.replay.io/?signin=true";
       const options = { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() };
 
-      if (getRecordingState(gBrowser.selectedBrowser) === RecordingState.READY) {
+      // open a new tab to authenticate if not on a replay (or auth0 replay) host
+      const host = gBrowser.selectedBrowser.documentURI.host;
+      if (getRecordingState(gBrowser.selectedBrowser) === RecordingState.READY && (
+        /(\.|^)replay.io$/.test(host) ||
+        "webreplay.us.auth0.com" === host
+      )) {
         gBrowser.loadURI(url, options);
       } else {
         gBrowser.selectedTab = gBrowser.addTab(url, options);
