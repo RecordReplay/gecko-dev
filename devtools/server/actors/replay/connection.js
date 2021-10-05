@@ -738,7 +738,7 @@ function setRecordingSaved(browser, recordingId) {
   // For testing, allow specifying a test script to load in the tab.
   const localTest = getenv("RECORD_REPLAY_LOCAL_TEST");
   if (localTest) {
-    url.searchParmas.set('test', localTest);
+    url.searchParams.set('test', localTest);
   }
 
   openInNewTab(browser, url.toString());
