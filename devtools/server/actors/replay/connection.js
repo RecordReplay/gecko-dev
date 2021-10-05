@@ -86,15 +86,22 @@ function openInNewTab(browser, url) {
   tabbrowser.selectedTab = tab;
 }
 
-function getViewURL() {
-  let viewHost = "https://replay.io";
+function getViewURL(path) {
+  let viewHost = "https://app.replay.io";
 
   // For testing, allow overriding the host for the view page.
   const hostOverride = getenv("RECORD_REPLAY_VIEW_HOST");
   if (hostOverride) {
     viewHost = hostOverride;
   }
-  return `${viewHost}/view`;
+
+  const url = new URL(viewHost);
+
+  if (path) {
+    url.pathname = path;
+  }
+
+  return url;
 }
 
 function setConnectionStatusChangeCallback(callback) {
@@ -721,20 +728,20 @@ function setRecordingSaved(browser, recordingId) {
   const dispatchAddress = getDispatchServer();
   const key = getRecordingKey(browser);
 
-  let extra = "";
+  const url = getViewURL(`/recording/${recordingId}`);
 
   // Specify the dispatch address if it is not the default.
   if (dispatchAddress != "wss://dispatch.replay.io") {
-    extra += `&dispatch=${dispatchAddress}`;
+    url.searchParams.set('dispatch', dispatchAddress);
   }
 
   // For testing, allow specifying a test script to load in the tab.
   const localTest = getenv("RECORD_REPLAY_LOCAL_TEST");
   if (localTest) {
-    extra += `&test=${localTest}`;
+    url.searchParmas.set('test', localTest);
   }
 
-  openInNewTab(browser, `${getViewURL()}?id=${recordingId}${extra}`);
+  openInNewTab(browser, url.toString());
 
   // defer setting the state until the end so that the new tab has opened before the spinner disappears.
   setRecordingState(key, RecordingState.READY, {duration: getRecordingStateDuration(key, RecordingState.STOPPING)});
@@ -763,7 +770,9 @@ function handleRecordingStarted(pmm) {
     console.error("Unstable recording: " + data.why);
     const browser = getBrowser();
 
-    setRecordingFinished(browser, `https://replay.io/browser/error?message=${data.why}`);
+    const url = getViewURL('/browser/error');
+    url.searchParams.set("message", data.why);
+    setRecordingFinished(browser, url.toString());
     setRecordingState(getRecordingKey(browser), RecordingState.READY);
   });
 

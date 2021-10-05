@@ -1138,6 +1138,9 @@ function createProtocolValue(v) {
   if (typeof v == "string" && v.length > MaxStringLength) {
     return { value: v.substring(0, MaxStringLength) + "…" };
   }
+  if (typeof v == "symbol") {
+    return { symbol: v.toString() };
+  }
   return { value: v };
 }
 
@@ -1147,7 +1150,7 @@ function createProtocolValueRaw(v) {
 
 function createProtocolPropertyDescriptor(name, desc) {
   const rv = createProtocolValue(desc.value);
-  rv.name = name;
+  rv.name = name.toString();
 
   let flags = 0;
   if (desc.writable) {
@@ -1168,6 +1171,10 @@ function createProtocolPropertyDescriptor(name, desc) {
   }
   if (desc.set) {
     rv.set = getObjectId(desc.set);
+  }
+
+  if (typeof name == "symbol") {
+    rv.isSymbol = true;
   }
 
   return rv;
@@ -1338,7 +1345,7 @@ function propertyNames(object) {
     return [];
   }
   try {
-    return object.getOwnPropertyNames();
+    return [...object.getOwnPropertyNames(), ...object.getOwnPropertySymbols()];
   } catch (e) {
     return [];
   }
