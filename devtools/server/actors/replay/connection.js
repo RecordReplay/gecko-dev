@@ -75,6 +75,17 @@ function getDispatchServer() {
   return Services.prefs.getStringPref("devtools.recordreplay.cloudServer");
 }
 
+function openInNewTab(browser, url) {
+  const tabbrowser = browser.getTabBrowser();
+  const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
+  const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
+  const tab = tabbrowser.addTab(
+    url,
+    { triggeringPrincipal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
+  );
+  tabbrowser.selectedTab = tab;
+}
+
 function getViewURL() {
   let viewHost = "https://replay.io";
 
@@ -723,14 +734,7 @@ function setRecordingSaved(browser, recordingId) {
     extra += `&test=${localTest}`;
   }
 
-  const tabbrowser = browser.getTabBrowser();
-  const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
-  const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-  const tab = tabbrowser.addTab(
-    `${getViewURL()}?id=${recordingId}${extra}`,
-    { triggeringPrincipal, index: currentTabIndex === -1 ? undefined : currentTabIndex + 1}
-  );
-  tabbrowser.selectedTab = tab;
+  openInNewTab(browser, `${getViewURL()}?id=${recordingId}${extra}`);
 
   // defer setting the state until the end so that the new tab has opened before the spinner disappears.
   setRecordingState(key, RecordingState.READY, {duration: getRecordingStateDuration(key, RecordingState.STOPPING)});
@@ -824,14 +828,19 @@ function showUnsupportedFeatureNotification(browser, feature, issueNumber) {
     return;
   }
 
-  const message = `This page uses a feature (${feature}) that is not yet supported while recording, and might not work right.  See https://github.com/recordreplay/gecko-dev/issues/${issueNumber}`;
+  const message = `${feature} is not currently supported.`;
 
   notificationBox.appendNotification(
     message,
     "unsupported-feature",
-    "chrome://browser/content/aboutRobots-icon.png",
+    undefined,
     notificationBox.PRIORITY_WARNING_HIGH,
-    []
+    [{
+      label: "Learn More",
+      callback: () => {
+        openInNewTab(browser, `https://github.com/recordreplay/gecko-dev/issues/${issueNumber}`);
+      }
+    }],
   );
 }
 
