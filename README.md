@@ -55,7 +55,8 @@ git push
 ```
 
 8. Update geckoVersion in the backend.
-9. Make sure automatic updates work with the new browser. Deploy a browser but do not release it, then open it, open "About Replay" and see if it updates.
+9. Update User Agent version reported by `CurrentFirefoxVersion()` in `toolkit/recordreplay/ProcessRecordReplay.cpp`
+10. Make sure automatic updates work with the new browser. Deploy a browser but do not release it, then open it, open "About Replay" and see if it updates.
 
 Tips for debugging:
 
