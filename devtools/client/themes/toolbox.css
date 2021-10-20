@@ -547,3 +547,46 @@
   background-color: var(--theme-toolbar-hover);
   z-index: 1;
 }
+
+/* [Replay] */
+
+/* Let the component gain focus when a click hits an empty area */
+#toolbox-container {
+  position: relative;
+}
+
+#recording-overlay {
+  position: absolute;
+  z-index: 999;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 24pt;
+  font-weight: bold;
+}
+
+#recording-overlay[hidden="true"] {
+  display: none;
+}
+
+#recording-overlay::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background-color: var(--theme-toolbar-background);
+  opacity: 0.6;
+  z-index: -1;
+}
+
+#recording-overlay li {
+  color: #7e6c8f;
+  list-style-image: url("chrome://global/skin/icons/replay-logo-light.svg");
+}

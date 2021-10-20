@@ -23,6 +23,10 @@
   <script src="chrome://devtools/content/framework/toolbox-init.js"/>
 
   <vbox id="toolbox-container" flex="1" role="group">
+    <!-- [Replay] Add overlay to disable devtools while recording -->
+    <div xmlns="http://www.w3.org/1999/xhtml" id="recording-overlay" hidden="true">
+      <li>Developer Tools are disabled while recording.</li>
+    </div>
     <div xmlns="http://www.w3.org/1999/xhtml" id="toolbox-error-mount"/>
     <div xmlns="http://www.w3.org/1999/xhtml" id="toolbox-notificationbox"/>
     <div xmlns="http://www.w3.org/1999/xhtml" id="toolbox-toolbar-mount"

@@ -45,6 +45,14 @@ const { BrowserLoader } = ChromeUtils.import(
   "resource://devtools/client/shared/browser-loader.js"
 );
 
+// [Replay] - Import getRecordingState to obscure dev tools while recording
+const { getRecordingState } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/connection.js"
+);
+const { pingTelemetry } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/telemetry.js"
+);
+
 const { LocalizationHelper } = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper(
   "devtools/client/locales/toolbox.properties"
@@ -943,6 +951,32 @@ Toolbox.prototype = {
       // will handle this on their own, but each have their own tear down function.
       if (flags.testing) {
         await performanceFrontConnection;
+      }
+
+      // [Replay] - Apply an overlay to the devtools while recording to prevent user input
+      const toggleRecordingOverlay = (state) => {
+        const overlay = this.win.document.getElementById("recording-overlay");
+        const hidden = String(state === 0 /* READY */);
+        if (overlay) {
+          overlay.setAttribute("hidden", hidden);
+        }
+      }
+
+      // get the current state and observe for changes
+      const selectedBrowser = this.topWindow && this.topWindow.gBrowser && this.topWindow.gBrowser.selectedBrowser;
+      // the browser toolbox doesn't have a selectedBrowser so this
+      // protects against showing the overlay on it
+      if (selectedBrowser) {
+        const recordingState = getRecordingState(selectedBrowser);
+        pingTelemetry("devtools", "open", {recordingState});
+        toggleRecordingOverlay(recordingState);
+        Services.obs.addObserver(
+          subject => {
+            pingTelemetry("devtools", "state-update", {recordingState: subject.wrappedJSObject.state});
+            toggleRecordingOverlay(subject.wrappedJSObject.state)
+          },
+          "recordreplay-recording-changed"
+        );
       }
 
       this.emit("ready");
