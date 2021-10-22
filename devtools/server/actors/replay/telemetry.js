@@ -20,17 +20,20 @@ function pingTelemetry(source, name, data) {
   );
   const browserSettings = { usePreallocated: !disablePreallocated };
 
-  fetch(url, {
-    method: 'POST',
-    headers: auth ? { Authorization: `Bearer ${auth}` } : undefined,
-    body: JSON.stringify({
-      ...data,
-      event: 'Gecko',
-      build: Services.appinfo.appBuildID,
-      ts: Date.now(),
-      source,
-      name,
-      browserSettings,
-    })
-  }).catch(console.error);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", url);
+  if (auth) {
+    xhr.setRequestHeader("Authorization", `Bearer ${auth}`);
+  }
+  xhr.send(JSON.stringify({
+    ...data,
+    event: 'Gecko',
+    build: Services.appinfo.appBuildID,
+    ts: Date.now(),
+    source,
+    name,
+    browserSettings,
+  }));
+
+  xhr.onerror = console.error;
 }

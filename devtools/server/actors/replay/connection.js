@@ -337,8 +337,7 @@ if (ReplayAuth.hasOriginalApiKey()) {
 
     const timeToExpiration = expiration - Date.now();
     if (timeToExpiration <= 0) {
-      // TODO (ryanjduffy): fetch() isn't defined yet so this fails
-      // pingTelemetry("browser", "auth-expired", {expiration, authId: payload.sub});
+      pingTelemetry("browser", "auth-expired", {expiration, authId: payload.sub});
       clearUserToken();
       return;
     }
