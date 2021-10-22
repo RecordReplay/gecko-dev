@@ -4,6 +4,10 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const ReplayAuth = ChromeUtils.import(
   "resource://devtools/server/actors/replay/auth.js"
 );
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
+XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
 function pingTelemetry(source, name, data) {
   const url = Services.prefs.getStringPref("replay.telemetry.url");
@@ -20,20 +24,17 @@ function pingTelemetry(source, name, data) {
   );
   const browserSettings = { usePreallocated: !disablePreallocated };
 
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", url);
-  if (auth) {
-    xhr.setRequestHeader("Authorization", `Bearer ${auth}`);
-  }
-  xhr.send(JSON.stringify({
-    ...data,
-    event: 'Gecko',
-    build: Services.appinfo.appBuildID,
-    ts: Date.now(),
-    source,
-    name,
-    browserSettings,
-  }));
-
-  xhr.onerror = console.error;
+  fetch(url, {
+    method: 'POST',
+    headers: auth ? { Authorization: `Bearer ${auth}` } : undefined,
+    body: JSON.stringify({
+      ...data,
+      event: 'Gecko',
+      build: Services.appinfo.appBuildID,
+      ts: Date.now(),
+      source,
+      name,
+      browserSettings,
+    })
+  }).catch(console.error);
 }
