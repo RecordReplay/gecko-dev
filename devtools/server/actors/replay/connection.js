@@ -287,7 +287,14 @@ class CommandError extends Error {
 const gRecordingCreateWaiters = [];
 
 function isLoggedIn() {
-  return !!ReplayAuth.getReplayUserToken() || ReplayAuth.hasOriginalApiKey();
+  const token = ReplayAuth.getReplayUserToken();
+  if (token) {
+    const expiration = ReplayAuth.tokenExpiration(token);
+
+    return expiration && expiration > Date.now();
+  }
+
+  return !!ReplayAuth.hasOriginalApiKey();
 }
 
 async function saveRecordingToken(token) {
@@ -320,6 +327,7 @@ if (ReplayAuth.hasOriginalApiKey()) {
       return;
     }
 
+    const payload = ReplayAuth.tokenInfo(token);
     const expiration = ReplayAuth.tokenExpiration(token);
     if (typeof expiration !== "number") {
       ChromeUtils.recordReplayLog(`InvalidJWTExpiration`);
@@ -329,13 +337,15 @@ if (ReplayAuth.hasOriginalApiKey()) {
 
     const timeToExpiration = expiration - Date.now();
     if (timeToExpiration <= 0) {
+      // TODO (ryanjduffy): fetch() isn't defined yet so this fails
+      // pingTelemetry("browser", "auth-expired", {expiration, authId: payload.sub});
       clearUserToken();
       return;
     }
 
     gExpirationTimer = setTimeout(
       () => {
-        pingTelemetry("browser", "auth-expired");
+        pingTelemetry("browser", "auth-expired", {expiration, authId: payload.sub});
         clearUserToken();
       },
       timeToExpiration
