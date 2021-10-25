@@ -120,9 +120,7 @@ class ProtocolSocket {
   }
 
   _onClose() {
-    if (this._state === "closed") {
-      return;
-    }
+    this._clearSocket();
 
     for (const entry of this._pendingMessages.values()) {
       entry.resolve(makeUnavailableResponse());
@@ -131,7 +129,18 @@ class ProtocolSocket {
 
     this._state = "connecting";
     this._notifyStateChange();
+
     setTimeout(() => this._initialize(), 3000);
+  }
+
+  _clearSocket() {
+    if (this._socket) {
+      this._socket.onopen = null;
+      this._socket.onclose = null;
+      this._socket.onmessage = null;
+      this._socket.onerror = null;
+      this._socket = null;
+    }
   }
 
   _onError() {
@@ -206,7 +215,9 @@ class ProtocolSocket {
     this._pendingMessages.clear();
 
     this._state = "closed";
-    this._socket.close();
+    this._socket?.close();
+
+    this._clearSocket();
     this._notifyStateChange();
   }
 }
