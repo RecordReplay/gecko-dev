@@ -518,7 +518,21 @@ function updateRecordingState(key, state) {
   const timestamps = current && current.timestamps || {};
   timestamps[state] = Date.now();
 
-  return recordings.set(key, { state, timestamps });
+  const entry = {
+    state,
+    recording: current ? current.recording : null,
+    timestamps
+  };
+  recordings.set(key, entry);
+  return entry;
+}
+
+function addRecordingInstance(key, recording) {
+  const entry = recordings.get(key);
+  if (!entry) {
+    entry = updateRecordingState(key, RecordingState.RECORDING);
+  }
+  entry.recording = recording;
 }
 
 function setRecordingState(key, state) {
@@ -682,7 +696,7 @@ function stopRecording(browser) {
     return;
   }
 
-  pingTelemetry("recording", "stop", { action: "complete", duration: getRecordingStateDuration(key, RecordingState.STOPPING) }); 
+  pingTelemetry("recording", "stop", { action: "complete", duration: getRecordingStateDuration(key, RecordingState.STOPPING) });
   ChromeUtils.recordReplayLog(`WaitForFinishedRecording`);
 }
 
@@ -771,6 +785,8 @@ function handleRecordingStarted(pmm) {
     }
     return _browser;
   }
+
+  addRecordingInstance(getRecordingKey(getBrowser()), recording);
 
   recording.on("unusable", function(name, data) {
     pingTelemetry("recording", "unusable", data);
