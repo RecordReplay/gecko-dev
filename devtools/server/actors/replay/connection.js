@@ -261,7 +261,7 @@ async function sendCommand(method, params) {
     if (tokenCallbacks === gTokenChangeCallbacks) {
       clearUserToken();
       if (gTokenChangeCallbacks.size === 0) {
-        alert("Your Replay session has expired while recording. \nPlease sign in to see your new recording.");
+        Services.prompt.alert(null, "Replay Authentication", "Your Replay session has expired while recording. \nPlease sign in.");
       }
 
       await new Promise(resolve => {
