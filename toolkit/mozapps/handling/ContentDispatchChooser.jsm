@@ -270,7 +270,20 @@ const replaySchemeMap = {
       });
     }
 
-    new Promise(resolve => setTimeout(resolve, 500)).then(() => {
+    new Promise(resolve => {
+      const listener = {
+        onStateChange(_aWebProgress, _aRequest, aStateFlags, _aStatus) {
+          if (
+            aStateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW &&
+            aStateFlags & Ci.nsIWebProgressListener.STATE_STOP
+          ) {
+            tabbrowser.removeProgressListener(listener);
+            resolve();
+          }
+        }
+      }
+      tabbrowser.addProgressListener(listener)
+    }).then(() => {
       toggleRecording(browser.ownerDocument.defaultView.gBrowser.selectedBrowser);
     });
   }
