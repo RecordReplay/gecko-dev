@@ -278,19 +278,24 @@ const replaySchemeMap = {
 
     Promise.race([
       new Promise((_, reject) => setTimeout(reject, 30000)),
-      new Promise(resolve => {
+      new Promise((resolve, reject) => {
         let started = false;
         const listener = {
           onStateChange(_a, _b, status) {
-            // Useful for debugging status
-            // Object.keys(Ci.nsIWebProgressListener).forEach(k => {
-            //   args[2] & Ci.nsIWebProgressListener[k] && console.log(k, args[2] & Ci.nsIWebProgressListener[k]);
-            // });
-            if (!started && status & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT && status & Ci.nsIWebProgressListener.STATE_START) {
-              started = true;
-            } else if (started && status & Ci.nsIWebProgressListener.STATE_IS_WINDOW && status & Ci.nsIWebProgressListener.STATE_STOP) {
+            try {
+              // Useful for debugging status
+              // Object.keys(Ci.nsIWebProgressListener).forEach(k => {
+              //   args[2] & Ci.nsIWebProgressListener[k] && console.log(k, args[2] & Ci.nsIWebProgressListener[k]);
+              // });
+              if (!started && status & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT && status & Ci.nsIWebProgressListener.STATE_START) {
+                started = true;
+              } else if (started && status & Ci.nsIWebProgressListener.STATE_IS_WINDOW && status & Ci.nsIWebProgressListener.STATE_STOP) {
+                tabbrowser.removeProgressListener(listener);
+                resolve();
+              }
+            } catch (e) {
+              reject(e);
               tabbrowser.removeProgressListener(listener);
-              resolve();
             }
           },
           QueryInterface: ChromeUtils.generateQI([
@@ -304,9 +309,9 @@ const replaySchemeMap = {
     ]).then(() => {
       pingTelemetry("replay:record", "record", { url: target, newtab });
       toggleRecording(browser.ownerDocument.defaultView.gBrowser.selectedBrowser);
-    }).catch(() => {
-      pingTelemetry("replay:record", "error", { url: target, newtab });
-      tabbrowser.loadURI("https://app.replay.io/browser/error?message=Failed to launch recorder", {
+    }).catch((e) => {
+      pingTelemetry("replay:record", "error", { url: target, newtab, message: e.message });
+      tabbrowser.loadURI(`https://app.replay.io/browser/error?message=Failed to launch recorder: (${e.message})`, {
         triggeringPrincipal: principal
       });
     });
