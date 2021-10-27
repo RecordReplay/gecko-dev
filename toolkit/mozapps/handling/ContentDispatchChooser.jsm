@@ -277,7 +277,7 @@ const replaySchemeMap = {
     }
 
     Promise.race([
-      new Promise((_, reject) => setTimeout(reject, 30000)),
+      new Promise((_, reject) => setTimeout(() => reject({message: "Timed out waiting to start recording"}), 30000)),
       new Promise((resolve, reject) => {
         let started = false;
         const listener = {
