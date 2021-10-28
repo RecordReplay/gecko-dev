@@ -38,6 +38,15 @@ ChromeUtils.defineModuleGetter(
   "resource:///modules/sessionstore/SessionStore.jsm"
 );
 
+const {
+  getChannelRequestData,
+  getChannelResponseData,
+  getChannelRequestDoneData,
+  getChannelRequestFailedData,
+} = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/network-helpers.jsm"
+);
+
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppUpdater: "resource:///modules/AppUpdater.jsm",
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
@@ -390,6 +399,10 @@ class Recording extends EventEmitter {
 
   get osPid() {
     return this._pmm.osPid;
+  }
+
+  sendProcessMessage(name, data) {
+    this._pmm.sendAsyncMessage(name, data);
   }
 
   _lockRecording(recordingId) {
@@ -1117,6 +1130,137 @@ async function withUploadedResource(text, callback) {
 Services.ppmm.addMessageListener("RecordingStarting", {
   receiveMessage(msg) {
     handleRecordingStarted(msg.target);
+  },
+});
+
+function getChannelRecording(channel) {
+  for (const [frameLoader, entry] of recordings) {
+    if (frameLoader.browsingContext && frameLoader.browsingContext === channel.loadInfo.browsingContext) {
+      return entry.recording || null;
+    }
+  }
+
+  return null;
+}
+function ensureHttpChannel(channel) {
+  if (
+    !(channel instanceof Ci.nsIHttpChannel) ||
+    !(channel instanceof Ci.nsIClassifiedChannel)
+  ) {
+    return null;
+  }
+
+  channel = channel.QueryInterface(Ci.nsIHttpChannel);
+  channel = channel.QueryInterface(Ci.nsIClassifiedChannel);
+
+  if (channel instanceof Ci.nsIHttpChannelInternal) {
+    channel = channel.QueryInterface(Ci.nsIHttpChannelInternal);
+  }
+
+  return channel;
+}
+
+Services.obs.addObserver((subject, topic, data) => {
+  const channel = ensureHttpChannel(subject);
+  const recording = channel ? getChannelRecording(channel) : null;
+  if (!recording) {
+    return;
+  }
+
+  sendChannelRequestStart(recording, channel);
+}, "http-on-opening-request");
+
+Services.obs.addObserver((subject, topic, data) => {
+  const channel = ensureHttpChannel(subject);
+  const recording = channel ? getChannelRecording(channel) : null;
+  if (!recording) {
+    return;
+  }
+
+  sendChannelRequestStart(recording, channel);
+  recording.sendProcessMessage("RecordingChannelRequestFailed", {
+    channelId: channel.channelId,
+    data: getChannelRequestFailedData(channel),
+  });
+}, "http-on-failed-opening-request");
+
+function sendChannelRequestStart(recording, channel) {
+  // Some requests like the top-level HTTP request appear to be started from the
+  // parent process so we proxy those through to the child here since it won't
+  // have gotten an http-on-opening-request topic notification.
+  recording.sendProcessMessage("RecordingChannelOpeningRequest", {
+    channelId: channel.channelId,
+    data: getChannelRequestData(channel),
+  });
+}
+
+Services.obs.addObserver((subject, topic, data) => {
+  const channel = ensureHttpChannel(subject);
+  if (!channel) {
+    return;
+  }
+
+  sendChannelResponseStart(channel, true);
+}, "http-on-examine-cached-response");
+
+Services.obs.addObserver((subject, topic, data) => {
+  const channel = ensureHttpChannel(subject);
+  if (!channel) {
+    return;
+  }
+
+  sendChannelResponseStart(channel, false);
+}, "http-on-examine-response");
+
+function sendChannelResponseStart(channel, fromCache) {
+  const recording = getChannelRecording(channel);
+  if (!recording) {
+    return;
+  }
+
+  // If we're reading from cache, there may not have been an http-on-opening-request
+  // notification for this channel.
+  if (fromCache) {
+    sendChannelRequestStart(recording, channel);
+  }
+
+  recording.sendProcessMessage("RecordingChannelResponseStart", {
+    channelId: channel.channelId,
+    data: getChannelResponseData(channel, fromCache),
+  });
+}
+
+const distributor =
+  Cc["@mozilla.org/network/http-activity-distributor;1"]
+    .getService(Ci.nsIHttpActivityDistributor);
+distributor.addObserver({
+  observeActivity(
+    channel,
+    activityType,
+    activitySubtype,
+    timestamp,
+    extraSizeData,
+    extraStringData
+  ) {
+    channel = ensureHttpChannel(channel);
+    const recording = channel ? getChannelRecording(channel) : null;
+    if (!recording) {
+      return;
+    }
+
+    if (activityType === Ci.nsIHttpActivityObserver.ACTIVITY_TYPE_HTTP_TRANSACTION) {
+      if (activitySubtype === Ci.nsIHttpActivityObserver.ACTIVITY_SUBTYPE_REQUEST_HEADER) {
+        recording.sendProcessMessage("RecordingChannelRequestRawHeaders", {
+          channelId: channel.channelId,
+          requestRawHeaders: extraStringData,
+        });
+      } else if (activitySubtype === Ci.nsIHttpActivityObserver.ACTIVITY_SUBTYPE_RESPONSE_HEADER) {
+        recording.sendProcessMessage("RecordingChannelResponseRawHeaders", {
+          channelId: channel.channelId,
+          responseRawHeaders: extraStringData,
+        });
+      }
+    }
   },
 });
 

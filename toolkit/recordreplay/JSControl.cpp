@@ -72,6 +72,8 @@ static void (*gInstrument)(const char* aKind, const char* aFunctionId, int aOffs
 static void (*gOnExceptionUnwind)();
 static void (*gOnDebuggerStatement)();
 static void (*gOnEvent)(const char* aEvent, bool aBefore);
+static void (*gOnRequest)(const char* aId, const char* aKind, size_t aBookmark);
+static void (*gOnRequestEvent)(const char* aId);
 static void (*gOnConsoleMessage)(int aTimeWarpTarget);
 static void (*gOnAnnotation)(const char* aKind, const char* aContents);
 static size_t (*gNewTimeWarpTarget)();
@@ -101,6 +103,8 @@ void InitializeJS() {
   LoadSymbol("RecordReplayOnExceptionUnwind", gOnExceptionUnwind);
   LoadSymbol("RecordReplayOnDebuggerStatement", gOnDebuggerStatement);
   LoadSymbol("RecordReplayOnEvent", gOnEvent);
+  LoadSymbol("RecordReplayOnRequest", gOnRequest);
+  LoadSymbol("RecordReplayOnRequestEvent", gOnRequestEvent);
   LoadSymbol("RecordReplayOnConsoleMessage", gOnConsoleMessage);
   LoadSymbol("RecordReplayOnAnnotation", gOnAnnotation);
   LoadSymbol("RecordReplayNewBookmark", gNewTimeWarpTarget);
@@ -625,6 +629,50 @@ static bool Method_OnEvent(JSContext* aCx, unsigned aArgc, Value* aVp) {
   return true;
 }
 
+static bool Method_OnHttpRequest(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isString() || !args.get(1).isNumber()) {
+    JS_ReportErrorASCII(aCx, "Bad parameters");
+    return false;
+  }
+
+  nsAutoCString requestId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), requestId);
+
+  double bookmark = args.get(1).toDouble();
+  MOZ_RELEASE_ASSERT((uint64_t)bookmark == (uint32_t)bookmark, "bad request bookmark");
+
+  gOnRequest(requestId.get(), "http", (size_t)bookmark);
+  return true;
+}
+
+static bool Method_OnHttpRequestEvent(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isString()) {
+    JS_ReportErrorASCII(aCx, "Bad parameters");
+    return false;
+  }
+
+  nsAutoCString requestId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), requestId);
+
+  gOnRequestEvent(requestId.get());
+  return true;
+}
+
+static bool Method_MakeBookmark(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  uint64_t bookmark = gNewTimeWarpTarget();
+  // Make sure it won't overflow.
+  MOZ_RELEASE_ASSERT(bookmark == (uint32_t)bookmark, "bad make bookmark");
+
+  args.rval().setDouble(bookmark);
+  return true;
+}
+
 static bool Method_RecordingId(JSContext* aCx, unsigned aArgc,
                                      Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
@@ -757,11 +805,14 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("onExceptionUnwind", Method_OnExceptionUnwind, 0, 0),
   JS_FN("onDebuggerStatement", Method_OnDebuggerStatement, 0, 0),
   JS_FN("onEvent", Method_OnEvent, 2, 0),
+  JS_FN("onHttpRequest", Method_OnHttpRequest, 2, 0),
+  JS_FN("onHttpRequestEvent", Method_OnHttpRequestEvent, 1, 0),
   JS_FN("onConsoleMessage", Method_OnConsoleMessage, 1, 0),
   JS_FN("onAnnotation", Method_OnAnnotation, 2, 0),
   JS_FN("recordingId", Method_RecordingId, 0, 0),
   JS_FN("addMetadata", Method_AddMetadata, 1, 0),
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
+  JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
   JS_FS_END
 };
 
