@@ -1514,6 +1514,10 @@ function refreshRecordingButton(doc) {
   if (node) {
     node.refreshStatus();
   }
+  const signinNode = doc.getElementById("replay-signin-button");
+  if (signinNode) {
+    signinNode.refreshStatus();
+  }
 }
 
 function refreshAllRecordingButtons() {
