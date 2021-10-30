@@ -849,7 +849,7 @@ function handleRecordingStarted(pmm) {
 }
 
 function showUnsupportedFeatureNotification(browser, feature, issueNumber) {
-  const notificationBox = browser.ownerGlobal.gHighPriorityNotificationBox;
+  const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
   let notification = notificationBox.getNotificationWithValue(
     "unsupported-feature"
   );
@@ -874,7 +874,7 @@ function showUnsupportedFeatureNotification(browser, feature, issueNumber) {
 }
 
 function hideUnsupportedFeatureNotification(browser) {
-  const notificationBox = browser.ownerGlobal.gHighPriorityNotificationBox;
+  const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
   const notification = notificationBox.getNotificationWithValue(
     "unsupported-feature"
   );
