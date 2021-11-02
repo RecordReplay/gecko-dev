@@ -1063,11 +1063,41 @@ function Debugger_getSourceContents({ sourceId }) {
 // Network Commands
 ///////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Networking in Gecko is complex because requests themselves are handled in the
+ * parent process, even though the page itself is executed and rendered in the
+ * child process.
+ *
+ * Primary notes:
+ *  * Only a few http-on-* events are available in the child, so the parent
+ *    is the only place to observe basic response data consistently.
+ *  * Only the parent process has an API for observing request timing and
+ *    capturing raw request header data.
+ *  * Observing request-start in the child process is important to allow us to
+ *    capture execution info so we can jump to that point in the recording later.
+ *  * Observing request-done in the child process is important because decoding
+ *    of Content-Encoding request data happens in the child process, so the
+ *    parent process has no access to 'decodedBodySize'.
+ *
+ * To handle all of these cases consistently, we watch for the minimal number of
+ * parent-process events that we need, and send IPC messages to the child so
+ * that the child can directly use that data.
+ */
+
 let gCurrentRequestEvent;
 
 if (isRecordingOrReplaying) {
-  const gPendingRedirects = new Map();
+  // ChannelId => BookmarkId
+  // While a request is in-progress, this map will have an entry for the channelId
+  // and will track the bookmark that was used for the request, so if the request
+  // is redirected and a new channel forks off of this one, its bookmark can be
+  // applied to the new channel as well.
   const gActiveRequests = new Map();
+
+  // ChannelId => BookmarkId
+  // When a channel redirects, we need to save the bookmark for the channel so that
+  // it can be applied to the new channel created to handle the redirect.
+  const gPendingRedirects = new Map();
 
   function getChannel(subject) {
     if (!(subject instanceof Ci.nsIHttpChannel)) {

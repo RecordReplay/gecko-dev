@@ -1133,6 +1133,13 @@ Services.ppmm.addMessageListener("RecordingStarting", {
   },
 });
 
+///////////////////////////////////////////////////////////////////////////////
+// Network Observing Logic
+//
+// See module.js for more information about the architecture of Replay's
+// network-request observation logic.
+///////////////////////////////////////////////////////////////////////////////
+
 function getChannelRecording(channel) {
   for (const [frameLoader, entry] of recordings) {
     if (frameLoader.browsingContext && frameLoader.browsingContext === channel.loadInfo.browsingContext) {
