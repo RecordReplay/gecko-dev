@@ -38,7 +38,7 @@
 function getChannelRequestData(channel) {
   const requestHeaders = [];
   channel.visitRequestHeaders({
-    visitHeader: (name, value) => requestHeaders.push([name, value]),
+    visitHeader: (name, value) => requestHeaders.push({ name, value }),
   });
 
   return {
@@ -52,7 +52,7 @@ function getChannelRequestData(channel) {
 function getChannelResponseData(channel, fromCache) {
   const responseHeaders = [];
   channel.visitOriginalResponseHeaders({
-    visitHeader: (name, value) => responseHeaders.push([name, value]),
+    visitHeader: (name, value) => responseHeaders.push({ name, value }),
   });
 
   return {
