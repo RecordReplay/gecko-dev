@@ -646,7 +646,7 @@ const commands = {
   "Target.getSourceMapURL": Target_getSourceMapURL,
   "Target.getSheetSourceMapURL": Target_getSheetSourceMapURL,
   "Target.topFrameLocation": Target_topFrameLocation,
-  "Target.getCurrentRequestEvent": Target_getCurrentRequestEvent,
+  "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
 };
 
 function OnProtocolCommand(method, params) {
@@ -2130,7 +2130,7 @@ function Pause_getTopFrame() {
   return { data: {} };
 }
 
-function Target_getCurrentRequestEvent() {
+function Target_getCurrentNetworkRequestEvent() {
   assert(gCurrentRequestEvent);
   const { kind, data } = gCurrentRequestEvent;
   return { data: { kind, ...data } };

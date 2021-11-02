@@ -72,8 +72,8 @@ static void (*gInstrument)(const char* aKind, const char* aFunctionId, int aOffs
 static void (*gOnExceptionUnwind)();
 static void (*gOnDebuggerStatement)();
 static void (*gOnEvent)(const char* aEvent, bool aBefore);
-static void (*gOnRequest)(const char* aId, const char* aKind, size_t aBookmark);
-static void (*gOnRequestEvent)(const char* aId);
+static void (*gOnNetworkRequest)(const char* aId, const char* aKind, size_t aBookmark);
+static void (*gOnNetworkRequestEvent)(const char* aId);
 static void (*gOnConsoleMessage)(int aTimeWarpTarget);
 static void (*gOnAnnotation)(const char* aKind, const char* aContents);
 static size_t (*gNewTimeWarpTarget)();
@@ -103,8 +103,8 @@ void InitializeJS() {
   LoadSymbol("RecordReplayOnExceptionUnwind", gOnExceptionUnwind);
   LoadSymbol("RecordReplayOnDebuggerStatement", gOnDebuggerStatement);
   LoadSymbol("RecordReplayOnEvent", gOnEvent);
-  LoadSymbol("RecordReplayOnRequest", gOnRequest);
-  LoadSymbol("RecordReplayOnRequestEvent", gOnRequestEvent);
+  LoadSymbol("RecordReplayOnNetworkRequest", gOnNetworkRequest);
+  LoadSymbol("RecordReplayOnNetworkRequestEvent", gOnNetworkRequestEvent);
   LoadSymbol("RecordReplayOnConsoleMessage", gOnConsoleMessage);
   LoadSymbol("RecordReplayOnAnnotation", gOnAnnotation);
   LoadSymbol("RecordReplayNewBookmark", gNewTimeWarpTarget);
@@ -643,7 +643,7 @@ static bool Method_OnHttpRequest(JSContext* aCx, unsigned aArgc, Value* aVp) {
   double bookmark = args.get(1).toDouble();
   MOZ_RELEASE_ASSERT((uint64_t)bookmark == (uint32_t)bookmark, "bad request bookmark");
 
-  gOnRequest(requestId.get(), "http", (size_t)bookmark);
+  gOnNetworkRequest(requestId.get(), "http", (size_t)bookmark);
   return true;
 }
 
@@ -658,7 +658,7 @@ static bool Method_OnHttpRequestEvent(JSContext* aCx, unsigned aArgc, Value* aVp
   nsAutoCString requestId;
   ConvertJSStringToCString(aCx, args.get(0).toString(), requestId);
 
-  gOnRequestEvent(requestId.get());
+  gOnNetworkRequestEvent(requestId.get());
   return true;
 }
 
