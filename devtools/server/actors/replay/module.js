@@ -1222,7 +1222,15 @@ if (isRecordingOrReplaying) {
         return;
       }
 
-      notifyRequestEvent(channelId, "response", data);
+      const { remoteDestination, ...response } = data;
+
+      if (remoteDestination) {
+        notifyRequestEvent(channelId, "request-destination", {
+          remoteAddress: remoteDestination.address,
+          remotePort: remoteDestination.port,
+        });
+      }
+      notifyRequestEvent(channelId, "response", response);
     },
   });
 
