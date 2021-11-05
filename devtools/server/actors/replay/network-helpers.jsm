@@ -45,7 +45,7 @@ function getChannelRequestData(channel) {
     requestUrl: channel.URI?.spec,
     requestMethod: channel.requestMethod,
     requestHeaders,
-    requestCause: LOAD_CAUSE_STRINGS[channel.loadInfo?.externalContentPolicyType] || null,
+    requestCause: LOAD_CAUSE_STRINGS[channel.loadInfo?.externalContentPolicyType] || undefined,
   };
 }
 
@@ -80,14 +80,14 @@ function getChannelRequestDoneData(channel) {
 
   return {
     // If there are not content encodings, the decodedBodySize is usually just 0.
-    decodedBodySize: hasContentEncodings ? channel.decodedBodySize : null,
+    decodedBodySize: hasContentEncodings ? channel.decodedBodySize : undefined,
     encodedBodySize: channel.encodedBodySize,
   };
 }
 
 function getChannelRequestFailedData(channel) {
   return {
-    requestFailedReason: channel.loadInfo.requestBlockingReason || null,
+    requestFailedReason: channel.loadInfo.requestBlockingReason || undefined,
   };
 }
 
