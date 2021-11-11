@@ -1550,6 +1550,10 @@ function createProtocolFrame(frameId, frame) {
   }
 }
 
+function getClassName(obj) {
+  return obj.isProxy ? "Proxy" : obj.class;
+}
+
 function createProtocolObject(objectId, level) {
   const obj = getObjectFromId(objectId);
 
@@ -1558,7 +1562,7 @@ function createProtocolObject(objectId, level) {
     return { objectId, className: "BadObjectId" };
   }
 
-  const className = obj.isProxy ? "Proxy" : obj.class;
+  const className = getClassName(obj)
   let preview;
   if (level != "none") {
     preview = new ProtocolObjectPreview(obj, level).fill();
@@ -1711,14 +1715,15 @@ ProtocolObjectPreview.prototype = {
 
   fill() {
     let prototypeId;
-    if (this.obj.proto) {
+    if (this.obj.proto && !this.obj.isProxy) {
       try {
         prototypeId = getObjectId(this.obj.proto);
       } catch (e) {}
     }
 
     // Add class-specific data.
-    const previewer = CustomPreviewers[this.obj.class];
+    const className = getClassName(this.obj);
+    const previewer = CustomPreviewers[className];
     if (previewer) {
       for (const entry of previewer) {
         if (typeof entry == "string") {
@@ -1876,6 +1881,13 @@ function previewPromise() {
   this.extra.promiseState = { state, value };
 }
 
+function previewProxy() {
+  this.extra.proxyState = {
+    target: createProtocolValue(this.obj.proxyTarget),
+    handler: createProtocolValue(this.obj.proxyHandler),
+  };
+}
+
 function previewRegExp() {
   this.extra.regexpString = this.raw.toString();
 }
@@ -1925,6 +1937,7 @@ const CustomPreviewers = {
   Set: ["size", previewSet],
   WeakSet: [previewWeakSet],
   Promise: [previewPromise],
+  Proxy: [previewProxy],
   RegExp: ["global", "source", previewRegExp],
   Date: [previewDate],
   Error: ErrorProperties,
