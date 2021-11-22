@@ -49,3 +49,6 @@ pref("browser.urlbar.suggest.quicksuggest",         false);
 // Telemetry
 pref('replay.telemetry.url', 'https://telemetry.replay.io');
 pref('replay.telemetry.enabled', true);
+
+// Windows
+pref('browser.tabs.drawInTitlebar', false);
