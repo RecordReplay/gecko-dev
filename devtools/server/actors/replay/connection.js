@@ -422,6 +422,10 @@ class Recording extends EventEmitter {
       params => params.key,
       err => {
         console.error("Failed to tell the server about in-progress resource uploading", err);
+        pingTelemetry("sourcemap-upload", "lock-exception", {
+          message: err?.message,
+          stack: err?.stack,
+        });
         // We don't re-throw here because we can at worst let the resources upload
         // might still succeed in the background, it'll just be a race and the sourcemaps
         // may not apply until the user creates a second debugging session.
@@ -445,6 +449,10 @@ class Recording extends EventEmitter {
       })
       .catch(err => {
         console.error("Exception while unlocking", err);
+        pingTelemetry("sourcemap-upload", "unlock-exception", {
+          message: err?.message,
+          stack: err?.stack,
+        });
       });
   }
 
@@ -453,6 +461,11 @@ class Recording extends EventEmitter {
 
     this._resourceUploads.push(uploadAllSourcemapAssets(params).catch(err => {
       console.error("Exception while processing sourcemap", err, params);
+
+      pingTelemetry("sourcemap-upload", "upload-exception", {
+        message: err?.message,
+        stack: err?.stack,
+      });
     }));
   }
 
@@ -1080,10 +1093,32 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
 }
 
 async function fetchText(url) {
+  let urlObj;
+  try {
+    urlObj = new URL(url);
+  } catch (err) {
+    // If the URL isn't parseable then the fetch is definitely going to fail
+    // so we might as well just print a warning.
+    urlObj = null;
+  }
+  // For URLs like webpack:///foo/bar.js, we can just warn and then
+  // ignore it since it'd never load anyway.
+  if (urlObj && !["http:", "https:", "data:", "blob:"].includes(urlObj.protocol)) {
+    urlObj = null;
+  }
+  if (!urlObj) {
+    console.warn("Unable to fetch recording resource", url);
+    return null;
+  }
+
   try {
     const response = await fetch(url);
     if (response.status < 200 || response.status >= 300) {
       console.error("Error fetching recording resource", url, response);
+      pingTelemetry("sourcemap-upload", "fetch-bad-status", {
+        message: `Request got status: ${response.status}`,
+        status: response.status,
+      });
       return null;
     }
 
@@ -1093,6 +1128,10 @@ async function fetchText(url) {
     };
   } catch (e) {
     console.error("Exception fetching recording resource", url, e);
+    pingTelemetry("sourcemap-upload", "fetch-exception", {
+      message: e?.message,
+      stack: e?.stack,
+    });
     return null;
   }
 }
