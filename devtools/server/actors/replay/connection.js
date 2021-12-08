@@ -185,7 +185,7 @@ class ProtocolSocket {
     const response = await new Promise(resolve => this._handlers.set(commandId, resolve));
 
     if (response.error) {
-      throw new CommandError(response.error.message, response.error.code);
+      throw new CommandError(response.error.message, response.error.code, response.error.data);
     }
 
     return response.result;
@@ -286,9 +286,10 @@ async function sendCommand(method, params) {
 }
 
 class CommandError extends Error {
-  constructor(message, code) {
+  constructor(message, code, data) {
     super(message);
     this.code = code;
+    this.data = data;
   }
 }
 
@@ -425,6 +426,7 @@ class Recording extends EventEmitter {
         pingTelemetry("sourcemap-upload", "lock-exception", {
           message: err?.message,
           stack: err?.stack,
+          recordingId,
         });
         // We don't re-throw here because we can at worst let the resources upload
         // might still succeed in the background, it'll just be a race and the sourcemaps
@@ -434,7 +436,7 @@ class Recording extends EventEmitter {
     );
   }
 
-  _unlockRecording() {
+  _unlockRecording(recordingId) {
     if (!this._recordingResourcesUpload) {
       return;
     }
@@ -452,6 +454,7 @@ class Recording extends EventEmitter {
         pingTelemetry("sourcemap-upload", "unlock-exception", {
           message: err?.message,
           stack: err?.stack,
+          recordingId,
         });
       });
   }
@@ -465,6 +468,8 @@ class Recording extends EventEmitter {
       pingTelemetry("sourcemap-upload", "upload-exception", {
         message: err?.message,
         stack: err?.stack,
+        recordingId: params.recordingId,
+        commandErrorData: err instanceof CommandError ? err.data : undefined,
       });
     }));
   }
@@ -513,12 +518,12 @@ class Recording extends EventEmitter {
       // recording session without all the maps available.
       await Promise.all(this._resourceUploads);
     } finally {
-      this._unlockRecording();
+      this._unlockRecording(data.id);
     }
   }
 
   _onUnusable(data) {
-    this._unlockRecording();
+    this._unlockRecording(null);
 
     this.emit("unusable", data);
   }
