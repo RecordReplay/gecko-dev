@@ -1047,7 +1047,7 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
   }
 
   function logError(msg) {
-    console.error(msg, mapURL, sourceOffset, sectionOffset);
+    console.error(msg, mapURL, sourceOffset);
   }
 
   const unresolvedSources = [];
