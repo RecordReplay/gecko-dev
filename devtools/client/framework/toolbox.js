@@ -703,6 +703,11 @@ Toolbox.prototype = {
         this.emit("switch-target", targetFront);
       }
 
+      // [Replay] - enable the recording overlay when a top-level target becomes available
+      const browsingContext = BrowsingContext.get(targetFront.browsingContextID);
+      const browser = browsingContext.currentWindowContext.rootFrameLoader.ownerElement;
+      this.enableRecordingOverlay(browser);
+
       // Attach to a new top-level target.
       // For now, register these event listeners only on the top level target
       targetFront.on("will-navigate", this._onWillNavigate);
@@ -756,6 +761,37 @@ Toolbox.prototype = {
       "wrong-resume-order",
       "",
       box.PRIORITY_WARNING_HIGH
+    );
+  },
+
+  // [Replay] - Apply an overlay to the devtools while recording to prevent user input
+  toggleRecordingOverlay(browser, state) {
+    // the browser toolbox doesn't have a selectedBrowser so this
+    // protects against showing the overlay on it
+    if (browser) {
+      if (state === undefined) {
+        state = getRecordingState(browser);
+      }
+
+      pingTelemetry("devtools", "open", {recordingState: state});
+
+      if (this.doc) {
+        const overlay = this.doc.getElementById("recording-overlay");
+        const hidden = String(state === 0 /* READY */);
+        if (overlay) {
+          overlay.setAttribute("hidden", hidden);
+        }
+      }
+    }
+  },
+
+  enableRecordingOverlay(browser) {
+    this.toggleRecordingOverlay(browser);
+    Services.obs.addObserver(
+      subject => {
+        this.toggleRecordingOverlay(browser, subject.wrappedJSObject.state)
+      },
+      "recordreplay-recording-changed"
     );
   },
 
@@ -951,32 +987,6 @@ Toolbox.prototype = {
       // will handle this on their own, but each have their own tear down function.
       if (flags.testing) {
         await performanceFrontConnection;
-      }
-
-      // [Replay] - Apply an overlay to the devtools while recording to prevent user input
-      const toggleRecordingOverlay = (state) => {
-        const overlay = this.win.document.getElementById("recording-overlay");
-        const hidden = String(state === 0 /* READY */);
-        if (overlay) {
-          overlay.setAttribute("hidden", hidden);
-        }
-      }
-
-      // get the current state and observe for changes
-      const selectedBrowser = this.topWindow && this.topWindow.gBrowser && this.topWindow.gBrowser.selectedBrowser;
-      // the browser toolbox doesn't have a selectedBrowser so this
-      // protects against showing the overlay on it
-      if (selectedBrowser) {
-        const recordingState = getRecordingState(selectedBrowser);
-        pingTelemetry("devtools", "open", {recordingState});
-        toggleRecordingOverlay(recordingState);
-        Services.obs.addObserver(
-          subject => {
-            pingTelemetry("devtools", "state-update", {recordingState: subject.wrappedJSObject.state});
-            toggleRecordingOverlay(subject.wrappedJSObject.state)
-          },
-          "recordreplay-recording-changed"
-        );
       }
 
       this.emit("ready");
