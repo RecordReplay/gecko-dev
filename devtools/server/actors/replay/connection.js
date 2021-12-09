@@ -542,6 +542,32 @@ class Recording extends EventEmitter {
   }
 }
 
+function canRecordUrl(url) {
+  return fetch(getAPIServer(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ReplayAuth.getReplayUserToken()}`,
+    },
+    body: JSON.stringify({
+      query: `
+        query CanRecord ($url: String!) {
+          viewer {
+            canRecordUrl(url: $url)
+          }
+        }
+      `,
+      variables: {
+        url
+      }
+    })
+  }).then(resp => resp.json()).then(resp => {
+    if (resp.data && !resp.data.viewer.canRecordUrl) {
+      throw new Error("Cannot record")
+    }
+  })
+}
+
 let locationListener;
 
 function getLocationListener(browser) {
@@ -554,29 +580,9 @@ function getLocationListener(browser) {
         return;
       }
 
-      fetch(getAPIServer(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${ReplayAuth.getReplayUserToken()}`,
-        },
-        body: JSON.stringify({
-          query: `
-            mutation CanRecord ($url: String!) {
-              canRecordUrl(input: {url: $url}) {
-                allowed
-              }
-            }
-          `,
-          variables: {
-            url: aLocation.displaySpec
-          }
-        })
-      }).then(resp => resp.json()).then(resp => {
-        if (resp.data && !resp.data.canRecordUrl.allowed) {
-          showInvalidatedRecordingNotification(browser);
-        }
-      })
+      canRecordUrl(aLocation.displaySpec).catch(() => {
+        showInvalidatedRecordingNotification(browser);
+      });
     }
   }
 
