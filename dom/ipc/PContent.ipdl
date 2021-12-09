@@ -877,9 +877,10 @@ child:
     async AddDynamicScalars(DynamicScalarDefinition[] definitions);
 
     /*
-     * Flush the recording and send a description back to this process.
+     * Finish the recording being made by the process. If invalidateReason is
+     * specified then the recording will be invalidated with that reason.
      */
-    async FinishRecording();
+    async FinishRecording(nsCString invalidateReason);
 
     // This message is sent to content processes, and triggers the creation of a
     // new HttpChannelChild that will be connected to the parent channel
