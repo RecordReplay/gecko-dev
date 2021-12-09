@@ -185,14 +185,14 @@ notification[type="critical"] > hbox > .messageImage {
 
 /* [Replay] */
 
-*|notification[value="unsupported-feature"] > *|hbox {
+*|notification[value^="replay-"] > *|hbox {
   justify-content: center;
   display: flex;
   align-items: center;
   font-weight: bold;
 }
 
-notification[value="unsupported-feature"] .notification-button {
+notification[value^="replay-"] .notification-button {
   /* clear out some rules to make it look like a link */
   background-color: transparent;
   padding: 0;
@@ -203,20 +203,20 @@ notification[value="unsupported-feature"] .notification-button {
   cursor: pointer;
 }
 
-*|html[lwthemetextcolor="dark"] *|notification[value="unsupported-feature"] {
+*|html[lwthemetextcolor="dark"] *|notification[value^="replay-"] {
   --notification-background: #ffefe6;
   --notification-text: #7e6c8f;
 }
 
-*|html[lwthemetextcolor="dark"] *|notification[value="unsupported-feature"] > hbox > .messageImage {
+*|html[lwthemetextcolor="dark"] *|notification[value^="replay-"] > hbox > .messageImage {
   list-style-image: url("chrome://global/skin/icons/replay-logo-light.svg");
 }
 
-*|html[lwthemetextcolor="bright"] *|notification[value="unsupported-feature"] {
+*|html[lwthemetextcolor="bright"] *|notification[value^="replay-"] {
   --notification-background: #2a1b50;
   --notification-text: #c2afb9;
 }
 
-*|html[lwthemetextcolor="bright"] *|notification[value="unsupported-feature"] > hbox > .messageImage {
+*|html[lwthemetextcolor="bright"] *|notification[value^="replay-"] > hbox > .messageImage {
   list-style-image: url("chrome://global/skin/icons/replay-logo-dark.svg");
 }

@@ -84,6 +84,15 @@ function getDispatchServer() {
   return Services.prefs.getStringPref("devtools.recordreplay.cloudServer");
 }
 
+// See also GetRecordReplayDispatchServer in ContentParent.cpp
+function getAPIServer() {
+  const address = getenv("RECORD_REPLAY_API_SERVER");
+  if (address) {
+    return address;
+  }
+  return Services.prefs.getStringPref("devtools.recordreplay.apiServer");
+}
+
 function openInNewTab(browser, url) {
   const tabbrowser = browser.getTabBrowser();
   const currentTabIndex = tabbrowser.visibleTabs.indexOf(tabbrowser.selectedTab);
@@ -533,6 +542,47 @@ class Recording extends EventEmitter {
   }
 }
 
+let locationListener;
+
+function getLocationListener(browser) {
+  locationListener = {
+    onLocationChange(aWebProgress, aRequest, aLocation) {
+      if(!aWebProgress.isTopLevel) return;
+
+      // Always allow blank and new tab
+      if (aLocation.displaySpec === "about:blank" || aLocation.displaySpec === "https://app.replay.io/browser/new-tab") {
+        return;
+      }
+
+      fetch(getAPIServer(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${ReplayAuth.getReplayUserToken()}`,
+        },
+        body: JSON.stringify({
+          query: `
+            mutation CanRecord ($url: String!) {
+              canRecordUrl(input: {url: $url}) {
+                allowed
+              }
+            }
+          `,
+          variables: {
+            url: aLocation.displaySpec
+          }
+        })
+      }).then(resp => resp.json()).then(resp => {
+        if (resp.data && !resp.data.canRecordUrl.allowed) {
+          showInvalidatedRecordingNotification(browser);
+        }
+      })
+    }
+  }
+
+  return locationListener;
+}
+
 const RecordingState = {
   READY: 0,
   STARTING: 1,
@@ -706,6 +756,8 @@ async function startRecording(browser) {
     remoteType,
   });
 
+  tabbrowser.addProgressListener(getLocationListener(browser));
+
   // Creating a new frameloader will destroy the tab's session history so we
   // need to restore it. This also instructs the new child proocess to load
   // the target URL, which would otherwise require a browser.loadURI() call.
@@ -823,6 +875,12 @@ function handleRecordingStarted(pmm) {
     return _browser;
   }
 
+  function removeLocationListener() {
+    const browser = getBrowser();
+    const tabbrowser = browser.getTabBrowser();
+    tabbrowser.removeProgressListener(locationListener);
+  }
+
   addRecordingInstance(getRecordingKey(getBrowser()), recording);
 
   recording.on("unusable", function(name, data) {
@@ -831,6 +889,8 @@ function handleRecordingStarted(pmm) {
     // Log the reason so we can see in our CI logs when something went wrong.
     console.error("Unstable recording: " + data.why);
     const browser = getBrowser();
+
+    removeLocationListener();
 
     // Sometimes, an unusable recording causes the browser to be cleaned
     // up before this point.  Check for this and emit a clear telemetry
@@ -843,6 +903,7 @@ function handleRecordingStarted(pmm) {
     }
 
     hideUnsupportedFeatureNotification(browser);
+    hideInvalidatedRecordingNotification(browser);
 
     const url = getViewURL('/browser/error');
     url.searchParams.set("message", data.why);
@@ -859,7 +920,9 @@ function handleRecordingStarted(pmm) {
       const browser = getBrowser();
       let url;
 
+      removeLocationListener();
       hideUnsupportedFeatureNotification(browser);
+      hideInvalidatedRecordingNotification(browser);
 
       // When the submitTestRecordings pref is set we don't load the viewer,
       // but show a simple page that the recording was submitted, to make things
@@ -901,10 +964,40 @@ function handleRecordingStarted(pmm) {
   });
 }
 
+function showInvalidatedRecordingNotification(browser) {
+  const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
+  let notification = notificationBox.getNotificationWithValue(
+    "replay-invalidated-recording"
+  );
+  if (notification) {
+    return;
+  }
+
+  const message = `The current URL is not allowed by your organization's policy.`;
+
+  notificationBox.appendNotification(
+    message,
+    "replay-invalidated-recording",
+    undefined,
+    notificationBox.PRIORITY_WARNING_HIGH,
+  );
+}
+
+function hideInvalidatedRecordingNotification(browser) {
+  const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
+  const notification = notificationBox.getNotificationWithValue(
+    "replay-invalidated-recording"
+  );
+
+  if (notification) {
+    notificationBox.removeNotification(notification)
+  }
+}
+
 function showUnsupportedFeatureNotification(browser, feature, issueNumber) {
   const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
   let notification = notificationBox.getNotificationWithValue(
-    "unsupported-feature"
+    "replay-unsupported-feature"
   );
   if (notification) {
     return;
@@ -914,7 +1007,7 @@ function showUnsupportedFeatureNotification(browser, feature, issueNumber) {
 
   notificationBox.appendNotification(
     message,
-    "unsupported-feature",
+    "replay-unsupported-feature",
     undefined,
     notificationBox.PRIORITY_WARNING_HIGH,
     [{
@@ -929,7 +1022,7 @@ function showUnsupportedFeatureNotification(browser, feature, issueNumber) {
 function hideUnsupportedFeatureNotification(browser) {
   const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
   const notification = notificationBox.getNotificationWithValue(
-    "unsupported-feature"
+    "replay-unsupported-feature"
   );
 
   if (notification) {
