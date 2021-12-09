@@ -631,7 +631,7 @@ class ContentChild final : public PContentChild,
       const uint32_t& aPluginEpoch, nsTArray<PluginTag>&& aPluginTags,
       nsTArray<FakePluginTag>&& aFakePluginTags);
 
-  mozilla::ipc::IPCResult RecvFinishRecording();
+  mozilla::ipc::IPCResult RecvFinishRecording(const nsCString& aInvalidateReason);
 
   mozilla::ipc::IPCResult RecvCrossProcessRedirect(
       RedirectToRealChannelArgs&& aArgs,

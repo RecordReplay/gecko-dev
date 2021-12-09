@@ -241,11 +241,11 @@ BrowserHost::StopApzAutoscroll(nsViewID aScrollId, uint32_t aPresShellId) {
 
 /* bool finishRecording (); */
 NS_IMETHODIMP
-BrowserHost::FinishRecording(bool* _retval) {
+BrowserHost::FinishRecording(const nsACString& aInvalidateReason, bool* _retval) {
   if (!mRoot) {
     return NS_OK;
   }
-  return GetContentParent()->FinishRecording(_retval);
+  return GetContentParent()->FinishRecording(aInvalidateReason, _retval);
 }
 
 NS_IMETHODIMP

@@ -3414,8 +3414,12 @@ mozilla::ipc::IPCResult ContentChild::RecvAddDynamicScalars(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult ContentChild::RecvFinishRecording() {
-  recordreplay::FinishRecording();
+mozilla::ipc::IPCResult ContentChild::RecvFinishRecording(const nsCString& aInvalidateReason) {
+  if (aInvalidateReason.Length()) {
+    recordreplay::InvalidateRecording(aInvalidateReason.get());
+  } else {
+    recordreplay::FinishRecording();
+  }
   return IPC_OK();
 }
 

@@ -82,9 +82,10 @@ interface nsIRemoteTab : nsISupports
   void stopApzAutoscroll(in nsViewID aScrollId, in uint32_t aPresShellId);
 
   /**
-   * Flush the current recording with a description.
+   * Finish the recording being made by the current tab. If aInvalidateReason is
+   * specified then the recording will be invalidated with that reason.
    */
-  bool finishRecording();
+  bool finishRecording([optional] in ACString aInvalidateReason);
 
   cenum NavigationType : 8 {
     NAVIGATE_BACK = 0,

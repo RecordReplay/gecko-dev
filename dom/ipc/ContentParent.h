@@ -1440,7 +1440,7 @@ class ContentParent final
                                const bool& aMinimizeMemoryUsage,
                                const Maybe<FileDescriptor>& aDMDFile) override;
 
-  nsresult FinishRecording(bool* aRetval);
+  nsresult FinishRecording(const nsACString& aInvalidateReason, bool* aRetval);
 
   bool IsRecording() const {
     return mRecordingDispatchAddress.Length() != 0;

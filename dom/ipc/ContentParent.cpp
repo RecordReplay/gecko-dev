@@ -1743,7 +1743,7 @@ void ContentParent::ShutDownProcess(ShutDownMethod aMethod) {
   // finish uploading in that case.
   if (IsRecording() && TestEnv("RECORD_ALL_CONTENT")) {
     bool retval;
-    FinishRecording(&retval);
+    FinishRecording(nsCString(), &retval);
   }
 
   // Shutting down by sending a shutdown message works differently than the
@@ -6368,7 +6368,7 @@ bool ContentParent::DeallocPSessionStorageObserverParent(
   return mozilla::dom::DeallocPSessionStorageObserverParent(aActor);
 }
 
-nsresult ContentParent::FinishRecording(bool* aRetval) {
+nsresult ContentParent::FinishRecording(const nsACString& aInvalidateReason, bool* aRetval) {
   if (mRecordingDispatchAddress.IsEmpty() || mRecordingFinished) {
     *aRetval = false;
     return NS_OK;
@@ -6376,7 +6376,7 @@ nsresult ContentParent::FinishRecording(bool* aRetval) {
 
   mRecordingFinished = true;
 
-  Unused << SendFinishRecording();
+  Unused << SendFinishRecording(nsCString(aInvalidateReason));
 
   *aRetval = true;
   return NS_OK;

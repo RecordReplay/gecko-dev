@@ -2351,24 +2351,52 @@ function Target_topFrameLocation() {
 //   mostly ignored here.
 
 // Information about an element needed to add it to a stacking context.
-function StackingContextElement(elem, left, top) {
-  assert(elem.nodeType == Node.ELEMENT_NODE);
+function StackingContextElement(node, parent, offset, style, bounds, clipBounds) {
+  assert(node.nodeType == Node.ELEMENT_NODE);
 
   // Underlying element.
-  this.raw = elem;
+  this.raw = node;
 
   // Offset relative to the outer window of the window containing this context.
-  this.left = left;
-  this.top = top;
+  this.offset = offset;
 
-  // Style information for the node.
-  this.style = getWindow().getComputedStyle(elem);
+  // the parent StackingContextElement
+  this.parent = parent;
+
+  // Style and layout information for the node.
+  this.style = style;
+  this.bounds = bounds;
+  this.clipBounds = clipBounds;
 
   // Any stacking context at which this element is the root.
   this.context = null;
 }
 
 StackingContextElement.prototype = {
+  getClippedBounds() {
+    let { left, top, right, bottom } = this.bounds;
+    if (this.clipBounds.left !== undefined) {
+      left = Math.max(left, this.clipBounds.left);
+    }
+    if (this.clipBounds.top !== undefined) {
+      top = Math.max(top, this.clipBounds.top);
+    }
+    if (this.clipBounds.right !== undefined) {
+      right = Math.min(right, this.clipBounds.right);
+    }
+    if (this.clipBounds.bottom !== undefined) {
+      bottom = Math.min(bottom, this.clipBounds.bottom);
+    }
+    return { left, top, right, bottom };
+  },
+
+  getPositionedAncestor() {
+    if (this.style.getPropertyValue("position") != "static") {
+      return this;
+    }
+    return this.parent?.getPositionedAncestor();
+  },
+
   toString() {
     return getObjectIdRaw(this.raw);
   },
@@ -2383,14 +2411,13 @@ let gNextStackingContextId = 1;
 // considered part of the parent stacking context, not this new one".
 // For these elements we also create a StackingContext but pass the
 // parent stacking context to the constructor as the "realStackingContext".
-function StackingContext(root, left = 0, top = 0, realStackingContext) {
+function StackingContext(root, offset, realStackingContext) {
   this.id = gNextStackingContextId++;
 
   this.realStackingContext = realStackingContext || this;
 
   // Offset relative to the outer window of the window containing this context.
-  this.left = left;
-  this.top = top;
+  this.offset = offset || { left: 0, top: 0 };
 
   // The arrays below are filled in tree order (preorder depth first traversal).
 
@@ -2417,12 +2444,34 @@ StackingContext.prototype = {
     return `StackingContext:${this.id}`;
   },
 
-  // Add elem and its descendants to this stacking context.
-  add(elem, parentElem) {
+  // Add node and its descendants to this stacking context.
+  add(node, parentElem, offset) {
+    const bounds = node.getBoundingClientRect();
+    const style = getWindow().getComputedStyle(node);
+    const position = style.getPropertyValue("position");
+    let clipBounds;
+    if (position == "absolute") {
+      clipBounds = parentElem?.getPositionedAncestor()?.clipBounds || {};
+    } else if (position == "fixed") {
+      clipBounds = {};
+    } else {
+      clipBounds = parentElem?.clipBounds || {};
+    }
+    clipBounds = Object.assign({}, clipBounds);
+    if (style.getPropertyValue("overflow-x") != "visible") {
+      clipBounds.left = clipBounds.left !== undefined ? Math.max(bounds.left, clipBounds.left) : bounds.left;
+      clipBounds.right = clipBounds.right !== undefined ? Math.min(bounds.right, clipBounds.right) : bounds.right;
+    }
+    if (style.getPropertyValue("overflow-y") != "visible") {
+      clipBounds.top = clipBounds.top !== undefined ? Math.max(bounds.top, clipBounds.top) : bounds.top;
+      clipBounds.bottom = clipBounds.bottom !== undefined ? Math.min(bounds.bottom, clipBounds.bottom) : bounds.bottom;
+    }
+    const elem = new StackingContextElement(node, parentElem, offset, style, bounds, clipBounds);
+
     // Create a new stacking context for any iframes.
     if (elem.raw.tagName == "IFRAME") {
       const { left, top } = elem.raw.getBoundingClientRect();
-      this.addContext(elem, left, top);
+      this.addContext(elem, undefined, left, top);
       elem.context.addChildren(elem.raw.contentWindow.document);
     }
 
@@ -2432,8 +2481,7 @@ StackingContext.prototype = {
       return;
     }
 
-    const position = elem.style.getPropertyValue("position");
-    const parentDisplay = parentElem?.style?.getPropertyValue("display");
+    const parentDisplay = elem.parent?.style?.getPropertyValue("display");
     if (
       position != "static" ||
       ["flex", "inline-flex", "grid", "inline-grid"].includes(parentDisplay)
@@ -2453,7 +2501,7 @@ StackingContext.prototype = {
       if (position != "static") {
         this.realStackingContext.addPositionedElement(elem);
         if (!elem.context) {
-          this.addContext(elem, 0, 0, this.realStackingContext);
+          this.addContext(elem, this.realStackingContext);
         }
       } else {
         this.addNonPositionedElement(elem);
@@ -2466,7 +2514,7 @@ StackingContext.prototype = {
 
     if (elem.style.getPropertyValue("float") != "none") {
       // Group the element and its descendants.
-      this.addContext(elem, 0, 0, this.realStackingContext);
+      this.addContext(elem, this.realStackingContext);
       this.addFloatingElement(elem);
       return;
     }
@@ -2474,7 +2522,7 @@ StackingContext.prototype = {
     const display = elem.style.getPropertyValue("display");
     if (display == "inline-block" || display == "inline-table") {
       // Group the element and its descendants.
-      this.addContext(elem, 0, 0, this.realStackingContext);
+      this.addContext(elem, this.realStackingContext);
       this.addNonPositionedElement(elem);
       return;
     }
@@ -2483,12 +2531,16 @@ StackingContext.prototype = {
     this.addChildrenWithParent(elem);
   },
 
-  addContext(elem, left = 0, top = 0, realStackingContext) {
+  addContext(elem, realStackingContext, left = 0, top = 0) {
     if (elem.context) {
       assert(!left && !top);
       return;
     }
-    elem.context = new StackingContext(elem, this.left + left, this.top + top, realStackingContext);
+    const offset = {
+      left: this.offset.left + left,
+      top: this.offset.top + top,
+    };
+    elem.context = new StackingContext(elem, offset, realStackingContext);
   },
 
   addZIndexElement(elem, index) {
@@ -2514,13 +2566,13 @@ StackingContext.prototype = {
 
   addChildren(parentNode) {
     for (const child of parentNode.children) {
-      this.add(new StackingContextElement(child, this.left, this.top));
+      this.add(child, undefined, this.offset);
     }
   },
 
   addChildrenWithParent(parentElem) {
     for (const child of parentElem.raw.children) {
-      this.add(new StackingContextElement(child, this.left, this.top), parentElem);
+      this.add(child, parentElem, this.offset);
     }
   },
 
@@ -2576,17 +2628,17 @@ function DOM_getAllBoundingClientRects() {
   const elements = entries
     .map((elem) => {
       const id = getObjectIdRaw(elem.raw);
-      const { left, top, right, bottom } = elem.raw.getBoundingClientRect(elem);
+      const { left, top, right, bottom } = elem.getClippedBounds();
       if (left >= right || top >= bottom) {
         return null;
       }
       const v = {
         node: id,
         rect: [
-          elem.left + left,
-          elem.top + top,
-          elem.left + right,
-          elem.top + bottom,
+          elem.offset.left + left,
+          elem.offset.top + top,
+          elem.offset.left + right,
+          elem.offset.top + bottom,
         ],
       };
       if (elem.style?.getPropertyValue("visibility") === "hidden") {
