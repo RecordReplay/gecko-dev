@@ -1055,7 +1055,9 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
 
   if (obj.version !== 3) {
     logError("Invalid sourcemap version");
-    return;
+    return {
+      sources: [],
+    };
   }
 
   if (obj.sources != null) {
