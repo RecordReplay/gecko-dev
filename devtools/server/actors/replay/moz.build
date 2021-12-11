@@ -9,9 +9,11 @@ DIRS += [
 ]
 
 DevToolsModules(
+    'apiServer.js',
     'auth.js',
     'connection-worker.js',
     'connection.js',
+    'env.js',
     'globals.js',
     'module.js',
     'network-helpers.jsm',

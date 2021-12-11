@@ -23,6 +23,9 @@ const { CryptoUtils } = ChromeUtils.import(
 const ReplayAuth = ChromeUtils.import(
   "resource://devtools/server/actors/replay/auth.js"
 );
+const { queryAPIServer } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/apiServer.js"
+);
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
@@ -83,15 +86,6 @@ function getDispatchServer() {
     return address;
   }
   return Services.prefs.getStringPref("devtools.recordreplay.cloudServer");
-}
-
-// See also GetRecordReplayDispatchServer in ContentParent.cpp
-function getAPIServer() {
-  const address = getenv("RECORD_REPLAY_API_SERVER");
-  if (address) {
-    return address;
-  }
-  return Services.prefs.getStringPref("devtools.recordreplay.apiServer");
 }
 
 function openInNewTab(browser, url) {
@@ -548,31 +542,22 @@ function checkShouldValidateUrl() {
   if (gShouldValidateUrl !== null) {
     return Promise.resolve(gShouldValidateUrl)
   } else {
-    return fetch(getAPIServer(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${ReplayAuth.getReplayUserToken()}`,
-      },
-      body: JSON.stringify({
-        query: `
-          query GetOrgs {
-            viewer {
-              workspaces {
-                edges {
-                  node {
-                    isOrganization
-                    settings {
-                      features
-                    }
-                  }
+    return queryAPIServer(`
+      query GetOrgs {
+        viewer {
+          workspaces {
+            edges {
+              node {
+                isOrganization
+                settings {
+                  features
                 }
               }
             }
           }
-        `,
-      })
-    }).then(resp => resp.json()).then(resp => {
+        }
+      }
+    `).then(resp => {
       if (resp.errors) {
         throw new Error("Unexpected error checking Replay user permissions");
       }
@@ -595,25 +580,15 @@ async function canRecordUrl(url) {
   const shouldValidate = await checkShouldValidateUrl();
   if (!shouldValidate) return true;
 
-  return fetch(getAPIServer(), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${ReplayAuth.getReplayUserToken()}`,
-    },
-    body: JSON.stringify({
-      query: `
-        query CanRecord ($url: String!) {
-          viewer {
-            canRecordUrl(url: $url)
-          }
-        }
-      `,
-      variables: {
-        url
+  return queryAPIServer(`
+    query CanRecord ($url: String!) {
+      viewer {
+        canRecordUrl(url: $url)
       }
-    })
-  }).then(resp => resp.json()).then(resp => {
+    }
+  `, {
+    url
+  }).then(resp => {
     if (resp.data && !resp.data.viewer.canRecordUrl) {
       throw new Error("Cannot record")
     }
