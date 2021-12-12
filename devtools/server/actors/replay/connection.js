@@ -29,6 +29,9 @@ const { queryAPIServer } = ChromeUtils.import(
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
+const { getenv, setenv } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/env.js"
+);
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -58,20 +61,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 let updateStatusCallback = null;
 let connectionStatus = "cloudConnecting.label";
 let gShouldValidateUrl = null;
-
-function getenv(name) {
-  const env = Cc["@mozilla.org/process/environment;1"].getService(
-    Ci.nsIEnvironment
-  );
-  return env.get(name);
-}
-
-function setenv(name, value) {
-  const env = Cc["@mozilla.org/process/environment;1"].getService(
-    Ci.nsIEnvironment
-  );
-  return env.set(name, value);
-}
 
 // Return whether all tabs are automatically being recorded.
 function isRecordingAllTabs() {
