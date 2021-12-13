@@ -597,6 +597,10 @@ async function canRecordUrl(url) {
 function getLocationListener(key) {
   return {
     key,
+    QueryInterface: ChromeUtils.generateQI([
+      "nsIWebProgressListener",
+      "nsISupportsWeakReference",
+    ]),
     onLocationChange(aWebProgress, _, aLocation) {
       if(!aWebProgress.isTopLevel) return;
 
@@ -624,11 +628,10 @@ Services.obs.addObserver(
   subject => {
     const {state, entry, browser} = subject.wrappedJSObject;
     if (browser && entry) {
-      const tabbrowser = browser.getTabBrowser();
       if (state === RecordingState.STARTING) {
-        tabbrowser.addProgressListener(entry.locationListener);
+        browser.addProgressListener(entry.locationListener);
       } else if (state === RecordingState.READY) {
-        tabbrowser.removeProgressListener(entry.locationListener)
+        browser.removeProgressListener(entry.locationListener)
       }
     }
   },
