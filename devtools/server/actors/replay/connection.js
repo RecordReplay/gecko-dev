@@ -566,22 +566,32 @@ function checkShouldValidateUrl() {
 }
 
 async function canRecordUrl(url) {
-  const shouldValidate = await checkShouldValidateUrl();
-  if (!shouldValidate) return true;
+  try {
+    const shouldValidate = await checkShouldValidateUrl();
+    if (!shouldValidate) return true;
 
-  return queryAPIServer(`
-    query CanRecord ($url: String!) {
-      viewer {
-        canRecordUrl(url: $url)
+    const resp = await queryAPIServer(`
+      query CanRecord ($url: String!) {
+        viewer {
+          canRecordUrl(url: $url)
+        }
       }
+    `, {
+      url
+    });
+
+    if (resp.errors) {
+      throw new Error(resp.errors[0].message);
     }
-  `, {
-    url
-  }).then(resp => {
-    if (resp.data && !resp.data.viewer.canRecordUrl) {
-      throw new Error("Cannot record")
-    }
-  })
+
+    return resp.data.viewer.canRecordUrl;
+  } catch (e) {
+    // Fallback to allowing recordings if the backend errors but log to telemetry
+    console.error(e);
+    pingTelemetry("recording", "can-record-failed", { why: e.message || "", url });
+
+    return true;
+  }
 }
 
 function getLocationListener(key) {
@@ -595,7 +605,9 @@ function getLocationListener(key) {
         return;
       }
 
-      canRecordUrl(aLocation.displaySpec).catch(() => {
+      canRecordUrl(aLocation.displaySpec).then((canRecord) => {
+        if (canRecord) return;
+
         const browser = getRecordingBrowser(this.key);
         const message = `The URL ${aLocation.displaySpec} may not be recorded according to your organization's policy.`;
         showInvalidatedRecordingNotification(browser, message);
