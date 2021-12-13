@@ -554,7 +554,7 @@ function checkShouldValidateUrl() {
       const workspaces = resp.data.viewer.workspaces.edges;
       gShouldValidateUrl = !workspaces ? false : workspaces.some(w => {
         if (w.node.isOrganization) {
-          const {allowList, blockList} = w.node.settings && w.node.settings.features && w.node.settings.features.recording || {};
+          const {allowList, blockList} = w.node.settings?.features?.recording || {};
 
           return (Array.isArray(allowList) && allowList.length > 0) || (Array.isArray(blockList) && blockList.length > 0);
         }
@@ -940,7 +940,6 @@ function handleRecordingStarted(pmm) {
     // Log the reason so we can see in our CI logs when something went wrong.
     console.error("Unstable recording: " + data.why);
     const browser = getBrowser();
-
 
     // Sometimes, an unusable recording causes the browser to be cleaned
     // up before this point.  Check for this and emit a clear telemetry
