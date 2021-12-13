@@ -551,7 +551,7 @@ function checkShouldValidateUrl() {
         throw new Error("Unexpected error checking Replay user permissions");
       }
 
-      const workspaces = resp.data.viewer.workspaces.edges;
+      const workspaces = resp.data.viewer?.workspaces.edges;
       gShouldValidateUrl = !workspaces ? false : workspaces.some(w => {
         if (w.node.isOrganization) {
           const {allowList, blockList} = w.node.settings?.features?.recording || {};
