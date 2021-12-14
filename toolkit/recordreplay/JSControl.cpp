@@ -74,6 +74,9 @@ static void (*gOnDebuggerStatement)();
 static void (*gOnEvent)(const char* aEvent, bool aBefore);
 static void (*gOnNetworkRequest)(const char* aId, const char* aKind, size_t aBookmark);
 static void (*gOnNetworkRequestEvent)(const char* aId);
+static void (*gOnSequenceStart)(const char* aId, const char* aKind);
+static void (*gOnSequenceData)(const char* aId, size_t offset, size_t length);
+static void (*gOnSequenceEnd)(const char* aId, size_t length);
 static void (*gOnConsoleMessage)(int aTimeWarpTarget);
 static void (*gOnAnnotation)(const char* aKind, const char* aContents);
 static size_t (*gNewTimeWarpTarget)();
@@ -105,6 +108,9 @@ void InitializeJS() {
   LoadSymbol("RecordReplayOnEvent", gOnEvent);
   LoadSymbol("RecordReplayOnNetworkRequest", gOnNetworkRequest);
   LoadSymbol("RecordReplayOnNetworkRequestEvent", gOnNetworkRequestEvent);
+  LoadSymbol("RecordReplayOnSequenceStart", gOnSequenceStart);
+  LoadSymbol("RecordReplayOnSequenceData", gOnSequenceData);
+  LoadSymbol("RecordReplayOnSequenceEnd", gOnSequenceEnd);
   LoadSymbol("RecordReplayOnConsoleMessage", gOnConsoleMessage);
   LoadSymbol("RecordReplayOnAnnotation", gOnAnnotation);
   LoadSymbol("RecordReplayNewBookmark", gNewTimeWarpTarget);
@@ -616,7 +622,7 @@ static bool Method_OnHttpRequest(JSContext* aCx, unsigned aArgc, Value* aVp) {
   nsAutoCString requestId;
   ConvertJSStringToCString(aCx, args.get(0).toString(), requestId);
 
-  double bookmark = args.get(1).toDouble();
+  double bookmark = args.get(1).toNumber();
   MOZ_RELEASE_ASSERT((uint64_t)bookmark == (uint32_t)bookmark, "bad request bookmark");
 
   gOnNetworkRequest(requestId.get(), "http", (size_t)bookmark);
@@ -635,6 +641,63 @@ static bool Method_OnHttpRequestEvent(JSContext* aCx, unsigned aArgc, Value* aVp
   ConvertJSStringToCString(aCx, args.get(0).toString(), requestId);
 
   gOnNetworkRequestEvent(requestId.get());
+  return true;
+}
+
+static bool Method_OnSequenceStart(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isString() || !args.get(1).isString()) {
+    JS_ReportErrorASCII(aCx, "Bad parameters");
+    return false;
+  }
+
+  nsAutoCString sequenceId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), sequenceId);
+
+  nsAutoCString sequenceKind;
+  ConvertJSStringToCString(aCx, args.get(1).toString(), sequenceKind);
+
+  gOnSequenceStart(sequenceId.get(), sequenceKind.get());
+  return true;
+}
+
+static bool Method_OnSequenceData(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isString() || !args.get(1).isNumber() || !args.get(2).isNumber()) {
+    JS_ReportErrorASCII(aCx, "Bad parameters");
+    return false;
+  }
+
+  nsAutoCString sequenceId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), sequenceId);
+
+  double offset = args.get(1).toNumber();
+  MOZ_RELEASE_ASSERT((uint64_t)offset == (size_t)offset, "bad offset");
+
+  double length = args.get(2).toNumber();
+  MOZ_RELEASE_ASSERT((uint64_t)length == (size_t)length, "bad length");
+
+  gOnSequenceData(sequenceId.get(), (size_t)offset, (size_t)length);
+  return true;
+}
+
+static bool Method_OnSequenceEnd(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isString() || !args.get(1).isNumber()) {
+    JS_ReportErrorASCII(aCx, "Bad parameters");
+    return false;
+  }
+
+  nsAutoCString sequenceId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), sequenceId);
+
+  double length = args.get(1).toNumber();
+  MOZ_RELEASE_ASSERT((uint64_t)length == (size_t)length, "bad length");
+
+  gOnSequenceEnd(sequenceId.get(), (size_t)length);
   return true;
 }
 
@@ -783,6 +846,9 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("onEvent", Method_OnEvent, 2, 0),
   JS_FN("onHttpRequest", Method_OnHttpRequest, 2, 0),
   JS_FN("onHttpRequestEvent", Method_OnHttpRequestEvent, 1, 0),
+  JS_FN("onSequenceStart", Method_OnSequenceStart, 2, 0),
+  JS_FN("onSequenceData", Method_OnSequenceData, 3, 0),
+  JS_FN("onSequenceEnd", Method_OnSequenceEnd, 2, 0),
   JS_FN("onConsoleMessage", Method_OnConsoleMessage, 1, 0),
   JS_FN("onAnnotation", Method_OnAnnotation, 2, 0),
   JS_FN("recordingId", Method_RecordingId, 0, 0),

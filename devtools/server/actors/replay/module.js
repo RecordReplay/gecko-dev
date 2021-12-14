@@ -43,6 +43,8 @@ const {
   "resource://devtools/server/actors/replay/network-helpers.jsm"
 );
 
+const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+
 const { ComponentUtils } = ChromeUtils.import("resource://gre/modules/ComponentUtils.jsm");
 
 const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
@@ -647,6 +649,7 @@ const commands = {
   "Target.getSheetSourceMapURL": Target_getSheetSourceMapURL,
   "Target.topFrameLocation": Target_topFrameLocation,
   "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
+  "Target.getCurrentSequenceData": Target_getCurrentSequenceData,
 };
 
 function OnProtocolCommand(method, params) {
@@ -1110,6 +1113,57 @@ if (isRecordingOrReplaying) {
   }
 
   Services.obs.addObserver((subject, topic, data) => {
+    const inputStream = subject.QueryInterface(Ci.nsIInputStream);
+    const channelId = +data;
+
+    const sequenceId = `response-${channelId}`;
+    notifyRequestEvent(channelId, "response-body-sequence", { sequenceId });
+    notifySequenceStart(sequenceId, "data");
+
+    let offset = 0;
+    listenForStreamData();
+
+    function onResponseData(value) {
+      notifySequenceData(sequenceId, offset, value.byteLength, ({ index, length }) => ({
+        kind: "data",
+        value: ChromeUtils.base64URLEncode(
+          value.slice(index, index + length),
+          { pad: true }
+        ).replace(/^[^,],/, ""),
+      }));
+
+      offset += value.byteLength;
+    }
+
+    function onResponseEnd() {
+      notifySequenceEnd(sequenceId, offset);
+    }
+
+    function listenForStreamData() {
+      inputStream.asyncWait({ onInputStreamReady }, 0, 0, Services.tm.mainThread);
+    }
+
+    function onInputStreamReady(stream) {
+      assert(stream === inputStream);
+
+      let available;
+      try {
+        available = inputStream.available();
+      } catch {
+        onResponseEnd();
+        return;
+      }
+
+      if (available > 0) {
+        const value = NetUtil.readInputStream(inputStream, available);
+        onResponseData(value);
+      }
+
+      listenForStreamData();
+    }
+  }, "replay-response-start");
+
+  Services.obs.addObserver((subject, topic, data) => {
     const channel = getChannel(subject);
     if (!channel) {
       return;
@@ -1288,6 +1342,18 @@ if (isRecordingOrReplaying) {
     false,
     true
   );
+
+  function notifySequenceStart(id, kind) {
+    RecordReplayControl.onSequenceStart(id, kind);
+  }
+  function notifySequenceData(id, offset, length, callback) {
+    gCurrentSequenceDataCallback = callback;
+    RecordReplayControl.onSequenceData(id, offset, length);
+    gCurrentSequenceDataCallback = null;
+  }
+  function notifySequenceEnd(id, length) {
+    RecordReplayControl.onSequenceEnd(id, length);
+  }
 }
 
 
@@ -2179,6 +2245,15 @@ function Pause_getTopFrame() {
     return { frame: id, data: { frames: [frameData] } };
   }
   return { data: {} };
+}
+
+let gCurrentSequenceDataCallback;
+
+function Target_getCurrentSequenceData(params) {
+  assert(gCurrentSequenceDataCallback, "must have sequence data");
+  return {
+    data: gCurrentSequenceDataCallback(params),
+  };
 }
 
 function Target_getCurrentNetworkRequestEvent() {

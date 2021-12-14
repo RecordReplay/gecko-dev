@@ -9,6 +9,7 @@
 #ifndef mozilla_RecordReplay_h
 #define mozilla_RecordReplay_h
 
+#include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/TemplateLib.h"
@@ -21,6 +22,7 @@
 struct PLDHashTableOps;
 
 class nsIURI;
+class nsIStreamListener;
 
 namespace mozilla {
 
@@ -350,6 +352,7 @@ const char* GetBuildId();
 void OnTestCommand(const char* aString);
 void OnRepaintNeeded(const char* aWhy);
 bool IsTearingDownProcess();
+already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener* listener);
 
 ///////////////////////////////////////////////////////////////////////////////
 // API inline function implementation
