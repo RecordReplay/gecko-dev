@@ -25,7 +25,7 @@ function getAPIServer() {
   return Services.prefs.getStringPref("devtools.recordreplay.apiServer");
 }
 
-async function queryAPIServer (query, variables = {}) {
+async function queryAPIServer(query, variables = {}) {
   const token = ReplayAuth.getReplayUserToken() || ReplayAuth.getOriginalApiKey();
 
   if (!token) {

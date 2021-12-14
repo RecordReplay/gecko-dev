@@ -24,7 +24,7 @@ const ReplayAuth = ChromeUtils.import(
   "resource://devtools/server/actors/replay/auth.js"
 );
 const { queryAPIServer } = ChromeUtils.import(
-  "resource://devtools/server/actors/replay/apiServer.js"
+  "resource://devtools/server/actors/replay/api-server.js"
 );
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
@@ -527,11 +527,9 @@ class Recording extends EventEmitter {
   }
 }
 
-function checkShouldValidateUrl() {
-  if (gShouldValidateUrl !== null) {
-    return Promise.resolve(gShouldValidateUrl)
-  } else {
-    return queryAPIServer(`
+async function checkShouldValidateUrl() {
+  if (gShouldValidateUrl === null) {
+    const resp = await queryAPIServer(`
       query GetOrgs {
         viewer {
           workspaces {
@@ -546,23 +544,25 @@ function checkShouldValidateUrl() {
           }
         }
       }
-    `).then(resp => {
-      if (resp.errors) {
-        throw new Error("Unexpected error checking Replay user permissions");
+    `);
+
+    if (resp.errors) {
+      throw new Error("Unexpected error checking Replay user permissions");
+    }
+
+    const workspaces = resp.data.viewer?.workspaces.edges;
+    gShouldValidateUrl = !workspaces ? false : workspaces.some(w => {
+      if (w.node.isOrganization) {
+        const {allowList, blockList} = w.node.settings?.features?.recording || {};
+
+        return (Array.isArray(allowList) && allowList.length > 0) || (Array.isArray(blockList) && blockList.length > 0);
       }
 
-      const workspaces = resp.data.viewer?.workspaces.edges;
-      gShouldValidateUrl = !workspaces ? false : workspaces.some(w => {
-        if (w.node.isOrganization) {
-          const {allowList, blockList} = w.node.settings?.features?.recording || {};
-
-          return (Array.isArray(allowList) && allowList.length > 0) || (Array.isArray(blockList) && blockList.length > 0);
-        }
-      });
-
-      return gShouldValidateUrl;
+      return false;
     });
   }
+
+  return gShouldValidateUrl;
 }
 
 async function canRecordUrl(url) {
