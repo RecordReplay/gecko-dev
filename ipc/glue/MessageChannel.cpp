@@ -1057,10 +1057,9 @@ bool MessageChannel::SendBuildIDsMatchMessage(const char* aParentBuildID) {
   nsCString parentBuildID(aParentBuildID);
   nsCString childBuildID(mozilla::PlatformBuildID());
 
-  // https://github.com/RecordReplay/backend/issues/3414
-  recordreplay::RecordReplayAssert("MessageChannel::SendBuildIDsMatchMessage %s %s",
-                                   parentBuildID.get(), childBuildID.get());
-
+  // When replaying we might have a different platform build ID than what we used
+  // when originally recording. Tolerate mismatches here so that we don't
+  // immediately crash when starting up.
   if (recordreplay::RecordReplayValue("MessageChannel::SendBuildIDsMatchMessage #1",
                                       parentBuildID != childBuildID)) {
     // The build IDs didn't match, usually because an update occurred in the
