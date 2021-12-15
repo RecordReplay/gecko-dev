@@ -133,6 +133,11 @@ void ProcessLink::Open(UniquePtr<Transport> aTransport, MessageLoop* aIOLoop,
 }
 
 void ProcessLink::SendMessage(UniquePtr<Message> msg) {
+  // Check that messages sent over IPC channels have consistent contents when
+  // recording vs. replaying.
+  mozilla::recordreplay::RecordReplayAssert("ProcessLink::SendMessage %d %d %u",
+                                            msg->type(), msg->routing_id(), msg->size());
+
   if (msg->size() > IPC::Channel::kMaximumMessageSize) {
     CrashReporter::AnnotateCrashReport(
         CrashReporter::Annotation::IPCMessageName,
