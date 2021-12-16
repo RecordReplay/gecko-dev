@@ -320,8 +320,10 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
     // is ideal for security.
 #ifdef XP_WIN
     MOZ_RELEASE_ASSERT(!_putenv("RECORD_REPLAY_AUTH="));
+    MOZ_RELEASE_ASSERT(!_putenv("RECORD_REPLAY_API_KEY="));
 #else
     MOZ_RELEASE_ASSERT(!unsetenv("RECORD_REPLAY_AUTH"));
+    MOZ_RELEASE_ASSERT(!unsetenv("RECORD_REPLAY_API_KEY"));
 #endif
   }
 
