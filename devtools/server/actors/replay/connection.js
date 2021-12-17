@@ -58,6 +58,13 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
 });
 
+XPCOMUtils.defineLazyServiceGetter(
+  this,
+  "gExternalProtocolService",
+  "@mozilla.org/uriloader/external-helper-app-service;1",
+  Ci.nsIExternalProtocolService
+);
+
 let updateStatusCallback = null;
 let connectionStatus = "cloudConnecting.label";
 let gShouldValidateUrl = null;
@@ -1476,6 +1483,45 @@ distributor.addObserver({
   },
 });
 
+function openSigninPage() {
+  const key = btoa(Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256))).join(""))
+  const url = Services.io.newURI(`http://localhost:8080/api/browser/auth?key=${key}`);
+
+  gExternalProtocolService
+    .getProtocolHandlerInfo("https")
+    .launchWithURI(url);
+
+  Promise.race([
+    new Promise((_resolve, reject) => setTimeout(reject, 2 * 60 * 1000)),
+    new Promise(async (resolve, reject) => {
+      let retries = 0;
+      while (retries < 20) {
+        const resp = await queryAPIServer(`
+          mutation CloseAuthRequest($key: String!) {
+            closeAuthRequest(input: {key: $key}) {
+              success
+              token
+            }
+          }
+        `, {
+          key
+        });
+
+        if (resp.errors) {
+          retries++;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } else {
+          ReplayAuth.setReplayUserToken(resp.data.closeAuthRequest.token);
+          resolve();
+          break;
+        }
+      }
+
+      reject(`Failed to authenticate`);
+    })
+  ]).catch(console.error);
+}
+
 // eslint-disable-next-line no-unused-vars
 var EXPORTED_SYMBOLS = [
   "setConnectionStatusChangeCallback",
@@ -1489,4 +1535,5 @@ var EXPORTED_SYMBOLS = [
   "isLoggedIn",
   "saveRecordingToken",
   "isRunningTest",
+  "openSigninPage"
 ];

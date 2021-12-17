@@ -36,6 +36,7 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 const {
+  openSigninPage,
   getConnectionStatus,
   setConnectionStatusChangeCallback,
   toggleRecording,
@@ -739,23 +740,23 @@ DevToolsStartup.prototype = {
   },
 
   initializeRecordingWebChannel() {
-    const pageUrl = Services.prefs.getStringPref(
-      "devtools.recordreplay.recordingsUrl"
-    );
-    const localUrl = "http://localhost:8080/view";
+    // const pageUrl = Services.prefs.getStringPref(
+    //   "devtools.recordreplay.recordingsUrl"
+    // );
+    // const localUrl = "http://localhost:8080/view";
 
-    registerWebChannel(pageUrl);
-    registerWebChannel(localUrl);
+    // registerWebChannel(pageUrl);
+    // registerWebChannel(localUrl);
 
-    function registerWebChannel(url) {
-      const urlForWebChannel = Services.io.newURI(url);
-      const channel = new WebChannel("record-replay-token", urlForWebChannel);
+    // function registerWebChannel(url) {
+    //   const urlForWebChannel = Services.io.newURI(url);
+    //   const channel = new WebChannel("record-replay-token", urlForWebChannel);
 
-      channel.listen((id, message) => {
-        const { token } = message;
-        saveRecordingToken(token);
-      });
-    }
+    //   channel.listen((id, message) => {
+    //     const { token } = message;
+    //     saveRecordingToken(token);
+    //   });
+    // }
   },
   /*
    * We listen to the "Web Developer" system menu, which is under "Tools" main item.
@@ -1430,7 +1431,7 @@ function createRecordingButton() {
       const { selectedBrowser } = node.ownerDocument.defaultView.gBrowser;
       if (!isLoggedIn()) {
         pingTelemetry("browser", "recording-button-click-while-logged-out");
-        openSigninPage(selectedBrowser);
+        openSigninPage();
         return;
       }
 
@@ -1483,8 +1484,8 @@ function createRecordingButton() {
     id: "replay-signin-button",
     type: "button",
     tooltiptext: "replay-signin-button.tooltiptext2",
-    onClick(evt) {
-      openSigninPage(evt.target.ownerDocument.defaultView.gBrowser);
+    onClick() {
+      openSigninPage();
     },
     onCreated(node) {
       node.refreshStatus = () => {
@@ -1504,22 +1505,6 @@ function createRecordingButton() {
     dump(`CloudReplayStatus ${status}\n`);
     refreshAllRecordingButtons();
   });
-}
-
-function openSigninPage(gBrowser) {
-  const url = "https://app.replay.io/?signin=true";
-  const options = { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() };
-
-  // open a new tab to authenticate if not on a replay (or auth0 replay) host
-  const host = gBrowser.selectedBrowser.documentURI.host;
-  if (getRecordingState(gBrowser.selectedBrowser) === RecordingState.READY && (
-    /(\.|^)replay.io$/.test(host) ||
-    "webreplay.us.auth0.com" === host
-  )) {
-    gBrowser.loadURI(url, options);
-  } else {
-    gBrowser.selectedTab = gBrowser.addTab(url, options);
-  }
 }
 
 function refreshRecordingButton(doc) {
