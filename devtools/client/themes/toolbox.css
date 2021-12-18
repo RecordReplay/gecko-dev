@@ -590,3 +590,8 @@
   color: #7e6c8f;
   list-style-image: url("chrome://global/skin/icons/replay-logo-light.svg");
 }
+
+#recording-overlay[hidden="false"] ~ #toolbox-toolbar-mount #toolbox-close {
+  /* Has to be larger than the z-index of reording-overlay */
+  z-index: 1000;
+}
