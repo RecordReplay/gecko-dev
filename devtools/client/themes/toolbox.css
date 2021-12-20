@@ -592,6 +592,6 @@
 }
 
 #recording-overlay[hidden="false"] ~ #toolbox-toolbar-mount #toolbox-close {
-  /* Has to be larger than the z-index of reording-overlay */
+  /* Has to be larger than the z-index of recording-overlay */
   z-index: 1000;
 }
