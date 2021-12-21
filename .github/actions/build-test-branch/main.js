@@ -16,7 +16,7 @@ if (branchName.includes("webreplay-release")) {
 
 const replayRevision = getLatestReplayRevision();
 
-const driverRevision = process.env.DRIVER_REVISION;
+const driverRevision = process.env.INPUT_DRIVER_REVISION;
 console.log("DriverRevision", driverRevision);
 
 sendBuildTestRequest({
