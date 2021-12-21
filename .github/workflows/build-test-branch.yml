@@ -1,6 +1,10 @@
 name: Build/Test Branch
 on:
   workflow_dispatch:
+    inputs:
+      driver_revision:
+        description: "Driver revision to use, if not the latest"
+        required: false
 
 jobs:
   build-test:
