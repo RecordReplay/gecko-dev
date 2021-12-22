@@ -1110,7 +1110,7 @@ async function uploadAllSourcemapAssets({
   sourceMapURL,
   sourceMapBaseURL
 }) {
-  const result = await fetchText(sourceMapURL);
+  const result = await fetchText(recordingId, sourceMapURL);
   if (!result) {
     return;
   }
@@ -1144,7 +1144,7 @@ async function uploadAllSourcemapAssets({
     // once that is detected by the sources.
     sourceMapURL.startsWith("data:") ? undefined : ensureMapUploading(),
     Promise.all(sources.map(async ({ offset, url }) => {
-      const result = await fetchText(url);
+      const result = await fetchText(recordingId, url);
       if (!result || mapUploadFailed) {
         return;
       }
@@ -1245,7 +1245,7 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
   };
 }
 
-async function fetchText(url) {
+async function fetchText(recordingId, url) {
   let urlObj;
   try {
     urlObj = new URL(url);
@@ -1265,12 +1265,17 @@ async function fetchText(url) {
   }
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      //
+      credentials: "include",
+    });
     if (response.status < 200 || response.status >= 300) {
       console.error("Error fetching recording resource", url, response);
       pingTelemetry("sourcemap-upload", "fetch-bad-status", {
         message: `Request got status: ${response.status}`,
         status: response.status,
+        url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
+        recordingId,
       });
       return null;
     }
@@ -1284,6 +1289,8 @@ async function fetchText(url) {
     pingTelemetry("sourcemap-upload", "fetch-exception", {
       message: e?.message,
       stack: e?.stack,
+      url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
+      recordingId,
     });
     return null;
   }
