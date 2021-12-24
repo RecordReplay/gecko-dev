@@ -309,6 +309,7 @@ function isLoggedIn() {
 
 async function saveRecordingToken(token) {
   ReplayAuth.setReplayUserToken(token);
+  gShouldValidateUrl = null;
 }
 
 function isRunningTest() {
@@ -1487,5 +1488,5 @@ var EXPORTED_SYMBOLS = [
   "RecordingState",
   "isLoggedIn",
   "saveRecordingToken",
-  "isRunningTest"
+  "isRunningTest",
 ];
