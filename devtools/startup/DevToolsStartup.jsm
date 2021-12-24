@@ -36,19 +36,19 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 const {
-  openSigninPage,
   getConnectionStatus,
   setConnectionStatusChangeCallback,
   toggleRecording,
   getRecordingState,
   RecordingState,
   isLoggedIn,
-  saveRecordingToken,
   isRunningTest,
 } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/connection.js"
 );
-
+const { openSigninPage } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/auth.js"
+);
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
@@ -426,6 +426,7 @@ DevToolsStartup.prototype = {
           this.hookDeveloperToggle();
         }
 
+        initAuth();
         this.hookRecordingButton();
         this.hookProfilerRecordingButton();
       }
@@ -657,7 +658,6 @@ DevToolsStartup.prototype = {
       return;
     }
     this.recordingButtonCreated = true;
-    this.initializeRecordingWebChannel();
 
     createRecordingButton();
   },
@@ -739,25 +739,6 @@ DevToolsStartup.prototype = {
     }
   },
 
-  initializeRecordingWebChannel() {
-    // const pageUrl = Services.prefs.getStringPref(
-    //   "devtools.recordreplay.recordingsUrl"
-    // );
-    // const localUrl = "http://localhost:8080/view";
-
-    // registerWebChannel(pageUrl);
-    // registerWebChannel(localUrl);
-
-    // function registerWebChannel(url) {
-    //   const urlForWebChannel = Services.io.newURI(url);
-    //   const channel = new WebChannel("record-replay-token", urlForWebChannel);
-
-    //   channel.listen((id, message) => {
-    //     const { token } = message;
-    //     saveRecordingToken(token);
-    //   });
-    // }
-  },
   /*
    * We listen to the "Web Developer" system menu, which is under "Tools" main item.
    * This menu item is hardcoded empty in Firefox UI. We listen for its opening to
