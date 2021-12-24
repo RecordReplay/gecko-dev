@@ -63,7 +63,7 @@ function getOriginalApiKey() {
 
 function setReplayRefreshToken(token) {
   Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
-  refresh(token);
+  refresh();
 }
 
 function setReplayUserToken(token) {
@@ -144,7 +144,8 @@ function initializeRecordingWebChannel() {
   }
 }
 
-async function refresh(refreshToken) {
+async function refresh() {
+  const refreshToken = Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
   if (!refreshToken) {
     return;
   }
@@ -222,5 +223,5 @@ function openSigninPage() {
 // Init
 (() => {
   initializeRecordingWebChannel();
-  refresh(Services.prefs.getStringPref("devtools.recordreplay.refresh-token", ""));
+  refresh();
 })();
