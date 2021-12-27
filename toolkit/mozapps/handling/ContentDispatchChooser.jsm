@@ -238,6 +238,10 @@ const { toggleRecording } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/connection.js"
 );
 
+const { getenv } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/env.js"
+);
+
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
@@ -245,7 +249,7 @@ const { pingTelemetry } = ChromeUtils.import(
 // [Replay] - Mapping of replay: URL scheme values to destinations. Can either
 // be a URL or a function which invokes arbitrary browser-chrome functionality
 const replaySchemeMap = {
-  library: 'https://app.replay.io/',
+  library: getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io/",
   migrate: (uri, principal, browsingContext) => {
     const win = browsingContext.topFrameElement.getTabBrowser().ownerGlobal;
     MigrationUtils.showMigrationWizard(win, [

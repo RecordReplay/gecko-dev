@@ -22,6 +22,9 @@ const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
 const { queryAPIServer } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/api-server.js"
 );
+const { getenv } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/env.js"
+);
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
@@ -192,7 +195,8 @@ function base64URLEncode(str) {
 function openSigninPage() {
   const keyArray = Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256)));
   const key = base64URLEncode(btoa(keyArray.join("")));
-  const url = Services.io.newURI(`http://localhost:8080/api/browser/auth?key=${key}`);
+  const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
+  const url = Services.io.newURI(`${viewHost}/api/browser/auth?key=${key}`);
 
   gExternalProtocolService
     .getProtocolHandlerInfo("https")
