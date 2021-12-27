@@ -110,11 +110,15 @@ function tokenExpiration(token) {
   return typeof exp === "number" ? exp * 1000 : null;
 }
 
+let authChannel;
+
 function handleAuthChannelMessage(_id, message, target) {
   const { type } = message;
   if (type === "connect") {
     deferredAccessToken.promise.then(token => {
-      authChannel.send({ token }, target);
+      if (authChannel) {
+        authChannel.send({ token }, target);
+      }
     })
   // TODO [ryanjduffy]: Add support for app login to use the browser auth flow
   // } else if (type === "login") {
@@ -138,7 +142,7 @@ function initializeRecordingWebChannel() {
 
   function registerWebChannel(url) {
     const urlForWebChannel = Services.io.newURI(url);
-    const authChannel = new WebChannel("record-replay-token", urlForWebChannel);
+    authChannel = new WebChannel("record-replay-token", urlForWebChannel);
 
     authChannel.listen(handleAuthChannelMessage);
   }
