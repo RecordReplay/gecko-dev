@@ -184,8 +184,14 @@ async function refresh() {
   }
 }
 
+function base64URLEncode(str) {
+  // https://auth0.com/docs/authorization/flows/call-your-api-using-the-authorization-code-flow-with-pkce
+  return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
 function openSigninPage() {
-  const key = btoa(Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256))).join(""))
+  const keyArray = Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256)));
+  const key = base64URLEncode(btoa(keyArray.join("")));
   const url = Services.io.newURI(`http://localhost:8080/api/browser/auth?key=${key}`);
 
   gExternalProtocolService
