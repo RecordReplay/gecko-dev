@@ -135,8 +135,41 @@ void ProcessLink::Open(UniquePtr<Transport> aTransport, MessageLoop* aIOLoop,
 void ProcessLink::SendMessage(UniquePtr<Message> msg) {
   // Check that messages sent over IPC channels have consistent contents when
   // recording vs. replaying.
-  mozilla::recordreplay::RecordReplayAssert("ProcessLink::SendMessage %d %d %u",
-                                            msg->type(), msg->routing_id(), msg->size());
+  recordreplay::RecordReplayAssert("ProcessLink::SendMessage %d %d %u",
+                                   msg->type(), msg->routing_id(), msg->size());
+
+  // When replaying message sizes must be consistent, or we'll crash when trying
+  // to send the messages because we'll get unexpected data from system calls
+  // which are being replayed. To improve robustness, force messages to be the
+  // same size when replaying by padding or truncating them.
+  size_t recordedSize = recordreplay::RecordReplayValue("ProcessLink::SendMessage", msg->size());
+  if (recordedSize != msg->size()) {
+    recordreplay::AutoPassThroughThreadEvents pt;
+    recordreplay::Diagnostic("ProcessLink::SendMessage resizing message from %zu to %zu",
+                             msg->size(), recordedSize);
+    if (recordedSize < msg->size()) {
+      PickleIterator iter(*msg);
+      // The total size includes the header which the iterator skips past,
+      // so correct for this difference.
+      MOZ_RELEASE_ASSERT(recordedSize >= msg->header_size());
+      if (!msg->IgnoreBytes(&iter, recordedSize - msg->header_size())) {
+        MOZ_CRASH("ProcessLink::SendMessage resize IgnoreBytes failed");
+      }
+      msg->Truncate(&iter);
+    } else {
+      size_t paddingSize = recordedSize - msg->size();
+      char* padding = new char[paddingSize];
+      memset(padding, 0, paddingSize);
+      if (!msg->WriteBytes(padding, paddingSize)) {
+        MOZ_CRASH("ProcessLink::SendMessage resize WriteBytes failed");
+      }
+      delete[] padding;
+    }
+    if (recordedSize != msg->size()) {
+      recordreplay::Diagnostic("ProcessLink::SendMessage resize failed, size is %zu", msg->size());
+      MOZ_CRASH("ProcessLink::SendMessage");
+    }
+  }
 
   if (msg->size() > IPC::Channel::kMaximumMessageSize) {
     CrashReporter::AnnotateCrashReport(
