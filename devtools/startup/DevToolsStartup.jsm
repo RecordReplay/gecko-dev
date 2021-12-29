@@ -1488,25 +1488,6 @@ function createRecordingButton() {
   });
 }
 
-function refreshRecordingButton(doc) {
-  const node = doc.getElementById("record-button");
-  if (node) {
-    node.refreshStatus();
-  }
-  const signinNode = doc.getElementById("replay-signin-button");
-  if (signinNode) {
-    signinNode.refreshStatus();
-  }
-}
-
-function refreshAllRecordingButtons() {
-  try {
-    for (const w of Services.wm.getEnumerator("navigator:browser")) {
-      refreshRecordingButton(w.document);
-    }
-  } catch (e) {}
-}
-
 function pickSigninPage(gBrowser) {
   const externalAuthFlow = Services.prefs.getBoolPref("devtools.recordreplay.ext-auth", false);
 
@@ -1528,6 +1509,25 @@ function pickSigninPage(gBrowser) {
   } else {
     gBrowser.selectedTab = gBrowser.addTab(url, options);
   }
+}
+
+function refreshRecordingButton(doc) {
+  const node = doc.getElementById("record-button");
+  if (node) {
+    node.refreshStatus();
+  }
+  const signinNode = doc.getElementById("replay-signin-button");
+  if (signinNode) {
+    signinNode.refreshStatus();
+  }
+}
+
+function refreshAllRecordingButtons() {
+  try {
+    for (const w of Services.wm.getEnumerator("navigator:browser")) {
+      refreshRecordingButton(w.document);
+    }
+  } catch (e) {}
 }
 
 // When state changes which affects the recording buttons, we try to update the
