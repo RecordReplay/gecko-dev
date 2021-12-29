@@ -19,6 +19,9 @@ var EXPORTED_SYMBOLS = [
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
 const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
+const { pingTelemetry } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/telemetry.js"
+);
 const { queryAPIServer } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/api-server.js"
 );
@@ -154,6 +157,9 @@ function initializeRecordingWebChannel() {
 async function refresh() {
   const refreshToken = Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
   if (!refreshToken) {
+    pingTelemetry("browser", "auth-request-failed", {
+      error: "no-refresh-token"
+    });
     return;
   }
 
@@ -172,18 +178,23 @@ async function refresh() {
   const json = await resp.json();
 
   if (json.error) {
-    // TODO: telemetry
+    pingTelemetry("browser", "auth-request-failed", {
+      error: json.error
+    });
     setReplayRefreshToken("");
     setReplayUserToken("");
     return;
   }
-
 
   if (json.access_token) {
     Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
     setReplayUserToken(json.access_token);
 
     setTimeout(refresh, json.expires_in * 1000);
+  } else {
+    pingTelemetry("browser", "auth-request-failed", {
+      error: "no-access-token"
+    });
   }
 }
 
@@ -228,6 +239,9 @@ function openSigninPage() {
         }
       }
 
+      pingTelemetry("browser", "auth-request-failed", {
+        error: "max-retries"
+      });
       reject(`Failed to authenticate`);
     })
   ]).catch(console.error);
