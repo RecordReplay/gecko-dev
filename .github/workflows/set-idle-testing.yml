@@ -1,0 +1,21 @@
+name: Set Idle Testing Branch
+on:
+  workflow_dispatch:
+    inputs:
+      driver_revision:
+        description: "Driver revision to use, if not the latest"
+        required: false
+
+jobs:
+  idle-test:
+    name: Set idle testing revision to current branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v2
+      - uses: ./.github/actions/set-idle-testing
+        env:
+          BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
+          BUILD_TEST_HOSTNAME: ${{ secrets.BUILD_TEST_HOSTNAME }}
+          BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
+          BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
