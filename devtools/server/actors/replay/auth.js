@@ -18,7 +18,7 @@ var EXPORTED_SYMBOLS = [
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
-const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
+const { clearTimeout, setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
 const { queryAPIServer } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/api-server.js"
 );
@@ -50,8 +50,6 @@ function defer() {
   return { resolve, reject, promise };
 };
 
-let deferredAccessToken = defer();
-
 const Env = Cc["@mozilla.org/process/environment;1"].getService(
   Ci.nsIEnvironment
 );
@@ -64,16 +62,38 @@ function getOriginalApiKey() {
   return gOriginalApiKey;
 }
 
-function setReplayRefreshToken(token) {
-  Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
-  refresh();
+let gDeferredAccessToken = defer();
+let gValidationKey = null;
+let gValidationKeyTimer = null;
+
+function setValidationKey(validationKey) {
+  gValidationKey = validationKey;
+  clearTimeout(gValidationKeyTimer);
+  setTimeout(() => {
+    gValidationKey = null;
+  }, 5 * 60 * 1000);
+}
+
+async function setReplayRefreshToken(encoded) {
+  if (encoded) {
+      const {token, key} = JSON.parse(atob(encoded));
+      if (key !== gValidationKey) {
+        Services.prefs.setStringPref("devtools.recordreplay.refresh-token", "");
+        throw new Error("Authentication request expired");
+      }
+
+      Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token);
+      await refresh();
+  } else {
+    Services.prefs.setStringPref("devtools.recordreplay.refresh-token", "");
+  }
 }
 
 function setReplayUserToken(token) {
   if (token) {
-    deferredAccessToken.resolve(token);
+    gDeferredAccessToken.resolve(token);
   } else {
-    deferredAccessToken = defer();
+    gDeferredAccessToken = defer();
   }
   Services.prefs.setStringPref("devtools.recordreplay.user-token", token || "");
 }
@@ -118,7 +138,7 @@ let authChannel;
 function handleAuthChannelMessage(_id, message, target) {
   const { type } = message;
   if (type === "connect") {
-    deferredAccessToken.promise.then(token => {
+    gDeferredAccessToken.promise.then(token => {
       if (authChannel) {
         authChannel.send({ token }, target);
       }
@@ -171,20 +191,18 @@ async function refresh() {
 
   const json = await resp.json();
 
-  if (json.error) {
+  if (json.error || !json.access_token) {
     // TODO: telemetry
-    setReplayRefreshToken("");
+    setReplayRefreshToken(null);
     setReplayUserToken("");
-    return;
+
+    throw new Error(json.error || "Missing access token");
   }
 
+  Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
+  setReplayUserToken(json.access_token);
 
-  if (json.access_token) {
-    Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
-    setReplayUserToken(json.access_token);
-
-    setTimeout(refresh, json.expires_in * 1000);
-  }
+  setTimeout(refresh, json.expires_in * 1000);
 }
 
 function base64URLEncode(str) {
@@ -198,39 +216,11 @@ function openSigninPage() {
   const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
   const url = Services.io.newURI(`${viewHost}/api/browser/auth?key=${key}`);
 
+  setValidationKey(key);
+
   gExternalProtocolService
     .getProtocolHandlerInfo("https")
     .launchWithURI(url);
-
-  Promise.race([
-    new Promise((_resolve, reject) => setTimeout(reject, 2 * 60 * 1000)),
-    new Promise(async (resolve, reject) => {
-      let retries = 0;
-      while (retries < 20) {
-        const resp = await queryAPIServer(`
-          mutation CloseAuthRequest($key: String!) {
-            closeAuthRequest(input: {key: $key}) {
-              success
-              token
-            }
-          }
-        `, {
-          key
-        });
-
-        if (resp.errors) {
-          retries++;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } else {
-          setReplayRefreshToken(resp.data.closeAuthRequest.token);
-          resolve();
-          break;
-        }
-      }
-
-      reject(`Failed to authenticate`);
-    })
-  ]).catch(console.error);
 }
 
 

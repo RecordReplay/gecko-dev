@@ -234,6 +234,10 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   MigrationUtils: "resource:///modules/MigrationUtils.jsm",
 });
 
+const { setReplayRefreshToken } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/auth.js"
+);
+
 const { toggleRecording } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/connection.js"
 );
@@ -322,21 +326,32 @@ const replaySchemeMap = {
   }
 };
 
-function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
-  if (aURI.scheme.toLowerCase() === 'replay') {
-    const newUrl = replaySchemeMap[aURI.filePath];
-    
-    pingTelemetry(`${aURI.scheme}:${aURI.filePath}`, "init", {handler: !!newUrl});
-    if (newUrl) {
-      if (typeof newUrl === 'function') {
-        newUrl(aURI, aPrincipal, aBrowsingContext);
-      } else if (typeof newUrl === 'string') {
-        const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
-        tabBrowser.loadURI(newUrl, { triggeringPrincipal: aPrincipal });
-      }
+async function mayRedirectToReplayBrowser (aURI, aPrincipal, aBrowsingContext) {
+  try {
+    if (aURI.scheme.toLowerCase() === 'replay') {
+      const newUrl = replaySchemeMap[aURI.filePath];
+      const code = new URLSearchParams(aURI.query).get("code");
 
-      return true;
+      if (code) {
+        await setReplayRefreshToken(code);
+      }
+      
+      pingTelemetry(`${aURI.scheme}:${aURI.filePath}`, "init", {handler: !!newUrl});
+      if (newUrl) {
+        if (typeof newUrl === 'function') {
+          newUrl(aURI, aPrincipal, aBrowsingContext);
+        } else if (typeof newUrl === 'string') {
+          const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
+          tabBrowser.loadURI(newUrl, { triggeringPrincipal: aPrincipal });
+        }
+
+        return true;
+      }
     }
+  } catch {
+    const tabBrowser = aBrowsingContext.topFrameElement.getTabBrowser();
+    tabBrowser.loadURI("about:replay?error=Authentication Failed", { triggeringPrincipal: aPrincipal });
+    return false;
   }
 }
 
@@ -354,7 +369,7 @@ class nsContentDispatchChooser {
    */
   async handleURI(aHandler, aURI, aPrincipal, aBrowsingContext) {
     // [Replay] - Patching in support for replay:// URL Scheme
-    if (mayRedirectToReplayBrowser(aURI, aPrincipal, aBrowsingContext)) {
+    if (await mayRedirectToReplayBrowser(aURI, aPrincipal, aBrowsingContext)) {
       return;
     }
 
