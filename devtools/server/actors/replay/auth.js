@@ -217,7 +217,7 @@ function openSigninPage() {
     new Promise((_resolve, reject) => setTimeout(reject, 2 * 60 * 1000)),
     new Promise(async (resolve, reject) => {
       let retries = 0;
-      while (retries < 20) {
+      while (retries < 40) {
         const resp = await queryAPIServer(`
           mutation CloseAuthRequest($key: String!) {
             closeAuthRequest(input: {key: $key}) {
@@ -231,7 +231,7 @@ function openSigninPage() {
 
         if (resp.errors) {
           retries++;
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 3000));
         } else {
           setReplayRefreshToken(resp.data.closeAuthRequest.token);
           resolve();
