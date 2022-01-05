@@ -1,4 +1,4 @@
-name: Build/Test Branch
+name: Set Idle Testing Branch
 on:
   workflow_dispatch:
     inputs:
@@ -7,8 +7,8 @@ on:
         required: false
 
 jobs:
-  build-test:
-    name: Trigger build/test run on current branch
+  idle-test:
+    name: Set idle testing revision to current branch
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -17,7 +17,7 @@ jobs:
         with:
           authkey: ${{ secrets.TAILSCALE_API_KEY }}
       - uses: actions/checkout@v2
-      - uses: ./.github/actions/build-test-branch
+      - uses: ./.github/actions/set-idle-testing
         env:
           BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
           BUILD_TEST_HOSTNAME: ${{ secrets.BUILD_TEST_HOSTNAME }}

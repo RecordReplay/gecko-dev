@@ -1,0 +1,6 @@
+name: "Set Idle Testing"
+description: "Set idle testing to current branch"
+
+runs:
+  using: "node12"
+  main: "./main.js"
