@@ -74,9 +74,9 @@ static void (*gOnDebuggerStatement)();
 static void (*gOnEvent)(const char* aEvent, bool aBefore);
 static void (*gOnNetworkRequest)(const char* aId, const char* aKind, size_t aBookmark);
 static void (*gOnNetworkRequestEvent)(const char* aId);
-static void (*gOnSequenceStart)(const char* aId, const char* aKind);
-static void (*gOnSequenceData)(const char* aId, size_t offset, size_t length);
-static void (*gOnSequenceEnd)(const char* aId, size_t length);
+static void (*gOnNetworkStreamStart)(const char* aId, const char* aKind, const char* aParentId);
+static void (*gOnNetworkStreamData)(const char* aId, size_t aOffset, size_t aLength, size_t aBookmark);
+static void (*gOnNetworkStreamEnd)(const char* aId, size_t aLength);
 static void (*gOnConsoleMessage)(int aTimeWarpTarget);
 static void (*gOnAnnotation)(const char* aKind, const char* aContents);
 static size_t (*gNewTimeWarpTarget)();
@@ -108,9 +108,9 @@ void InitializeJS() {
   LoadSymbol("RecordReplayOnEvent", gOnEvent);
   LoadSymbol("RecordReplayOnNetworkRequest", gOnNetworkRequest);
   LoadSymbol("RecordReplayOnNetworkRequestEvent", gOnNetworkRequestEvent);
-  LoadSymbol("RecordReplayOnSequenceStart", gOnSequenceStart);
-  LoadSymbol("RecordReplayOnSequenceData", gOnSequenceData);
-  LoadSymbol("RecordReplayOnSequenceEnd", gOnSequenceEnd);
+  LoadSymbol("RecordReplayOnNetworkStreamStart", gOnNetworkStreamStart);
+  LoadSymbol("RecordReplayOnNetworkStreamData", gOnNetworkStreamData);
+  LoadSymbol("RecordReplayOnNetworkStreamEnd", gOnNetworkStreamEnd);
   LoadSymbol("RecordReplayOnConsoleMessage", gOnConsoleMessage);
   LoadSymbol("RecordReplayOnAnnotation", gOnAnnotation);
   LoadSymbol("RecordReplayNewBookmark", gNewTimeWarpTarget);
@@ -644,25 +644,28 @@ static bool Method_OnHttpRequestEvent(JSContext* aCx, unsigned aArgc, Value* aVp
   return true;
 }
 
-static bool Method_OnSequenceStart(JSContext* aCx, unsigned aArgc, Value* aVp) {
+static bool Method_OnNetworkStreamStart(JSContext* aCx, unsigned aArgc, Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
 
-  if (!args.get(0).isString() || !args.get(1).isString()) {
+  if (!args.get(0).isString() || !args.get(1).isString() || !args.get(2).isString()) {
     JS_ReportErrorASCII(aCx, "Bad parameters");
     return false;
   }
 
-  nsAutoCString sequenceId;
-  ConvertJSStringToCString(aCx, args.get(0).toString(), sequenceId);
+  nsAutoCString streamId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), streamId);
 
-  nsAutoCString sequenceKind;
-  ConvertJSStringToCString(aCx, args.get(1).toString(), sequenceKind);
+  nsAutoCString streamKind;
+  ConvertJSStringToCString(aCx, args.get(1).toString(), streamKind);
 
-  gOnSequenceStart(sequenceId.get(), sequenceKind.get());
+  nsAutoCString streamParentId;
+  ConvertJSStringToCString(aCx, args.get(2).toString(), streamParentId);
+
+  gOnNetworkStreamStart(streamId.get(), streamKind.get(), streamParentId.get());
   return true;
 }
 
-static bool Method_OnSequenceData(JSContext* aCx, unsigned aArgc, Value* aVp) {
+static bool Method_OnNetworkStreamData(JSContext* aCx, unsigned aArgc, Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
 
   if (!args.get(0).isString() || !args.get(1).isNumber() || !args.get(2).isNumber()) {
@@ -670,8 +673,8 @@ static bool Method_OnSequenceData(JSContext* aCx, unsigned aArgc, Value* aVp) {
     return false;
   }
 
-  nsAutoCString sequenceId;
-  ConvertJSStringToCString(aCx, args.get(0).toString(), sequenceId);
+  nsAutoCString streamId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), streamId);
 
   double offset = args.get(1).toNumber();
   MOZ_RELEASE_ASSERT((uint64_t)offset == (size_t)offset, "bad offset");
@@ -679,11 +682,11 @@ static bool Method_OnSequenceData(JSContext* aCx, unsigned aArgc, Value* aVp) {
   double length = args.get(2).toNumber();
   MOZ_RELEASE_ASSERT((uint64_t)length == (size_t)length, "bad length");
 
-  gOnSequenceData(sequenceId.get(), (size_t)offset, (size_t)length);
+  gOnNetworkStreamData(streamId.get(), (size_t)offset, (size_t)length, 0);
   return true;
 }
 
-static bool Method_OnSequenceEnd(JSContext* aCx, unsigned aArgc, Value* aVp) {
+static bool Method_OnNetworkStreamEnd(JSContext* aCx, unsigned aArgc, Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
 
   if (!args.get(0).isString() || !args.get(1).isNumber()) {
@@ -691,13 +694,13 @@ static bool Method_OnSequenceEnd(JSContext* aCx, unsigned aArgc, Value* aVp) {
     return false;
   }
 
-  nsAutoCString sequenceId;
-  ConvertJSStringToCString(aCx, args.get(0).toString(), sequenceId);
+  nsAutoCString streamId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), streamId);
 
   double length = args.get(1).toNumber();
   MOZ_RELEASE_ASSERT((uint64_t)length == (size_t)length, "bad length");
 
-  gOnSequenceEnd(sequenceId.get(), (size_t)length);
+  gOnNetworkStreamEnd(streamId.get(), (size_t)length);
   return true;
 }
 
@@ -846,9 +849,9 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("onEvent", Method_OnEvent, 2, 0),
   JS_FN("onHttpRequest", Method_OnHttpRequest, 2, 0),
   JS_FN("onHttpRequestEvent", Method_OnHttpRequestEvent, 1, 0),
-  JS_FN("onSequenceStart", Method_OnSequenceStart, 2, 0),
-  JS_FN("onSequenceData", Method_OnSequenceData, 3, 0),
-  JS_FN("onSequenceEnd", Method_OnSequenceEnd, 2, 0),
+  JS_FN("onNetworkStreamStart", Method_OnNetworkStreamStart, 3, 0),
+  JS_FN("onNetworkStreamData", Method_OnNetworkStreamData, 3, 0),
+  JS_FN("onNetworkStreamEnd", Method_OnNetworkStreamEnd, 2, 0),
   JS_FN("onConsoleMessage", Method_OnConsoleMessage, 1, 0),
   JS_FN("onAnnotation", Method_OnAnnotation, 2, 0),
   JS_FN("recordingId", Method_RecordingId, 0, 0),

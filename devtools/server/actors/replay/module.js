@@ -649,7 +649,7 @@ const commands = {
   "Target.getSheetSourceMapURL": Target_getSheetSourceMapURL,
   "Target.topFrameLocation": Target_topFrameLocation,
   "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
-  "Target.getCurrentSequenceData": Target_getCurrentSequenceData,
+  "Target.getCurrentNetworkStreamData": Target_getCurrentNetworkStreamData,
 };
 
 function OnProtocolCommand(method, params) {
@@ -1116,15 +1116,15 @@ if (isRecordingOrReplaying) {
     const inputStream = subject.QueryInterface(Ci.nsIInputStream);
     const channelId = +data;
 
-    const sequenceId = `response-${channelId}`;
-    notifyRequestEvent(channelId, "response-body-sequence", { sequenceId });
-    notifySequenceStart(sequenceId, "data");
+    const streamId = `response-${channelId}`;
+    notifyRequestEvent(channelId, "response-body", {});
+    notifyNetworkStreamStart(streamId, "response-data", `${channelId}`);
 
     let offset = 0;
     listenForStreamData();
 
     function onResponseData(value) {
-      notifySequenceData(sequenceId, offset, value.byteLength, ({ index, length }) => ({
+      notifyNetworkStreamData(streamId, offset, value.byteLength, ({ index, length }) => ({
         kind: "data",
         value: ChromeUtils.base64URLEncode(
           value.slice(index, index + length),
@@ -1136,7 +1136,7 @@ if (isRecordingOrReplaying) {
     }
 
     function onResponseEnd() {
-      notifySequenceEnd(sequenceId, offset);
+      notifyNetworkStreamEnd(streamId, offset);
     }
 
     function listenForStreamData() {
@@ -1343,16 +1343,16 @@ if (isRecordingOrReplaying) {
     true
   );
 
-  function notifySequenceStart(id, kind) {
-    RecordReplayControl.onSequenceStart(id, kind);
+  function notifyNetworkStreamStart(id, kind, parentId) {
+    RecordReplayControl.onNetworkStreamStart(id, kind, parentId);
   }
-  function notifySequenceData(id, offset, length, callback) {
-    gCurrentSequenceDataCallback = callback;
-    RecordReplayControl.onSequenceData(id, offset, length);
-    gCurrentSequenceDataCallback = null;
+  function notifyNetworkStreamData(id, offset, length, callback) {
+    gCurrentNetworkStreamDataCallback = callback;
+    RecordReplayControl.onNetworkStreamData(id, offset, length);
+    gCurrentNetworkStreamDataCallback = null;
   }
-  function notifySequenceEnd(id, length) {
-    RecordReplayControl.onSequenceEnd(id, length);
+  function notifyNetworkStreamEnd(id, length) {
+    RecordReplayControl.onNetworkStreamEnd(id, length);
   }
 }
 
@@ -2247,12 +2247,12 @@ function Pause_getTopFrame() {
   return { data: {} };
 }
 
-let gCurrentSequenceDataCallback;
+let gCurrentNetworkStreamDataCallback;
 
-function Target_getCurrentSequenceData(params) {
-  assert(gCurrentSequenceDataCallback, "must have sequence data");
+function Target_getCurrentNetworkStreamData(params) {
+  assert(gCurrentNetworkStreamDataCallback, "must have network stream data");
   return {
-    data: gCurrentSequenceDataCallback(params),
+    data: gCurrentNetworkStreamDataCallback(params),
   };
 }
 
