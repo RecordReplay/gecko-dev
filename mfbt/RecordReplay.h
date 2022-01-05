@@ -352,6 +352,9 @@ const char* GetBuildId();
 void OnTestCommand(const char* aString);
 void OnRepaintNeeded(const char* aWhy);
 bool IsTearingDownProcess();
+
+// Wrap a given stream listener to emit an observer notification when the stream
+// begins and allow observation of a tee stream.
 already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener* listener);
 
 ///////////////////////////////////////////////////////////////////////////////

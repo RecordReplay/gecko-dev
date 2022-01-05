@@ -26,6 +26,8 @@
 
 namespace mozilla::recordreplay {
 
+// Define a custom class for listening for request start so that we can
+// be notified when the request begins.
 class ResponseRequestObserver final : public nsIRequestObserver {
  private:
   nsCOMPtr<nsIInputStream> mStream;
