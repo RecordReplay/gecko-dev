@@ -39,6 +39,7 @@
 #include "mozilla/PreloaderBase.h"
 #include "mozilla/net/NeckoChannelParams.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_privacy.h"
@@ -800,6 +801,7 @@ nsresult FetchDriver::HttpFetch(
   // if the preferred alternative data type in InternalRequest is not empty, set
   // the data type on the created channel and also create a
   // AlternativeDataStreamListener to be the stream listener of the channel.
+  nsCOMPtr<nsIStreamListener> chanListener;
   if (!aPreferredAlternativeDataType.IsEmpty()) {
     nsCOMPtr<nsICacheInfoChannel> cic = do_QueryInterface(chan);
     if (cic) {
@@ -808,9 +810,9 @@ nsresult FetchDriver::HttpFetch(
       MOZ_ASSERT(!mAltDataListener);
       mAltDataListener = new AlternativeDataStreamListener(
           this, chan, aPreferredAlternativeDataType);
-      rv = chan->AsyncOpen(mAltDataListener);
+      chanListener = mAltDataListener;
     } else {
-      rv = chan->AsyncOpen(this);
+      chanListener = recordreplay::WrapNetworkStreamListener(this);
     }
   } else {
     // Integrity check cannot be done on alt-data yet.
@@ -823,8 +825,11 @@ nsresult FetchDriver::HttpFetch(
       }
     }
 
-    rv = chan->AsyncOpen(this);
+    chanListener = recordreplay::WrapNetworkStreamListener(this);
   }
+
+  rv = chan->AsyncOpen(chanListener);
+  chanListener = nullptr;
 
   if (NS_FAILED(rv)) {
     return rv;
