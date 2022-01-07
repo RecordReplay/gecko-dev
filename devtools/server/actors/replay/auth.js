@@ -120,15 +120,16 @@ let authChannel;
 
 function handleAuthChannelMessage(_id, message, target) {
   const { type } = message;
+  // TODO [ryanjduffy]: Add support for app login to use the browser auth flow
+  // by extending this logic to support a webchannel message from the client
+  // (the app) to request a login which would launch the sign in page in the
+  // user's preferred browser.
   if (type === "connect") {
     deferredAccessToken.promise.then(token => {
       if (authChannel) {
         authChannel.send({ token }, target);
       }
     })
-  // TODO [ryanjduffy]: Add support for app login to use the browser auth flow
-  // } else if (type === "login") {
-  //   openSigninPage();
   } else if ('token' in message) {
     if (!message.token) {
       setReplayRefreshToken(null);
