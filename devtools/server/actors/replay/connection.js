@@ -309,7 +309,6 @@ function isLoggedIn() {
 
 async function saveRecordingToken(token) {
   ReplayAuth.setReplayUserToken(token);
-  gShouldValidateUrl = null;
 }
 
 function isRunningTest() {
@@ -335,6 +334,7 @@ if (ReplayAuth.hasOriginalApiKey()) {
 
     let token = ReplayAuth.getReplayUserToken();
     if (!token) {
+      gShouldValidateUrl = null;
       return;
     }
 

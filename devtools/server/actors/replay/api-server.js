@@ -28,18 +28,17 @@ function getAPIServer() {
 async function queryAPIServer(query, variables = {}) {
   const token = ReplayAuth.getReplayUserToken() || ReplayAuth.getOriginalApiKey();
 
-  if (!token) {
-    // We shouldn't hit this because the recording button shouldn't be enabled
-    // if the user hasn't authenticated
-    throw new Error("Authentication required");
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const resp = await fetch(getAPIServer(), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
     body: JSON.stringify({
       query,
       variables

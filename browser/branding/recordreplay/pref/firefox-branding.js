@@ -49,3 +49,6 @@ pref("browser.urlbar.suggest.quicksuggest",         false);
 // Telemetry
 pref('replay.telemetry.url', 'https://telemetry.replay.io');
 pref('replay.telemetry.enabled', true);
+
+// Authentication Flow
+pref('devtools.recordreplay.ext-auth', false);
