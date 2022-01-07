@@ -9,6 +9,7 @@ SOURCES += [
     'Graphics.cpp',
     'HashTable.cpp',
     'JSControl.cpp',
+    'Network.cpp',
     'ProcessRecordReplay.cpp',
     'RecordReplayDriver.cpp',
 ]

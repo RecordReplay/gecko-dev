@@ -436,6 +436,14 @@ bool Pickle::ReadBytesInto(PickleIterator* iter, void* data,
   return iter->iter_.AdvanceAcrossSegments(buffers_, AlignInt(length) - length);
 }
 
+bool Pickle::IgnoreBytes(PickleIterator* iter, uint32_t length) const {
+  if (AlignInt(length) < length) {
+    return false;
+  }
+
+  return iter->iter_.AdvanceAcrossSegments(buffers_, AlignInt(length));
+}
+
 #ifdef MOZ_PICKLE_SENTINEL_CHECKING
 MOZ_NEVER_INLINE
 bool Pickle::ReadSentinel(PickleIterator* iter, uint32_t sentinel) const {
@@ -477,6 +485,11 @@ void Pickle::EndRead(PickleIterator& iter, uint32_t ipcMsgType) const {
           latencyMs);
     }
   }
+}
+
+void Pickle::Truncate(PickleIterator* iter) {
+  size_t dropped = buffers_.Truncate(iter->iter_);
+  header_->payload_size -= dropped;
 }
 
 void Pickle::BeginWrite(uint32_t length, uint32_t alignment) {
