@@ -14,13 +14,15 @@
 #include "nsCOMPtr.h"
 #include "nsComponentManagerUtils.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsIStreamListener.h"
-#include "nsISupportsImpl.h"
+#include "nsNetUtil.h"
+#include "nsIChannel.h"
+#include "nsIHttpChannel.h"
+#include "nsIInputStreamTee.h"
 #include "nsIOutputStream.h"
 #include "nsIPipe.h"
-#include "nsIChannel.h"
-#include "nsIInputStreamTee.h"
+#include "nsIStreamListener.h"
 #include "nsIStreamListenerTee.h"
+#include "nsISupportsImpl.h"
 
 #include "mozilla/ToString.h"
 
@@ -63,7 +65,8 @@ ResponseRequestObserver::OnStartRequest(nsIRequest* request) {
   nsCOMPtr<nsIIdentChannel> channel = do_QueryInterface(request);
   nsCOMPtr<nsIObserverService> obsService = mozilla::services::GetObserverService();
   if (channel && obsService) {
-    nsAutoString channelIdStr = NS_ConvertUTF8toUTF16(NumberToStringRecordReplayWorkaroundForWindows(channel->ChannelId()).c_str());
+    nsAutoString channelIdStr = NS_ConvertUTF8toUTF16(
+        NumberToStringRecordReplayWorkaroundForWindows(channel->ChannelId()).c_str());
 
     obsService->NotifyObservers(mStream, "replay-response-start", channelIdStr.get());
   } else {
@@ -97,6 +100,47 @@ already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener*
   MOZ_ALWAYS_SUCCEEDS(rv);
 
   return tee.forget();
+}
+
+
+already_AddRefed<nsIInputStream> WrapNetworkRequestBodyStream(nsIHttpChannel* aChannel,
+                                                              nsIInputStream* aStream) {
+  if (!IsRecordingOrReplaying()) {
+    return nsCOMPtr(aStream).forget();
+  }
+
+  nsCOMPtr<nsIIdentChannel> channel = do_QueryInterface(aChannel);
+  nsCOMPtr<nsIObserverService> obsService = mozilla::services::GetObserverService();
+  if (!channel || !obsService) {
+    return nsCOMPtr(aStream).forget();
+  }
+
+  nsCOMPtr<nsIOutputStream> outputStream;
+  nsCOMPtr<nsIInputStream> inputStream;
+  nsresult rv = NS_NewPipe(
+      getter_AddRefs(inputStream), getter_AddRefs(outputStream),
+      0, UINT32_MAX,
+      true, false);
+  MOZ_ALWAYS_SUCCEEDS(rv);
+
+  // Tee the upload stream into the new pipe so we can pass the pipe off to our
+  // JS code to read from.
+  nsCOMPtr<nsIInputStream> tee;
+  rv = NS_NewInputStreamTee(getter_AddRefs(tee), aStream, outputStream);
+  MOZ_ALWAYS_SUCCEEDS(rv);
+
+  nsAutoString channelIdStr = NS_ConvertUTF8toUTF16(
+      NumberToStringRecordReplayWorkaroundForWindows(channel->ChannelId()).c_str());
+  obsService->NotifyObservers(inputStream, "replay-request-start", channelIdStr.get());
+
+  // Buffering is necessarily because ExplicitSetUploadStream errors if the
+  // stream is not buffered.
+  nsCOMPtr<nsIInputStream> bufferedTee;
+  rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedTee),
+                                  tee.forget(), 4096);
+  MOZ_ALWAYS_SUCCEEDS(rv);
+
+  return bufferedTee.forget();
 }
 
 } // namespace mozilla::recordreplay

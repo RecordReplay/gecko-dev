@@ -1114,18 +1114,19 @@ if (isRecordingOrReplaying) {
     return channel;
   }
 
-  Services.obs.addObserver((subject, topic, data) => {
+  function onRequestStreamTopic(subject, topic, data) {
     const inputStream = subject.QueryInterface(Ci.nsIInputStream);
     const channelId = +data;
+    const isRequestBody = topic === "replay-request-start";
 
-    const streamId = `response-${channelId}`;
-    notifyRequestEvent(channelId, "response-body", {});
-    notifyNetworkStreamStart(streamId, "response-data", `${channelId}`);
+    const streamId = `${isRequestBody ? "request" : "response"}-${channelId}`;
+    notifyRequestEvent(channelId, isRequestBody ? "request-body" : "response-body", {});
+    notifyNetworkStreamStart(streamId, isRequestBody ? "request-data" : "response-data", `${channelId}`);
 
     let offset = 0;
     listenForStreamData();
 
-    function onResponseData(value) {
+    function onStreamData(value) {
       notifyNetworkStreamData(streamId, offset, value.byteLength, ({ index, length }) => ({
         kind: "data",
         value: ChromeUtils.base64URLEncode(
@@ -1137,7 +1138,7 @@ if (isRecordingOrReplaying) {
       offset += value.byteLength;
     }
 
-    function onResponseEnd() {
+    function onStreamEnd() {
       notifyNetworkStreamEnd(streamId, offset);
     }
 
@@ -1152,18 +1153,31 @@ if (isRecordingOrReplaying) {
       try {
         available = inputStream.available();
       } catch {
-        onResponseEnd();
+        onStreamEnd();
         return;
       }
 
       if (available > 0) {
         const value = NetUtil.readInputStream(inputStream, available);
-        onResponseData(value);
+        onStreamData(value);
+      }
+
+      // For some reason, request streams don't appear to be marked closed properly.
+      // Firefox doesn't support using an actual ReadableStream for fetch bodies,
+      // so every request body SHOULD have all of its data available immediately,
+      // meaning that we can immediately consider all request body streams to
+      // end once they have been read.
+      if (isRequestBody) {
+        onStreamEnd();
+        stream.close();
+        return;
       }
 
       listenForStreamData();
     }
-  }, "replay-response-start");
+  }
+  Services.obs.addObserver(onRequestStreamTopic, "replay-request-start");
+  Services.obs.addObserver(onRequestStreamTopic, "replay-response-start");
 
   Services.obs.addObserver((subject, topic, data) => {
     const channel = getChannel(subject);

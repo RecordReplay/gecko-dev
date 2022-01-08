@@ -762,6 +762,10 @@ nsresult FetchDriver::HttpFetch(
     nsCOMPtr<nsIInputStream> bodyStream;
     mRequest->GetBody(getter_AddRefs(bodyStream), &bodyLength);
     if (bodyStream) {
+      if (httpChan) {
+        bodyStream = recordreplay::WrapNetworkRequestBodyStream(httpChan, bodyStream);
+      }
+
       nsAutoCString method;
       mRequest->GetMethod(method);
       rv = uploadChan->ExplicitSetUploadStream(bodyStream, contentType,
