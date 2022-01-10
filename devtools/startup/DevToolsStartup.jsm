@@ -426,7 +426,6 @@ DevToolsStartup.prototype = {
           this.hookDeveloperToggle();
         }
 
-        initAuth();
         this.hookRecordingButton();
         this.hookProfilerRecordingButton();
       }
