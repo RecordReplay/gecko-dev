@@ -24,6 +24,10 @@
 
 #include "mozilla/ToString.h"
 
+namespace mozilla {
+extern std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v);
+}
+
 namespace mozilla::recordreplay {
 
 // Define a custom class for listening for request start so that we can
@@ -59,7 +63,7 @@ ResponseRequestObserver::OnStartRequest(nsIRequest* request) {
   nsCOMPtr<nsIIdentChannel> channel = do_QueryInterface(request);
   nsCOMPtr<nsIObserverService> obsService = mozilla::services::GetObserverService();
   if (channel && obsService) {
-    nsAutoString channelIdStr = NS_ConvertUTF8toUTF16(ToString(channel->ChannelId()).c_str());
+    nsAutoString channelIdStr = NS_ConvertUTF8toUTF16(NumberToStringRecordReplayWorkaroundForWindows(channel->ChannelId()).c_str());
 
     obsService->NotifyObservers(mStream, "replay-response-start", channelIdStr.get());
   } else {
