@@ -21,8 +21,10 @@
 
 struct PLDHashTableOps;
 
-class nsIURI;
+class nsIHttpChannel;
+class nsIInputStream;
 class nsIStreamListener;
+class nsIURI;
 
 namespace mozilla {
 
@@ -355,7 +357,12 @@ bool IsTearingDownProcess();
 
 // Wrap a given stream listener to emit an observer notification when the stream
 // begins and allow observation of a tee stream.
-already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener* listener);
+already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener* aListener);
+
+// Wrap a given request input stream to emit an observer notification when the stream
+// begins and allow observation of a tee stream.
+already_AddRefed<nsIInputStream> WrapNetworkRequestBodyStream(nsIHttpChannel* aChannel,
+                                                              nsIInputStream* aStream);
 
 ///////////////////////////////////////////////////////////////////////////////
 // API inline function implementation

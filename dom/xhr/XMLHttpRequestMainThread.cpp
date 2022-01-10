@@ -2588,6 +2588,10 @@ nsresult XMLHttpRequestMainThread::InitiateFetch(
     }
 
     if (uploadStream) {
+      if (httpChannel) {
+        uploadStream = recordreplay::WrapNetworkRequestBodyStream(httpChannel, uploadStream);
+      }
+
       // If necessary, wrap the stream in a buffered stream so as to guarantee
       // support for our upload when calling ExplicitSetUploadStream.
       if (!NS_InputStreamIsBuffered(uploadStream)) {
