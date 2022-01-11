@@ -1132,7 +1132,7 @@ if (isRecordingOrReplaying) {
         value: ChromeUtils.base64URLEncode(
           value.slice(index, index + length),
           { pad: true }
-        ).replace(/^[^,],/, ""),
+        ).replace(/-/g, "+").replace(/_/g, "/"),
       }));
 
       offset += value.byteLength;
