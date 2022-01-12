@@ -626,6 +626,7 @@ const commands = {
   "Pause.getScope": Pause_getScope,
   "Pause.getTopFrame": Pause_getTopFrame,
   "Debugger.getPossibleBreakpoints": Debugger_getPossibleBreakpoints,
+  "Debugger.getPossibleBreakpointsForMultipleSources": Debugger_getPossibleBreakpointsForMultipleSources,
   "Debugger.getSourceContents": Debugger_getSourceContents,
   "CSS.getAppliedRules": CSS_getAppliedRules,
   "CSS.getComputedStyle": CSS_getComputedStyle,
@@ -950,6 +951,15 @@ function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
       return { line, columns };
     });
   }
+}
+
+function Debugger_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
+  return sourceIds.map((sourceId => {
+    return {
+      sourceId,
+      ...Debugger_getPossibleBreakpoints({sourceId})
+    }
+  }));
 }
 
 function functionIdToScript(functionId) {
