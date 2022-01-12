@@ -5,6 +5,10 @@ on:
       driver_revision:
         description: "Driver revision to use, if not the latest"
         required: false
+      clobber:
+        description: "Whether to build the browser from scratch"
+        type: boolean
+        required: false
 
 jobs:
   build-test:
