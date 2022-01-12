@@ -45,6 +45,6 @@ IF DEFINED GITDIR (
 )
 
 REM Start shell.
-%MOZILLABUILD%msys\bin\bash --login recordreplay/gecko-dev/windows-build.sh
+%MOZILLABUILD%msys\bin\bash --login recordreplay/%GECKODIR%/windows-build.sh
 
 EXIT /B
