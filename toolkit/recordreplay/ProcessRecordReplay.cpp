@@ -75,6 +75,8 @@ static InfallibleVector<JSFilter> gJSAsserts;
 
 static void (*gAttach)(const char* dispatch, const char* buildId);
 static void (*gSetApiKey)(const char* apiKey);
+static void (*gProfileExecution)(const char* path);
+static void (*gAddProfileEntry(const char* json);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
 static void (*gRecordReplayBytes)(const char* why, void* buf, size_t size);
@@ -283,6 +285,10 @@ static const char* GetRecordingUnsupportedReason() {
 #endif
 }
 
+// If the profiler is enabled via the environment, start it. This may be used
+// when not recording.
+static void MaybeStartProfiling();
+
 extern "C" {
 
 MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
@@ -305,7 +311,10 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
       dispatchAddress.emplace(strcmp(arg, "*") ? arg : nullptr);
     }
   }
-  MOZ_RELEASE_ASSERT(dispatchAddress.isSome());
+  if (!dispatchAddress.isSome()) {
+    MaybeStartProfiling();
+    return;
+  }
 
   Maybe<std::string> apiKey;
   // this environment variable is set by server/actors/replay/connection.js
@@ -435,6 +444,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   }
 
   ConfigureGecko();
+  MaybeStartProfiling();
 }
 
 MOZ_EXPORT size_t
@@ -672,6 +682,35 @@ MOZ_EXPORT void RecordReplayInterface_InternalPopCrashNote() {
 }
 
 }  // extern "C"
+
+// Whether we are profiling. This process may or may not be recording.
+static bool gProfiling;
+
+static void MaybeStartProfiling() {
+  const char* directory = getenv("RECORD_REPLAY_PROFILE_DIRECTORY");
+  if (!directory) {
+    return;
+  }
+
+  if (!IsRecordingOrReplaying()) {
+    // If this env var isn't set, only recording processes will be profiled.
+    if (!TestEnv("RECORD_REPLAY_PROFILE_EVERYTHING")) {
+      return;
+    }
+    gDriverHandle = OpenDriverHandle();
+    if (!gDriverHandle) {
+      fprintf(stderr, "Loading driver failed, crashing.\n");
+      MOZ_CRASH("RECORD_REPLAY_DRIVER loading failed");
+    }
+  }
+
+  nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
+
+  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
+  gProfileExecution(path.get());
+
+  gProfiling = true;
+}
 
 static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilters) {
   const char* value = getenv(aEnv);

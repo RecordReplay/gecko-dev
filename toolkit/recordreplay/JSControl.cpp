@@ -998,5 +998,34 @@ void OnTestCommand(const char* aString) {
   }
 }
 
+bool BuildProfilerEventJSON(const char* aEvent, const char* aData, nsCString& aResult) {
+  AutoSafeJSContext cx;
+  JSAutoRealm ar(cx, xpc::PrivilegedJunkScope());
+
+  JSObject* obj = JS_NewObject(cx, nullptr);
+  if (!obj) {
+    return false;
+  }
+
+  JSString* eventStr = JS_NewStringCopyZ(cx, aEvent);
+  if (!eventStr || !JS_DefineProperty(cx, obj, "event", eventStr, 0)) {
+    return false;
+  }
+
+  // The event data is optional.
+  if (aData) {
+    JSString* dataStr = JS_NewStringCopyZ(cx, aData);
+    if (!dataStr || !JS_DefineProperty(cx, obj, "data", dataStr, 0)) {
+      return false;
+    }
+  }
+
+  if (!JS::ToJSONMaybeSafely(cx, obj, FillStringCallback, &aResult)) {
+    return false;
+  }
+
+  return true;
+}
+
 }  // namespace recordreplay
 }  // namespace mozilla

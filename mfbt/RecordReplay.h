@@ -248,10 +248,6 @@ struct OrderedAtomic {
 // initialize record/replay state if so.
 MFBT_API void Initialize(int* aArgc, char*** aArgv);
 
-///////////////////////////////////////////////////////////////////////////////
-// JS interface
-///////////////////////////////////////////////////////////////////////////////
-
 // Get the counter used to keep track of how much progress JS execution has
 // made while running on the main thread. Progress must advance whenever a JS
 // function is entered or loop entry point is reached, so that no script
@@ -331,6 +327,10 @@ static inline void NotifyActivity();
 // browser feature, and message the user to notify them the page might not work right.
 // Issue numbers are from https://github.com/RecordReplay/gecko-dev/issues
 MFBT_API void ReportUnsupportedFeature(const char* aFeature, int aIssueNumber);
+
+// Report an event that will be added to any profile the record/replay driver
+// is generating. This may be called when not recording/replaying.
+MFBT_API void AddProfilerEvent(const char* aEvent, const char* aData);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Gecko interface

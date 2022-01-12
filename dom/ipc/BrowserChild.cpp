@@ -3685,9 +3685,7 @@ NS_IMETHODIMP BrowserChild::OnLocationChange(nsIWebProgress* aWebProgress,
 
   if (aWebProgress && webProgressData->isTopLevel()) {
     // Record top-level document navigation in the browser child.
-    if (recordreplay::IsRecordingOrReplaying()) {
-      recordreplay::OnLocationChange(this, aLocation, aFlags);
-    }
+    recordreplay::OnLocationChange(this, aLocation, aFlags);
 
     locationChangeData.emplace();
 
