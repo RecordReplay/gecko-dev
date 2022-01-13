@@ -292,17 +292,6 @@ static void MaybeStartProfiling() {
     return;
   }
 
-  if (!IsRecordingOrReplaying()) {
-    if (!TestEnv("RECORD_REPLAY_PROFILE_CONTENT_PROCESSES")) {
-      return;
-    }
-    gDriverHandle = OpenDriverHandle();
-    if (!gDriverHandle) {
-      fprintf(stderr, "Loading driver failed, crashing.\n");
-      MOZ_CRASH("RECORD_REPLAY_DRIVER loading failed");
-    }
-  }
-
   nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
 
   gProfileExecution(path.get());
