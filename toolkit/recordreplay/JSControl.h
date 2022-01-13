@@ -37,9 +37,6 @@ void MaybeSendRecordingUnusable();
 // Notify the UI process that recording is unsupported on this machine.
 void SendRecordingUnsupported(const char* aReason);
 
-// Helper to build a JSON object for reporting to the profiler.
-bool BuildProfilerEventJSON(const char* aEvent, const char* aData, nsCString& aResult);
-
 }  // namespace js
 }  // namespace recordreplay
 }  // namespace mozilla

@@ -77,11 +77,16 @@ namespace recordreplay {
 extern MFBT_DATA bool gIsRecordingOrReplaying;
 extern MFBT_DATA bool gIsRecording;
 extern MFBT_DATA bool gIsReplaying;
+extern MFBT_DATA bool gIsProfiling;
 
 // Get the kind of recording/replaying process this is, if any.
 static inline bool IsRecordingOrReplaying() { return gIsRecordingOrReplaying; }
 static inline bool IsRecording() { return gIsRecording; }
 static inline bool IsReplaying() { return gIsReplaying; }
+
+// Return whether execution is being profiled. This does not imply the process
+// is recording/replaying.
+static inline bool IsProfiling() { return gIsProfiling; }
 
 // Mark a region where thread events are passed through the record/replay
 // system. While recording, no information from system calls or other events
@@ -329,8 +334,8 @@ static inline void NotifyActivity();
 MFBT_API void ReportUnsupportedFeature(const char* aFeature, int aIssueNumber);
 
 // Report an event that will be added to any profile the record/replay driver
-// is generating. This may be called when not recording/replaying.
-MFBT_API void AddProfilerEvent(const char* aEvent, const char* aData);
+// is generating.
+MFBT_API void AddProfilerEvent(const char* aEvent, const char* aJSON);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Gecko interface
@@ -356,6 +361,11 @@ bool IsTearingDownProcess();
 // Wrap a given stream listener to emit an observer notification when the stream
 // begins and allow observation of a tee stream.
 already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener* listener);
+
+// Helper to build a JSON object with the given properties.
+bool BuildJSON(size_t aNumProperties,
+               const char** aPropertyNames, const char** aPropertyValues,
+               /*nsCString*/void* aResult);
 
 ///////////////////////////////////////////////////////////////////////////////
 // API inline function implementation

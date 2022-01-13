@@ -3685,7 +3685,23 @@ NS_IMETHODIMP BrowserChild::OnLocationChange(nsIWebProgress* aWebProgress,
 
   if (aWebProgress && webProgressData->isTopLevel()) {
     // Record top-level document navigation in the browser child.
-    recordreplay::OnLocationChange(this, aLocation, aFlags);
+    if (recordreplay::IsRecordingOrReplaying()) {
+      recordreplay::OnLocationChange(this, aLocation, aFlags);
+    }
+
+    // Add location changes to record/replay profiles, so we can tell them apart
+    // when profiling all content processes.
+    if (recordreplay::IsProfiling()) {
+      nsCString url;
+      if (NS_SUCCEEDED(aLocation->GetSpec(url))) {
+        const char* propertyName = "url";
+        const char* urlRaw = url.get();
+        nsCString json;
+        if (recordreplay::BuildJSON(1, &propertyName, &urlRaw, &json)) {
+          recordreplay::AddProfilerEvent("LocationChange", json.get());
+        }
+      }
+    }
 
     locationChangeData.emplace();
 

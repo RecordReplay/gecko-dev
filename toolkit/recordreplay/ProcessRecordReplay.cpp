@@ -76,7 +76,7 @@ static InfallibleVector<JSFilter> gJSAsserts;
 static void (*gAttach)(const char* dispatch, const char* buildId);
 static void (*gSetApiKey)(const char* apiKey);
 static void (*gProfileExecution)(const char* path);
-static void (*gAddProfileEntry(const char* json);
+static void (*gAddProfilerEvent)(const char* event, const char* json);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
 static void (*gRecordReplayBytes)(const char* why, void* buf, size_t size);
@@ -286,8 +286,39 @@ static const char* GetRecordingUnsupportedReason() {
 }
 
 // If the profiler is enabled via the environment, start it. This may be used
-// when not recording.
-static void MaybeStartProfiling();
+// when not recording. Vars affecting the profiler:
+//
+// RECORD_REPLAY_PROFILE_DIRECTORY: If this is set, recording processes will
+//   be profiled and those profiles will be added to the directory.
+//
+// RECORD_REPLAY_PROFILE_CONTENT_PROCESSES: If this is also set, non-recording
+//   content processes will also be profiled.
+static void MaybeStartProfiling() {
+  const char* directory = getenv("RECORD_REPLAY_PROFILE_DIRECTORY");
+  if (!directory) {
+    return;
+  }
+
+  if (!IsRecordingOrReplaying()) {
+    if (!TestEnv("RECORD_REPLAY_PROFILE_CONTENT_PROCESSES")) {
+      return;
+    }
+    gDriverHandle = OpenDriverHandle();
+    if (!gDriverHandle) {
+      fprintf(stderr, "Loading driver failed, crashing.\n");
+      MOZ_CRASH("RECORD_REPLAY_DRIVER loading failed");
+    }
+  }
+
+  nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
+
+  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
+  gProfileExecution(path.get());
+
+  LoadSymbol("RecordReplayAddProfilerEvent", gAddProfilerEvent);
+
+  gIsProfiling = true;
+}
 
 extern "C" {
 
@@ -681,36 +712,13 @@ MOZ_EXPORT void RecordReplayInterface_InternalPopCrashNote() {
   }
 }
 
-}  // extern "C"
-
-// Whether we are profiling. This process may or may not be recording.
-static bool gProfiling;
-
-static void MaybeStartProfiling() {
-  const char* directory = getenv("RECORD_REPLAY_PROFILE_DIRECTORY");
-  if (!directory) {
-    return;
+MOZ_EXPORT void RecordReplayInterface_AddProfilerEvent(const char* aEvent, const char* aJSON) {
+  if (gIsProfiling) {
+    gAddProfilerEvent(aEvent, aJSON);
   }
-
-  if (!IsRecordingOrReplaying()) {
-    // If this env var isn't set, only recording processes will be profiled.
-    if (!TestEnv("RECORD_REPLAY_PROFILE_EVERYTHING")) {
-      return;
-    }
-    gDriverHandle = OpenDriverHandle();
-    if (!gDriverHandle) {
-      fprintf(stderr, "Loading driver failed, crashing.\n");
-      MOZ_CRASH("RECORD_REPLAY_DRIVER loading failed");
-    }
-  }
-
-  nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
-
-  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
-  gProfileExecution(path.get());
-
-  gProfiling = true;
 }
+
+}  // extern "C"
 
 static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilters) {
   const char* value = getenv(aEnv);

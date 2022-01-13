@@ -998,33 +998,28 @@ void OnTestCommand(const char* aString) {
   }
 }
 
-bool BuildProfilerEventJSON(const char* aEvent, const char* aData, nsCString& aResult) {
+bool BuildJSON(size_t aNumProperties,
+               const char** aPropertyNames, const char** aPropertyValues,
+               void* aResultRaw) {
+  nsCString* result = (nsCString*)aResultRaw;
+
   AutoSafeJSContext cx;
   JSAutoRealm ar(cx, xpc::PrivilegedJunkScope());
 
-  JSObject* obj = JS_NewObject(cx, nullptr);
+  RootedObject obj(cx, JS_NewObject(cx, nullptr));
   if (!obj) {
     return false;
   }
 
-  JSString* eventStr = JS_NewStringCopyZ(cx, aEvent);
-  if (!eventStr || !JS_DefineProperty(cx, obj, "event", eventStr, 0)) {
-    return false;
-  }
-
-  // The event data is optional.
-  if (aData) {
-    JSString* dataStr = JS_NewStringCopyZ(cx, aData);
-    if (!dataStr || !JS_DefineProperty(cx, obj, "data", dataStr, 0)) {
+  for (size_t i = 0; i < aNumProperties; i++) {
+    RootedString valueStr(cx, JS_NewStringCopyZ(cx, aPropertyValues[i]));
+    RootedValue value(cx, StringValue(valueStr));
+    if (!valueStr || !JS_DefineProperty(cx, obj, aPropertyNames[i], value, JSPROP_ENUMERATE)) {
       return false;
     }
   }
 
-  if (!JS::ToJSONMaybeSafely(cx, obj, FillStringCallback, &aResult)) {
-    return false;
-  }
-
-  return true;
+  return JS::ToJSONMaybeSafely(cx, obj, js::FillStringCallback, result);
 }
 
 }  // namespace recordreplay

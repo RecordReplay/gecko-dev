@@ -102,7 +102,7 @@ namespace recordreplay {
   Macro(ExecutionProgressReached, (), ())                                      \
   Macro(InternalAssertScriptedCaller, (const char* aWhy), (aWhy))              \
   Macro(InternalNotifyActivity, (), ())                                        \
-  Macro(AddProfilerEvent, (const char* aEvent, const char* aData), (aEvent, aData))
+  Macro(AddProfilerEvent, (const char* aEvent, const char* aJSON), (aEvent, aJSON))
 // clang-format on
 
 #define DECLARE_SYMBOL(aName, aReturnType, aFormals, _) \
@@ -198,6 +198,7 @@ FOR_EACH_INTERFACE_VOID(DEFINE_WRAPPER_VOID)
 bool gIsRecordingOrReplaying;
 bool gIsRecording;
 bool gIsReplaying;
+bool gIsProfiling;
 
 }  // namespace recordreplay
 }  // namespace mozilla
