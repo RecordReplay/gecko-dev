@@ -285,14 +285,7 @@ static const char* GetRecordingUnsupportedReason() {
 #endif
 }
 
-// If the profiler is enabled via the environment, start it. This may be used
-// when not recording. Vars affecting the profiler:
-//
-// RECORD_REPLAY_PROFILE_DIRECTORY: If this is set, recording processes will
-//   be profiled and those profiles will be added to the directory.
-//
-// RECORD_REPLAY_PROFILE_CONTENT_PROCESSES: If this is also set, non-recording
-//   content processes will also be profiled.
+// If the profiler is enabled via the environment, start it.
 static void MaybeStartProfiling() {
   const char* directory = getenv("RECORD_REPLAY_PROFILE_DIRECTORY");
   if (!directory) {
@@ -312,13 +305,16 @@ static void MaybeStartProfiling() {
 
   nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
 
-  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
   gProfileExecution(path.get());
-
-  LoadSymbol("RecordReplayAddProfilerEvent", gAddProfilerEvent);
-
   gIsProfiling = true;
 }
+
+// This can be set while recording to pretend we're not recording when other
+// places in gecko check to see if they need to change their behavior.
+// This is used with the record/replay profiler to understand the performance
+// effects of these changes to gecko's behavior. When this is set, the resulting
+// recording will not be usable.
+static bool gPretendNotRecording;
 
 extern "C" {
 
@@ -343,7 +339,6 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
     }
   }
   if (!dispatchAddress.isSome()) {
-    MaybeStartProfiling();
     return;
   }
 
@@ -375,6 +370,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   LoadSymbol("RecordReplayAttach", gAttach);
   LoadSymbol("RecordReplaySetApiKey", gSetApiKey);
+  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
+  LoadSymbol("RecordReplayAddProfilerEvent", gAddProfilerEvent);
   LoadSymbol("RecordReplayRecordCommandLineArguments",
              gRecordCommandLineArguments);
   LoadSymbol("RecordReplayValue", gRecordReplayValue);
@@ -445,9 +442,15 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   js::InitializeJS();
   InitializeGraphics();
 
-  gIsRecordingOrReplaying = true;
-  gIsRecording = !gRecordReplayIsReplaying();
-  gIsReplaying = gRecordReplayIsReplaying();
+  if (TestEnv("RECORD_REPLAY_PRETEND_NOT_RECORDING")) {
+    gPretendNotRecording = true;
+  }
+
+  if (!gPretendNotRecording) {
+    gIsRecordingOrReplaying = true;
+    gIsRecording = !gRecordReplayIsReplaying();
+    gIsReplaying = gRecordReplayIsReplaying();
+  }
 
   const char* logFile = getenv("RECORD_REPLAY_CRASH_LOG");
   if (logFile) {
@@ -474,7 +477,9 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
     gProcessRecording();
   }
 
-  ConfigureGecko();
+  if (!gPretendNotRecording) {
+    ConfigureGecko();
+  }
   MaybeStartProfiling();
 }
 
