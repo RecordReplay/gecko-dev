@@ -34,8 +34,6 @@ const { getenv, setenv } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/env.js"
 );
 
-const { fetch: mainThreadFetch } = require("devtools/shared/DevToolsUtils.js");
-
 ChromeUtils.defineModuleGetter(
   this,
   "TabStateFlusher",
@@ -1283,17 +1281,13 @@ async function fetchText(browser, recordingId, url) {
       uri: urlObj.toString(),
       loadingPrincipal: browser.contentPrincipal,
       triggeringPrincipal: browser.contentPrincipal,
-      contentPolicyType: Ci.nsIContentPolicy.TYPE_OTHER,
+      contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
       securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
     });
 
     return await new Promise(resolve => {
-      console.log("fetching via channel");
       NetUtil.asyncFetch(channel, function(inputStream, resultCode) {
-        console.log(inputStream, resultCode);
         const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
-
-        console.log(str);
 
         resolve({
           url,
@@ -1301,26 +1295,6 @@ async function fetchText(browser, recordingId, url) {
         });
       });
     });
-
-    // const response = await fetch("/get?url=" + url, {
-    //   //
-    //   credentials: "include",
-    // });
-    // if (response.status < 200 || response.status >= 300) {
-    //   console.error("Error fetching recording resource", url, response);
-    //   pingTelemetry("sourcemap-upload", "fetch-bad-status", {
-    //     message: `Request got status: ${response.status}`,
-    //     status: response.status,
-    //     url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
-    //     recordingId,
-    //   });
-    //   return null;
-    // }
-
-    // return {
-    //   url,
-    //   text: await response.text(),
-    // };
   } catch (e) {
     console.error("Exception fetching recording resource", url, e);
     pingTelemetry("sourcemap-upload", "fetch-exception", {
