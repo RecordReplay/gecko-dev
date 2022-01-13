@@ -5,6 +5,7 @@
 
 "use strict";
 
+const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
@@ -32,6 +33,8 @@ const { pingTelemetry } = ChromeUtils.import(
 const { getenv, setenv } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/env.js"
 );
+
+const { fetch: mainThreadFetch } = require("devtools/shared/DevToolsUtils.js");
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -404,6 +407,17 @@ class Recording extends EventEmitter {
     });
   }
 
+  get browser() {
+    let _browser = null;
+    for (let frameLoader of recordings.keys()) {
+      if (frameLoader.remoteTab && frameLoader.remoteTab.osPid === this.osPid) {
+        _browser = frameLoader.ownerElement;
+        break;
+      }
+    }
+    return _browser;
+  }
+
   get osPid() {
     return this._pmm.osPid;
   }
@@ -462,7 +476,7 @@ class Recording extends EventEmitter {
   _onNewSourcemap(params) {
     this._lockRecording(params.recordingId);
 
-    this._resourceUploads.push(uploadAllSourcemapAssets(params).catch(err => {
+    this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
       console.error("Exception while processing sourcemap", err, params);
 
       pingTelemetry("sourcemap-upload", "upload-exception", {
@@ -1109,8 +1123,8 @@ async function uploadAllSourcemapAssets({
   targetMapURLHash,
   sourceMapURL,
   sourceMapBaseURL
-}) {
-  const result = await fetchText(recordingId, sourceMapURL);
+}, browser) {
+  const result = await fetchText(browser, recordingId, sourceMapURL);
   if (!result) {
     return;
   }
@@ -1144,7 +1158,7 @@ async function uploadAllSourcemapAssets({
     // once that is detected by the sources.
     sourceMapURL.startsWith("data:") ? undefined : ensureMapUploading(),
     Promise.all(sources.map(async ({ offset, url }) => {
-      const result = await fetchText(recordingId, url);
+      const result = await fetchText(browser, recordingId, url);
       if (!result || mapUploadFailed) {
         return;
       }
@@ -1245,7 +1259,7 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
   };
 }
 
-async function fetchText(recordingId, url) {
+async function fetchText(browser, recordingId, url) {
   let urlObj;
   try {
     urlObj = new URL(url);
@@ -1265,25 +1279,48 @@ async function fetchText(recordingId, url) {
   }
 
   try {
-    const response = await fetch(url, {
-      //
-      credentials: "include",
+    let channel = NetUtil.newChannel({
+      uri: urlObj.toString(),
+      loadingPrincipal: browser.contentPrincipal,
+      triggeringPrincipal: browser.contentPrincipal,
+      contentPolicyType: Ci.nsIContentPolicy.TYPE_OTHER,
+      securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
     });
-    if (response.status < 200 || response.status >= 300) {
-      console.error("Error fetching recording resource", url, response);
-      pingTelemetry("sourcemap-upload", "fetch-bad-status", {
-        message: `Request got status: ${response.status}`,
-        status: response.status,
-        url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
-        recordingId,
-      });
-      return null;
-    }
 
-    return {
-      url,
-      text: await response.text(),
-    };
+    return await new Promise(resolve => {
+      console.log("fetching via channel");
+      NetUtil.asyncFetch(channel, function(inputStream, resultCode) {
+        console.log(inputStream, resultCode);
+        const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
+
+        console.log(str);
+
+        resolve({
+          url,
+          text: str,
+        });
+      });
+    });
+
+    // const response = await fetch("/get?url=" + url, {
+    //   //
+    //   credentials: "include",
+    // });
+    // if (response.status < 200 || response.status >= 300) {
+    //   console.error("Error fetching recording resource", url, response);
+    //   pingTelemetry("sourcemap-upload", "fetch-bad-status", {
+    //     message: `Request got status: ${response.status}`,
+    //     status: response.status,
+    //     url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
+    //     recordingId,
+    //   });
+    //   return null;
+    // }
+
+    // return {
+    //   url,
+    //   text: await response.text(),
+    // };
   } catch (e) {
     console.error("Exception fetching recording resource", url, e);
     pingTelemetry("sourcemap-upload", "fetch-exception", {
