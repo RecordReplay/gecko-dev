@@ -1277,7 +1277,7 @@ async function fetchText(browser, recordingId, url) {
   }
 
   try {
-    let channel = NetUtil.newChannel({
+    const channel = NetUtil.newChannel({
       uri: urlObj.toString(),
       loadingPrincipal: browser.contentPrincipal,
       triggeringPrincipal: browser.contentPrincipal,
@@ -1287,7 +1287,19 @@ async function fetchText(browser, recordingId, url) {
 
     return await new Promise(resolve => {
       NetUtil.asyncFetch(channel, function(inputStream, resultCode) {
+        if (resultCode !== 0) {
+          pingTelemetry("sourcemap-upload", "fetch-bad-status", {
+            message: `Request got result code: ${resultCode}`,
+            status: resultCode,
+            url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
+            recordingId,
+          });
+
+          return null;
+        }
+
         const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
+        inputStream.close();
 
         resolve({
           url,
