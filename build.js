@@ -45,6 +45,8 @@ const buildOptions = {
     RUSTC_BOOTSTRAP: "qcms",
     // terminal-notifier can hang, so prevent it from running.
     MOZ_NOSPAM: "1",
+    // For windows-build.bat on windows.
+    GECKODIR: path.basename(process.cwd()),
   },
 };
 
