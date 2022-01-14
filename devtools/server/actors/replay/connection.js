@@ -1122,7 +1122,7 @@ async function uploadAllSourcemapAssets({
   sourceMapURL,
   sourceMapBaseURL
 }, browser) {
-  const result = await fetchText(browser, recordingId, sourceMapURL);
+  const result = await fetchText(browser.contentPrincipal, recordingId, sourceMapURL);
   if (!result) {
     return;
   }
@@ -1156,7 +1156,7 @@ async function uploadAllSourcemapAssets({
     // once that is detected by the sources.
     sourceMapURL.startsWith("data:") ? undefined : ensureMapUploading(),
     Promise.all(sources.map(async ({ offset, url }) => {
-      const result = await fetchText(browser, recordingId, url);
+      const result = await fetchText(browser.contentPrincipal, recordingId, url);
       if (!result || mapUploadFailed) {
         return;
       }
@@ -1257,7 +1257,7 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
   };
 }
 
-async function fetchText(browser, recordingId, url) {
+async function fetchText(contentPrincipal, recordingId, url) {
   let urlObj;
   try {
     urlObj = new URL(url);
@@ -1277,36 +1277,35 @@ async function fetchText(browser, recordingId, url) {
   }
 
   try {
-    const channel = NetUtil.newChannel({
-      uri: urlObj.toString(),
-      loadingPrincipal: browser.contentPrincipal,
-      triggeringPrincipal: browser.contentPrincipal,
-      contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
-      securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-    });
+    const {inputStream, resultCode} = await new Promise(resolve => NetUtil.asyncFetch(
+      {
+        uri: urlObj.toString(),
+        loadingPrincipal: contentPrincipal,
+        triggeringPrincipal: contentPrincipal,
+        contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
+        securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+      },
+      (inputStream, resultCode) => resolve({inputStream, resultCode})
+    ));
 
-    return await new Promise(resolve => {
-      NetUtil.asyncFetch(channel, function(inputStream, resultCode) {
-        if (resultCode !== 0) {
-          pingTelemetry("sourcemap-upload", "fetch-bad-status", {
-            message: `Request got result code: ${resultCode}`,
-            status: resultCode,
-            url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
-            recordingId,
-          });
-
-          return null;
-        }
-
-        const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
-        inputStream.close();
-
-        resolve({
-          url,
-          text: str,
-        });
+    if (resultCode !== 0) {
+      pingTelemetry("sourcemap-upload", "fetch-bad-status", {
+        message: `Request got result code: ${resultCode}`,
+        status: resultCode,
+        url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
+        recordingId,
       });
-    });
+
+      return null;
+    }
+
+    const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
+    inputStream.close();
+
+    return {
+      url,
+      text: str,
+    };
   } catch (e) {
     console.error("Exception fetching recording resource", url, e);
     pingTelemetry("sourcemap-upload", "fetch-exception", {
