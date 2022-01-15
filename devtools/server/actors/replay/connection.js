@@ -5,6 +5,7 @@
 
 "use strict";
 
+const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
@@ -404,6 +405,17 @@ class Recording extends EventEmitter {
     });
   }
 
+  get browser() {
+    let _browser = null;
+    for (let frameLoader of recordings.keys()) {
+      if (frameLoader.remoteTab && frameLoader.remoteTab.osPid === this.osPid) {
+        _browser = frameLoader.ownerElement;
+        break;
+      }
+    }
+    return _browser;
+  }
+
   get osPid() {
     return this._pmm.osPid;
   }
@@ -462,7 +474,7 @@ class Recording extends EventEmitter {
   _onNewSourcemap(params) {
     this._lockRecording(params.recordingId);
 
-    this._resourceUploads.push(uploadAllSourcemapAssets(params).catch(err => {
+    this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
       console.error("Exception while processing sourcemap", err, params);
 
       pingTelemetry("sourcemap-upload", "upload-exception", {
@@ -1109,8 +1121,9 @@ async function uploadAllSourcemapAssets({
   targetMapURLHash,
   sourceMapURL,
   sourceMapBaseURL
-}) {
-  const result = await fetchText(recordingId, sourceMapURL);
+}, browser) {
+  const contentPrincipal = browser.contentPrincipal;
+  const result = await fetchText(contentPrincipal, recordingId, sourceMapURL);
   if (!result) {
     return;
   }
@@ -1144,7 +1157,7 @@ async function uploadAllSourcemapAssets({
     // once that is detected by the sources.
     sourceMapURL.startsWith("data:") ? undefined : ensureMapUploading(),
     Promise.all(sources.map(async ({ offset, url }) => {
-      const result = await fetchText(recordingId, url);
+      const result = await fetchText(contentPrincipal, recordingId, url);
       if (!result || mapUploadFailed) {
         return;
       }
@@ -1245,7 +1258,7 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
   };
 }
 
-async function fetchText(recordingId, url) {
+async function fetchText(contentPrincipal, recordingId, url) {
   let urlObj;
   try {
     urlObj = new URL(url);
@@ -1265,24 +1278,34 @@ async function fetchText(recordingId, url) {
   }
 
   try {
-    const response = await fetch(url, {
-      //
-      credentials: "include",
-    });
-    if (response.status < 200 || response.status >= 300) {
-      console.error("Error fetching recording resource", url, response);
+    const {inputStream, resultCode} = await new Promise(resolve => NetUtil.asyncFetch(
+      {
+        uri: urlObj.toString(),
+        loadingPrincipal: contentPrincipal,
+        triggeringPrincipal: contentPrincipal,
+        contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
+        securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+      },
+      (inputStream, resultCode) => resolve({inputStream, resultCode})
+    ));
+
+    if (resultCode !== 0) {
       pingTelemetry("sourcemap-upload", "fetch-bad-status", {
-        message: `Request got status: ${response.status}`,
-        status: response.status,
+        message: `Request got result code: ${resultCode}`,
+        status: resultCode,
         url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
         recordingId,
       });
+
       return null;
     }
 
+    const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
+    inputStream.close();
+
     return {
       url,
-      text: await response.text(),
+      text: str,
     };
   } catch (e) {
     console.error("Exception fetching recording resource", url, e);
