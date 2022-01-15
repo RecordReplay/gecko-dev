@@ -1122,7 +1122,8 @@ async function uploadAllSourcemapAssets({
   sourceMapURL,
   sourceMapBaseURL
 }, browser) {
-  const result = await fetchText(browser.contentPrincipal, recordingId, sourceMapURL);
+  const contentPrincipal = browser.contentPrincipal;
+  const result = await fetchText(contentPrincipal, recordingId, sourceMapURL);
   if (!result) {
     return;
   }
@@ -1156,7 +1157,7 @@ async function uploadAllSourcemapAssets({
     // once that is detected by the sources.
     sourceMapURL.startsWith("data:") ? undefined : ensureMapUploading(),
     Promise.all(sources.map(async ({ offset, url }) => {
-      const result = await fetchText(browser.contentPrincipal, recordingId, url);
+      const result = await fetchText(contentPrincipal, recordingId, url);
       if (!result || mapUploadFailed) {
         return;
       }
