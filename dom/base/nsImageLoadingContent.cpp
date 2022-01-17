@@ -116,9 +116,16 @@ nsImageLoadingContent::nsImageLoadingContent()
   }
 
   mMostRecentRequestChange = TimeStamp::ProcessCreation();
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::RegisterThing(this);
 }
 
 void nsImageLoadingContent::Destroy() {
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::RecordReplayAssert("nsImageLoadingContent::Destroy %zu",
+                                   recordreplay::ThingIndex(this));
+
   // Cancel our requests so they won't hold stale refs to us
   // NB: Don't ask to discard the images here.
   RejectDecodePromises(NS_ERROR_DOM_IMAGE_INVALID_REQUEST);
@@ -135,6 +142,9 @@ nsImageLoadingContent::~nsImageLoadingContent() {
   MOZ_ASSERT(mOutstandingDecodePromises == 0,
              "Decode promises still unfulfilled?");
   MOZ_ASSERT(mDecodePromises.IsEmpty(), "Decode promises still unfulfilled?");
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::UnregisterThing(this);
 }
 
 /*
