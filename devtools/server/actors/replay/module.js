@@ -954,14 +954,14 @@ function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
 }
 
 function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
-  return sourceIds.map((sourceId => {
-    return {
-      possibleBreakpoints: {
+  return { possibleBreakpoints:
+    sourceIds.map((sourceId => {
+      return {
         sourceId,
         ...Debugger_getPossibleBreakpoints({sourceId})
       }
-    }
-  }));
+    }))
+  };
 }
 
 function functionIdToScript(functionId) {
