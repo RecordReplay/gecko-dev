@@ -626,7 +626,6 @@ const commands = {
   "Pause.getScope": Pause_getScope,
   "Pause.getTopFrame": Pause_getTopFrame,
   "Debugger.getPossibleBreakpoints": Debugger_getPossibleBreakpoints,
-  "Debugger.getPossibleBreakpointsForMultipleSources": Debugger_getPossibleBreakpointsForMultipleSources,
   "Debugger.getSourceContents": Debugger_getSourceContents,
   "CSS.getAppliedRules": CSS_getAppliedRules,
   "CSS.getComputedStyle": CSS_getComputedStyle,
@@ -653,6 +652,7 @@ const commands = {
   "Target.topFrameLocation": Target_topFrameLocation,
   "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
   "Target.getCurrentNetworkStreamData": Target_getCurrentNetworkStreamData,
+  "Target.getPossibleBreakpointsForMultipleSources": Target_getPossibleBreakpointsForMultipleSources,
 };
 
 function OnProtocolCommand(method, params) {
@@ -953,11 +953,13 @@ function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
   }
 }
 
-function Debugger_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
+function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
   return sourceIds.map((sourceId => {
     return {
-      sourceId,
-      ...Debugger_getPossibleBreakpoints({sourceId})
+      possibleBreakpoints: {
+        sourceId,
+        ...Debugger_getPossibleBreakpoints({sourceId})
+      }
     }
   }));
 }
