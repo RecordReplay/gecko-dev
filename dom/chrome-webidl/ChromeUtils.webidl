@@ -209,6 +209,9 @@ namespace ChromeUtils {
                          optional (ProfilerMarkerOptions or DOMHighResTimeStamp) options = {},
                          optional UTF8String text);
 
+  // Return the value of mozilla::recordreplay::IsRecordingOrReplaying().
+  boolean isRecordingOrReplaying();
+
   /**
    * IF YOU ADD NEW METHODS HERE, MAKE SURE THEY ARE THREAD-SAFE.
    */
