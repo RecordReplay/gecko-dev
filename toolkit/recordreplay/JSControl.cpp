@@ -998,5 +998,29 @@ void OnTestCommand(const char* aString) {
   }
 }
 
+bool BuildJSON(size_t aNumProperties,
+               const char** aPropertyNames, const char** aPropertyValues,
+               void* aResultRaw) {
+  nsCString* result = (nsCString*)aResultRaw;
+
+  AutoSafeJSContext cx;
+  JSAutoRealm ar(cx, xpc::PrivilegedJunkScope());
+
+  RootedObject obj(cx, JS_NewObject(cx, nullptr));
+  if (!obj) {
+    return false;
+  }
+
+  for (size_t i = 0; i < aNumProperties; i++) {
+    RootedString valueStr(cx, JS_NewStringCopyZ(cx, aPropertyValues[i]));
+    RootedValue value(cx, StringValue(valueStr));
+    if (!valueStr || !JS_DefineProperty(cx, obj, aPropertyNames[i], value, JSPROP_ENUMERATE)) {
+      return false;
+    }
+  }
+
+  return JS::ToJSONMaybeSafely(cx, obj, js::FillStringCallback, result);
+}
+
 }  // namespace recordreplay
 }  // namespace mozilla

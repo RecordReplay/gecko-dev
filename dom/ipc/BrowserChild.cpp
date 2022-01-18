@@ -3696,6 +3696,20 @@ NS_IMETHODIMP BrowserChild::OnLocationChange(nsIWebProgress* aWebProgress,
       recordreplay::OnLocationChange(this, aLocation, aFlags);
     }
 
+    // Add location changes to record/replay profiles, so we can tell them apart
+    // when profiling all content processes.
+    if (recordreplay::IsProfiling()) {
+      nsCString url;
+      if (NS_SUCCEEDED(aLocation->GetSpec(url))) {
+        const char* propertyName = "url";
+        const char* urlRaw = url.get();
+        nsCString json;
+        if (recordreplay::BuildJSON(1, &propertyName, &urlRaw, &json)) {
+          recordreplay::AddProfilerEvent("LocationChange", json.get());
+        }
+      }
+    }
+
     locationChangeData.emplace();
 
     document->GetContentType(locationChangeData->contentType());

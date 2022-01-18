@@ -7513,6 +7513,10 @@ void GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget,
     return;
   }
 
+  if (mozilla::recordreplay::IsProfiling()) {
+    mozilla::recordreplay::AddProfilerEvent("StartGC", nullptr);
+  }
+
   stats().log("GC starting in state %s", StateName(incrementalState));
 
   AutoTraceLog logGC(TraceLoggerForCurrentThread(), TraceLogger_GC);
@@ -7583,6 +7587,10 @@ void GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget,
   stats().log("GC ending in state %s", StateName(incrementalState));
 
   UnscheduleZones(this);
+
+  if (mozilla::recordreplay::IsProfiling()) {
+    mozilla::recordreplay::AddProfilerEvent("FinishGC", nullptr);
+  }
 }
 
 js::AutoEnqueuePendingParseTasksAfterGC::

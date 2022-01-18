@@ -75,6 +75,8 @@ static InfallibleVector<JSFilter> gJSAsserts;
 
 static void (*gAttach)(const char* dispatch, const char* buildId);
 static void (*gSetApiKey)(const char* apiKey);
+static void (*gProfileExecution)(const char* path);
+static void (*gAddProfilerEvent)(const char* event, const char* json);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
 static void (*gRecordReplayBytes)(const char* why, void* buf, size_t size);
@@ -283,6 +285,26 @@ static const char* GetRecordingUnsupportedReason() {
 #endif
 }
 
+// If the profiler is enabled via the environment, start it.
+static void MaybeStartProfiling() {
+  const char* directory = getenv("RECORD_REPLAY_PROFILE_DIRECTORY");
+  if (!directory) {
+    return;
+  }
+
+  nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
+
+  gProfileExecution(path.get());
+  gIsProfiling = true;
+}
+
+// This can be set while recording to pretend we're not recording when other
+// places in gecko check to see if they need to change their behavior.
+// This is used with the record/replay profiler to understand the performance
+// effects of these changes to gecko's behavior. When this is set, the resulting
+// recording will not be usable.
+static bool gPretendNotRecording = false;
+
 extern "C" {
 
 MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
@@ -305,7 +327,9 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
       dispatchAddress.emplace(strcmp(arg, "*") ? arg : nullptr);
     }
   }
-  MOZ_RELEASE_ASSERT(dispatchAddress.isSome());
+  if (!dispatchAddress.isSome()) {
+    return;
+  }
 
   Maybe<std::string> apiKey;
   // this environment variable is set by server/actors/replay/connection.js
@@ -335,6 +359,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   LoadSymbol("RecordReplayAttach", gAttach);
   LoadSymbol("RecordReplaySetApiKey", gSetApiKey);
+  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
+  LoadSymbol("RecordReplayAddProfilerEvent", gAddProfilerEvent);
   LoadSymbol("RecordReplayRecordCommandLineArguments",
              gRecordCommandLineArguments);
   LoadSymbol("RecordReplayValue", gRecordReplayValue);
@@ -405,9 +431,15 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   js::InitializeJS();
   InitializeGraphics();
 
-  gIsRecordingOrReplaying = true;
-  gIsRecording = !gRecordReplayIsReplaying();
-  gIsReplaying = gRecordReplayIsReplaying();
+  if (TestEnv("RECORD_REPLAY_PRETEND_NOT_RECORDING")) {
+    gPretendNotRecording = true;
+  }
+
+  if (!gPretendNotRecording) {
+    gIsRecordingOrReplaying = true;
+    gIsRecording = !gRecordReplayIsReplaying();
+    gIsReplaying = gRecordReplayIsReplaying();
+  }
 
   const char* logFile = getenv("RECORD_REPLAY_CRASH_LOG");
   if (logFile) {
@@ -434,7 +466,10 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
     gProcessRecording();
   }
 
-  ConfigureGecko();
+  if (!gPretendNotRecording) {
+    ConfigureGecko();
+  }
+  MaybeStartProfiling();
 }
 
 MOZ_EXPORT size_t
@@ -668,6 +703,12 @@ MOZ_EXPORT void RecordReplayInterface_InternalPopCrashNote() {
     if (gSetCrashNote) {
       gSetCrashNote(gCrashNotes.length() ? gCrashNotes.back() : nullptr);
     }
+  }
+}
+
+MOZ_EXPORT void RecordReplayInterface_AddProfilerEvent(const char* aEvent, const char* aJSON) {
+  if (gIsProfiling) {
+    gAddProfilerEvent(aEvent, aJSON);
   }
 }
 
