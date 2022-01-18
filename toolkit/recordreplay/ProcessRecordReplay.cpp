@@ -303,7 +303,7 @@ static void MaybeStartProfiling() {
 // This is used with the record/replay profiler to understand the performance
 // effects of these changes to gecko's behavior. When this is set, the resulting
 // recording will not be usable.
-static bool gPretendNotRecording;
+static bool gPretendNotRecording = false;
 
 extern "C" {
 
