@@ -930,7 +930,7 @@ function sourceToProtocolSourceId(source) {
   return String(id);
 }
 
-function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
+function getPossibleBreakpoints({sourceId, begin, end}) {
   const source = protocolSourceIdToSource(sourceId);
 
   const lineLocations = new ArrayMap();
@@ -952,14 +952,17 @@ function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
     });
   }
 }
+function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
+  return getPossibleBreakpoints({source, begin, end});
+}
 
 function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
-  return { possibleBreakpoints:
-    sourceIds.map((sourceId => {
+  return {
+    possibleBreakpoints: sourceIds.map((sourceId => {
+      const { lineLocations } = getPossibleBreakpoints({sourceId});
       return {
-        sourceId,
-        ...Debugger_getPossibleBreakpoints({sourceId})
-      }
+        sourceId, lineLocations
+      };
     }))
   };
 }
