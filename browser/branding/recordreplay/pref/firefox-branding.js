@@ -51,4 +51,4 @@ pref('replay.telemetry.url', 'https://telemetry.replay.io');
 pref('replay.telemetry.enabled', true);
 
 // Authentication Flow
-pref('devtools.recordreplay.ext-auth', false);
+pref('devtools.recordreplay.ext-auth', true);
