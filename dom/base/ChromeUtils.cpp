@@ -269,6 +269,11 @@ void ChromeUtils::AddProfilerMarker(
 }
 
 /* static */
+bool ChromeUtils::IsRecordingOrReplaying(GlobalObject& aGlobal) {
+  return recordreplay::IsRecordingOrReplaying();
+}
+
+/* static */
 void ChromeUtils::WaiveXrays(GlobalObject& aGlobal, JS::HandleValue aVal,
                              JS::MutableHandleValue aRetval, ErrorResult& aRv) {
   JS::RootedValue value(aGlobal.Context(), aVal);

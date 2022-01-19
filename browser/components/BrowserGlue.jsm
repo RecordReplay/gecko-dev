@@ -3844,6 +3844,9 @@ BrowserGlue.prototype = {
   },
 
   async _maybeShowDefaultBrowserPrompt() {
+    // Never show the upgrade dialog or default browser prompt for the replay browser.
+    return;
+
     // Highest priority is the upgrade dialog, which can include a "primary
     // browser" request and is limited in various ways, e.g., major upgrades.
     const dialogVersion = 89;

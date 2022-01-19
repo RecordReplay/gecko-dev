@@ -5,6 +5,7 @@
 "use strict";
 
 const { Ci } = require("chrome");
+const ChromeUtils = require("ChromeUtils");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const { assert, fetch } = DevToolsUtils;
 const EventEmitter = require("devtools/shared/event-emitter");
@@ -34,6 +35,11 @@ class SourcesManager extends EventEmitter {
     super();
     this._thread = threadActor;
     this.allowSource = source => {
+      // Inspecting sources is not allowed when recording/replaying.
+      // The devtools should not be able to inspect/change JS state.
+      if (ChromeUtils.isRecordingOrReplaying()) {
+        return false;
+      }
       return !isHiddenSource(source) && allowSourceFn(source);
     };
 

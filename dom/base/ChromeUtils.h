@@ -88,6 +88,8 @@ class ChromeUtils {
                                 const ProfilerMarkerOptionsOrDouble& aOptions,
                                 const Optional<nsACString>& text);
 
+  static bool IsRecordingOrReplaying(GlobalObject& aGlobal);
+
   static void OriginAttributesToSuffix(
       GlobalObject& aGlobal, const dom::OriginAttributesDictionary& aAttrs,
       nsCString& aSuffix);
