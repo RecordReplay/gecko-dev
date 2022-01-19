@@ -28,7 +28,6 @@ with Files("controlcenter/**"):
 
 DIRS += [
     "about",
-    "aboutconfig",
     "aboutlogins",
     "attribution",
     "contextualidentity",
@@ -37,7 +36,6 @@ DIRS += [
     "downloads",
     "enterprisepolicies",
     "extensions",
-    "fxmonitor",
     "migration",
     "newtab",
     "originattributes",

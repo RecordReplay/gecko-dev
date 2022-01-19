@@ -7750,7 +7750,10 @@ module.exports = networkRequest;
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 function WorkerDispatcher() {
   this.msgId = 1;
-  this.worker = null;
+  this.worker = null; // Map of message ids -> promise resolution functions, for dispatching worker responses
+
+  this.pendingCalls = new Map();
+  this._onMessage = this._onMessage.bind(this);
 }
 
 WorkerDispatcher.prototype = {
@@ -7760,6 +7763,8 @@ WorkerDispatcher.prototype = {
     this.worker.onerror = err => {
       console.error(`Error in worker ${url}`, err.message);
     };
+
+    this.worker.addEventListener("message", this._onMessage);
   },
 
   stop() {
@@ -7767,8 +7772,10 @@ WorkerDispatcher.prototype = {
       return;
     }
 
+    this.worker.removeEventListener("message", this._onMessage);
     this.worker.terminate();
     this.worker = null;
+    this.pendingCalls.clear();
   },
 
   task(method, {
@@ -7782,7 +7789,11 @@ WorkerDispatcher.prototype = {
           Promise.resolve().then(flush);
         }
 
-        calls.push([args, resolve, reject]);
+        calls.push({
+          args,
+          resolve,
+          reject
+        });
 
         if (!queue) {
           flush();
@@ -7802,35 +7813,9 @@ WorkerDispatcher.prototype = {
       this.worker.postMessage({
         id,
         method,
-        calls: items.map(item => item[0])
+        calls: items.map(item => item.args)
       });
-
-      const listener = ({
-        data: result
-      }) => {
-        if (result.id !== id) {
-          return;
-        }
-
-        if (!this.worker) {
-          return;
-        }
-
-        this.worker.removeEventListener("message", listener);
-        result.results.forEach((resultData, i) => {
-          const [, resolve, reject] = items[i];
-
-          if (resultData.error) {
-            const err = new Error(resultData.message);
-            err.metadata = resultData.metadata;
-            reject(err);
-          } else {
-            resolve(resultData.response);
-          }
-        });
-      };
-
-      this.worker.addEventListener("message", listener);
+      this.pendingCalls.set(id, items);
     };
 
     return (...args) => push(args);
@@ -7838,6 +7823,36 @@ WorkerDispatcher.prototype = {
 
   invoke(method, ...args) {
     return this.task(method)(...args);
+  },
+
+  _onMessage({
+    data: result
+  }) {
+    const items = this.pendingCalls.get(result.id);
+    this.pendingCalls.delete(result.id);
+
+    if (!items) {
+      return;
+    }
+
+    if (!this.worker) {
+      return;
+    }
+
+    result.results.forEach((resultData, i) => {
+      const {
+        resolve,
+        reject
+      } = items[i];
+
+      if (resultData.error) {
+        const err = new Error(resultData.message);
+        err.metadata = resultData.metadata;
+        reject(err);
+      } else {
+        resolve(resultData.response);
+      }
+    });
   }
 
 };
@@ -8314,12 +8329,12 @@ const sourceOptions = {
   generated: {
     sourceType: "unambiguous",
     tokens: true,
-    plugins: ["classProperties", "objectRestSpread", "optionalChaining", "nullishCoalescingOperator"]
+    plugins: ["classPrivateProperties", "classPrivateMethods", "classProperties", "objectRestSpread", "optionalChaining", "privateIn", "nullishCoalescingOperator"]
   },
   original: {
     sourceType: "unambiguous",
     tokens: true,
-    plugins: ["jsx", "flow", "doExpressions", "optionalChaining", "nullishCoalescingOperator", "decorators-legacy", "objectRestSpread", "classProperties", "exportDefaultFrom", "exportNamespaceFrom", "asyncGenerators", "functionBind", "functionSent", "dynamicImport", "react-jsx"]
+    plugins: ["jsx", "flow", "doExpressions", "optionalChaining", "nullishCoalescingOperator", "decorators-legacy", "objectRestSpread", "classPrivateProperties", "classPrivateMethods", "classProperties", "exportDefaultFrom", "exportNamespaceFrom", "asyncGenerators", "functionBind", "functionSent", "dynamicImport", "react-jsx"]
   }
 };
 
@@ -8391,7 +8406,7 @@ function parseVueScript(code) {
 function parseConsoleScript(text, opts) {
   try {
     return _parse(text, {
-      plugins: ["objectRestSpread", "dynamicImport", "nullishCoalescingOperator", "optionalChaining"],
+      plugins: ["classPrivateProperties", "classPrivateMethods", "objectRestSpread", "dynamicImport", "nullishCoalescingOperator", "optionalChaining"],
       ...opts,
       allowAwaitOutsideFunction: true
     });
@@ -14733,7 +14748,7 @@ function extractSymbol(path, symbols, state) {
       end
     } = path.node.property.loc;
     symbols.memberExpressions.push({
-      name: path.node.property.name,
+      name: t.isPrivateName(path.node.property) ? `#${path.node.property.id.name}` : path.node.property.name,
       location: {
         start,
         end
@@ -14953,7 +14968,7 @@ function extendSnippet(name, expression, path, prevPath) {
 
 function getMemberSnippet(node, expression = "", optional = false) {
   if (t.isMemberExpression(node) || t.isOptionalMemberExpression(node)) {
-    const name = node.property.name;
+    const name = t.isPrivateName(node.property) ? `#${node.property.id.name}` : node.property.name;
     const snippet = getMemberSnippet(node.object, extendSnippet(name, expression, {
       node
     }), node.optional);
@@ -16197,6 +16212,8 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.default = createSimplePath;
 
+function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
+
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
@@ -16209,14 +16226,23 @@ function createSimplePath(ancestors) {
 
   return new SimplePath(ancestors.slice());
 }
-
 /**
  * Mimics @babel/traverse's NodePath API in a simpler fashion that isn't as
  * heavy, but still allows the ease of passing paths around to process nested
  * AST structures.
  */
+
+
 class SimplePath {
   constructor(ancestors, index = ancestors.length - 1) {
+    _defineProperty(this, "_index", void 0);
+
+    _defineProperty(this, "_ancestors", void 0);
+
+    _defineProperty(this, "_ancestor", void 0);
+
+    _defineProperty(this, "_parentPath", void 0);
+
     if (index < 0 || index >= ancestors.length) {
       console.error(ancestors);
       throw new Error("Created invalid path");
@@ -30055,7 +30081,7 @@ function getFunctionName(node, parent) {
     computed: false
   }) || t.isClassMethod(node, {
     computed: false
-  })) {
+  }) || t.isClassPrivateMethod(node)) {
     const {
       key
     } = node;
@@ -30071,6 +30097,10 @@ function getFunctionName(node, parent) {
     if (t.isNumericLiteral(key)) {
       return `${key.value}`;
     }
+
+    if (t.isPrivateName(key)) {
+      return `#${key.id.name}`;
+    }
   }
 
   if (t.isObjectProperty(parent, {
@@ -30080,6 +30110,8 @@ function getFunctionName(node, parent) {
   // here so that it is most flexible. Once Babylon 7 is used, this
   // can change to use computed: false like ObjectProperty.
   t.isClassProperty(parent, {
+    value: node
+  }) && !parent.computed || t.isClassPrivateProperty(parent, {
     value: node
   }) && !parent.computed) {
     const {
@@ -30096,6 +30128,10 @@ function getFunctionName(node, parent) {
 
     if (t.isNumericLiteral(key)) {
       return `${key.value}`;
+    }
+
+    if (t.isPrivateName(key)) {
+      return `#${key.id.name}`;
     }
   }
 
@@ -30219,7 +30255,6 @@ function findScopes(scopes, location) {
 function compareLocations(a, b) {
   // According to type of Location.column can be undefined, if will not be the
   // case here, ignoring flow error.
-  // $FlowIgnore
   return a.line == b.line ? a.column - b.column : a.line - b.line;
 }
 
@@ -44876,6 +44911,29 @@ function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { de
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
+
+/**
+ * "implicit"
+ * Variables added automaticly like "this" and "arguments"
+ *
+ * "var"
+ * Variables declared with "var" or non-block function declarations
+ *
+ * "let"
+ * Variables declared with "let".
+ *
+ * "const"
+ * Variables declared with "const", or added as const
+ * bindings like inner function expressions and inner class names.
+ *
+ * "import"
+ * Imported binding names exposed from other modules.
+ *
+ * "global"
+ * Variables that reference undeclared global values.
+ */
+// Location information about the expression immediartely surrounding a
+// given binding reference.
 function isGeneratedId(id) {
   return !/\/originalSource/.test(id);
 }

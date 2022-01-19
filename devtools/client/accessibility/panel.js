@@ -50,12 +50,11 @@ const EVENTS = {
  * render Accessibility Tree of the current debugger target and the sidebar that
  * displays current relevant accessible details.
  */
-function AccessibilityPanel(iframeWindow, toolbox) {
+function AccessibilityPanel(iframeWindow, toolbox, commands) {
   this.panelWin = iframeWindow;
   this._toolbox = toolbox;
+  this._commands = commands;
 
-  this.onTabNavigated = this.onTabNavigated.bind(this);
-  this.onTargetUpdated = this.onTargetUpdated.bind(this);
   this.onPanelVisibilityChange = this.onPanelVisibilityChange.bind(this);
   this.onNewAccessibleFrontSelected = this.onNewAccessibleFrontSelected.bind(
     this
@@ -103,12 +102,7 @@ AccessibilityPanel.prototype = {
       this.onAccessibilityInspectorUpdated
     );
 
-    this.shouldRefresh = true;
-
-    this.accessibilityProxy = new AccessibilityProxy(this._toolbox);
-    this.accessibilityProxy.startListeningForTargetUpdated(
-      this.onTargetUpdated
-    );
+    this.accessibilityProxy = new AccessibilityProxy(this._commands);
     await this.accessibilityProxy.initialize();
 
     // Enable accessibility service if necessary.
@@ -119,6 +113,14 @@ AccessibilityPanel.prototype = {
       await this.accessibilityProxy.enableAccessibility();
     }
 
+    this.onResourceAvailable = this.onResourceAvailable.bind(this);
+    await this._commands.resourceCommand.watchResources(
+      [this._commands.resourceCommand.TYPES.DOCUMENT_EVENT],
+      {
+        onAvailable: this.onResourceAvailable,
+      }
+    );
+
     this.picker = new Picker(this);
     this.fluentBundles = await this.createFluentBundles();
 
@@ -128,8 +130,12 @@ AccessibilityPanel.prototype = {
       shutdown: this.onLifecycleEvent,
     });
 
-    this.isReady = true;
-    this.emit("ready");
+    // Force refresh to render the UI and wait for the INITIALIZED event.
+    const onInitialized = this.panelWin.once(EVENTS.INITIALIZED);
+    this.shouldRefresh = true;
+    this.refresh();
+    await onInitialized;
+
     resolver(this);
     return this._opening;
   },
@@ -172,15 +178,28 @@ AccessibilityPanel.prototype = {
    * refreshed immediatelly if it's currently selected or lazily when the user
    * actually selects it.
    */
-  onTabNavigated() {
+  async onTabNavigated() {
     this.shouldRefresh = true;
-    this._opening.then(() => this.refresh());
+    await this._opening;
+
+    const onUpdated = this.panelWin.once(EVENTS.INITIALIZED);
+    this.refresh();
+    await onUpdated;
+
+    this.emit("reloaded");
   },
 
-  onTargetUpdated({ isTargetSwitching }) {
-    this.accessibilityProxy.currentTarget.on("navigate", this.onTabNavigated);
-    if (isTargetSwitching) {
-      this.onTabNavigated();
+  onResourceAvailable: function(resources) {
+    for (const resource of resources) {
+      // Only consider top level document, and ignore remote iframes top document
+      if (
+        resource.resourceType ===
+          this._commands.resourceCommand.TYPES.DOCUMENT_EVENT &&
+        resource.name === "dom-complete" &&
+        resource.targetFront.isTopLevel
+      ) {
+        this.onTabNavigated();
+      }
     }
   },
 
@@ -324,12 +343,9 @@ AccessibilityPanel.prototype = {
     this.postContentMessage("destroy");
 
     if (this.accessibilityProxy) {
-      this.accessibilityProxy.stopListeningForTargetUpdated(
-        this.onTargetUpdated
-      );
-      this.accessibilityProxy.currentTarget.off(
-        "navigate",
-        this.onTabNavigated
+      this._commands.resourceCommand.unwatchResources(
+        [this._commands.resourceCommand.TYPES.DOCUMENT_EVENT],
+        { onAvailable: this.onResourceAvailable }
       );
       this.accessibilityProxy.stopListeningForLifecycleEvents({
         init: this.onLifecycleEvent,

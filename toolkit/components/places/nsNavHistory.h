@@ -236,14 +236,7 @@ class nsNavHistory final : public nsSupportsWeakReference,
   void DomainNameFromURI(nsIURI* aURI, nsACString& aDomainName);
   static PRTime NormalizeTime(uint32_t aRelative, PRTime aOffset);
 
-  typedef nsDataHashtable<nsCStringHashKey, nsCString> StringHash;
-
-  /**
-   * Indicates if it is OK to notify history observers or not.
-   *
-   * @return true if it is OK to notify, false otherwise.
-   */
-  bool canNotify() { return mCanNotify; }
+  typedef nsTHashMap<nsCStringHashKey, nsCString> StringHash;
 
   enum RecentEventFlags {
     RECENT_TYPED = 1 << 0,      // User typed in URL recently
@@ -433,9 +426,6 @@ class nsNavHistory final : public nsSupportsWeakReference,
                          nsNavHistoryQueryOptions* aOptions,
                          nsCOMArray<nsNavHistoryResultNode>* aResults);
 
-  // observers
-  nsMaybeWeakPtrArray<nsINavHistoryObserver> mObservers;
-
   // effective tld service
   nsCOMPtr<nsIEffectiveTLDService> mTLDService;
   nsCOMPtr<nsIIDNService> mIDNService;
@@ -445,7 +435,7 @@ class nsNavHistory final : public nsSupportsWeakReference,
   nsCOMPtr<nsICollation> mCollation;
 
   // recent events
-  typedef nsDataHashtable<nsCStringHashKey, int64_t> RecentEventHash;
+  typedef nsTHashMap<nsCStringHashKey, int64_t> RecentEventHash;
   RecentEventHash mRecentTyped;
   RecentEventHash mRecentLink;
   RecentEventHash mRecentBookmark;
@@ -499,9 +489,6 @@ class nsNavHistory final : public nsSupportsWeakReference,
 
   int64_t mLastCachedStartOfDay;
   int64_t mLastCachedEndOfDay;
-
-  // Used to enable and disable the observer notifications
-  bool mCanNotify;
 
   // Used to cache the call to CryptAcquireContext, which is expensive
   // when called thousands of times

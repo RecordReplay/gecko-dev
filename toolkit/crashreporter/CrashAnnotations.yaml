@@ -92,11 +92,6 @@ ApplicationBuildID:
     Product application's build ID.
   type: string
 
-AsyncShutdownModule:
-  description: >
-    Holds the contents of the AsyncShutdown.js script
-  type: string
-
 AsyncShutdownTimeout:
   description: >
     This annotation is present if a shutdown blocker was not released in time
@@ -148,11 +143,6 @@ AvailableVirtualMemory:
   type: string
   ping: true
 
-BIOS_Manufacturer:
-  description: >
-    Name of the BIOS manufacturer.
-  type: string
-
 BlockedDllList:
   description: >
     Comma-separated list of blocked DLLS, Windows-only
@@ -185,11 +175,6 @@ Bug_1086977:
   description: >
     Mac-only annotation which should be present only if Firefox crashed when
     loading a facebook plugin.
-  type: string
-
-Bug_1541161:
-  description: >
-    Dump JS Stack in case loadinfo is null within NewChannelFromURIWithProxyFlagsInternal().
   type: string
 
 BuildID:
@@ -239,6 +224,11 @@ ContentSandboxLevel:
   description: >
     Content sandbox level.
   type: integer
+
+ContentSandboxWin32kState:
+  description: >
+    Content sandbox Win32k state
+  type: string
 
 CoUnmarshalInterfaceResult:
   description: >
@@ -306,6 +296,11 @@ DOMIPCEnabled:
     Set to 1 when a tab is running in a content process
   type: boolean
 
+DumperError:
+  description: >
+    Error message of the minidump writer, in case there was an error during dumping.
+  type: string
+
 EMCheckCompatibility:
   description: >
     Set to 1 if add-on compatibility checking is enabled.
@@ -367,6 +362,7 @@ GPUProcessLaunchCount:
   description: >
     Number of times the GPU process was launched.
   type: integer
+  ping: true
 
 GPUProcessStatus:
   description: >
@@ -382,6 +378,12 @@ GraphicsCompileShader:
 GraphicsCriticalError:
   description: >
     Information of a critical error that occurred within the graphics code.
+  type: string
+
+GraphicsDrawShader:
+  description: >
+    Name of the shader that is currently bound for a draw call, if applicable.
+    See file names in gfx/wr/webrender/res/* for the possible values.
   type: string
 
 GraphicsSanityTest:
@@ -548,11 +550,6 @@ IsWayland:
     If true then the Wayland windowing system was in use.
   type: boolean
 
-IsWaylandDRM:
-  description: >
-    If true then the Wayland DRM backend was in use.
-  type: boolean
-
 IsWebRenderResourcePathOverridden:
   description: >
     If true then the WebRender resources (i.e. shaders) are loaded from a user specified path.
@@ -605,10 +602,10 @@ LauncherProcessState:
     mozilla::LauncherRegistryInfo::EnableState enum
   type: integer
 
-LowCommitSpaceEvents:
+LowPhysicalMemoryEvents:
   description: >
-    Number of times the available memory tracker has detected a that
-    commit-space was running low. This is a Windows-specific annotation.
+    Number of times the available memory tracker has detected that free
+    physical memory is running low. This is a Windows-specific annotation.
   type: integer
   ping: true
 
@@ -622,14 +619,6 @@ MarshalActCtxManifestPath:
   description: >
     Proxy stream marshalling current activation context manifest path.
   type: string
-
-MemoryErrorCorrection:
-  description: >
-    Windows only, type of error correction used by system memory.  See
-    documentation for MemoryErrorCorrection property of
-    Win32_PhysicalMemoryArray WMI class.
-  type: string
-  ping: true
 
 MozCrashReason:
   description: >
@@ -702,6 +691,13 @@ ProductName:
 ProductID:
   description: >
     Application UUID (e.g. ec8030f7-c20a-464f-9b0e-13a3a9e97384).
+  type: string
+  ping: true
+
+ProfilerChildShutdownPhase:
+  description: >
+    When a child process shuts down, this describes if the profiler is running,
+    and the point the profiler shutdown sequence has reached.
   type: string
   ping: true
 
@@ -964,6 +960,11 @@ URL:
     URL being loaded.
   type: string
 
+URLSegments:
+  description: >
+    The offsets of the nsStandardURL segments that fail a sanity check
+  type: string
+
 User32BeforeBlocklist:
   description: >
     Set to 1 if user32.dll was loaded before we could install the DLL blocklist.
@@ -990,7 +991,20 @@ VRProcessStatus:
     Status of the VR process, can be set to "Running" or "Destroyed"
   type: string
 
+WindowsErrorReporting:
+  description: >
+    Set to 1 if this crash was intercepted via the Windows Error Reporting
+    runtime exception module.
+  type: boolean
+  ping: true
+
 Winsock_LSP:
   description: >
     Information on winsock LSPs injected in our networking stack.
+  type: string
+
+XPCOMSpinEventLoopStack:
+  description: >
+    If we crash while some code is spinning manually the event
+    loop, we will see the stack of nested annotations here.
   type: string

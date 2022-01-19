@@ -34,6 +34,7 @@
 #include "mozilla/layers/WebRenderUserData.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/webgpu/CanvasContext.h"
 #include "nsAttrValueInlines.h"
@@ -594,6 +595,26 @@ nsChangeHint HTMLCanvasElement::GetAttributeChangeHint(const nsAtom* aAttribute,
     retval |= NS_STYLE_HINT_VISUAL;
   }
   return retval;
+}
+
+void HTMLCanvasElement::MapAttributesIntoRule(
+    const nsMappedAttributes* aAttributes, MappedDeclarations& aDecls) {
+  MapAspectRatioInto(aAttributes, aDecls);
+  MapCommonAttributesInto(aAttributes, aDecls);
+}
+
+nsMapRuleToAttributesFunc HTMLCanvasElement::GetAttributeMappingFunction()
+    const {
+  return &MapAttributesIntoRule;
+}
+
+NS_IMETHODIMP_(bool)
+HTMLCanvasElement::IsAttributeMapped(const nsAtom* aAttribute) const {
+  static const MappedAttributeEntry attributes[] = {
+      {nsGkAtoms::width}, {nsGkAtoms::height}, {nullptr}};
+  static const MappedAttributeEntry* const map[] = {attributes,
+                                                    sCommonAttributeMap};
+  return FindAttributeDependence(aAttribute, map);
 }
 
 bool HTMLCanvasElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,

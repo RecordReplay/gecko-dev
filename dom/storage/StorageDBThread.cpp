@@ -5,6 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "StorageDBThread.h"
+
+#include "StorageCommon.h"
 #include "StorageDBUpdater.h"
 #include "StorageUtils.h"
 #include "LocalStorageCache.h"
@@ -53,10 +55,10 @@ using namespace StorageUtils;
 
 namespace {  // anon
 
-StorageDBThread* sStorageThread[2] = {nullptr, nullptr};
+StorageDBThread* sStorageThread[kPrivateBrowsingIdCount] = {nullptr, nullptr};
 
 // False until we shut the storage thread down.
-bool sStorageThreadDown[2] = {false, false};
+bool sStorageThreadDown[kPrivateBrowsingIdCount] = {false, false};
 
 }  // namespace
 
@@ -106,7 +108,9 @@ class StorageDBThread::NoteBackgroundThreadRunnable final : public Runnable {
   explicit NoteBackgroundThreadRunnable(const uint32_t aPrivateBrowsingId)
       : Runnable("dom::StorageDBThread::NoteBackgroundThreadRunnable"),
         mPrivateBrowsingId(aPrivateBrowsingId),
-        mOwningThread(GetCurrentEventTarget()) {}
+        mOwningThread(GetCurrentEventTarget()) {
+    MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
+  }
 
  private:
   ~NoteBackgroundThreadRunnable() override = default;
@@ -126,13 +130,13 @@ StorageDBThread::StorageDBThread(const uint32_t aPrivateBrowsingId)
       mFlushImmediately(false),
       mPrivateBrowsingId(aPrivateBrowsingId),
       mPriorityCounter(0) {
-  MOZ_ASSERT(aPrivateBrowsingId <= 1);
+  MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
 }
 
 // static
 StorageDBThread* StorageDBThread::Get(const uint32_t aPrivateBrowsingId) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
-  MOZ_ASSERT(aPrivateBrowsingId <= 1);
+  MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
 
   return sStorageThread[aPrivateBrowsingId];
 }
@@ -141,7 +145,7 @@ StorageDBThread* StorageDBThread::Get(const uint32_t aPrivateBrowsingId) {
 StorageDBThread* StorageDBThread::GetOrCreate(
     const nsString& aProfilePath, const uint32_t aPrivateBrowsingId) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
-  MOZ_ASSERT(aPrivateBrowsingId <= 1);
+  MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
 
   StorageDBThread*& storageThread = sStorageThread[aPrivateBrowsingId];
   if (storageThread || sStorageThreadDown[aPrivateBrowsingId]) {
@@ -304,7 +308,7 @@ void StorageDBThread::SyncPreload(LocalStorageCacheBridge* aCache,
   // need to be flushed first.
   // Schedule preload for this cache as the first operation.
   nsresult rv =
-      InsertDBOp(new DBOperation(DBOperation::opPreloadUrgent, aCache));
+      InsertDBOp(MakeUnique<DBOperation>(DBOperation::opPreloadUrgent, aCache));
 
   // LoadWait exits after LoadDone of the cache has been called.
   if (NS_SUCCEEDED(rv)) {
@@ -325,16 +329,12 @@ bool StorageDBThread::ShouldPreloadOrigin(const nsACString& aOrigin) {
 
 void StorageDBThread::GetOriginsHavingData(nsTArray<nsCString>* aOrigins) {
   MonitorAutoLock monitor(mThreadObserver->GetMonitor());
-  for (auto iter = mOriginsHavingData.Iter(); !iter.Done(); iter.Next()) {
-    aOrigins->AppendElement(iter.Get()->GetKey());
-  }
+  AppendToArray(*aOrigins, mOriginsHavingData);
 }
 
-nsresult StorageDBThread::InsertDBOp(StorageDBThread::DBOperation* aOperation) {
+nsresult StorageDBThread::InsertDBOp(
+    UniquePtr<StorageDBThread::DBOperation> aOperation) {
   MonitorAutoLock monitor(mThreadObserver->GetMonitor());
-
-  // Sentinel to don't forget to delete the operation when we exit early.
-  UniquePtr<StorageDBThread::DBOperation> opScope(aOperation);
 
   if (NS_FAILED(mStatus)) {
     MonitorAutoUnlock unlock(mThreadObserver->GetMonitor());
@@ -377,13 +377,10 @@ nsresult StorageDBThread::InsertDBOp(StorageDBThread::DBOperation* aOperation) {
     case DBOperation::opGetUsage:
       if (aOperation->Type() == DBOperation::opPreloadUrgent) {
         SetHigherPriority();  // Dropped back after urgent preload execution
-        mPreloads.InsertElementAt(0, aOperation);
+        mPreloads.InsertElementAt(0, aOperation.release());
       } else {
-        mPreloads.AppendElement(aOperation);
+        mPreloads.AppendElement(aOperation.release());
       }
-
-      // DB operation adopted, don't delete it.
-      Unused << opScope.release();
 
       // Immediately start executing this.
       monitor.Notify();
@@ -392,10 +389,7 @@ nsresult StorageDBThread::InsertDBOp(StorageDBThread::DBOperation* aOperation) {
     default:
       // Update operations are first collected, coalesced and then flushed
       // after a short time.
-      mPendingTasks.Add(aOperation);
-
-      // DB operation adopted, don't delete it.
-      Unused << opScope.release();
+      mPendingTasks.Add(std::move(aOperation));
 
       ScheduleFlush();
       break;
@@ -628,7 +622,7 @@ nsresult StorageDBThread::InitDatabase() {
     NS_ENSURE_SUCCESS(rv, rv);
 
     MonitorAutoLock monitor(mThreadObserver->GetMonitor());
-    mOriginsHavingData.PutEntry(foundOrigin);
+    mOriginsHavingData.Insert(foundOrigin);
   }
 
   return NS_OK;
@@ -1097,7 +1091,7 @@ nsresult StorageDBThread::DBOperation::Perform(StorageDBThread* aThread) {
       NS_ENSURE_SUCCESS(rv, rv);
 
       MonitorAutoLock monitor(aThread->mThreadObserver->GetMonitor());
-      aThread->mOriginsHavingData.PutEntry(Origin());
+      aThread->mOriginsHavingData.Insert(Origin());
       break;
     }
 
@@ -1148,7 +1142,7 @@ nsresult StorageDBThread::DBOperation::Perform(StorageDBThread* aThread) {
       NS_ENSURE_SUCCESS(rv, rv);
 
       MonitorAutoLock monitor(aThread->mThreadObserver->GetMonitor());
-      aThread->mOriginsHavingData.RemoveEntry(Origin());
+      aThread->mOriginsHavingData.Remove(Origin());
       break;
     }
 
@@ -1308,14 +1302,13 @@ bool StorageDBThread::PendingOperations::CheckForCoalesceOpportunity(
 }
 
 void StorageDBThread::PendingOperations::Add(
-    StorageDBThread::DBOperation* aOperation) {
+    UniquePtr<StorageDBThread::DBOperation> aOperation) {
   // Optimize: when a key to remove has never been written to disk
   // just bypass this operation.  A key is new when an operation scheduled
   // to write it to the database is of type opAddItem.
-  if (CheckForCoalesceOpportunity(aOperation, DBOperation::opAddItem,
+  if (CheckForCoalesceOpportunity(aOperation.get(), DBOperation::opAddItem,
                                   DBOperation::opRemoveItem)) {
     mUpdates.Remove(aOperation->Target());
-    delete aOperation;
     return;
   }
 
@@ -1323,7 +1316,7 @@ void StorageDBThread::PendingOperations::Add(
   // written to disk, keep type of the operation to store it at opAddItem.
   // This allows optimization to just forget adding a new key when
   // it is removed from the storage before flush.
-  if (CheckForCoalesceOpportunity(aOperation, DBOperation::opAddItem,
+  if (CheckForCoalesceOpportunity(aOperation.get(), DBOperation::opAddItem,
                                   DBOperation::opUpdateItem)) {
     aOperation->mType = DBOperation::opAddItem;
   }
@@ -1332,7 +1325,7 @@ void StorageDBThread::PendingOperations::Add(
   // remove/set/remove on a previously existing key we have to change
   // opAddItem to opUpdateItem on the new operation when there is opRemoveItem
   // pending for the key.
-  if (CheckForCoalesceOpportunity(aOperation, DBOperation::opRemoveItem,
+  if (CheckForCoalesceOpportunity(aOperation.get(), DBOperation::opRemoveItem,
                                   DBOperation::opAddItem)) {
     aOperation->mType = DBOperation::opUpdateItem;
   }
@@ -1344,7 +1337,7 @@ void StorageDBThread::PendingOperations::Add(
     case DBOperation::opUpdateItem:
     case DBOperation::opRemoveItem:
       // Override any existing operation for the target (=scope+key).
-      mUpdates.Put(aOperation->Target(), aOperation);
+      mUpdates.InsertOrUpdate(aOperation->Target(), std::move(aOperation));
       break;
 
       // Clear operations
@@ -1381,14 +1374,14 @@ void StorageDBThread::PendingOperations::Add(
         iter.Remove();
       }
 
-      mClears.Put(aOperation->Target(), aOperation);
+      mClears.InsertOrUpdate(aOperation->Target(), std::move(aOperation));
       break;
 
     case DBOperation::opClearAll:
       // Drop simply everything, this is a super-operation.
       mUpdates.Clear();
       mClears.Clear();
-      mClears.Put(aOperation->Target(), aOperation);
+      mClears.InsertOrUpdate(aOperation->Target(), std::move(aOperation));
       break;
 
     default:
@@ -1423,7 +1416,10 @@ nsresult StorageDBThread::PendingOperations::Execute(StorageDBThread* aThread) {
 
   mozStorageTransaction transaction(aThread->mWorkerConnection, false);
 
-  nsresult rv;
+  nsresult rv = transaction.Start();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   for (uint32_t i = 0; i < mExecList.Length(); ++i) {
     const auto& task = mExecList[i];
@@ -1500,9 +1496,9 @@ bool StorageDBThread::PendingOperations::IsOriginClearPending(
     const nsACString& aOriginSuffix, const nsACString& aOriginNoSuffix) const {
   // Called under the lock
 
-  for (auto iter = mClears.ConstIter(); !iter.Done(); iter.Next()) {
+  for (const auto& clear : mClears.Values()) {
     if (FindPendingClearForOrigin(aOriginSuffix, aOriginNoSuffix,
-                                  iter.UserData())) {
+                                  clear.get())) {
       return true;
     }
   }
@@ -1541,9 +1537,9 @@ bool StorageDBThread::PendingOperations::IsOriginUpdatePending(
     const nsACString& aOriginSuffix, const nsACString& aOriginNoSuffix) const {
   // Called under the lock
 
-  for (auto iter = mUpdates.ConstIter(); !iter.Done(); iter.Next()) {
+  for (const auto& update : mUpdates.Values()) {
     if (FindPendingUpdateForOrigin(aOriginSuffix, aOriginNoSuffix,
-                                   iter.UserData())) {
+                                   update.get())) {
       return true;
     }
   }
@@ -1616,6 +1612,7 @@ StorageDBThread::ShutdownRunnable::Run() {
   }
 
   ::mozilla::ipc::AssertIsOnBackgroundThread();
+  MOZ_RELEASE_ASSERT(mPrivateBrowsingId < kPrivateBrowsingIdCount);
 
   StorageDBThread*& storageThread = sStorageThread[mPrivateBrowsingId];
   if (storageThread) {

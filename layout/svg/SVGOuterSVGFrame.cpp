@@ -35,24 +35,23 @@ void SVGOuterSVGFrame::RegisterForeignObject(SVGForeignObjectFrame* aFrame) {
   NS_ASSERTION(aFrame, "Who on earth is calling us?!");
 
   if (!mForeignObjectHash) {
-    mForeignObjectHash =
-        MakeUnique<nsTHashtable<nsPtrHashKey<SVGForeignObjectFrame>>>();
+    mForeignObjectHash = MakeUnique<nsTHashSet<SVGForeignObjectFrame*>>();
   }
 
-  NS_ASSERTION(!mForeignObjectHash->GetEntry(aFrame),
+  NS_ASSERTION(!mForeignObjectHash->Contains(aFrame),
                "SVGForeignObjectFrame already registered!");
 
-  mForeignObjectHash->PutEntry(aFrame);
+  mForeignObjectHash->Insert(aFrame);
 
-  NS_ASSERTION(mForeignObjectHash->GetEntry(aFrame),
+  NS_ASSERTION(mForeignObjectHash->Contains(aFrame),
                "Failed to register SVGForeignObjectFrame!");
 }
 
 void SVGOuterSVGFrame::UnregisterForeignObject(SVGForeignObjectFrame* aFrame) {
   NS_ASSERTION(aFrame, "Who on earth is calling us?!");
-  NS_ASSERTION(mForeignObjectHash && mForeignObjectHash->GetEntry(aFrame),
+  NS_ASSERTION(mForeignObjectHash && mForeignObjectHash->Contains(aFrame),
                "SVGForeignObjectFrame not in registry!");
-  return mForeignObjectHash->RemoveEntry(aFrame);
+  return mForeignObjectHash->Remove(aFrame);
 }
 
 }  // namespace mozilla
@@ -81,6 +80,7 @@ SVGOuterSVGFrame::SVGOuterSVGFrame(ComputedStyle* aStyle,
       mIsInIframe(false) {
   // Outer-<svg> has CSS layout, so remove this bit:
   RemoveStateBits(NS_FRAME_SVG_LAYOUT);
+  AddStateBits(NS_FRAME_MAY_BE_TRANSFORMED);
 }
 
 // helper
@@ -253,7 +253,7 @@ AspectRatio SVGOuterSVGFrame::GetIntrinsicRatio() const {
 
   // We only have an intrinsic size/ratio if our width and height attributes
   // are both specified and set to non-percentage values, or we have a viewBox
-  // rect: http://www.w3.org/TR/SVGMobile12/coords.html#IntrinsicSizing
+  // rect: https://svgwg.org/svg2-draft/coords.html#SizingSVGInCSS
   // Unfortunately we have to return the ratio as two nscoords whereas what
   // we have are two floats. Using app units allows for some floating point
   // values to work but really small or large numbers will fail.
@@ -263,10 +263,17 @@ AspectRatio SVGOuterSVGFrame::GetIntrinsicRatio() const {
       content->mLengthAttributes[SVGSVGElement::ATTR_WIDTH];
   const SVGAnimatedLength& height =
       content->mLengthAttributes[SVGSVGElement::ATTR_HEIGHT];
-
   if (!width.IsPercentage() && !height.IsPercentage()) {
-    return AspectRatio::FromSize(width.GetAnimValue(content),
-                                 height.GetAnimValue(content));
+    // Use width/height ratio only if
+    // 1. it's not a degenerate ratio, and
+    // 2. width and height are non-negative numbers.
+    // Otherwise, we use the viewbox rect.
+    // https://github.com/w3c/csswg-drafts/issues/6286
+    const float w = width.GetAnimValue(content);
+    const float h = height.GetAnimValue(content);
+    if (w > 0.0f && h > 0.0f) {
+      return AspectRatio::FromSize(w, h);
+    }
   }
 
   SVGViewElement* viewElement = content->GetCurrentViewElement();
@@ -291,7 +298,7 @@ nsIFrame::SizeComputationResult SVGOuterSVGFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWritingMode,
     const LogicalSize& aCBSize, nscoord aAvailableISize,
     const LogicalSize& aMargin, const LogicalSize& aBorderPadding,
-    ComputeSizeFlags aFlags) {
+    const StyleSizeOverrides& aSizeOverrides, ComputeSizeFlags aFlags) {
   if (IsRootOfImage() || mIsInObjectOrEmbed) {
     // The embedding element has sized itself using the CSS replaced element
     // sizing rules, using our intrinsic dimensions as necessary. The SVG spec
@@ -353,7 +360,7 @@ nsIFrame::SizeComputationResult SVGOuterSVGFrame::ComputeSize(
 
   return {ComputeSizeWithIntrinsicDimensions(
               aRenderingContext, aWritingMode, intrinsicSize, GetAspectRatio(),
-              cbSize, aMargin, aBorderPadding, aFlags),
+              cbSize, aMargin, aBorderPadding, aSizeOverrides, aFlags),
           AspectRatioUsage::None};
 }
 
@@ -637,8 +644,8 @@ nsRegion SVGOuterSVGFrame::FindInvalidatedForeignObjectFrameChildren(
     nsIFrame* aFrame) {
   nsRegion result;
   if (mForeignObjectHash && mForeignObjectHash->Count()) {
-    for (auto it = mForeignObjectHash->Iter(); !it.Done(); it.Next()) {
-      result.Or(result, it.Get()->GetKey()->GetInvalidRegion());
+    for (const auto& key : *mForeignObjectHash) {
+      result.Or(result, key->GetInvalidRegion());
     }
   }
   return result;
@@ -765,6 +772,8 @@ void SVGOuterSVGFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
                          contentList, contentList);
     BuildDisplayListForNonBlockChildren(aBuilder, set);
   } else if (IsVisibleForPainting() || !aBuilder->IsForPainting()) {
+    aBuilder->BuildCompositorHitTestInfoIfNeeded(this,
+                                                 aLists.BorderBackground());
     aLists.Content()->AppendNewToTop<nsDisplayOuterSVG>(aBuilder, this);
   }
 }

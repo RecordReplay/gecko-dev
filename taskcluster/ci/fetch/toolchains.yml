@@ -30,44 +30,44 @@ binutils-2.31.1:
         strip-components: 1
         add-prefix: binutils-source/
 
-gcc-6.4.0:
-    description: GCC 6.4.0 source code
+gcc-6.5.0:
+    description: GCC 6.5.0 source code
     fetch:
         type: static-url
-        url: ftp://ftp.gnu.org/gnu/gcc/gcc-6.4.0/gcc-6.4.0.tar.xz
-        sha256: 850bf21eafdfe5cd5f6827148184c08c4a0852a37ccf36ce69855334d2c914d4
-        size: 76156220
-        gpg-signature:
-            sig-url: "{url}.sig"
-            key-path: build/unix/build-gcc/13975A70E63C361C73AE69EF6EEB81F8981C74C7.key
-        artifact-name: gcc-source.tar.zst
-        strip-components: 1
-        add-prefix: gcc-source/
-
-gcc-7.4.0:
-    description: GCC 7.4.0 source code
-    fetch:
-        type: static-url
-        url: ftp://ftp.gnu.org/gnu/gcc/gcc-7.4.0/gcc-7.4.0.tar.xz
-        sha256: eddde28d04f334aec1604456e536416549e9b1aa137fc69204e65eb0c009fe51
-        size: 62601888
-        gpg-signature:
-            sig-url: "{url}.sig"
-            key-path: build/unix/build-gcc/13975A70E63C361C73AE69EF6EEB81F8981C74C7.key
-        artifact-name: gcc-source.tar.zst
-        strip-components: 1
-        add-prefix: gcc-source/
-
-gcc-8.3.0:
-    description: GCC 8.3.0 source code
-    fetch:
-        type: static-url
-        url: ftp://ftp.gnu.org/gnu/gcc/gcc-8.3.0/gcc-8.3.0.tar.xz
-        sha256: 64baadfe6cc0f4947a84cb12d7f0dfaf45bb58b7e92461639596c21e02d97d2c
-        size: 63694700
+        url: ftp://ftp.gnu.org/gnu/gcc/gcc-6.5.0/gcc-6.5.0.tar.xz
+        sha256: 7ef1796ce497e89479183702635b14bb7a46b53249209a5e0f999bebf4740945
+        size: 74355588
         gpg-signature:
             sig-url: "{url}.sig"
             key-path: build/unix/build-gcc/33C235A34C46AA3FFB293709A328C3A2C3C45C06.key
+        artifact-name: gcc-source.tar.zst
+        strip-components: 1
+        add-prefix: gcc-source/
+
+gcc-7.5.0:
+    description: GCC 7.5.0 source code
+    fetch:
+        type: static-url
+        url: ftp://ftp.gnu.org/gnu/gcc/gcc-7.5.0/gcc-7.5.0.tar.xz
+        sha256: b81946e7f01f90528a1f7352ab08cc602b9ccc05d4e44da4bd501c5a189ee661
+        size: 62783088
+        gpg-signature:
+            sig-url: "{url}.sig"
+            key-path: build/unix/build-gcc/7F74F97C103468EE5D750B583AB00996FC26A641.key
+        artifact-name: gcc-source.tar.zst
+        strip-components: 1
+        add-prefix: gcc-source/
+
+gcc-8.5.0:
+    description: GCC 8.5.0 source code
+    fetch:
+        type: static-url
+        url: ftp://ftp.gnu.org/gnu/gcc/gcc-8.5.0/gcc-8.5.0.tar.xz
+        sha256: d308841a511bb830a6100397b0042db24ce11f642dab6ea6ee44842e5325ed50
+        size: 63841008
+        gpg-signature:
+            sig-url: "{url}.sig"
+            key-path: build/unix/build-gcc/D3A93CAD751C2AF4F8C7AD516C35B99309B5FA62.key
         artifact-name: gcc-source.tar.zst
         strip-components: 1
         add-prefix: gcc-source/
@@ -85,6 +85,16 @@ gcc-9.3.0:
         artifact-name: gcc-source.tar.zst
         strip-components: 1
         add-prefix: gcc-source/
+
+gcc-11.1.0:
+    description: GCC 11.1.0+ source code
+    fetch:
+        type: git
+        repo: https://gcc.gnu.org/git/gcc.git
+        # Tip of the releases/gcc-11 as of 2021-06-02.
+        revision: 22e424002217e182dee2fcc7d2df6d0fc601300d
+        artifact-name: gcc-source.tar.zst
+        path-prefix: gcc-source/
 
 gmp-5.1.3:
     description: GMP 5.1.3 source code
@@ -215,13 +225,13 @@ nasm-2.14.02:
         sha256: e24ade3e928f7253aa8c14aa44726d1edf3f98643f87c9d72ec1df44b26be8f5
         size: 827620
 
-nasm-2.13.02:
-    description: nasm 2.13.02 source code
+nasm-2.15.05:
+    description: nasm 2.15.05 source code
     fetch:
         type: static-url
-        url: https://www.nasm.us/pub/nasm/releasebuilds/2.13.02/nasm-2.13.02.tar.xz
-        sha256: 8ac3235f49a6838ff7a8d7ef7c19a4430d0deecc0c2d3e3e237b5e9f53291757
-        size: 805744
+        url: https://www.nasm.us/pub/nasm/releasebuilds/2.15.05/nasm-2.15.05.tar.xz
+        sha256: 3caf6729c1073bf96629b57cee31eeb54f4f8129b01902c73428836550b30a3f
+        size: 995732
 
 wix-3.14.0:
     description: wix 3.14.0.2812 binary release
@@ -277,30 +287,33 @@ upx-3.95-win:
         sha256: 5c076f87ba64d82f11513f4af0ceb07246a3540aa3c72ca3ffc2d53971fa56e3
         size: 462820
 
-wine-5.0:
-    description: wine-5.0.tar.xz
+wine:
+    description: wine source code
     fetch:
         type: static-url
-        url: https://dl.winehq.org/wine/source/5.0/wine-5.0.tar.xz
-        sha256: 181550ba69a80b00c631f80c28ff7642264613bbecdb0c0fc04d6534866713b4
-        size: 22469428
+        url: https://dl.winehq.org/wine/source/6.0/wine-6.0.tar.xz
+        sha256: b493065f2f83ee429c62e2ec58698a3cf63ef78722e1b20765823152e8582c56
+        size: 24192280
         gpg-signature:
             sig-url: "{url}.sign"
             key-path: build/unix/build-gcc/DA23579A74D4AD9AF9D3F945CEFAC8EAAF17519D.key
+        artifact-name: wine.tar.zst
+        strip-components: 1
+        add-prefix: wine-source/
 
-cbindgen-0.16.0:
+cbindgen-0.19.0:
     description: cbindgen source code
     fetch:
         type: git
         repo: https://github.com/eqrion/cbindgen
-        revision: a00b4215a907601680f6e9acaf93df1cbafa8ded
+        revision: d9e490ce8b836194595bd30611253a7028059da2
 
 cctools-port:
     description: cctools-port source code
     fetch:
         type: git
         repo: https://github.com/tpoechtrager/cctools-port
-        revision: 43f32a4c61b5ba7fde011e816136c550b1b3146f
+        revision: 30518813875aed656aa7f18b6d485feee25f8f87
 
 libtapi:
     description: libtapi source code
@@ -308,6 +321,13 @@ libtapi:
         type: git
         repo: https://github.com/tpoechtrager/apple-libtapi
         revision: b4f141a16c7c82f75973429c92242a8c7de3ddb1
+
+ldid:
+    description: ldid source code
+    fetch:
+        type: git
+        repo: https://github.com/tpoechtrager/ldid
+        revision: 4bf8f4d60384a0693dbbe2084ce62a35bfeb87ab
 
 libdmg-hfsplus:
     description: libdmg-hfsplug source code
@@ -366,7 +386,7 @@ mingw-w64:
     fetch:
         type: git
         repo: https://git.code.sf.net/p/mingw-w64/mingw-w64
-        revision: 660e09f3cb20f181b6d6435cb623d65a3922a063
+        revision: cdb052f1d4056cd510cb83197b55868427b87476
 
 libunwind:
     description: libunwind source code
@@ -424,19 +444,44 @@ clang-11:
         repo: https://github.com/llvm/llvm-project
         revision: 43ff75f2c3feef64f9d73328230d34dac8832a91
 
-rust-1.47.0-dev:
-    description: Rust 1.47.0-dev source code
+clang-12:
+    description: clang 12.0.0 source code
+    fetch:
+        type: git
+        repo: https://github.com/llvm/llvm-project
+        revision: d28af7c654d8db0b68c175db5ce212d74fb5e9bc
+
+clang-trunk:
+    description: clang main branch source code
+    attributes:
+        cached_task: false
+    fetch:
+        type: git
+        repo: https://github.com/llvm/llvm-project
+        branch: main
+
+# This revision currently corresponds to rust nightly-2021-05-02,
+# which is the first nightly with the version 1.54.0,
+# so it should be as close as possible to the behaviour of
+# stable-1.53.0.
+#
+# We use this to build from source, so the resulting non-official
+# artifacts will report their version as "1.54.0-dev", but will otherwise
+# behave like a nightly build. This means they will allow you to use
+# unstable features like -Zbuild-std and sanitizers.
+rust-1.54.0-dev:
+    description: Rust 1.54.0-dev source code
     fetch:
         type: git
         repo: https://github.com/rust-lang/rust/
-        revision: 18bf6b4f01a6feaf7259ba7cdae58031af1b7b39
+        revision: 4de75720970a223b125a811d3662fd15a08d4d18
 
 wasi-sdk:
     description: wasi-sdk source code
     fetch:
         type: git
         repo: https://github.com/WebAssembly/wasi-sdk
-        revision: 8446a3f8d49f70d17e38cefd9990a9e79bf3e78a
+        revision: b36c433738f0c29160a5ac1c1cee1b1b884bf4a0
 
 ninja:
     description: ninja 1.9.0
@@ -464,21 +509,21 @@ lucetc-source:
     fetch:
         type: git
         repo: https://github.com/PLSysSec/lucet_sandbox_compiler/
-        revision: cd07861d1c92147b35b538e6f94fde7d1986f9ad
+        revision: d582d76bf0d17984501f3933688bf7a1eb5cf208
 
 dump-syms:
     description: dump_syms source code
     fetch:
         type: git
         repo: https://github.com/mozilla/dump_syms/
-        revision: 1e64e56720131bcf0ab01f201ed89a337c73069d
+        revision: 34a466ce2d144247cec90ee6bde21645e2d5aacd
 
 fix-stacks:
     description: fix-stacks source code
     fetch:
         type: git
         repo: https://github.com/mozilla/fix-stacks/
-        revision: 45a3301151244615df92c503379bb189dc3ee7f5
+        revision: c30daaef43bd15486fba189b06487aa24dad3492
 
 winchecksec:
     description: winchecksec source code
@@ -513,3 +558,115 @@ makecab:
         type: git
         repo: https://github.com/luser/rust-makecab/
         revision: d2bc6797648b7a834782714a55d339d2fd4e58c8
+
+nodejs-10-linux64:
+    description: nodejs 10 for x64 linux
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v10.23.1/node-v10.23.1-linux-x64.tar.xz
+        sha256: 207e5ec77ca655ba6fcde922d6b329acbb09898b0bd793ccfcce6c27a36fdff0
+        size: 13139076
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-12-linux64:
+    description: nodejs 12 for x64 linux
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v12.22.1/node-v12.22.1-linux-x64.tar.xz
+        sha256: 8b537282c222ae4a40e019a52f769ca27b6640699bdde1510375e8d72da7d041
+        size: 14594952
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+
+nodejs-10-macosx64:
+    description: nodejs 10 for x64 macOS
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v10.23.1/node-v10.23.1-darwin-x64.tar.xz
+        sha256: febfdabd98ab5b8f8fdff32ab8c111d834083805bf042ab65c923cc22609c99d
+        size: 12233276
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-12-macosx64:
+    description: nodejs 12 for x64 macOS
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v12.22.1/node-v12.22.1-darwin-x64.tar.xz
+        sha256: de5e317580732530961d83b0fb9b2c370d222bd0c5a1b331900e9ddc0fdfe086
+        size: 13670384
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-16-macosx64-arm64:
+    description: nodejs 16 for arm64 macOS
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v16.0.0/node-v16.0.0-darwin-arm64.tar.xz
+        sha256: f8710a83738b4408da82fe81b7934373e4d2f84d40c8c1217676119fd3c77c7e
+        size: 19028900
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-10-win32:
+    description: nodejs 10 for x86 Windows
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v10.23.1/node-v10.23.1-win-x86.zip
+        sha256: c3be0fd50c218cc52e85377c9e22d7d2110d72de95bdbc9447145b246330f818
+        size: 16806899
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-12-win32:
+    description: nodejs 12 for x86 Windows
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v12.22.1/node-v12.22.1-win-x86.zip
+        sha256: 832bd047d3709e4229d1cc95d04391aceb991a5c957b8efd395e01f51832a774
+        size: 17132424
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-10-win64:
+    description: nodejs 10 for x64 Windows
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v10.23.1/node-v10.23.1-win-x64.zip
+        sha256: 497996aa1037b6f7f492c1d275bb90140269223939525286b4e95babad16f0de
+        size: 18307638
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+nodejs-12-win64:
+    description: nodejs 12 for x64 Windows
+    fetch:
+        type: static-url
+        url: https://nodejs.org/dist/v12.22.1/node-v12.22.1-win-x64.zip
+        sha256: 0cf3545c1ff9717bf3196eed6a423d878709ed4560125fdc29b42bd80ee661c3
+        size: 18677788
+        artifact-name: nodejs.tar.zst
+        strip-components: 1
+        add-prefix: node/
+
+
+gnumake:
+    description: GNU make source
+    fetch:
+        type: static-url
+        url: http://ftp.gnu.org/gnu/make/make-4.3.tar.gz
+        sha256: e05fdde47c5f7ca45cb697e973894ff4f5d79e13b750ed57d7b66d8defc78e19
+        size: 2317073
+        artifact-name: make.tar.zst
+        strip-components: 1
+        add-prefix: make/

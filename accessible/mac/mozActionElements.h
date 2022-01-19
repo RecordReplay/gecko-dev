@@ -46,7 +46,7 @@
 
 @end
 
-// Accessible for a radio button
+// LocalAccessible for a radio button
 @interface mozRadioButtonAccessible : mozCheckboxAccessible
 
 // override
@@ -68,6 +68,9 @@
  * Base accessible for an incrementable
  */
 @interface mozIncrementableAccessible : mozAccessible
+
+// override
+- (void)moxSetValue:(id)value;
 
 // override
 - (void)moxPerformIncrement;

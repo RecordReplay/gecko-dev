@@ -8,14 +8,10 @@ import argparse
 import os
 import subprocess
 
-from mach.decorators import (
-    CommandArgument,
-    CommandProvider,
-    Command,
-)
+from mach.decorators import CommandArgument, CommandProvider, Command
 
 from mozbuild.base import MachCommandBase
-from mozbuild.util import ensure_subprocess_env, MOZBUILD_METRICS_PATH
+from mozbuild.util import MOZBUILD_METRICS_PATH
 from mozbuild.mozconfig import MozconfigLoader
 import mozpack.path as mozpath
 
@@ -28,11 +24,16 @@ OF THE TREE CAN RESULT IN BAD TREE STATE. USE AT YOUR OWN RISK.
 """.strip()
 
 
-@CommandProvider(metrics_path=MOZBUILD_METRICS_PATH)
+@CommandProvider
 class Build(MachCommandBase):
     """Interface to build the tree."""
 
-    @Command("build", category="build", description="Build the tree.")
+    @Command(
+        "build",
+        category="build",
+        description="Build the tree.",
+        metrics_path=MOZBUILD_METRICS_PATH,
+    )
     @CommandArgument(
         "--jobs",
         "-j",
@@ -59,7 +60,15 @@ class Build(MachCommandBase):
         action="store_true",
         help="Keep building after an error has occurred",
     )
-    def build(self, what=None, jobs=0, directory=None, verbose=False, keep_going=False):
+    def build(
+        self,
+        command_context,
+        what=None,
+        jobs=0,
+        directory=None,
+        verbose=False,
+        keep_going=False,
+    ):
         """Build the source tree.
 
         With no arguments, this will perform a full build.
@@ -135,9 +144,7 @@ class Build(MachCommandBase):
                 instr.virtualenv_manager.python_path,
                 mozpath.join(self.topsrcdir, "build/pgo/profileserver.py"),
             ]
-            subprocess.check_call(
-                pgo_cmd, cwd=instr.topobjdir, env=ensure_subprocess_env(pgo_env)
-            )
+            subprocess.check_call(pgo_cmd, cwd=instr.topobjdir, env=pgo_env)
 
             # Set the default build to MOZ_PROFILE_USE
             append_env = {"MOZ_PROFILE_USE": "1"}
@@ -158,11 +165,18 @@ class Build(MachCommandBase):
         "configure",
         category="build",
         description="Configure the tree (run configure and config.status).",
+        metrics_path=MOZBUILD_METRICS_PATH,
     )
     @CommandArgument(
         "options", default=None, nargs=argparse.REMAINDER, help="Configure options"
     )
-    def configure(self, options=None, buildstatus_messages=False, line_handler=None):
+    def configure(
+        self,
+        command_context,
+        options=None,
+        buildstatus_messages=False,
+        line_handler=None,
+    ):
         from mozbuild.controller.building import BuildDriver
 
         self.log_manager.enable_all_structured_loggers()
@@ -197,7 +211,9 @@ class Build(MachCommandBase):
         help="Web browser to automatically open. See webbrowser Python module.",
     )
     @CommandArgument("--url", help="URL of JSON document to display")
-    def resource_usage(self, address=None, port=None, browser=None, url=None):
+    def resource_usage(
+        self, command_context, address=None, port=None, browser=None, url=None
+    ):
         import webbrowser
         from mozbuild.html_build_viewer import BuildViewerServer
 
@@ -252,7 +268,9 @@ class Build(MachCommandBase):
         action="store_true",
         help="Do everything except writing files out.",
     )
-    def build_backend(self, backend, diff=False, verbose=False, dry_run=False):
+    def build_backend(
+        self, command_context, backend, diff=False, verbose=False, dry_run=False
+    ):
         python = self.virtualenv_manager.python_path
         config_status = os.path.join(self.topobjdir, "config.status")
 

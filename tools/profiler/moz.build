@@ -11,11 +11,9 @@ if CONFIG["MOZ_GECKO_PROFILER"]:
         "gecko/nsIProfiler.idl",
     ]
     EXPORTS += [
-        "public/ChildProfilerController.h",
         "public/GeckoProfilerReporter.h",
         "public/ProfilerChild.h",
         "public/ProfilerCodeAddressService.h",
-        "public/ProfilerParent.h",
         "public/shared-libraries.h",
     ]
     UNIFIED_SOURCES += [
@@ -32,7 +30,6 @@ if CONFIG["MOZ_GECKO_PROFILER"]:
         "gecko/nsProfilerStartParams.cpp",
         "gecko/ProfilerChild.cpp",
         "gecko/ProfilerIOInterposeObserver.cpp",
-        "gecko/ProfilerParent.cpp",
     ]
     if CONFIG["MOZ_REPLACE_MALLOC"] and CONFIG["MOZ_PROFILER_MEMORY"]:
         SOURCES += [
@@ -119,7 +116,21 @@ if CONFIG["MOZ_GECKO_PROFILER"]:
     if CONFIG["ENABLE_TESTS"]:
         DIRS += ["tests/gtest"]
 
-    FINAL_LIBRARY = "xul"
+    if CONFIG["MOZ_VTUNE"]:
+        DEFINES["MOZ_VTUNE_INSTRUMENTATION"] = True
+        UNIFIED_SOURCES += [
+            "core/VTuneProfiler.cpp",
+        ]
+
+    XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.ini"]
+    MOCHITEST_CHROME_MANIFESTS += ["tests/chrome/chrome.ini"]
+    BROWSER_CHROME_MANIFESTS += ["tests/browser/browser.ini"]
+
+UNIFIED_SOURCES += [
+    "core/MicroGeckoProfiler.cpp",
+    "core/ProfilerBindings.cpp",
+    "gecko/ProfilerParent.cpp",
+]
 
 IPDL_SOURCES += [
     "gecko/PProfiler.ipdl",
@@ -128,46 +139,26 @@ IPDL_SOURCES += [
 
 include("/ipc/chromium/chromium-config.mozbuild")
 
-# GeckoProfiler.h and ProfilerCounts.h are the only code that's visible in
-# non-MOZ_GECKO_PROFILER builds, and they only contains no-op macros in that
-# case.
 EXPORTS += [
+    "public/ChildProfilerController.h",
     "public/GeckoProfiler.h",
+    "public/ProfilerBindings.h",
+    "public/ProfilerParent.h",
 ]
 
 EXPORTS.mozilla += [
     "public/ProfileBufferEntrySerializationGeckoExtensions.h",
     "public/ProfileJSONWriter.h",
-    # vm/GeckoProfiler.h needs to include this and doesn't like #include "ProfilerCounts.h"
     "public/ProfilerCounts.h",
+    "public/ProfilerLabels.h",
     "public/ProfilerMarkers.h",
     "public/ProfilerMarkersDetail.h",
     "public/ProfilerMarkersPrerequisites.h",
     "public/ProfilerMarkerTypes.h",
+    "public/ProfilerState.h",
 ]
 
-if CONFIG["MOZ_VTUNE"]:
-    DEFINES["MOZ_VTUNE_INSTRUMENTATION"] = True
-    UNIFIED_SOURCES += [
-        "core/VTuneProfiler.cpp",
-    ]
-
-
-if CONFIG["MOZ_TASK_TRACER"]:
-    EXPORTS += [
-        "tasktracer/GeckoTaskTracer.h",
-        "tasktracer/GeckoTaskTracerImpl.h",
-        "tasktracer/SourceEventTypeMap.h",
-        "tasktracer/TracedTaskCommon.h",
-    ]
-    UNIFIED_SOURCES += [
-        "tasktracer/GeckoTaskTracer.cpp",
-        "tasktracer/TracedTaskCommon.cpp",
-    ]
-
-XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.ini"]
-MOCHITEST_CHROME_MANIFESTS += ["tests/chrome/chrome.ini"]
-BROWSER_CHROME_MANIFESTS += ["tests/browser/browser.ini"]
+FINAL_LIBRARY = "xul"
 
 if CONFIG["CC_TYPE"] in ("clang", "gcc"):
     CXXFLAGS += [

@@ -124,6 +124,22 @@ void MacroAssemblerMIPS64Compat::convertDoubleToInt32(FloatRegister src,
   ma_b(ScratchRegister, Imm32(0), fail, Assembler::NotEqual);
 }
 
+void MacroAssemblerMIPS64Compat::convertDoubleToPtr(FloatRegister src,
+                                                    Register dest, Label* fail,
+                                                    bool negativeZeroCheck) {
+  if (negativeZeroCheck) {
+    moveFromDouble(src, dest);
+    ma_drol(dest, dest, Imm32(1));
+    ma_b(dest, Imm32(1), fail, Assembler::Equal);
+  }
+  as_truncld(ScratchDoubleReg, src);
+  as_cfc1(ScratchRegister, Assembler::FCSR);
+  moveFromDouble(ScratchDoubleReg, dest);
+  ma_ext(ScratchRegister, ScratchRegister, CauseBitPos, CauseBitCount);
+  as_andi(ScratchRegister, ScratchRegister, CauseIOrVMask);
+  ma_b(ScratchRegister, Imm32(0), fail, Assembler::NotEqual);
+}
+
 // Checks whether a float32 is representable as a 32-bit integer. If so, the
 // integer is written to the output register. Otherwise, a bailout is taken to
 // the given snapshot. This function overwrites the scratch float register.
@@ -159,6 +175,10 @@ void MacroAssemblerMIPS64Compat::convertInt32ToFloat32(const Address& src,
                                                        FloatRegister dest) {
   ma_ls(dest, src);
   as_cvtsw(dest, dest);
+}
+
+void MacroAssembler::convertIntPtrToDouble(Register src, FloatRegister dest) {
+  convertInt64ToDouble(Register64(src), dest);
 }
 
 void MacroAssemblerMIPS64Compat::movq(Register rs, Register rd) {
@@ -383,15 +403,15 @@ void MacroAssemblerMIPS64::ma_daddu(Register rd, Imm32 imm) {
   ma_daddu(rd, rd, imm);
 }
 
-void MacroAssemblerMIPS64::ma_addTestOverflow(Register rd, Register rs,
-                                              Register rt, Label* overflow) {
+void MacroAssemblerMIPS64::ma_add32TestOverflow(Register rd, Register rs,
+                                                Register rt, Label* overflow) {
   as_daddu(SecondScratchReg, rs, rt);
   as_addu(rd, rs, rt);
   ma_b(rd, SecondScratchReg, overflow, Assembler::NotEqual);
 }
 
-void MacroAssemblerMIPS64::ma_addTestOverflow(Register rd, Register rs,
-                                              Imm32 imm, Label* overflow) {
+void MacroAssemblerMIPS64::ma_add32TestOverflow(Register rd, Register rs,
+                                                Imm32 imm, Label* overflow) {
   // Check for signed range because of as_daddiu
   if (Imm16::IsInSignedRange(imm.value)) {
     as_daddiu(SecondScratchReg, rs, imm.value);
@@ -399,7 +419,65 @@ void MacroAssemblerMIPS64::ma_addTestOverflow(Register rd, Register rs,
     ma_b(rd, SecondScratchReg, overflow, Assembler::NotEqual);
   } else {
     ma_li(ScratchRegister, imm);
-    ma_addTestOverflow(rd, rs, ScratchRegister, overflow);
+    ma_add32TestOverflow(rd, rs, ScratchRegister, overflow);
+  }
+}
+
+void MacroAssemblerMIPS64::ma_addPtrTestOverflow(Register rd, Register rs,
+                                                 Register rt, Label* overflow) {
+  SecondScratchRegisterScope scratch2(asMasm());
+  MOZ_ASSERT(rd != rt);
+  MOZ_ASSERT(rd != scratch2);
+
+  if (rs == rt) {
+    as_daddu(rd, rs, rs);
+    as_xor(scratch2, rs, rd);
+  } else {
+    ScratchRegisterScope scratch(asMasm());
+    MOZ_ASSERT(rs != scratch2);
+    MOZ_ASSERT(rt != scratch2);
+
+    // If the sign of rs and rt are different, no overflow
+    as_xor(scratch2, rs, rt);
+    as_nor(scratch2, scratch2, zero);
+
+    as_daddu(rd, rs, rt);
+    as_xor(scratch, rd, rt);
+    as_and(scratch, scratch, scratch2);
+  }
+
+  ma_b(scratch2, zero, overflow, Assembler::LessThan);
+}
+
+void MacroAssemblerMIPS64::ma_addPtrTestOverflow(Register rd, Register rs,
+                                                 Imm32 imm, Label* overflow) {
+  ma_li(ScratchRegister, imm);
+  ma_addPtrTestOverflow(rd, rs, ScratchRegister, overflow);
+}
+
+void MacroAssemblerMIPS64::ma_addPtrTestCarry(Condition cond, Register rd,
+                                              Register rs, Register rt,
+                                              Label* overflow) {
+  SecondScratchRegisterScope scratch2(asMasm());
+  as_daddu(rd, rs, rt);
+  as_sltu(scratch2, rd, rt);
+  ma_b(scratch2, scratch2, overflow,
+       cond == Assembler::CarrySet ? Assembler::NonZero : Assembler::Zero);
+}
+
+void MacroAssemblerMIPS64::ma_addPtrTestCarry(Condition cond, Register rd,
+                                              Register rs, Imm32 imm,
+                                              Label* overflow) {
+  // Check for signed range because of as_daddiu
+  if (Imm16::IsInSignedRange(imm.value)) {
+    SecondScratchRegisterScope scratch2(asMasm());
+    as_daddiu(rd, rs, imm.value);
+    as_sltiu(scratch2, rd, imm.value);
+    ma_b(scratch2, scratch2, overflow,
+         cond == Assembler::CarrySet ? Assembler::NonZero : Assembler::Zero);
+  } else {
+    ma_li(ScratchRegister, imm);
+    ma_addPtrTestCarry(cond, rd, rs, ScratchRegister, overflow);
   }
 }
 
@@ -421,11 +499,48 @@ void MacroAssemblerMIPS64::ma_dsubu(Register rd, Imm32 imm) {
   ma_dsubu(rd, rd, imm);
 }
 
-void MacroAssemblerMIPS64::ma_subTestOverflow(Register rd, Register rs,
-                                              Register rt, Label* overflow) {
+void MacroAssemblerMIPS64::ma_sub32TestOverflow(Register rd, Register rs,
+                                                Register rt, Label* overflow) {
   as_dsubu(SecondScratchReg, rs, rt);
   as_subu(rd, rs, rt);
   ma_b(rd, SecondScratchReg, overflow, Assembler::NotEqual);
+}
+
+void MacroAssemblerMIPS64::ma_subPtrTestOverflow(Register rd, Register rs,
+                                                 Register rt, Label* overflow) {
+  SecondScratchRegisterScope scratch2(asMasm());
+  MOZ_ASSERT_IF(rs == rd, rs != rt);
+  MOZ_ASSERT(rd != rt);
+  MOZ_ASSERT(rs != scratch2);
+  MOZ_ASSERT(rt != scratch2);
+  MOZ_ASSERT(rd != scratch2);
+
+  Register rs_copy = rs;
+
+  if (rs == rd) {
+    ma_move(scratch2, rs);
+    rs_copy = scratch2;
+  }
+
+  {
+    ScratchRegisterScope scratch(asMasm());
+    MOZ_ASSERT(rd != scratch);
+
+    as_dsubu(rd, rs, rt);
+    // If the sign of rs and rt are the same, no overflow
+    as_xor(scratch, rs_copy, rt);
+    // Check if the sign of rd and rs are the same
+    as_xor(scratch2, rd, rs_copy);
+    as_and(scratch2, scratch2, scratch);
+  }
+
+  ma_b(scratch2, zero, overflow, Assembler::LessThan);
+}
+
+void MacroAssemblerMIPS64::ma_subPtrTestOverflow(Register rd, Register rs,
+                                                 Imm32 imm, Label* overflow) {
+  ma_li(ScratchRegister, imm);
+  ma_subPtrTestOverflow(rd, rs, ScratchRegister, overflow);
 }
 
 void MacroAssemblerMIPS64::ma_dmult(Register rs, Imm32 imm) {
@@ -439,8 +554,25 @@ void MacroAssemblerMIPS64::ma_dmult(Register rs, Imm32 imm) {
 #endif
 }
 
-// Memory.
+void MacroAssemblerMIPS64::ma_mulPtrTestOverflow(Register rd, Register rs,
+                                                 Register rt, Label* overflow) {
+#ifdef MIPSR6
+  if (rd == rs) {
+    ma_move(SecondScratchReg, rs);
+    rs = SecondScratchReg;
+  }
+  as_dmul(rd, rs, rt);
+  as_dmuh(SecondScratchReg, rs, rt);
+#else
+  as_dmult(rs, rt);
+  as_mflo(rd);
+  as_mfhi(SecondScratchReg);
+#endif
+  as_dsra32(ScratchRegister, rd, 63);
+  ma_b(ScratchRegister, SecondScratchReg, overflow, Assembler::NotEqual);
+}
 
+// Memory.
 void MacroAssemblerMIPS64::ma_load(Register dest, Address address,
                                    LoadStoreSize size,
                                    LoadStoreExtension extension) {
@@ -784,6 +916,12 @@ void MacroAssemblerMIPS64::ma_cmp_set(Register rd, Register rs, ImmWord imm,
 void MacroAssemblerMIPS64::ma_cmp_set(Register rd, Register rs, ImmPtr imm,
                                       Condition c) {
   ma_cmp_set(rd, rs, ImmWord(uintptr_t(imm.value)), c);
+}
+
+void MacroAssemblerMIPS64::ma_cmp_set(Register rd, Address address, Imm32 imm,
+                                      Condition c) {
+  ma_load(ScratchRegister, address, SizeWord, SignExtend);
+  ma_cmp_set(rd, ScratchRegister, imm, c);
 }
 
 // fp instructions
@@ -1630,6 +1768,7 @@ void MacroAssemblerMIPS64Compat::handleFailureWithHandlerTail(
   Label return_;
   Label bailout;
   Label wasm;
+  Label wasmCatch;
 
   // Already clobbered a0, so use it...
   load32(Address(StackPointer, offsetof(ResumeFromException, kind)), a0);
@@ -1646,6 +1785,8 @@ void MacroAssemblerMIPS64Compat::handleFailureWithHandlerTail(
                     Imm32(ResumeFromException::RESUME_BAILOUT), &bailout);
   asMasm().branch32(Assembler::Equal, a0,
                     Imm32(ResumeFromException::RESUME_WASM), &wasm);
+  asMasm().branch32(Assembler::Equal, a0,
+                    Imm32(ResumeFromException::RESUME_WASM_CATCH), &wasmCatch);
 
   breakpoint();  // Invalid kind.
 
@@ -1732,6 +1873,15 @@ void MacroAssemblerMIPS64Compat::handleFailureWithHandlerTail(
   loadPtr(Address(StackPointer, offsetof(ResumeFromException, stackPointer)),
           StackPointer);
   ret();
+
+  // Found a wasm catch handler, restore state and jump to it.
+  bind(&wasmCatch);
+  loadPtr(Address(sp, offsetof(ResumeFromException, target)), a1);
+  loadPtr(Address(StackPointer, offsetof(ResumeFromException, framePointer)),
+          FramePointer);
+  loadPtr(Address(StackPointer, offsetof(ResumeFromException, stackPointer)),
+          StackPointer);
+  jump(a1);
 }
 
 CodeOffset MacroAssemblerMIPS64Compat::toggledJump(Label* label) {
@@ -1781,6 +1931,10 @@ void MacroAssembler::subFromStackPtr(Imm32 imm32) {
 //{{{ check_macroassembler_style
 // ===============================================================
 // Stack manipulation functions.
+
+size_t MacroAssembler::PushRegsInMaskSizeInBytes(LiveRegisterSet set) {
+  return set.gprs().size() * sizeof(intptr_t) + set.fpus().getPushSizeInBytes();
+}
 
 void MacroAssembler::PushRegsInMask(LiveRegisterSet set) {
   int32_t diff =
@@ -2117,6 +2271,17 @@ void MacroAssembler::wasmBoundsCheck32(Condition cond, Register index,
   ma_b(index, SecondScratchReg, label, cond);
 }
 
+void MacroAssembler::wasmBoundsCheck64(Condition cond, Register64 index,
+                                       Register64 boundsCheckLimit,
+                                       Label* label) {
+  MOZ_CRASH("IMPLEMENTME");
+}
+
+void MacroAssembler::wasmBoundsCheck64(Condition cond, Register64 index,
+                                       Address boundsCheckLimit, Label* label) {
+  MOZ_CRASH("IMPLEMENTME");
+}
+
 void MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input,
                                                 Register output,
                                                 bool isSaturating,
@@ -2398,20 +2563,24 @@ void MacroAssemblerMIPS64Compat::wasmStoreI64Impl(
 }
 
 template <typename T>
-static void WasmCompareExchange64(MacroAssembler& masm,
-                                  const wasm::MemoryAccessDesc& access,
-                                  const T& mem, Register64 expect,
-                                  Register64 replace, Register64 output) {
+static void CompareExchange64(MacroAssembler& masm,
+                              const wasm::MemoryAccessDesc* access,
+                              const Synchronization& sync, const T& mem,
+                              Register64 expect, Register64 replace,
+                              Register64 output) {
+  MOZ_ASSERT(expect != output && replace != output);
   masm.computeEffectiveAddress(mem, SecondScratchReg);
 
   Label tryAgain;
   Label exit;
 
-  masm.memoryBarrierBefore(access.sync());
+  masm.memoryBarrierBefore(sync);
 
   masm.bind(&tryAgain);
 
-  masm.append(access, masm.size());
+  if (access) {
+    masm.append(*access, masm.size());
+  }
   masm.as_lld(output.reg, SecondScratchReg, 0);
 
   masm.ma_b(output.reg, expect.reg, &exit, Assembler::NotEqual, ShortJump);
@@ -2420,7 +2589,7 @@ static void WasmCompareExchange64(MacroAssembler& masm,
   masm.ma_b(ScratchRegister, ScratchRegister, &tryAgain, Assembler::Zero,
             ShortJump);
 
-  masm.memoryBarrierAfter(access.sync());
+  masm.memoryBarrierAfter(sync);
 
   masm.bind(&exit);
 }
@@ -2430,7 +2599,8 @@ void MacroAssembler::wasmCompareExchange64(const wasm::MemoryAccessDesc& access,
                                            Register64 expect,
                                            Register64 replace,
                                            Register64 output) {
-  WasmCompareExchange64(*this, access, mem, expect, replace, output);
+  CompareExchange64(*this, &access, access.sync(), mem, expect, replace,
+                    output);
 }
 
 void MacroAssembler::wasmCompareExchange64(const wasm::MemoryAccessDesc& access,
@@ -2438,58 +2608,100 @@ void MacroAssembler::wasmCompareExchange64(const wasm::MemoryAccessDesc& access,
                                            Register64 expect,
                                            Register64 replace,
                                            Register64 output) {
-  WasmCompareExchange64(*this, access, mem, expect, replace, output);
+  CompareExchange64(*this, &access, access.sync(), mem, expect, replace,
+                    output);
+}
+
+void MacroAssembler::compareExchange64(const Synchronization& sync,
+                                       const Address& mem, Register64 expect,
+                                       Register64 replace, Register64 output) {
+  CompareExchange64(*this, nullptr, sync, mem, expect, replace, output);
+}
+
+void MacroAssembler::compareExchange64(const Synchronization& sync,
+                                       const BaseIndex& mem, Register64 expect,
+                                       Register64 replace, Register64 output) {
+  CompareExchange64(*this, nullptr, sync, mem, expect, replace, output);
 }
 
 template <typename T>
 static void AtomicExchange64(MacroAssembler& masm,
-                             const wasm::MemoryAccessDesc& access, const T& mem,
-                             Register64 src, Register64 output) {
+                             const wasm::MemoryAccessDesc* access,
+                             const Synchronization& sync, const T& mem,
+                             Register64 value, Register64 output) {
+  MOZ_ASSERT(value != output);
   masm.computeEffectiveAddress(mem, SecondScratchReg);
 
   Label tryAgain;
 
-  masm.memoryBarrierBefore(access.sync());
+  masm.memoryBarrierBefore(sync);
 
   masm.bind(&tryAgain);
 
-  masm.append(access, masm.size());
-  masm.as_lld(output.reg, SecondScratchReg, 0);
+  if (access) {
+    masm.append(*access, masm.size());
+  }
 
-  masm.movePtr(src.reg, ScratchRegister);
+  masm.as_lld(output.reg, SecondScratchReg, 0);
+  masm.movePtr(value.reg, ScratchRegister);
   masm.as_scd(ScratchRegister, SecondScratchReg, 0);
   masm.ma_b(ScratchRegister, ScratchRegister, &tryAgain, Assembler::Zero,
             ShortJump);
 
-  masm.memoryBarrierAfter(access.sync());
+  masm.memoryBarrierAfter(sync);
+}
+
+template <typename T>
+static void WasmAtomicExchange64(MacroAssembler& masm,
+                                 const wasm::MemoryAccessDesc& access,
+                                 const T& mem, Register64 value,
+                                 Register64 output) {
+  AtomicExchange64(masm, &access, access.sync(), mem, value, output);
 }
 
 void MacroAssembler::wasmAtomicExchange64(const wasm::MemoryAccessDesc& access,
                                           const Address& mem, Register64 src,
                                           Register64 output) {
-  AtomicExchange64(*this, access, mem, src, output);
+  WasmAtomicExchange64(*this, access, mem, src, output);
 }
 
 void MacroAssembler::wasmAtomicExchange64(const wasm::MemoryAccessDesc& access,
                                           const BaseIndex& mem, Register64 src,
                                           Register64 output) {
-  AtomicExchange64(*this, access, mem, src, output);
+  WasmAtomicExchange64(*this, access, mem, src, output);
+}
+
+void MacroAssembler::atomicExchange64(const Synchronization& sync,
+                                      const Address& mem, Register64 value,
+                                      Register64 output) {
+  AtomicExchange64(*this, nullptr, sync, mem, value, output);
+}
+
+void MacroAssembler::atomicExchange64(const Synchronization& sync,
+                                      const BaseIndex& mem, Register64 value,
+                                      Register64 output) {
+  AtomicExchange64(*this, nullptr, sync, mem, value, output);
 }
 
 template <typename T>
 static void AtomicFetchOp64(MacroAssembler& masm,
-                            const wasm::MemoryAccessDesc& access, AtomicOp op,
+                            const wasm::MemoryAccessDesc* access,
+                            const Synchronization& sync, AtomicOp op,
                             Register64 value, const T& mem, Register64 temp,
                             Register64 output) {
+  MOZ_ASSERT(value != output);
+  MOZ_ASSERT(value != temp);
   masm.computeEffectiveAddress(mem, SecondScratchReg);
 
   Label tryAgain;
 
-  masm.memoryBarrierBefore(access.sync());
+  masm.memoryBarrierBefore(sync);
 
   masm.bind(&tryAgain);
+  if (access) {
+    masm.append(*access, masm.size());
+  }
 
-  masm.append(access, masm.size());
   masm.as_lld(output.reg, SecondScratchReg, 0);
 
   switch (op) {
@@ -2515,21 +2727,45 @@ static void AtomicFetchOp64(MacroAssembler& masm,
   masm.as_scd(temp.reg, SecondScratchReg, 0);
   masm.ma_b(temp.reg, temp.reg, &tryAgain, Assembler::Zero, ShortJump);
 
-  masm.memoryBarrierAfter(access.sync());
+  masm.memoryBarrierAfter(sync);
 }
 
 void MacroAssembler::wasmAtomicFetchOp64(const wasm::MemoryAccessDesc& access,
                                          AtomicOp op, Register64 value,
                                          const Address& mem, Register64 temp,
                                          Register64 output) {
-  AtomicFetchOp64(*this, access, op, value, mem, temp, output);
+  AtomicFetchOp64(*this, &access, access.sync(), op, value, mem, temp, output);
 }
 
 void MacroAssembler::wasmAtomicFetchOp64(const wasm::MemoryAccessDesc& access,
                                          AtomicOp op, Register64 value,
                                          const BaseIndex& mem, Register64 temp,
                                          Register64 output) {
-  AtomicFetchOp64(*this, access, op, value, mem, temp, output);
+  AtomicFetchOp64(*this, &access, access.sync(), op, value, mem, temp, output);
+}
+
+void MacroAssembler::atomicFetchOp64(const Synchronization& sync, AtomicOp op,
+                                     Register64 value, const Address& mem,
+                                     Register64 temp, Register64 output) {
+  AtomicFetchOp64(*this, nullptr, sync, op, value, mem, temp, output);
+}
+
+void MacroAssembler::atomicFetchOp64(const Synchronization& sync, AtomicOp op,
+                                     Register64 value, const BaseIndex& mem,
+                                     Register64 temp, Register64 output) {
+  AtomicFetchOp64(*this, nullptr, sync, op, value, mem, temp, output);
+}
+
+void MacroAssembler::atomicEffectOp64(const Synchronization& sync, AtomicOp op,
+                                      Register64 value, const Address& mem,
+                                      Register64 temp) {
+  AtomicFetchOp64(*this, nullptr, sync, op, value, mem, temp, temp);
+}
+
+void MacroAssembler::atomicEffectOp64(const Synchronization& sync, AtomicOp op,
+                                      Register64 value, const BaseIndex& mem,
+                                      Register64 temp) {
+  AtomicFetchOp64(*this, nullptr, sync, op, value, mem, temp, temp);
 }
 
 // ========================================================================

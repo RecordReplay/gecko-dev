@@ -190,6 +190,10 @@ StorageActors.defaults = function(typeName, observationTopics) {
         return null;
       }
 
+      if (this.storageActor.getHostName) {
+        return this.storageActor.getHostName(location);
+      }
+
       switch (location.protocol) {
         case "about:":
           return `${location.protocol}${location.pathname}`;
@@ -273,6 +277,9 @@ StorageActors.defaults = function(typeName, observationTopics) {
      *        The window which was added.
      */
     async onWindowReady(window) {
+      if (!this.hostVsStores) {
+        return;
+      }
       const host = this.getHostName(window.location);
       if (host && !this.hostVsStores.has(host)) {
         await this.populateStoresForHost(host, window);
@@ -295,6 +302,9 @@ StorageActors.defaults = function(typeName, observationTopics) {
      *        The window which was removed.
      */
     onWindowDestroyed(window) {
+      if (!this.hostVsStores) {
+        return;
+      }
       if (!window.location) {
         // Nothing can be done if location object is null
         return;
@@ -780,12 +790,10 @@ StorageActors.createActor(
       this.editCookie(data);
     },
 
-    async addItem(guid) {
-      const doc = this.storageActor.document;
-      const time = new Date().getTime();
-      const expiry = new Date(time + 3600 * 24 * 1000).toGMTString();
-
-      doc.cookie = `${guid}=${DEFAULT_VALUE};expires=${expiry}`;
+    async addItem(guid, host) {
+      const window = this.storageActor.getWindowFromHost(host);
+      const principal = window.document.effectiveStoragePrincipal;
+      this.addCookie(guid, principal);
     },
 
     async removeItem(host, name) {
@@ -816,6 +824,7 @@ StorageActors.createActor(
         this.removeCookieObservers = cookieHelpers.removeCookieObservers.bind(
           cookieHelpers
         );
+        this.addCookie = cookieHelpers.addCookie.bind(cookieHelpers);
         this.editCookie = cookieHelpers.editCookie.bind(cookieHelpers);
         this.removeCookie = cookieHelpers.removeCookie.bind(cookieHelpers);
         this.removeAllCookies = cookieHelpers.removeAllCookies.bind(
@@ -847,6 +856,7 @@ StorageActors.createActor(
         null,
         "removeCookieObservers"
       );
+      this.addCookie = callParentProcess.bind(null, "addCookie");
       this.editCookie = callParentProcess.bind(null, "editCookie");
       this.removeCookie = callParentProcess.bind(null, "removeCookie");
       this.removeAllCookies = callParentProcess.bind(null, "removeAllCookies");
@@ -899,6 +909,37 @@ var cookieHelpers = {
     host = trimHttpHttpsPort(host);
 
     return Services.cookies.getCookiesFromHost(host, originAttributes);
+  },
+
+  addCookie(guid, principal) {
+    // Set expiry time for cookie 1 day into the future
+    // NOTE: Services.cookies.add expects the time in seconds.
+    const ONE_DAY_IN_SECONDS = 60 * 60 * 24;
+    const time = Math.floor(Date.now() / 1000);
+    const expiry = time + ONE_DAY_IN_SECONDS;
+
+    // principal throws an error when we try to access principal.host if it
+    // does not exist (which happens at about: pages).
+    // We check for asciiHost instead, which is always present, and has a
+    // value of "" when the host is not available.
+    const domain = principal.asciiHost ? principal.host : principal.baseDomain;
+    const path = principal.filePath.startsWith("/") ? principal.filePath : "/";
+
+    Services.cookies.add(
+      domain,
+      path,
+      guid, // name
+      DEFAULT_VALUE, // value
+      false, // isSecure
+      false, // isHttpOnly,
+      false, // isSession,
+      expiry, // expires,
+      principal.originAttributes, // originAttributes
+      Ci.nsICookie.SAMESITE_LAX, // sameSite
+      principal.scheme === "https" // schemeMap
+        ? Ci.nsICookie.SCHEME_HTTPS
+        : Ci.nsICookie.SCHEME_HTTP
+    );
   },
 
   /**
@@ -1143,6 +1184,11 @@ var cookieHelpers = {
       }
       case "removeCookieObservers": {
         return cookieHelpers.removeCookieObservers();
+      }
+      case "addCookie": {
+        const guid = msg.data.args[0];
+        const principal = msg.data.args[1];
+        return cookieHelpers.addCookie(guid, principal);
       }
       case "editCookie": {
         const rowdata = msg.data.args[0];
@@ -2471,9 +2517,14 @@ StorageActors.createActor(
     populateStoresForHosts() {},
 
     getNamesForHost(host) {
+      const storesForHost = this.hostVsStores.get(host);
+      if (!storesForHost) {
+        return [];
+      }
+
       const names = [];
 
-      for (const [dbName, { objectStores }] of this.hostVsStores.get(host)) {
+      for (const [dbName, { objectStores }] of storesForHost) {
         if (objectStores.size) {
           for (const objectStore of objectStores.keys()) {
             names.push(JSON.stringify([dbName, objectStore]));
@@ -2482,6 +2533,7 @@ StorageActors.createActor(
           names.push(JSON.stringify([dbName]));
         }
       }
+
       return names;
     },
 
@@ -2546,7 +2598,6 @@ StorageActors.createActor(
      */
     async preListStores() {
       this.hostVsStores = new Map();
-
       for (const host of await this.getHosts()) {
         await this.populateStoresForHost(host);
       }
@@ -3375,6 +3426,11 @@ function trimHttpHttpsPort(url) {
 
 /**
  * The main Storage Actor.
+ *
+ * This class is meant to be dropped once we implement all storage
+ * types via a Watcher class. (bug 1644192)
+ * listStores will have been replaced by the ResourceCommand API
+ * which will distribute all storage type specific actors.
  */
 const StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
   typeName: "storage",
@@ -3411,6 +3467,9 @@ const StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
       false
     );
     const resourcesInWatcher = {
+      Cache: isWatcherEnabled,
+      cookies: isWatcherEnabled,
+      indexedDB: isWatcherEnabled,
       localStorage: isWatcherEnabled,
       sessionStorage: isWatcherEnabled,
     };
@@ -3609,22 +3668,31 @@ const StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
    * Lists the available hosts for all the registered storage types.
    *
    * @returns {object} An object containing with the following structure:
-   *  - <storageType> : [{
-   *      actor: <actorId>,
-   *      host: <hostname>
-   *    }]
+   *  - <storageType> : StorageActor's form specific to the storage type, which looks like this:
+   *                    {
+   *                      actor: <actorId>,
+   *                      host: <hostname>
+   *                    }
    */
   async listStores() {
-    const toReturn = {};
-
-    for (const [name, value] of this.childActorPool) {
-      if (value.preListStores) {
-        await value.preListStores();
-      }
-      toReturn[name] = value;
+    // Avoid trying to compute the list of storage actors more than once.
+    // `preListStores` is subject to issues if called more than once.
+    if (this._cachedStores) {
+      return this._cachedStores;
     }
+    this._cachedStores = (async () => {
+      const toReturn = {};
 
-    return toReturn;
+      for (const [name, value] of this.childActorPool) {
+        if (value.preListStores) {
+          await value.preListStores();
+        }
+        toReturn[name] = value;
+      }
+
+      return toReturn;
+    })();
+    return this._cachedStores;
   },
 
   /**

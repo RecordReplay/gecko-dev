@@ -6,7 +6,7 @@ use inherent::inherent;
 
 use super::{CommonMetricData, MetricId};
 
-use glean_core::traits::StringList;
+use glean::traits::StringList;
 
 use crate::ipc::{need_ipc, with_ipc_payload};
 
@@ -71,8 +71,7 @@ impl StringList for StringListMetric {
                     if let Some(v) = payload.string_lists.get_mut(&c.0) {
                         v.push(value.into());
                     } else {
-                        let mut v = vec![];
-                        v.push(value.into());
+                        let v = vec![value.into()];
                         payload.string_lists.insert(c.0, v);
                     }
                 });

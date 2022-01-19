@@ -17,8 +17,8 @@ namespace jit {
 //{{{ check_macroassembler_style
 
 void MacroAssembler::move64(Imm64 imm, Register64 dest) {
-  movl(Imm32(imm.value & 0xFFFFFFFFL), dest.low);
-  movl(Imm32((imm.value >> 32) & 0xFFFFFFFFL), dest.high);
+  move32(Imm32(imm.value & 0xFFFFFFFFL), dest.low);
+  move32(Imm32((imm.value >> 32) & 0xFFFFFFFFL), dest.high);
 }
 
 void MacroAssembler::move64(Register64 src, Register64 dest) {
@@ -974,6 +974,21 @@ void MacroAssembler::branchTestMagic(Condition cond, const Address& valaddr,
 
   branch32(cond, ToPayload(valaddr), Imm32(why), label);
   bind(&notMagic);
+}
+
+void MacroAssembler::branchTestValue(Condition cond, const BaseIndex& lhs,
+                                     const ValueOperand& rhs, Label* label) {
+  MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
+
+  Label notSameValue;
+  if (cond == Assembler::Equal) {
+    branch32(Assembler::NotEqual, ToType(lhs), rhs.typeReg(), &notSameValue);
+  } else {
+    branch32(Assembler::NotEqual, ToType(lhs), rhs.typeReg(), label);
+  }
+
+  branch32(cond, ToPayload(lhs), rhs.payloadReg(), label);
+  bind(&notSameValue);
 }
 
 void MacroAssembler::branchToComputedAddress(const BaseIndex& addr) {

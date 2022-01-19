@@ -16,12 +16,12 @@ int32_t AccessibleOrProxy::IndexInParent() const {
     return AsAccessible()->IndexInParent();
   }
 
-  ProxyAccessible* proxy = AsProxy();
+  RemoteAccessible* proxy = AsProxy();
   if (!proxy) {
     return -1;
   }
 
-  if (proxy->Parent()) {
+  if (proxy->RemoteParent()) {
     return proxy->IndexInParent();
   }
 
@@ -35,15 +35,15 @@ int32_t AccessibleOrProxy::IndexInParent() const {
 
 AccessibleOrProxy AccessibleOrProxy::Parent() const {
   if (IsAccessible()) {
-    return AsAccessible()->Parent();
+    return AsAccessible()->LocalParent();
   }
 
-  ProxyAccessible* proxy = AsProxy();
+  RemoteAccessible* proxy = AsProxy();
   if (!proxy) {
     return nullptr;
   }
 
-  if (ProxyAccessible* parent = proxy->Parent()) {
+  if (RemoteAccessible* parent = proxy->RemoteParent()) {
     return parent;
   }
 
@@ -53,35 +53,26 @@ AccessibleOrProxy AccessibleOrProxy::Parent() const {
 
 AccessibleOrProxy AccessibleOrProxy::ChildAtPoint(
     int32_t aX, int32_t aY, Accessible::EWhichChildAtPoint aWhichChild) {
-  if (IsProxy()) {
-    return AsProxy()->ChildAtPoint(aX, aY, aWhichChild);
+  // XXX: This implementation is silly now, but it will go away with AoP...
+  Accessible* result = IsProxy()
+                           ? AsProxy()->ChildAtPoint(aX, aY, aWhichChild)
+                           : AsAccessible()->ChildAtPoint(aX, aY, aWhichChild);
+  if (!result) {
+    return nullptr;
   }
-  ProxyAccessible* childDoc = RemoteChildDoc();
-  if (childDoc) {
-    // This is an OuterDocAccessible.
-    nsIntRect docRect = AsAccessible()->Bounds();
-    if (!docRect.Contains(aX, aY)) {
-      return nullptr;
-    }
-    if (aWhichChild == Accessible::eDirectChild) {
-      return childDoc;
-    }
-    return childDoc->ChildAtPoint(aX, aY, aWhichChild);
+
+  if (result->IsLocal()) {
+    return result->AsLocal();
   }
-  AccessibleOrProxy target = AsAccessible()->ChildAtPoint(aX, aY, aWhichChild);
-  if (target.IsNull() || aWhichChild == Accessible::eDirectChild) {
-    return target;
+
+  if (result->IsRemote()) {
+    return result->AsRemote();
   }
-  childDoc = target.RemoteChildDoc();
-  if (childDoc) {
-    // Accessible::ChildAtPoint stopped at an OuterDocAccessible, since it
-    // can't traverse into ProxyAccessibles. Continue the search from childDoc.
-    return childDoc->ChildAtPoint(aX, aY, aWhichChild);
-  }
-  return target;
+
+  return nullptr;
 }
 
-ProxyAccessible* AccessibleOrProxy::RemoteChildDoc() const {
+RemoteAccessible* AccessibleOrProxy::RemoteChildDoc() const {
   MOZ_ASSERT(!IsNull());
   if (IsProxy()) {
     return nullptr;

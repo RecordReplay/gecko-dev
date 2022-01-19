@@ -39,10 +39,6 @@ RUN apt-get update && \
       patch \
       p7zip-full \
       procps \
-      python-dev \
-      python-pip \
-      python-setuptools \
-      python-virtualenv \
       python3-dev \
       rsync \
       screen \
@@ -51,7 +47,6 @@ RUN apt-get update && \
       uuid \
       valgrind \
       wget \
-      yasm \
       zip \
       zlib1g-dev \
       x11-utils \
@@ -63,7 +58,6 @@ RUN apt-get update && \
       libgconf2-dev \
       libgmp-dev \
       libgtk-3-dev \
-      libgtk2.0-dev \
       libpango1.0-dev \
       libpulse-dev \
       libx11-xcb-dev \

@@ -11,7 +11,6 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Telemetry.h"
-#include "nsDataHashtable.h"
 #include "nsGlobalWindowOuter.h"
 
 namespace mozilla::dom {
@@ -328,9 +327,6 @@ void ContentMediaController::HandleMediaKey(MediaControlKey aKey) {
   }
   LOG("Handle '%s' event, receiver num=%zu", ToMediaControlKeyStr(aKey),
       mReceivers.Length());
-  AccumulateCategorical(
-      mozilla::Telemetry::LABELS_MEDIA_CONTROL_HANDLE_PLAY_PAUSE_STOP_ACTIONS::
-          DefaultHandler);
   // We have default handlers for play, pause and stop.
   // https://w3c.github.io/mediasession/#ref-for-dom-mediasessionaction-play%E2%91%A3
   switch (aKey) {

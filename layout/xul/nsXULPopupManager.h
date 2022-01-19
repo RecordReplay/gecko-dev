@@ -12,6 +12,7 @@
 #define nsXULPopupManager_h__
 
 #include "mozilla/Logging.h"
+#include "nsHashtablesFwd.h"
 #include "nsIContent.h"
 #include "nsIRollupListener.h"
 #include "nsIDOMEventListener.h"
@@ -26,6 +27,7 @@
 #include "nsStyleConsts.h"
 #include "nsWidgetInitData.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/widget/NativeMenu.h"
 #include "Units.h"
 
 // XXX Avoid including this here by moving function bodies to the cpp file.
@@ -67,6 +69,48 @@ class Event;
 class KeyboardEvent;
 }  // namespace dom
 }  // namespace mozilla
+
+// XUL popups can be in several different states. When opening a popup, the
+// state changes as follows:
+//   ePopupClosed - initial state
+//   ePopupShowing - during the period when the popupshowing event fires
+//   ePopupOpening - between the popupshowing event and being visible. Creation
+//                   of the child frames, layout and reflow occurs in this
+//                   state. The popup is stored in the popup manager's list of
+//                   open popups during this state.
+//   ePopupVisible - layout is done and the popup's view and widget are made
+//                   visible. The popup is visible on screen but may be
+//                   transitioning. The popupshown event has not yet fired.
+//   ePopupShown - the popup has been shown and is fully ready. This state is
+//                 assigned just before the popupshown event fires.
+// When closing a popup:
+//   ePopupHidden - during the period when the popuphiding event fires and
+//                  the popup is removed.
+//   ePopupClosed - the popup's widget is made invisible.
+enum nsPopupState {
+  // state when a popup is not open
+  ePopupClosed,
+  // state from when a popup is requested to be shown to after the
+  // popupshowing event has been fired.
+  ePopupShowing,
+  // state while a popup is waiting to be laid out and positioned
+  ePopupPositioning,
+  // state while a popup is open but the widget is not yet visible
+  ePopupOpening,
+  // state while a popup is visible and waiting for the popupshown event
+  ePopupVisible,
+  // state while a popup is open and visible on screen
+  ePopupShown,
+  // state from when a popup is requested to be hidden to when it is closed.
+  ePopupHiding,
+  // state which indicates that the popup was hidden without firing the
+  // popuphiding or popuphidden events. It is used when executing a menu
+  // command because the menu needs to be hidden before the command event
+  // fires, yet the popuphiding and popuphidden events are fired after. This
+  // state can also occur when the popup is removed because the document is
+  // unloaded.
+  ePopupInvisible
+};
 
 // when a menu command is executed, the closemenu attribute may be used
 // to define how the menu should be closed up
@@ -208,27 +252,6 @@ class nsMenuChainItem {
   void Detach(nsMenuChainItem** aRoot);
 };
 
-// this class is used for dispatching popupshowing events asynchronously.
-class nsXULPopupShowingEvent : public mozilla::Runnable {
- public:
-  nsXULPopupShowingEvent(nsIContent* aPopup, bool aIsContextMenu,
-                         bool aSelectFirstItem)
-      : mozilla::Runnable("nsXULPopupShowingEvent"),
-        mPopup(aPopup),
-        mIsContextMenu(aIsContextMenu),
-        mSelectFirstItem(aSelectFirstItem) {
-    NS_ASSERTION(aPopup,
-                 "null popup supplied to nsXULPopupShowingEvent constructor");
-  }
-
-  NS_IMETHOD Run() override;
-
- private:
-  nsCOMPtr<nsIContent> mPopup;
-  bool mIsContextMenu;
-  bool mSelectFirstItem;
-};
-
 // this class is used for dispatching popuphiding events asynchronously.
 class nsXULPopupHidingEvent : public mozilla::Runnable {
  public:
@@ -263,8 +286,8 @@ class nsXULPopupPositionedEvent : public mozilla::Runnable {
  public:
   explicit nsXULPopupPositionedEvent(nsIContent* aPopup)
       : mozilla::Runnable("nsXULPopupPositionedEvent"), mPopup(aPopup) {
-    NS_ASSERTION(aPopup,
-                 "null popup supplied to nsXULPopupShowingEvent constructor");
+    NS_ASSERTION(
+        aPopup, "null popup supplied to nsXULPopupPositionedEvent constructor");
   }
 
   NS_IMETHOD Run() override;
@@ -281,15 +304,13 @@ class nsXULPopupPositionedEvent : public mozilla::Runnable {
 class nsXULMenuCommandEvent : public mozilla::Runnable {
  public:
   nsXULMenuCommandEvent(mozilla::dom::Element* aMenu, bool aIsTrusted,
-                        bool aShift, bool aControl, bool aAlt, bool aMeta,
-                        bool aUserInput, bool aFlipChecked)
+                        mozilla::Modifiers aModifiers, bool aUserInput,
+                        bool aFlipChecked, int16_t aButton)
       : mozilla::Runnable("nsXULMenuCommandEvent"),
         mMenu(aMenu),
+        mModifiers(aModifiers),
+        mButton(aButton),
         mIsTrusted(aIsTrusted),
-        mShift(aShift),
-        mControl(aControl),
-        mAlt(aAlt),
-        mMeta(aMeta),
         mUserInput(aUserInput),
         mFlipChecked(aFlipChecked),
         mCloseMenuMode(CloseMenuMode_Auto) {
@@ -305,11 +326,10 @@ class nsXULMenuCommandEvent : public mozilla::Runnable {
 
  private:
   RefPtr<mozilla::dom::Element> mMenu;
+
+  mozilla::Modifiers mModifiers;
+  int16_t mButton;
   bool mIsTrusted;
-  bool mShift;
-  bool mControl;
-  bool mAlt;
-  bool mMeta;
   bool mUserInput;
   bool mFlipChecked;
   CloseMenuMode mCloseMenuMode;
@@ -317,9 +337,9 @@ class nsXULMenuCommandEvent : public mozilla::Runnable {
 
 class nsXULPopupManager final : public nsIDOMEventListener,
                                 public nsIRollupListener,
-                                public nsIObserver {
+                                public nsIObserver,
+                                public mozilla::widget::NativeMenu::Observer {
  public:
-  friend class nsXULPopupShowingEvent;
   friend class nsXULPopupHidingEvent;
   friend class nsXULPopupPositionedEvent;
   friend class nsXULMenuCommandEvent;
@@ -331,7 +351,8 @@ class nsXULPopupManager final : public nsIDOMEventListener,
 
   // nsIRollupListener
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  virtual bool Rollup(uint32_t aCount, bool aFlush, const nsIntPoint* pos,
+  virtual bool Rollup(uint32_t aCount, bool aFlush,
+                      const mozilla::LayoutDeviceIntPoint* pos,
                       nsIContent** aLastRolledUp) override;
   virtual bool ShouldRollupOnMouseWheelEvent() override;
   virtual bool ShouldConsumeOnMouseWheelEvent() override;
@@ -340,6 +361,16 @@ class nsXULPopupManager final : public nsIDOMEventListener,
       nsTArray<nsIWidget*>* aWidgetChain) override;
   virtual void NotifyGeometryChange() override {}
   virtual nsIWidget* GetRollupWidget() override;
+  virtual bool RollupNativeMenu() override;
+
+  // NativeMenu::Observer
+  void OnNativeMenuOpened() override;
+  void OnNativeMenuClosed() override;
+  void OnNativeSubMenuWillOpen(mozilla::dom::Element* aPopupElement) override;
+  void OnNativeSubMenuDidOpen(mozilla::dom::Element* aPopupElement) override;
+  void OnNativeSubMenuClosed(mozilla::dom::Element* aPopupElement) override;
+  void OnNativeMenuWillActivateItem(
+      mozilla::dom::Element* aMenuItemElement) override;
 
   static nsXULPopupManager* sInstance;
 
@@ -461,6 +492,18 @@ class nsXULPopupManager final : public nsIDOMEventListener,
                              mozilla::dom::Event* aTriggerEvent);
 
   /**
+   * Open a popup as a native menu, at a specific screen position specified by
+   * aXPos and aYPos, measured in CSS pixels.
+   *
+   * This fires the popupshowing event synchronously.
+   *
+   * Returns whether native menus are supported for aPopup on this platform.
+   */
+  bool ShowPopupAsNativeMenu(nsIContent* aPopup, int32_t aXPos, int32_t aYPos,
+                             bool aIsContextMenu,
+                             mozilla::dom::Event* aTriggerEvent);
+
+  /**
    * Open a tooltip at a specific screen position specified by aXPos and aYPos,
    * measured in CSS pixels.
    *
@@ -488,6 +531,11 @@ class nsXULPopupManager final : public nsIDOMEventListener,
   void HidePopup(nsIContent* aPopup, bool aHideChain, bool aDeselectMenu,
                  bool aAsynchronous, bool aIsCancel,
                  nsIContent* aLastPopup = nullptr);
+
+  /*
+   * Hide the popup of a <menu>.
+   */
+  void HideMenu(nsIContent* aMenu);
 
   /**
    * Hide a popup after a short delay. This is used when rolling over menu
@@ -531,6 +579,14 @@ class nsXULPopupManager final : public nsIDOMEventListener,
    *          event which triggered the menu to be executed, may not be null
    */
   void ExecuteMenu(nsIContent* aMenu, nsXULMenuCommandEvent* aEvent);
+
+  /**
+   * If a native menu is open, and aItem is an item in the menu's subtree,
+   * execute the item with the help of the native menu and close the menu.
+   * Returns true if a native menu was open.
+   */
+  bool ActivateNativeMenuItem(nsIContent* aItem, mozilla::Modifiers aModifiers,
+                              int16_t aButton, mozilla::ErrorResult& aRv);
 
   /**
    * Return true if the popup for the supplied content node is open.
@@ -662,6 +718,8 @@ class nsXULPopupManager final : public nsIDOMEventListener,
   // Sets mIgnoreKeys of the Top Visible Menu Item
   nsresult UpdateIgnoreKeys(bool aIgnoreKeys);
 
+  nsPopupState GetPopupState(mozilla::dom::Element* aPopupElement);
+
   nsresult KeyUp(mozilla::dom::KeyboardEvent* aKeyEvent);
   nsresult KeyDown(mozilla::dom::KeyboardEvent* aKeyEvent);
   nsresult KeyPress(mozilla::dom::KeyboardEvent* aKeyEvent);
@@ -682,6 +740,11 @@ class nsXULPopupManager final : public nsIDOMEventListener,
   // cause style changes and frame destruction.
   void HidePopupsInList(const nsTArray<nsMenuPopupFrame*>& aFrames);
 
+  // Hide, but don't close, visible menus. Called before executing a menu item.
+  // The caller promises to close the menus properly (with a call to HidePopup)
+  // once the item has been executed.
+  void HideOpenMenusBeforeExecutingMenu(CloseMenuMode aMode);
+
   // set the event that was used to trigger the popup, or null to clear the
   // event details. aTriggerContent will be set to the target of the event.
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
@@ -696,7 +759,8 @@ class nsXULPopupManager final : public nsIDOMEventListener,
                          nsPopupType aPopupType, bool aDeselectMenu);
 
   /**
-   * Fire a popupshowing event on the popup and then open the popup.
+   * Trigger frame construction and reflow in the popup, fire a popupshowing
+   * event on the popup and then open the popup.
    *
    * aPopup - the popup to open
    * aIsContextMenu - true for context menus
@@ -705,9 +769,9 @@ class nsXULPopupManager final : public nsIDOMEventListener,
    *                 This is currently used to propagate the
    *                 inputSource attribute. May be null.
    */
-  void FirePopupShowingEvent(nsIContent* aPopup, bool aIsContextMenu,
-                             bool aSelectFirstItem,
-                             mozilla::dom::Event* aTriggerEvent);
+  void BeginShowingPopup(nsIContent* aPopup, bool aIsContextMenu,
+                         bool aSelectFirstItem,
+                         mozilla::dom::Event* aTriggerEvent);
 
   /**
    * Fire a popuphiding event and then hide the popup. This will be called
@@ -758,6 +822,13 @@ class nsXULPopupManager final : public nsIDOMEventListener,
  protected:
   already_AddRefed<nsINode> GetLastTriggerNode(
       mozilla::dom::Document* aDocument, bool aIsTooltip);
+
+  /**
+   * Fire a popupshowing event for aPopup.
+   */
+  nsEventStatus FirePopupShowingEvent(nsIContent* aPopup,
+                                      nsPresContext* aPresContext,
+                                      mozilla::dom::Event* aTriggerEvent);
 
   /**
    * Set mouse capturing for the current popup. This traps mouse clicks that
@@ -816,6 +887,25 @@ class nsXULPopupManager final : public nsIDOMEventListener,
   // the popup that is currently being opened, stored only during the
   // popupshowing event
   nsCOMPtr<nsIContent> mOpeningPopup;
+
+  // If a popup is displayed as a native menu, this is non-null while the
+  // native menu is open.
+  // mNativeMenu has a strong reference to the menupopup nsIContent.
+  RefPtr<mozilla::widget::NativeMenu> mNativeMenu;
+
+  // If the currently open native menu activated an item, this is the item's
+  // close menu mode. Nothing() if mNativeMenu is null or if no item was
+  // activated.
+  mozilla::Maybe<CloseMenuMode> mNativeMenuActivatedItemCloseMenuMode;
+
+  // If a popup is displayed as a native menu, this map contains the popup state
+  // for any of its non-closed submenus. This state cannot be stored on the
+  // submenus' nsMenuPopupFrames, because we usually don't generate frames for
+  // the contents of native menus.
+  // If a submenu is not present in this map, it means it's closed.
+  // This map is empty if mNativeMenu is null.
+  nsTHashMap<RefPtr<mozilla::dom::Element>, nsPopupState>
+      mNativeMenuSubmenuStates;
 };
 
 #endif

@@ -16,7 +16,7 @@
 #include "mozilla/JSONWriter.h"
 #include "mozilla/OwningNonNull.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
@@ -34,6 +34,7 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/dom/WorkerScope.h"
+#include "Navigator.h"
 #include "nsAlertsUtils.h"
 #include "nsCRTGlue.h"
 #include "nsComponentManagerUtils.h"
@@ -691,7 +692,8 @@ Notification::Notification(nsIGlobalObject* aGlobal, const nsAString& aID,
                            const nsAString& aTitle, const nsAString& aBody,
                            NotificationDirection aDir, const nsAString& aLang,
                            const nsAString& aTag, const nsAString& aIconUrl,
-                           bool aRequireInteraction,
+                           bool aRequireInteraction, bool aSilent,
+                           nsTArray<uint32_t>&& aVibrate,
                            const NotificationBehavior& aBehavior)
     : DOMEventTargetHelper(aGlobal),
       mWorkerPrivate(nullptr),
@@ -704,6 +706,8 @@ Notification::Notification(nsIGlobalObject* aGlobal, const nsAString& aID,
       mTag(aTag),
       mIconUrl(aIconUrl),
       mRequireInteraction(aRequireInteraction),
+      mSilent(aSilent),
+      mVibrate(std::move(aVibrate)),
       mBehavior(aBehavior),
       mData(JS::NullValue()),
       mIsClosed(false),
@@ -798,7 +802,7 @@ already_AddRefed<Notification> Notification::ConstructFromFields(
   options.mTag = aTag;
   options.mIcon = aIcon;
   RefPtr<Notification> notification =
-      CreateInternal(aGlobal, aID, aTitle, options);
+      CreateInternal(aGlobal, aID, aTitle, options, aRv);
 
   notification->InitFromBase64(aData, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
@@ -866,7 +870,7 @@ void Notification::UnpersistNotification() {
 
 already_AddRefed<Notification> Notification::CreateInternal(
     nsIGlobalObject* aGlobal, const nsAString& aID, const nsAString& aTitle,
-    const NotificationOptions& aOptions) {
+    const NotificationOptions& aOptions, ErrorResult& aRv) {
   nsresult rv;
   nsString id;
   if (!aID.IsEmpty()) {
@@ -885,17 +889,41 @@ already_AddRefed<Notification> Notification::CreateInternal(
     id = convertedID;
   }
 
-  RefPtr<Notification> notification =
-      new Notification(aGlobal, id, aTitle, aOptions.mBody, aOptions.mDir,
-                       aOptions.mLang, aOptions.mTag, aOptions.mIcon,
-                       aOptions.mRequireInteraction, aOptions.mMozbehavior);
+  bool silent = false;
+  if (StaticPrefs::dom_webnotifications_silent_enabled()) {
+    silent = aOptions.mSilent;
+  }
+
+  nsTArray<uint32_t> vibrate;
+  if (StaticPrefs::dom_webnotifications_vibrate_enabled() &&
+      aOptions.mVibrate.WasPassed()) {
+    if (silent) {
+      aRv.ThrowTypeError(
+          "Silent notifications must not specify vibration patterns.");
+      return nullptr;
+    }
+
+    const OwningUnsignedLongOrUnsignedLongSequence& value =
+        aOptions.mVibrate.Value();
+    if (value.IsUnsignedLong()) {
+      AutoTArray<uint32_t, 1> array;
+      array.AppendElement(value.GetAsUnsignedLong());
+      vibrate = SanitizeVibratePattern(array);
+    } else {
+      vibrate = SanitizeVibratePattern(value.GetAsUnsignedLongSequence());
+    }
+  }
+
+  RefPtr<Notification> notification = new Notification(
+      aGlobal, id, aTitle, aOptions.mBody, aOptions.mDir, aOptions.mLang,
+      aOptions.mTag, aOptions.mIcon, aOptions.mRequireInteraction, silent,
+      std::move(vibrate), aOptions.mMozbehavior);
   rv = notification->Init();
   NS_ENSURE_SUCCESS(rv, nullptr);
   return notification.forget();
 }
 
 Notification::~Notification() {
-  mData.setUndefined();
   mozilla::DropJSObjects(this);
   AssertIsOnTargetThread();
   MOZ_ASSERT(!mWorkerRef);
@@ -1192,9 +1220,9 @@ ServiceWorkerNotificationObserver::Observe(nsISupports* aSubject,
   }
 
   if (!strcmp("alertclickcallback", aTopic)) {
-    if (XRE_IsParentProcess() || !ServiceWorkerParentInterceptEnabled()) {
+    if (XRE_IsParentProcess()) {
       nsCOMPtr<nsIServiceWorkerManager> swm =
-          mozilla::services::GetServiceWorkerManager();
+          mozilla::components::ServiceWorkerManager::Service();
       if (NS_WARN_IF(!swm)) {
         return NS_ERROR_FAILURE;
       }
@@ -1227,9 +1255,9 @@ ServiceWorkerNotificationObserver::Observe(nsISupports* aSubject,
       notificationStorage->Delete(origin, mID);
     }
 
-    if (XRE_IsParentProcess() || !ServiceWorkerParentInterceptEnabled()) {
+    if (XRE_IsParentProcess()) {
       nsCOMPtr<nsIServiceWorkerManager> swm =
-          mozilla::services::GetServiceWorkerManager();
+          mozilla::components::ServiceWorkerManager::Service();
       if (NS_WARN_IF(!swm)) {
         return NS_ERROR_FAILURE;
       }
@@ -1391,9 +1419,10 @@ void Notification::ShowInternal() {
       do_CreateInstance(ALERT_NOTIFICATION_CONTRACTID);
   NS_ENSURE_TRUE_VOID(alert);
   nsIPrincipal* principal = GetPrincipal();
-  rv = alert->Init(alertName, iconUrl, mTitle, mBody, true, uniqueCookie,
-                   DirectionToString(mDir), mLang, mDataAsBase64,
-                   GetPrincipal(), inPrivateBrowsing, requireInteraction);
+  rv =
+      alert->Init(alertName, iconUrl, mTitle, mBody, true, uniqueCookie,
+                  DirectionToString(mDir), mLang, mDataAsBase64, GetPrincipal(),
+                  inPrivateBrowsing, requireInteraction, mSilent, mVibrate);
   NS_ENSURE_SUCCESS_VOID(rv);
 
   if (isPersistent) {
@@ -1538,7 +1567,7 @@ NotificationPermission Notification::TestPermission(nsIPrincipal* aPrincipal) {
   uint32_t permission = nsIPermissionManager::UNKNOWN_ACTION;
 
   nsCOMPtr<nsIPermissionManager> permissionManager =
-      services::GetPermissionManager();
+      components::PermissionManager::Service();
   if (!permissionManager) {
     return NotificationPermission::Default;
   }
@@ -1870,6 +1899,12 @@ nsresult Notification::GetOrigin(nsIPrincipal* aPrincipal, nsString& aOrigin) {
 
 bool Notification::RequireInteraction() const { return mRequireInteraction; }
 
+bool Notification::Silent() const { return mSilent; }
+
+void Notification::GetVibrate(nsTArray<uint32_t>& aRetval) const {
+  aRetval = mVibrate.Clone();
+}
+
 void Notification::GetData(JSContext* aCx,
                            JS::MutableHandle<JS::Value> aRetval) {
   if (mData.isNull() && !mDataAsBase64.IsEmpty()) {
@@ -2188,7 +2223,10 @@ already_AddRefed<Notification> Notification::CreateAndShow(
   MOZ_ASSERT(aGlobal);
 
   RefPtr<Notification> notification =
-      CreateInternal(aGlobal, u""_ns, aTitle, aOptions);
+      CreateInternal(aGlobal, u""_ns, aTitle, aOptions, aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
 
   // Make a structured clone of the aOptions.mData object
   JS::Rooted<JS::Value> data(aCx, aOptions.mData);
@@ -2223,7 +2261,7 @@ already_AddRefed<Notification> Notification::CreateAndShow(
 nsresult Notification::RemovePermission(nsIPrincipal* aPrincipal) {
   MOZ_ASSERT(XRE_IsParentProcess());
   nsCOMPtr<nsIPermissionManager> permissionManager =
-      mozilla::services::GetPermissionManager();
+      mozilla::components::PermissionManager::Service();
   if (!permissionManager) {
     return NS_ERROR_FAILURE;
   }

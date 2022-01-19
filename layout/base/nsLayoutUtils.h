@@ -83,6 +83,8 @@ class EffectSet;
 struct ActiveScrolledRoot;
 enum class ScrollOrigin : uint8_t;
 enum class StyleImageOrientation : uint8_t;
+enum class StyleSystemFont : uint8_t;
+enum class StyleScrollbarWidth : uint8_t;
 struct OverflowAreas;
 namespace dom {
 class CanvasRenderingContext2D;
@@ -101,6 +103,10 @@ namespace gfx {
 struct RectCornerRadii;
 enum class ShapedTextFlags : uint16_t;
 }  // namespace gfx
+namespace image {
+class ImageIntRegion;
+struct Resolution;
+}  // namespace image
 namespace layers {
 struct FrameMetrics;
 struct ScrollMetadata;
@@ -267,6 +273,14 @@ class nsLayoutUtils {
    */
   static nsIFrame* GetMarkerFrame(const nsIContent* aContent);
 
+#ifdef ACCESSIBILITY
+  /**
+   * Set aText to the spoken text for the given ::marker content (aContent)
+   * if it has a frame, or the empty string otherwise.
+   */
+  static void GetMarkerSpokenText(const nsIContent* aContent, nsAString& aText);
+#endif
+
   /**
    * Given a frame, search up the frame tree until we find an
    * ancestor that (or the frame itself) is of type aFrameType, if any.
@@ -311,6 +325,12 @@ class nsLayoutUtils {
    * This is aContent->GetPrimaryFrame() except for tableWrapper frames.
    */
   static nsIFrame* GetStyleFrame(const nsIContent* aContent);
+
+  /**
+   * Returns the placeholder size for when the scrollbar is unthemed.
+   */
+  static mozilla::CSSIntCoord UnthemedScrollbarSize(
+      mozilla::StyleScrollbarWidth);
 
   /**
    * The inverse of GetStyleFrame. Returns |aStyleFrame| unless it is an inner
@@ -438,11 +458,22 @@ class nsLayoutUtils {
    * Get the parent of aFrame. If aFrame is the root frame for a document,
    * and the document has a parent document in the same view hierarchy, then
    * we try to return the subdocumentframe in the parent document.
-   * @param aExtraOffset [in/out] if non-null, then as we cross documents
+   * @param aCrossDocOffset [in/out] if non-null, then as we cross documents
    * an extra offset may be required and it will be added to aCrossDocOffset.
    * Be careful dealing with this extra offset as it is in app units of the
    * parent document, which may have a different app units per dev pixel ratio
    * than the child document.
+   * Note that, while this function crosses document boundaries, it (naturally)
+   * cannot cross process boundaries.
+   */
+  static nsIFrame* GetCrossDocParentFrameInProcess(
+      const nsIFrame* aFrame, nsPoint* aCrossDocOffset = nullptr);
+
+  /**
+   * Does the same thing as GetCrossDocParentFrameInProcess().
+   * The purpose of having two functions is to more easily track which call
+   * sites have been audited to consider out-of-process iframes (bug 1599913).
+   * Once all call sites have been audited, this function can be removed.
    */
   static nsIFrame* GetCrossDocParentFrame(const nsIFrame* aFrame,
                                           nsPoint* aCrossDocOffset = nullptr);
@@ -477,8 +508,31 @@ class nsLayoutUtils {
    *
    * Just like IsProperAncestorFrameCrossDoc, except that it returns true when
    * aFrame == aAncestorFrame.
+   *
+   * TODO: Bug 1700245, all call sites of this function will be eventually
+   * replaced by IsAncestorFrameCrossDocInProcess.
    */
   static bool IsAncestorFrameCrossDoc(
+      const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
+      const nsIFrame* aCommonAncestor = nullptr);
+
+  /**
+   * IsAncestorFrameCrossDocInProcess checks whether aAncestorFrame is an
+   * ancestor of aFrame or equal to aFrame, looking across document boundaries
+   * in the same process.
+   * @param aCommonAncestor nullptr, or a common ancestor of aFrame and
+   * aAncestorFrame. If non-null, this can bound the search and speed up
+   * the function.
+   *
+   * Just like IsProperAncestorFrameCrossDoc, except that it returns true when
+   * aFrame == aAncestorFrame.
+   *
+   * NOTE: This function doesn't return true even if |aAncestorFrame| and
+   * |aFrame| is in the same process but they are not directly connected, e.g.
+   * both |aAncestorFrame| and |aFrame| in A domain documents, but there's
+   * another an iframe document domain B, such as A1 -> B1 ->A2 document tree.
+   */
+  static bool IsAncestorFrameCrossDocInProcess(
       const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
       const nsIFrame* aCommonAncestor = nullptr);
 
@@ -908,6 +962,13 @@ class nsLayoutUtils {
       const nsTextFrame* aFrame1, const nsTextFrame* aFrame2);
 
   /**
+   * Whether author-specified borders / backgrounds disable theming for a given
+   * appearance value.
+   */
+  static bool AuthorSpecifiedBorderBackgroundDisablesTheming(
+      mozilla::StyleAppearance);
+
+  /**
    * Transforms a list of CSSPoints from aFromFrame to aToFrame, taking into
    * account all relevant transformations on the frames up to (but excluding)
    * their nearest common ancestor.
@@ -1084,6 +1145,7 @@ class nsLayoutUtils {
     Compressed = 0x200,
     ForWebRender = 0x400,
     UseHighQualityScaling = 0x800,
+    ResetViewportScrolling = 0x1000,
   };
 
   /**
@@ -1112,6 +1174,9 @@ class nsLayoutUtils {
    * as being relative to the document (normally it's relative to the CSS
    * viewport) and the document is painted as if no scrolling has occured.
    * Only considered if PresShell::IgnoringViewportScrolling is true.
+   * If ResetViewportScrolling is used, then the root scroll frame's scroll
+   * position is set to 0 during painting, so that position:fixed elements
+   * are drawn in their initial position.
    * PAINT_TO_WINDOW sets painting to window to true on the display list
    * builder even if we can't tell that we are painting to the window.
    * If PAINT_EXISTING_TRANSACTION is set, then BeginTransaction() has already
@@ -1874,9 +1939,9 @@ class nsLayoutUtils {
    */
   static ImgDrawResult DrawSingleImage(
       gfxContext& aContext, nsPresContext* aPresContext, imgIContainer* aImage,
-      const SamplingFilter aSamplingFilter, const nsRect& aDest,
-      const nsRect& aDirty, const mozilla::Maybe<SVGImageContext>& aSVGContext,
-      uint32_t aImageFlags, const nsPoint* aAnchorPoint = nullptr,
+      SamplingFilter aSamplingFilter, const nsRect& aDest, const nsRect& aDirty,
+      const mozilla::Maybe<SVGImageContext>& aSVGContext, uint32_t aImageFlags,
+      const nsPoint* aAnchorPoint = nullptr,
       const nsRect* aSourceArea = nullptr);
 
   /**
@@ -1894,8 +1959,16 @@ class nsLayoutUtils {
    * NOTE: This method is similar to ComputeSizeWithIntrinsicDimensions.  The
    * difference is that this one is simpler and is suited to places where we
    * have less information about the frame tree.
+   *
+   * @param aResolution The resolution specified by the author for the image, or
+   *                    its intrinsic resolution.
+   *
+   *                    This will affect the intrinsic size size of the image
+   *                    (so e.g., if resolution is 2, and the image is 100x100,
+   *                    the intrinsic size of the image will be 50x50).
    */
   static void ComputeSizeForDrawing(imgIContainer* aImage,
+                                    const mozilla::image::Resolution&,
                                     CSSIntSize& aImageSize,
                                     AspectRatio& aIntrinsicRatio,
                                     bool& aGotWidth, bool& aGotHeight);
@@ -1909,7 +1982,8 @@ class nsLayoutUtils {
    * dimensions, the corresponding dimension of aFallbackSize is used instead.
    */
   static CSSIntSize ComputeSizeForDrawingWithFallback(
-      imgIContainer* aImage, const nsSize& aFallbackSize);
+      imgIContainer* aImage, const mozilla::image::Resolution&,
+      const nsSize& aFallbackSize);
 
   /**
    * Given the image container, frame, and dest rect, determine the best fitting
@@ -1917,8 +1991,10 @@ class nsLayoutUtils {
    */
   static mozilla::gfx::IntSize ComputeImageContainerDrawingParameters(
       imgIContainer* aImage, nsIFrame* aForFrame,
-      const LayoutDeviceRect& aDestRect, const StackingContextHelper& aSc,
-      uint32_t aFlags, mozilla::Maybe<SVGImageContext>& aSVGContext);
+      const LayoutDeviceRect& aDestRect, const LayoutDeviceRect& aFillRect,
+      const StackingContextHelper& aSc, uint32_t aFlags,
+      mozilla::Maybe<SVGImageContext>& aSVGContext,
+      mozilla::Maybe<mozilla::image::ImageIntRegion>& aRegion);
 
   /**
    * Given a source area of an image (in appunits) and a destination area
@@ -1962,6 +2038,15 @@ class nsLayoutUtils {
    */
   static bool HasNonZeroCornerOnSide(const mozilla::BorderRadius& aCorners,
                                      mozilla::Side aSide);
+
+  /**
+   * Return the border radius size (width, height) based only on the top-left
+   * corner. This is a special case used for drawing the Windows 10 drop-shadow,
+   * and only supports a specified length (not percentages) on the top-left
+   * corner.
+   */
+  static LayoutDeviceIntSize GetBorderRadiusForMenuDropShadow(
+      const nsIFrame* aFrame);
 
   /**
    * Determine if a widget is likely to require transparency or translucency.
@@ -2080,21 +2165,25 @@ class nsLayoutUtils {
    */
 
   enum {
-    /* When creating a new surface, create an image surface */
-    SFE_WANT_IMAGE_SURFACE = 1 << 0,
     /* Whether to extract the first frame (as opposed to the
        current frame) in the case that the element is an image. */
-    SFE_WANT_FIRST_FRAME_IF_IMAGE = 1 << 1,
+    SFE_WANT_FIRST_FRAME_IF_IMAGE = 1 << 0,
     /* Whether we should skip colorspace/gamma conversion */
-    SFE_NO_COLORSPACE_CONVERSION = 1 << 2,
+    SFE_NO_COLORSPACE_CONVERSION = 1 << 1,
     /* Caller handles SFER::mAlphaType = NonPremult */
-    SFE_ALLOW_NON_PREMULT = 1 << 3,
+    SFE_ALLOW_NON_PREMULT = 1 << 2,
     /* Whether we should skip getting a surface for vector images and
        return a DirectDrawInfo containing an imgIContainer instead. */
-    SFE_NO_RASTERIZING_VECTORS = 1 << 4,
+    SFE_NO_RASTERIZING_VECTORS = 1 << 3,
     /* If image type is vector, the return surface size will same as
        element size, not image's intrinsic size. */
-    SFE_USE_ELEMENT_SIZE_IF_VECTOR = 1 << 5
+    SFE_USE_ELEMENT_SIZE_IF_VECTOR = 1 << 4,
+    /* Ensure that the returned surface has a size that matches the
+     * SurfaceFromElementResult::mSize. This is mostly a convenience thing so
+     * that callers who want this don't have to deal with it themselves.
+     * The surface might be different for, e.g., a EXIF-scaled raster image, if
+     * we don't rescale during decode. */
+    SFE_EXACT_SIZE_SURFACE = 1 << 6,
   };
 
   // This function can be called on any thread.
@@ -2179,8 +2268,8 @@ class nsLayoutUtils {
    */
   typedef nsTArray<mozilla::UniquePtr<mozilla::dom::InspectorFontFace>>
       UsedFontFaceList;
-  typedef nsDataHashtable<nsPtrHashKey<gfxFontEntry>,
-                          mozilla::dom::InspectorFontFace*>
+  typedef nsTHashMap<nsPtrHashKey<gfxFontEntry>,
+                     mozilla::dom::InspectorFontFace*>
       UsedFontFaceTable;
 
   /**
@@ -2527,17 +2616,20 @@ class nsLayoutUtils {
       const nsSize* aOverrideScrollPortSize = nullptr);
 
   /**
-   * Calculate the composition size for the root scroll frame of the root
-   * content document.
-   * @param aFrame A frame in the root content document (or a descendant of it).
-   * @param aIsRootContentDocRootScrollFrame Whether aFrame is already the root
-   *          scroll frame of the root content document. In this case we just
-   *          use aFrame's own composition size.
+   * Calculate a size suitable for bounding the size of the composition bounds
+   * of scroll frames in the current process. This should be at most the
+   * composition size of the cross-process RCD-RSF, but it may be a tighter
+   * bounding size.
+   * @param aFrame A frame in the (in-process) root content document (or a
+   *          descendant of it).
+   * @param aIsRootContentDocRootScrollFrame Whether aFrame is the root
+   *          scroll frame of the *cross-process* root content document.
+   *          In this case we just use aFrame's own composition size.
    * @param aMetrics A partially populated FrameMetrics for aFrame. Must have at
    *          least mCompositionBounds, mCumulativeResolution, and
    *          mDevPixelsPerCSSPixel set.
    */
-  static CSSSize CalculateRootCompositionSize(
+  static CSSSize CalculateBoundingCompositionSize(
       const nsIFrame* aFrame, bool aIsRootContentDocRootScrollFrame,
       const FrameMetrics& aMetrics);
 
@@ -2739,15 +2831,21 @@ class nsLayoutUtils {
    * of the scrolled content of |aRootScrollFrame|.
    * Where the element is contained inside a scrollable subframe, the
    * bounding rect is clipped to the bounds of the subframe.
+   * If non-null aOutNearestScrollClip will be filled in with the rect of the
+   * nearest scroll frame (excluding aRootScrollFrame) that is an ancestor of
+   * the frame of aContent, if such exists, in the same coords are the returned
+   * rect. This rect is used to clip the result.
    */
   static CSSRect GetBoundingContentRect(
-      const nsIContent* aContent, const nsIScrollableFrame* aRootScrollFrame);
+      const nsIContent* aContent, const nsIScrollableFrame* aRootScrollFrame,
+      mozilla::Maybe<CSSRect>* aOutNearestScrollClip = nullptr);
 
   /**
    * Similar to GetBoundingContentRect for nsIFrame.
    */
   static CSSRect GetBoundingFrameRect(
-      nsIFrame* aFrame, const nsIScrollableFrame* aRootScrollFrame);
+      nsIFrame* aFrame, const nsIScrollableFrame* aRootScrollFrame,
+      mozilla::Maybe<CSSRect>* aOutNearestScrollClip = nullptr);
 
   /**
    * Returns the first ancestor who is a float containing block.
@@ -2820,11 +2918,6 @@ class nsLayoutUtils {
   static nsPoint ComputeOffsetToUserSpace(nsDisplayListBuilder* aBuilder,
                                           nsIFrame* aFrame);
 
-  // Return the default value to be used for -moz-control-character-visibility,
-  // from preferences.
-  static mozilla::StyleControlCharacterVisibility
-  ControlCharVisibilityDefault();
-
   // Callers are responsible to ensure the user-font-set is up-to-date if
   // aUseUserFontSet is true.
   static already_AddRefed<nsFontMetrics> GetMetricsFor(
@@ -2833,7 +2926,7 @@ class nsLayoutUtils {
       bool aUseUserFontSet);
 
   static void ComputeSystemFont(nsFont* aSystemFont,
-                                mozilla::LookAndFeel::FontID aFontID,
+                                mozilla::StyleSystemFont aFontID,
                                 const nsFont* aDefaultVariableFont,
                                 const mozilla::dom::Document* aDocument);
 

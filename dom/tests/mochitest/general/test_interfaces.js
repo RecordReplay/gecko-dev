@@ -363,6 +363,8 @@ var interfaceNamesInGlobalScope = [
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "Event", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
+  { name: "EventCounts", insecureContext: true },
+  // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "EventSource", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "EventTarget", insecureContext: true },
@@ -403,21 +405,21 @@ var interfaceNamesInGlobalScope = [
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "GainNode", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "Gamepad", insecureContext: true },
+  { name: "Gamepad", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "GamepadAxisMoveEvent", insecureContext: true },
+  { name: "GamepadAxisMoveEvent", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "GamepadButtonEvent", insecureContext: true },
+  { name: "GamepadButtonEvent", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "GamepadButton", insecureContext: true },
+  { name: "GamepadButton", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "GamepadEvent", insecureContext: true },
+  { name: "GamepadEvent", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "GamepadHapticActuator", insecureContext: true },
+  { name: "GamepadHapticActuator", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "GamepadLightIndicator", insecureContext: false, disabled: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "GamepadPose", insecureContext: true },
+  { name: "GamepadPose", insecureContext: false },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "GamepadTouch", insecureContext: false, disabled: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -778,7 +780,11 @@ var interfaceNamesInGlobalScope = [
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "OfflineAudioContext", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "OfflineResourceList", insecureContext: false },
+  {
+    name: "OfflineResourceList",
+    insecureContext: false,
+    disabled: isEarlyBetaOrEarlier,
+  },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "Option", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -843,6 +849,8 @@ var interfaceNamesInGlobalScope = [
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "PerformanceEntry", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
+  { name: "PerformanceEventTiming", insecureContext: true },
+  // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "PerformanceMark", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "PerformanceMeasure", insecureContext: true },
@@ -878,62 +886,6 @@ var interfaceNamesInGlobalScope = [
   { name: "PopStateEvent", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "PopupBlockedEvent", insecureContext: true },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "Presentation",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationAvailability",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationConnection",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationConnectionAvailableEvent",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationConnectionCloseEvent",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationConnectionList",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationReceiver",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
-  // IMPORTANT: Do not change this list without review from a DOM peer!
-  {
-    name: "PresentationRequest",
-    insecureContext: true,
-    desktop: false,
-    release: false,
-  },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "ProcessingInstruction", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!

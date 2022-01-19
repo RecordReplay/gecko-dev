@@ -11,6 +11,7 @@
 #include "mozIThirdPartyUtil.h"
 #include "nsMixedContentBlocker.h"
 #include "nsNetUtil.h"
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/StaticPrefs_dom.h"
 
 // Helper function which maps an internal content policy type
@@ -75,6 +76,7 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
       return "empty"_ns;
     case nsIContentPolicy::TYPE_FONT:
     case nsIContentPolicy::TYPE_INTERNAL_FONT_PRELOAD:
+    case nsIContentPolicy::TYPE_UA_FONT:
       return "font"_ns;
     case nsIContentPolicy::TYPE_MEDIA:
       return "empty"_ns;
@@ -116,6 +118,15 @@ bool IsSameOrigin(nsIHttpChannel* aHTTPChannel) {
   NS_GetFinalChannelURI(aHTTPChannel, getter_AddRefs(channelURI));
 
   nsCOMPtr<nsILoadInfo> loadInfo = aHTTPChannel->LoadInfo();
+
+  if (mozilla::BasePrincipal::Cast(loadInfo->TriggeringPrincipal())
+          ->AddonPolicy()) {
+    // If an extension triggered the load that has access to the URI then the
+    // load is considered as same-origin.
+    return mozilla::BasePrincipal::Cast(loadInfo->TriggeringPrincipal())
+        ->AddonAllowsLoad(channelURI);
+  }
+
   bool isPrivateWin = loadInfo->GetOriginAttributes().mPrivateBrowsingId > 0;
   bool isSameOrigin = false;
   nsresult rv = loadInfo->TriggeringPrincipal()->IsSameOrigin(
@@ -195,14 +206,42 @@ bool IsSameSite(nsIChannel* aHTTPChannel) {
 // Helper function to determine whether a request was triggered
 // by the end user in the context of SecFetch.
 bool IsUserTriggeredForSecFetchSite(nsIHttpChannel* aHTTPChannel) {
+  /*
+   * The goal is to distinguish between "webby" navigations that are controlled
+   * by a given website (e.g. links, the window.location setter,form
+   * submissions, etc.), and those that are not (e.g. user interaction with a
+   * user agent’s address bar, bookmarks, etc).
+   */
   nsCOMPtr<nsILoadInfo> loadInfo = aHTTPChannel->LoadInfo();
-  nsContentPolicyType contentType = loadInfo->InternalContentPolicyType();
+  ExtContentPolicyType contentType = loadInfo->GetExternalContentPolicyType();
+
+  // A request issued by the browser is always user initiated.
+  if (loadInfo->TriggeringPrincipal()->IsSystemPrincipal() &&
+      contentType == ExtContentPolicy::TYPE_OTHER) {
+    return true;
+  }
 
   // only requests wich result in type "document" are subject to
   // user initiated actions in the context of SecFetch.
-  if (contentType != nsIContentPolicy::TYPE_DOCUMENT &&
-      contentType != nsIContentPolicy::TYPE_SUBDOCUMENT &&
-      contentType != nsIContentPolicy::TYPE_INTERNAL_IFRAME) {
+  if (contentType != ExtContentPolicy::TYPE_DOCUMENT &&
+      contentType != ExtContentPolicy::TYPE_SUBDOCUMENT) {
+    return false;
+  }
+
+  // The load is considered user triggered if it was triggered by an external
+  // application.
+  if (loadInfo->GetLoadTriggeredFromExternal()) {
+    return true;
+  }
+
+  // sec-fetch-site can only be user triggered if the load was user triggered.
+  if (!loadInfo->GetHasValidUserGestureActivation()) {
+    return false;
+  }
+
+  // We can assert that the navigation must be "webby" if the load was triggered
+  // by a meta refresh. See also Bug 1647128.
+  if (loadInfo->GetIsMetaRefresh()) {
     return false;
   }
 
@@ -301,8 +340,10 @@ void mozilla::dom::SecFetch::AddSecFetchUser(nsIHttpChannel* aHTTPChannel) {
     return;
   }
 
-  // sec-fetch-user only applies if the request is user triggered
-  if (!loadInfo->GetHasValidUserGestureActivation()) {
+  // sec-fetch-user only applies if the request is user triggered.
+  // requests triggered by an external application are considerd user triggered.
+  if (!loadInfo->GetLoadTriggeredFromExternal() &&
+      !loadInfo->GetHasValidUserGestureActivation()) {
     return;
   }
 

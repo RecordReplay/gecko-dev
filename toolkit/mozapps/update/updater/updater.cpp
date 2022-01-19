@@ -104,6 +104,10 @@ struct UpdateServerThreadArgs {
 #  define USE_EXECV
 #endif
 
+#if defined(XP_OPENBSD)
+#  define stat64 stat
+#endif
+
 #if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
 #  include "nss.h"
 #  include "prerror.h"
@@ -281,6 +285,16 @@ static bool sStagedUpdate = false;
 static bool sReplaceRequest = false;
 static bool sUsingService = false;
 
+// Whether the callback app is a background task. If true then the updater is
+// likely being run as part of a background task and therefore shouldn't:
+// a) show progress UI
+// b) prompt for elevation
+//
+// The updater could be run with no callback, but this only happens
+// when performing a staged update (see calls to ProcessUpdates), and there
+// are already checks for sStagedUpdate when showing UI or elevating.
+static bool sCallbackIsBackgroundTask = false;
+
 #ifdef XP_WIN
 static NS_tchar gCallbackRelPath[MAXPATHLEN];
 static NS_tchar gCallbackBackupPath[MAXPATHLEN];
@@ -338,13 +352,7 @@ static NS_tchar* mstrtok(const NS_tchar* delims, NS_tchar** str) {
   return ret;
 }
 
-#if defined(TEST_UPDATER)
-#  define HAS_ENV_CHECK 1
-#elif defined(MOZ_MAINTENANCE_SERVICE)
-#  define HAS_ENV_CHECK 1
-#endif
-
-#if defined(HAS_ENV_CHECK)
+#if defined(TEST_UPDATER) || defined(XP_WIN)
 static bool EnvHasValue(const char* name) {
   const char* val = getenv(name);
   return (val && *val);
@@ -428,9 +436,6 @@ static NS_tchar* get_full_path(const NS_tchar* relpath) {
   size_t lendestpath = NS_tstrlen(destpath);
   size_t lenrelpath = NS_tstrlen(relpath);
   NS_tchar* s = new NS_tchar[lendestpath + lenrelpath + 2];
-  if (!s) {
-    return nullptr;
-  }
 
   NS_tchar* c = s;
 
@@ -2229,7 +2234,7 @@ static bool IsUpdateStatusPendingService() {
 }
 #endif
 
-#if defined(XP_WIN) && defined(MOZ_MAINTENANCE_SERVICE)
+#if defined(XP_WIN)
 /*
  * Reads the secure update status file and sets isSucceeded to true if the
  * status is set to succeeded.
@@ -2671,6 +2676,35 @@ int LaunchCallbackAndPostProcessApps(int argc, NS_tchar** argv,
 return 0;
 }
 
+bool IsCallbackBackgroundTask(int argc, NS_tchar** argv) {
+#ifdef MOZ_BACKGROUNDTASKS
+  // If the callback has a --backgroundtask switch, consider it a background
+  // task. The CheckArg semantics aren't reproduced in full here,
+  // there's e.g. no check for a parameter and no case-insensitive comparison.
+  for (int i = 1; i < argc; ++i) {
+    NS_tchar* arg = argv[i];
+
+    // As in CheckArgs, accept -, --, or / (also incidentally /-)
+    if (*arg == '-'
+#  if defined(XP_WIN)
+        || *arg == '/'
+#  endif
+    ) {
+      ++arg;
+
+      if (*arg == '-') {
+        ++arg;
+      }
+
+      if (NS_tstrcmp(arg, NS_T("backgroundtask")) == 0) {
+        return true;
+      }
+    }
+  }
+#endif  // MOZ_BACKGROUNDTASKS
+  return false;
+}
+
 int NS_main(int argc, NS_tchar** argv) {
 #ifdef MOZ_MAINTENANCE_SERVICE
   sUsingService = EnvHasValue("MOZ_USING_SERVICE");
@@ -2931,6 +2965,9 @@ int NS_main(int argc, NS_tchar** argv) {
 #endif
       return 1;
     }
+
+    sCallbackIsBackgroundTask =
+        IsCallbackBackgroundTask(argc - callbackIndex, argv + callbackIndex);
   }
 
 #ifdef XP_MACOSX
@@ -2945,7 +2982,9 @@ int NS_main(int argc, NS_tchar** argv) {
     if (t1.Run(ServeElevatedUpdateThreadFunc, &threadArgs) == 0) {
       // Show an indeterminate progress bar while an elevated update is in
       // progress.
-      ShowProgressUI(true);
+      if (!sCallbackIsBackgroundTask) {
+        ShowProgressUI(true);
+      }
     }
     t1.Join();
 
@@ -3074,7 +3113,7 @@ int NS_main(int argc, NS_tchar** argv) {
 
   // Check whether a second instance of the updater should be launched by the
   // maintenance service or with the 'runas' verb when write access is denied to
-  // the installation directory and the update isn't being staged.
+  // the installation directory.
   HANDLE updateLockFileHandle = INVALID_HANDLE_VALUE;
   if (!sUsingService &&
       (argc > callbackIndex || sStagedUpdate || sReplaceRequest)) {
@@ -3247,8 +3286,9 @@ int NS_main(int argc, NS_tchar** argv) {
         // If the command was launched then wait for the service to be done.
         if (useService) {
           bool showProgressUI = false;
-          // Never show the progress UI when staging updates.
-          if (!sStagedUpdate) {
+          // Never show the progress UI when staging updates or in a background
+          // task.
+          if (!sStagedUpdate && !sCallbackIsBackgroundTask) {
             // We need to call this separately instead of allowing
             // ShowProgressUI to initialize the strings because the service will
             // move the ini file out of the way when running updater.
@@ -3293,17 +3333,38 @@ int NS_main(int argc, NS_tchar** argv) {
 #  endif
 
       // If the service can't be used when staging an update, make sure that
-      // the UAC prompt is not shown! In this case, just set the status to
-      // pending and the update will be applied during the next startup.
+      // the UAC prompt is not shown!
       if (!useService && sStagedUpdate) {
         if (updateLockFileHandle != INVALID_HANDLE_VALUE) {
           CloseHandle(updateLockFileHandle);
         }
+        // Set an error so the failure is reported. This will be reset
+        // to pending so the update can be applied during the next startup,
+        // see bug 1552853.
         WriteStatusFile(UNEXPECTED_STAGING_ERROR);
         LOG(
             ("Non-critical update staging error! Falling back to non-staged "
              "updates and exiting"));
         output_finish();
+        // We don't have a callback when staging so we can just exit.
+        return 0;
+      }
+
+      // If the service can't be used when in a background task, make sure
+      // that the UAC prompt is not shown!
+      if (!useService && sCallbackIsBackgroundTask) {
+        if (updateLockFileHandle != INVALID_HANDLE_VALUE) {
+          CloseHandle(updateLockFileHandle);
+        }
+        // Set an error so we don't get into an update loop when the callback
+        // runs. This will be reset to pending by handleUpdateFailure in
+        // UpdateService.jsm.
+        WriteStatusFile(BACKGROUND_TASK_NEEDED_ELEVATION_ERROR);
+        LOG(("Skipping update to avoid UAC prompt from background task."));
+        output_finish();
+
+        LaunchCallbackApp(argv[5], argc - callbackIndex, argv + callbackIndex,
+                          sUsingService);
         return 0;
       }
 
@@ -3621,7 +3682,9 @@ int NS_main(int argc, NS_tchar** argv) {
 
       // CreateFileW will fail if the callback executable is already in use.
       if (callbackFile == INVALID_HANDLE_VALUE) {
-        // Only fail the update if the last error was not a sharing violation.
+        bool proceedWithoutExclusive = true;
+
+        // Fail the update if the last error was not a sharing violation.
         if (lastWriteError != ERROR_SHARING_VIOLATION) {
           LOG(
               ("NS_main: callback app file in use, failed to exclusively open "
@@ -3633,6 +3696,25 @@ int NS_main(int argc, NS_tchar** argv) {
             WriteStatusFile(WRITE_ERROR_CALLBACK_APP);
           }
 
+          proceedWithoutExclusive = false;
+        }
+
+        // Fail even on sharing violation from a background task, since a
+        // background task has a higher risk of interfering with a running app.
+        // Note that this does not apply when staging (when an exclusive lock
+        // isn't necessary), as there is no callback.
+        if (lastWriteError == ERROR_SHARING_VIOLATION &&
+            sCallbackIsBackgroundTask) {
+          LOG(
+              ("NS_main: callback app file in use, failed to exclusively open "
+               "executable file from background task: " LOG_S,
+               argv[callbackIndex]));
+          WriteStatusFile(WRITE_ERROR_BACKGROUND_TASK_SHARING_VIOLATION);
+
+          proceedWithoutExclusive = false;
+        }
+
+        if (!proceedWithoutExclusive) {
           if (NS_tremove(gCallbackBackupPath) && errno != ENOENT) {
             LOG(
                 ("NS_main: unable to remove backup of callback app file, "
@@ -3645,6 +3727,7 @@ int NS_main(int argc, NS_tchar** argv) {
                             sUsingService);
           return 1;
         }
+
         LOG(
             ("NS_main: callback app file in use, continuing without "
              "exclusive access for executable file: " LOG_S,
@@ -3680,7 +3763,7 @@ int NS_main(int argc, NS_tchar** argv) {
   // is an elevated process on OSX.
   Thread t;
   if (t.Run(UpdateThreadFunc, nullptr) == 0) {
-    if (!sStagedUpdate && !sReplaceRequest
+    if (!sStagedUpdate && !sReplaceRequest && !sCallbackIsBackgroundTask
 #ifdef XP_MACOSX
         && !isElevated
 #endif

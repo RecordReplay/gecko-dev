@@ -7,23 +7,22 @@
 
 #import "MacUtils.h"
 
-#include "Accessible.h"
+#include "LocalAccessible.h"
 #include "nsCocoaUtils.h"
 #include "mozilla/a11y/PDocAccessible.h"
-#include "nsIPersistentProperties2.h"
 
 namespace mozilla {
 namespace a11y {
 namespace utils {
 
 // convert an array of Gecko accessibles to an NSArray of native accessibles
-NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<Accessible*>& aArray) {
-  NSMutableArray* nativeArray = [[NSMutableArray alloc] init];
+NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<LocalAccessible*>& aArray) {
+  NSMutableArray* nativeArray = [[[NSMutableArray alloc] init] autorelease];
 
   // iterate through the list, and get each native accessible.
   size_t totalCount = aArray.Length();
   for (size_t i = 0; i < totalCount; i++) {
-    Accessible* curAccessible = aArray.ElementAt(i);
+    LocalAccessible* curAccessible = aArray.ElementAt(i);
     mozAccessible* curNative = GetNativeFromGeckoAccessible(curAccessible);
     if (curNative)
       [nativeArray addObject:GetObjectOrRepresentedView(curNative)];
@@ -34,13 +33,13 @@ NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<Accessible*>& aArray) {
 
 // convert an array of Gecko proxy accessibles to an NSArray of native
 // accessibles
-NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray) {
-  NSMutableArray* nativeArray = [[NSMutableArray alloc] init];
+NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<RemoteAccessible*>& aArray) {
+  NSMutableArray* nativeArray = [[[NSMutableArray alloc] init] autorelease];
 
   // iterate through the list, and get each native accessible.
   size_t totalCount = aArray.Length();
   for (size_t i = 0; i < totalCount; i++) {
-    ProxyAccessible* curAccessible = aArray.ElementAt(i);
+    RemoteAccessible* curAccessible = aArray.ElementAt(i);
     mozAccessible* curNative = GetNativeFromGeckoAccessible(curAccessible);
     if (curNative)
       [nativeArray addObject:GetObjectOrRepresentedView(curNative)];
@@ -56,27 +55,23 @@ NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray) {
 NSString* LocalizedString(const nsString& aString) {
   nsString text;
 
-  Accessible::TranslateString(aString, text);
+  LocalAccessible::TranslateString(aString, text);
 
   return text.IsEmpty() ? nil : nsCocoaUtils::ToNSString(text);
 }
 
-NSString* GetAccAttr(mozAccessible* aNativeAccessible, const char* aAttrName) {
+NSString* GetAccAttr(mozAccessible* aNativeAccessible, nsAtom* aAttrName) {
   nsAutoString result;
-  if (Accessible* acc = [aNativeAccessible geckoAccessible].AsAccessible()) {
-    nsCOMPtr<nsIPersistentProperties> attributes = acc->Attributes();
-    attributes->GetStringProperty(nsCString(aAttrName), result);
-  } else if (ProxyAccessible* proxy =
+  RefPtr<AccAttributes> attributes;
+  if (LocalAccessible* acc =
+          [aNativeAccessible geckoAccessible].AsAccessible()) {
+    attributes = acc->Attributes();
+  } else if (RemoteAccessible* proxy =
                  [aNativeAccessible geckoAccessible].AsProxy()) {
-    AutoTArray<Attribute, 10> attrs;
-    proxy->Attributes(&attrs);
-    for (size_t i = 0; i < attrs.Length(); i++) {
-      if (attrs.ElementAt(i).Name() == aAttrName) {
-        result = attrs.ElementAt(i).Value();
-        break;
-      }
-    }
+    proxy->Attributes(&attributes);
   }
+
+  attributes->GetAttribute(aAttrName, result);
 
   if (!result.IsEmpty()) {
     return nsCocoaUtils::ToNSString(result);

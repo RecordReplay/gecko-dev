@@ -5,3 +5,9 @@
 body {
   border-radius: 3.5px;
 }
+
+@media (-moz-proton) {
+body {
+  border-radius: 8px;
+}
+}

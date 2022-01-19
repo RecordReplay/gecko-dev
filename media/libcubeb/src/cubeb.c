@@ -235,6 +235,11 @@ cubeb_init(cubeb ** context, char const * context_name, char const * backend_nam
 #if defined(USE_OPENSL)
     opensl_init,
 #endif
+    // TODO: should probably be preferred over OpenSLES when available.
+    // Initialization will fail on old android devices.
+#if defined(USE_AAUDIO)
+    aaudio_init,
+#endif
 #if defined(USE_AUDIOTRACK)
     audiotrack_init,
 #endif
@@ -397,20 +402,6 @@ cubeb_stream_stop(cubeb_stream * stream)
   }
 
   return stream->context->ops->stream_stop(stream);
-}
-
-int
-cubeb_stream_reset_default_device(cubeb_stream * stream)
-{
-  if (!stream) {
-    return CUBEB_ERROR_INVALID_PARAMETER;
-  }
-
-  if (!stream->context->ops->stream_reset_default_device) {
-    return CUBEB_ERROR_NOT_SUPPORTED;
-  }
-
-  return stream->context->ops->stream_reset_default_device(stream);
 }
 
 int

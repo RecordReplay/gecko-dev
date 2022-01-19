@@ -617,9 +617,8 @@ async function promiseVisit(expectedType, expectedURI) {
   return new Promise(resolve => {
     function done(type, uri) {
       if (uri == expectedURI.spec && type == expectedType) {
-        PlacesUtils.history.removeObserver(observer);
         PlacesObservers.removeListener(
-          ["page-visited"],
+          ["page-visited", "page-removed"],
           observer.handlePlacesEvents
         );
         resolve();
@@ -628,18 +627,19 @@ async function promiseVisit(expectedType, expectedURI) {
     let observer = {
       handlePlacesEvents(events) {
         Assert.equal(events.length, 1);
-        Assert.equal(events[0].type, "page-visited");
-        done("added", events[0].url);
+
+        if (events[0].type === "page-visited") {
+          done("added", events[0].url);
+        } else if (events[0].type === "page-removed") {
+          Assert.ok(events[0].isRemovedFromStore);
+          done("removed", events[0].url);
+        }
       },
-      onBeginUpdateBatch() {},
-      onEndUpdateBatch() {},
-      onDeleteURI(uri) {
-        done("removed", uri.spec);
-      },
-      onDeleteVisits() {},
     };
-    PlacesUtils.history.addObserver(observer, false);
-    PlacesObservers.addListener(["page-visited"], observer.handlePlacesEvents);
+    PlacesObservers.addListener(
+      ["page-visited", "page-removed"],
+      observer.handlePlacesEvents
+    );
   });
 }
 

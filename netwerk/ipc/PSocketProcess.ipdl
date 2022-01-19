@@ -21,6 +21,10 @@ include protocol PProxyConfigLookup;
 include protocol PNativeDNSResolverOverride;
 include protocol PRemoteLazyInputStream;
 
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+include protocol PSandboxTesting;
+#endif
+
 include MemoryReportTypes;
 include NeckoChannelParams;
 include PrefsTypes;
@@ -37,7 +41,7 @@ using mozilla::Telemetry::DiscardedData from "mozilla/TelemetryComms.h";
 using base::ProcessId from "base/process.h";
 using mozilla::OriginAttributes from "mozilla/ipc/BackgroundUtils.h";
 using PRTime from "prtime.h";
-using refcounted class nsIURI from "mozilla/ipc/URIUtils.h";
+[RefCounted] using class nsIURI from "mozilla/ipc/URIUtils.h";
 using struct nsID from "nsID.h";
 using mozilla::net::SocketInfo from "mozilla/net/DashboardTypes.h";
 using mozilla::net::DNSCacheEntries from "mozilla/net/DashboardTypes.h";
@@ -47,7 +51,6 @@ namespace mozilla {
 namespace net {
 
 struct HttpHandlerInitArgs {
-  bool mFastOpenSupported;
   nsCString mLegacyAppName;
   nsCString mLegacyAppVersion;
   nsCString mPlatform;
@@ -129,6 +132,7 @@ parent:
                        OriginAttributes aOriginAttributes,
                        nsCString aRequestString)
     returns (bool aAccepted);
+  async ODoHServiceActivated(bool aActivated);
 
 child:
   async Init(SocketPorcessInitAttributes aAttributes);
@@ -143,6 +147,9 @@ child:
   async InitLinuxSandbox(FileDescriptor? sandboxBroker);
   async InitSocketProcessBridgeParent(ProcessId processId, Endpoint<PSocketProcessBridgeParent> endpoint);
   async InitProfiler(Endpoint<PProfilerChild> aEndpoint);
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+  async InitSandboxTesting(Endpoint<PSandboxTestingChild> aEndpoint);
+#endif
   // test-only
   async SocketProcessTelemetryPing();
 

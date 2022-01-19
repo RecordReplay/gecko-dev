@@ -131,7 +131,7 @@ ConvertAppIdToOriginAttrsSQLFunction::OnFunctionCall(
 
   // Create an originAttributes object by inIsolatedMozBrowser.
   // Then create the originSuffix string from this object.
-  OriginAttributes attrs(inIsolatedMozBrowser ? true : false);
+  OriginAttributes attrs(inIsolatedMozBrowser != 0);
   nsAutoCString suffix;
   attrs.CreateSuffix(suffix);
 
@@ -382,7 +382,7 @@ void CookiePersistentStorage::NotifyChangedInternal(nsISupports* aSubject,
       u"added"_ns.Equals(aData)) {
     nsCOMPtr<nsICookie> xpcCookie = do_QueryInterface(aSubject);
     MOZ_ASSERT(xpcCookie);
-    auto cookie = static_cast<Cookie*>(xpcCookie.get());
+    auto* cookie = static_cast<Cookie*>(xpcCookie.get());
     if (!cookie->IsSession() && !aOldCookieIsSession) {
       return;
     }
@@ -454,6 +454,9 @@ void CookiePersistentStorage::RemoveCookiesWithOriginAttributes(
     const OriginAttributesPattern& aPattern, const nsACString& aBaseDomain) {
   mozStorageTransaction transaction(mDBConn, false);
 
+  // XXX Handle the error, bug 1696130.
+  Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
+
   CookieStorage::RemoveCookiesWithOriginAttributes(aPattern, aBaseDomain);
 
   DebugOnly<nsresult> rv = transaction.Commit();
@@ -464,6 +467,9 @@ void CookiePersistentStorage::RemoveCookiesFromExactHost(
     const nsACString& aHost, const nsACString& aBaseDomain,
     const OriginAttributesPattern& aPattern) {
   mozStorageTransaction transaction(mDBConn, false);
+
+  // XXX Handle the error, bug 1696130.
+  Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
 
   CookieStorage::RemoveCookiesFromExactHost(aHost, aBaseDomain, aPattern);
 
@@ -831,6 +837,9 @@ CookiePersistentStorage::OpenDBResult CookiePersistentStorage::TryInitDB(
 
     // Start a transaction for the whole migration block.
     mozStorageTransaction transaction(mSyncConn, true);
+
+    // XXX Handle the error, bug 1696130.
+    Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
 
     switch (dbSchemaVersion) {
       // Upgrading.
@@ -1978,6 +1987,9 @@ nsresult CookiePersistentStorage::RunInTransaction(
   }
 
   mozStorageTransaction transaction(mDBConn, true);
+
+  // XXX Handle the error, bug 1696130.
+  Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
 
   if (NS_FAILED(aCallback->Callback())) {
     Unused << transaction.Rollback();

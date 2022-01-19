@@ -51,8 +51,9 @@ add_task(async function task() {
   info("Network message found.");
 
   // Test that the request appears in the network panel.
-  const target = await TargetFactory.forTab(currentTab);
-  const toolbox = await gDevTools.showToolbox(target, "netmonitor");
+  const toolbox = await gDevTools.showToolboxForTab(currentTab, {
+    toolId: "netmonitor",
+  });
   info("Network panel is open.");
 
   await testNetmonitor(toolbox);
@@ -69,12 +70,12 @@ async function testNetmonitor(toolbox) {
 
   store.dispatch(Actions.batchEnable(false));
 
-  await waitUntil(() => store.getState().requests.requests.length > 0);
   // Lets also wait until all the event timings data requested
   // has completed and the column is rendered.
-  await waitForDOM(
-    document,
-    ".request-list-item:first-child .requests-list-timings-total"
+  await waitFor(() =>
+    document.querySelector(
+      ".request-list-item:first-child .requests-list-timings-total"
+    )
   );
 
   is(

@@ -129,7 +129,7 @@ module.exports = function(config) {
               branches: 75,
             },
             "lib/TopSitesFeed.jsm": {
-              statements: 75,
+              statements: 70,
               lines: 75,
               functions: 80,
               branches: 60,
@@ -189,10 +189,10 @@ module.exports = function(config) {
               branches: 70,
             },
             "content-src/aboutwelcome/**/*.jsx": {
-              statements: 50,
-              lines: 50,
-              functions: 76,
-              branches: 0,
+              statements: 62,
+              lines: 60,
+              functions: 65,
+              branches: 50,
             },
             "content-src/components/**/*.jsx": {
               statements: 51.1,

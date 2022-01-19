@@ -115,6 +115,18 @@ pub struct BuiltDisplayList {
     descriptor: BuiltDisplayListDescriptor,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub enum GeckoDisplayListType {
+  None,
+  Partial(f64),
+  Full(f64),
+}
+
+impl Default for GeckoDisplayListType {
+  fn default() -> Self { GeckoDisplayListType::None }
+}
+
 /// Describes the memory layout of a display list.
 ///
 /// A display list consists of some number of display list items, followed by a number of display
@@ -122,6 +134,8 @@ pub struct BuiltDisplayList {
 #[repr(C)]
 #[derive(Copy, Clone, Default, Deserialize, Serialize)]
 pub struct BuiltDisplayListDescriptor {
+    /// Gecko specific information about the display list.
+    gecko_display_list_type: GeckoDisplayListType,
     /// The first IPC time stamp: before any work has been done
     builder_start_time: u64,
     /// The second IPC time stamp: after serialization
@@ -166,6 +180,10 @@ impl DisplayListWithCache {
 
     pub fn descriptor(&self) -> &BuiltDisplayListDescriptor {
         self.display_list.descriptor()
+    }
+
+    pub fn times(&self) -> (u64, u64, u64) {
+        self.display_list.times()
     }
 
     pub fn data(&self) -> &[u8] {
@@ -220,7 +238,7 @@ pub struct BuiltDisplayListIter<'a> {
     cur_filter_data: Vec<TempFilterData<'a>>,
     cur_filter_primitives: ItemRange<'a, di::FilterPrimitive>,
     cur_clip_chain_items: ItemRange<'a, di::ClipId>,
-    cur_complex_clip: ItemRange<'a, di::ComplexClipRegion>,
+    cur_points: ItemRange<'a, LayoutPoint>,
     peeking: Peek,
     /// Should just be initialized but never populated in release builds
     debug_stats: DebugStats,
@@ -314,8 +332,8 @@ impl<'a, 'b> DisplayItemRef<'a, 'b> {
         self.iter.cur_clip_chain_items
     }
 
-    pub fn complex_clip(&self) -> ItemRange<di::ComplexClipRegion> {
-        self.iter.cur_complex_clip
+    pub fn points(&self) -> ItemRange<LayoutPoint> {
+        self.iter.cur_points
     }
 
     pub fn glyphs(&self) -> ItemRange<GlyphInstance> {
@@ -391,6 +409,14 @@ impl BuiltDisplayList {
         )
     }
 
+    pub fn gecko_display_list_stats(&self) -> (f64, bool) {
+        match self.descriptor.gecko_display_list_type {
+            GeckoDisplayListType::Full(duration) => (duration, true),
+            GeckoDisplayListType::Partial(duration) => (duration, false),
+            _ => (0.0, false)
+        }
+    }
+
     pub fn total_clip_nodes(&self) -> usize {
         self.descriptor.total_clip_nodes
     }
@@ -430,10 +456,6 @@ impl BuiltDisplayList {
 
         while let Some(item) = iterator.next_raw() {
             let serial_di = match *item.item() {
-                Real::Clip(v) => Debug::Clip(
-                    v,
-                    item.iter.cur_complex_clip.iter().collect()
-                ),
                 Real::ClipChain(v) => Debug::ClipChain(
                     v,
                     item.iter.cur_clip_chain_items.iter().collect()
@@ -471,6 +493,9 @@ impl BuiltDisplayList {
                 ),
                 Real::SetGradientStops => Debug::SetGradientStops(
                     item.iter.cur_stops.iter().collect()
+                ),
+                Real::SetPoints => Debug::SetPoints(
+                    item.iter.cur_points.iter().collect()
                 ),
                 Real::RectClip(v) => Debug::RectClip(v),
                 Real::RoundedRectClip(v) => Debug::RoundedRectClip(v),
@@ -540,7 +565,7 @@ impl<'a> BuiltDisplayListIter<'a> {
             cur_filter_data: Vec::new(),
             cur_filter_primitives: ItemRange::default(),
             cur_clip_chain_items: ItemRange::default(),
-            cur_complex_clip: ItemRange::default(),
+            cur_points: ItemRange::default(),
             peeking: Peek::NotPeeking,
             debug_stats: DebugStats {
                 last_addr: data.as_ptr() as usize,
@@ -607,8 +632,8 @@ impl<'a> BuiltDisplayListIter<'a> {
 
         // Don't let these bleed into another item
         self.cur_stops = ItemRange::default();
-        self.cur_complex_clip = ItemRange::default();
         self.cur_clip_chain_items = ItemRange::default();
+        self.cur_points = ItemRange::default();
         self.cur_filters = ItemRange::default();
         self.cur_filter_primitives = ItemRange::default();
         self.cur_filter_data.clear();
@@ -619,7 +644,8 @@ impl<'a> BuiltDisplayListIter<'a> {
                 SetGradientStops |
                 SetFilterOps |
                 SetFilterData |
-                SetFilterPrimitives => {
+                SetFilterPrimitives |
+                SetPoints => {
                     // These are marker items for populating other display items, don't yield them.
                     continue;
                 }
@@ -681,13 +707,13 @@ impl<'a> BuiltDisplayListIter<'a> {
                 self.cur_filter_primitives = skip_slice::<di::FilterPrimitive>(&mut self.data);
                 self.debug_stats.log_slice("set_filter_primitives.primitives", &self.cur_filter_primitives);
             }
+            SetPoints => {
+                self.cur_points = skip_slice::<LayoutPoint>(&mut self.data);
+                self.debug_stats.log_slice("set_points.points", &self.cur_points);
+            }
             ClipChain(_) => {
                 self.cur_clip_chain_items = skip_slice::<di::ClipId>(&mut self.data);
                 self.debug_stats.log_slice("clip_chain.clip_ids", &self.cur_clip_chain_items);
-            }
-            Clip(_) => {
-                self.cur_complex_clip = skip_slice::<di::ComplexClipRegion>(&mut self.data);
-                self.debug_stats.log_slice("clip.complex_clips", &self.cur_complex_clip);
             }
             Text(_) => {
                 self.cur_glyphs = skip_slice::<GlyphInstance>(&mut self.data);
@@ -839,11 +865,6 @@ impl<'de> Deserialize<'de> for BuiltDisplayList {
         let mut total_spatial_nodes = FIRST_SPATIAL_NODE_INDEX;
         for complete in list {
             let item = match complete {
-                Debug::Clip(v, complex_clips) => {
-                    total_clip_nodes += 1;
-                    DisplayListBuilder::push_iter_impl(&mut temp, complex_clips);
-                    Real::Clip(v)
-                },
                 Debug::ClipChain(v, clip_chain_ids) => {
                     DisplayListBuilder::push_iter_impl(&mut temp, clip_chain_ids);
                     Real::ClipChain(v)
@@ -894,6 +915,10 @@ impl<'de> Deserialize<'de> for BuiltDisplayList {
                     DisplayListBuilder::push_iter_impl(&mut temp, stops);
                     Real::SetGradientStops
                 },
+                Debug::SetPoints(points) => {
+                    DisplayListBuilder::push_iter_impl(&mut temp, points);
+                    Real::SetPoints
+                },
                 Debug::RectClip(v) => Real::RectClip(v),
                 Debug::RoundedRectClip(v) => Real::RoundedRectClip(v),
                 Debug::ImageMaskClip(v) => Real::ImageMaskClip(v),
@@ -931,6 +956,7 @@ impl<'de> Deserialize<'de> for BuiltDisplayList {
         Ok(BuiltDisplayList {
             data,
             descriptor: BuiltDisplayListDescriptor {
+                gecko_display_list_type: GeckoDisplayListType::None,
                 builder_start_time: 0,
                 builder_finish_time: 1,
                 send_start_time: 1,
@@ -1563,7 +1589,10 @@ impl DisplayListBuilder {
                     vertical_flip,
                     rotation,
                 },
-                kind: di::ReferenceFrameKind::Transform,
+                kind: di::ReferenceFrameKind::Transform {
+                    is_2d_scale_translation: false,
+                    should_snap: false,
+                },
                 id,
             },
         });
@@ -1770,14 +1799,25 @@ impl DisplayListBuilder {
         &mut self,
         parent_space_and_clip: &di::SpaceAndClipInfo,
         image_mask: di::ImageMask,
+        points: &[LayoutPoint],
+        fill_rule: di::FillRule,
     ) -> di::ClipId {
         let id = self.generate_clip_index();
         let item = di::DisplayItem::ImageMaskClip(di::ImageMaskClipDisplayItem {
             id,
             parent_space_and_clip: *parent_space_and_clip,
             image_mask,
+            fill_rule,
         });
 
+        // We only need to supply points if there are at least 3, which is the
+        // minimum to specify a polygon. BuiltDisplayListIter.next ensures that points
+        // are cleared between processing other display items, so we'll correctly get
+        // zero points when no SetPoints item has been pushed.
+        if points.len() >= 3 {
+            self.push_item(&di::DisplayItem::SetPoints);
+            self.push_iter(points);
+        }
         self.push_item(&item);
         id
     }
@@ -1811,28 +1851,6 @@ impl DisplayListBuilder {
         });
 
         self.push_item(&item);
-        id
-    }
-
-    pub fn define_clip<I>(
-        &mut self,
-        parent_space_and_clip: &di::SpaceAndClipInfo,
-        clip_rect: LayoutRect,
-        complex_clips: I,
-    ) -> di::ClipId
-    where
-        I: IntoIterator<Item = di::ComplexClipRegion>,
-        I::IntoIter: ExactSizeIterator + Clone,
-    {
-        let id = self.generate_clip_index();
-        let item = di::DisplayItem::Clip(di::ClipDisplayItem {
-            id,
-            parent_space_and_clip: *parent_space_and_clip,
-            clip_rect,
-        });
-
-        self.push_item(&item);
-        self.push_iter(complex_clips);
         id
     }
 
@@ -1981,6 +1999,7 @@ impl DisplayListBuilder {
             self.pipeline_id,
             BuiltDisplayList {
                 descriptor: BuiltDisplayListDescriptor {
+                    gecko_display_list_type: GeckoDisplayListType::None,
                     builder_start_time: self.builder_start_time,
                     builder_finish_time: end_time,
                     send_start_time: end_time,

@@ -102,9 +102,6 @@ function connectToContentProcess(connection, mm, onDestroy) {
     const onMessageManagerClose = DevToolsUtils.makeInfallible(
       (subject, topic, data) => {
         if (subject == mm) {
-          // Send the "tabDetached" event before closing the connection which
-          // will destroy fronts on the client.
-          connection.send({ from: actor.actor, type: "tabDetached" });
           onClose();
         }
       }

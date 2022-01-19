@@ -10,8 +10,8 @@
 option("--disable-optimize", nargs="?", help="Disable optimizations via compiler flags")
 
 
-@depends("--enable-optimize", "--help")
-def moz_optimize(option, _):
+@depends("--enable-optimize")
+def moz_optimize(option):
     flags = None
 
     if len(option):
@@ -31,48 +31,6 @@ def moz_optimize(option, _):
 set_config("MOZ_OPTIMIZE", moz_optimize.optimize)
 add_old_configure_assignment("MOZ_OPTIMIZE", moz_optimize.optimize)
 add_old_configure_assignment("MOZ_CONFIGURE_OPTIMIZE_FLAGS", moz_optimize.flags)
-
-# yasm detection
-# ==============================================================
-yasm = check_prog("YASM", ["yasm"], allow_missing=True)
-
-
-@depends_if(yasm)
-@checking("yasm version")
-def yasm_version(yasm):
-    version = (
-        check_cmd_output(
-            yasm, "--version", onerror=lambda: die("Failed to get yasm version.")
-        )
-        .splitlines()[0]
-        .split()[1]
-    )
-    return Version(version)
-
-
-@depends(yasm, target)
-def yasm_asflags(yasm, target):
-    if yasm:
-        asflags = {
-            ("OSX", "x86"): ["-f", "macho32"],
-            ("OSX", "x86_64"): ["-f", "macho64"],
-            ("WINNT", "x86"): ["-f", "win32"],
-            ("WINNT", "x86_64"): ["-f", "x64"],
-        }.get((target.os, target.cpu), None)
-        if asflags is None:
-            # We're assuming every x86 platform we support that's
-            # not Windows or Mac is ELF.
-            if target.cpu == "x86":
-                asflags = ["-f", "elf32"]
-            elif target.cpu == "x86_64":
-                asflags = ["-f", "elf64"]
-        if asflags:
-            asflags += ["-rnasm", "-pnasm"]
-        return asflags
-
-
-set_config("YASM_ASFLAGS", yasm_asflags)
-
 
 # Android NDK
 # ==============================================================
@@ -131,8 +89,10 @@ with only_when(host_is_osx | target_is_osx):
     @imports(_from="os.path", _import="isdir")
     @imports("plistlib")
     def macos_sdk(sdk, host):
+        # When we change the SDK we build with, please update the manual SDK
+        # installation docs:
+        # https://firefox-source-docs.mozilla.org/setup/macos_build.html#macos-sdk-is-unsupported
         sdk_min_version = Version("10.12")
-        sdk_max_version = Version("11.1")
 
         if sdk:
             sdk = sdk[0]
@@ -168,17 +128,13 @@ with only_when(host_is_osx | target_is_osx):
                 % sdk
             )
         version = Version(obj["Version"])
+        sdk_installation_docs_url = "https://firefox-source-docs.mozilla.org/setup/macos_build.html#macos-sdk-is-unsupported"
         if version < sdk_min_version:
             die(
-                'SDK version "%s" is too old. Please upgrade to at least %s. '
-                "You may need to point to it using --with-macos-sdk=<path> in your "
-                "mozconfig." % (version, sdk_min_version)
-            )
-        if version > sdk_max_version:
-            die(
-                'SDK version "%s" is unsupported. Please downgrade to version '
-                "%s. You may need to point to it using --with-macos-sdk=<path> in "
-                "your mozconfig." % (version, sdk_max_version)
+                'SDK version "%s" is too old. Please upgrade to at least %s. Try '
+                "updating your system Xcode. If that's not sufficient, see the manual "
+                "SDK installation docs: %s"
+                % (version, sdk_min_version, sdk_installation_docs_url)
             )
         return sdk
 
@@ -587,7 +543,6 @@ option(
     "--with-visual-studio-version",
     when=host_is_windows,
 )
-@imports(_from="__builtin__", _import="sorted")
 @imports(_from="operator", _import="itemgetter")
 def vc_compiler_paths_for_version(
     host, vs_major_version, env, vc_path, vs_release_name
@@ -654,13 +609,17 @@ def vc_toolchain_search_path(vc_compiler_path, original_path):
     return result
 
 
-clang_search_path = bootstrap_search_path("clang", "bin")
+clang_search_path = bootstrap_search_path("clang/bin")
 
 
-@depends(bootstrap_search_path("rustc", "bin", when="MOZ_AUTOMATION"), original_path)
+@depends(
+    bootstrap_search_path("rustc/bin", when="MOZ_AUTOMATION"),
+    bootstrap_search_path_order,
+    original_path,
+)
 @imports("os")
 @imports(_from="os", _import="environ")
-def rust_search_path(rust_path, original_path):
+def rust_search_path(rust_path, search_order, original_path):
     result = list(rust_path or original_path)
     # Also add the rustup install directory for cargo/rustc.
     cargo_home = environ.get("CARGO_HOME", "")
@@ -669,7 +628,10 @@ def rust_search_path(rust_path, original_path):
     else:
         cargo_home = os.path.expanduser(os.path.join("~", ".cargo"))
     rustup_path = os.path.join(cargo_home, "bin")
-    result.append(rustup_path)
+    if search_order == "prepend":
+        result.insert(0, rustup_path)
+    else:
+        result.append(rustup_path)
     return result
 
 
@@ -715,7 +677,9 @@ ccache = check_prog(
     "CCACHE",
     progs=(),
     input=ccache,
-    paths=bootstrap_search_path("sccache"),
+    paths=bootstrap_search_path(
+        "sccache", when=depends("CCACHE")(lambda c: len(c) and c[0] == "sccache")
+    ),
     allow_missing=True,
 )
 
@@ -953,10 +917,64 @@ def provided_program(env_var, when=None):
     return provided
 
 
-def prepare_flags(host_or_target, macos_sdk):
-    if macos_sdk and host_or_target.os == "OSX":
-        return ["-isysroot", macos_sdk]
-    return []
+option(
+    "--with-sysroot",
+    env="SYSROOT",
+    nargs=1,
+    when=target_is_linux_or_wasi,
+    help="Build using the given sysroot directory",
+)
+
+sysroot_input = depends("--with-sysroot", when=target_is_linux_or_wasi)(lambda x: x)
+bootstrap_sysroot = depends(target_is_linux, sysroot_input)(
+    lambda linux, input: linux and not input and input.origin == "default"
+)
+
+# We'll re-evaluate later, but for now, don't use the sysroot automatically
+# even if it exists, unless --enable-bootstrap was passed explicitly, or when
+# building on automation.
+@depends(
+    sysroot_input,
+    bootstrap_path("sysroot", context=target, when=bootstrap_sysroot),
+    "--enable-bootstrap",
+    "MOZ_AUTOMATION",
+)
+def sysroot_path(sysroot_input, path, bootstrap, automation):
+    if sysroot_input:
+        path = sysroot_input[0]
+    elif sysroot_input is not None and sysroot_input.origin != "default":
+        return
+    if sysroot_input or (bootstrap and bootstrap.origin != "default") or automation:
+        if path:
+            log.info("Using sysroot in %s", path)
+        return path
+
+
+@template
+def sysroot_flags(host_or_target):
+    @depends(
+        host_or_target, macos_sdk, sysroot_path if host_or_target is target else never
+    )
+    def sysroot_flags(host_or_target, macos_sdk, sysroot_path):
+        if macos_sdk and host_or_target.os == "OSX":
+            return ["-isysroot", macos_sdk]
+        if sysroot_path:
+            return ["--sysroot", sysroot_path]
+        return []
+
+    return sysroot_flags
+
+
+host_sysroot_flags = sysroot_flags(host)
+target_sysroot_flags = sysroot_flags(target)
+
+
+@depends(target, when=sysroot_path)
+def multiarch_dir(target):
+    if target.cpu == "x86":
+        # Turn e.g. i686-linux-gnu into i386-linux-gnu
+        return target.toolchain.replace(target.raw_cpu, "i386")
+    return target.toolchain
 
 
 def minimum_gcc_version():
@@ -994,6 +1012,11 @@ def compiler(
         target: "target",
     }[host_or_target]
 
+    sysroot_flags = {
+        host: host_sysroot_flags,
+        target: target_sysroot_flags,
+    }[host_or_target]
+
     var = {
         ("C", target): "CC",
         ("C++", target): "CXX",
@@ -1028,14 +1051,16 @@ def compiler(
         paths=clang_search_path,
     )
 
-    @depends(compiler, provided_compiler, compiler_wrapper, host_or_target, macos_sdk)
+    @depends(
+        compiler, provided_compiler, compiler_wrapper, host_or_target, sysroot_flags
+    )
     @checking("whether %s can be used" % what, lambda x: bool(x))
     @imports(_from="mozbuild.shellutil", _import="quote")
     def valid_compiler(
-        compiler, provided_compiler, compiler_wrapper, host_or_target, macos_sdk
+        compiler, provided_compiler, compiler_wrapper, host_or_target, sysroot_flags
     ):
         wrapper = list(compiler_wrapper or ())
-        flags = prepare_flags(host_or_target, macos_sdk)
+        flags = list(sysroot_flags or ())
         if provided_compiler:
             provided_wrapper = list(provided_compiler.wrapper)
             # When doing a subconfigure, the compiler is set by old-configure
@@ -1763,6 +1788,10 @@ def security_hardening_cflags(
     js_flags = []
     js_ldflags = []
 
+    # WASI compiler doesn't support security hardening cflags
+    if target.os == "WASI":
+        return
+
     # ----------------------------------------------------------
     # If hardening is explicitly enabled, or not explicitly disabled
     if hardening_flag.origin == "default" or hardening_flag:
@@ -1921,80 +1950,6 @@ def frame_pointer_flags(enable, flags):
 set_config("MOZ_FRAMEPTR_FLAGS", frame_pointer_flags)
 
 
-# nasm detection
-# ==============================================================
-nasm = check_prog(
-    "NASM", ["nasm"], allow_missing=True, paths=bootstrap_search_path("nasm")
-)
-
-
-@depends_if(nasm)
-@checking("nasm version")
-def nasm_version(nasm):
-    (retcode, stdout, _) = get_cmd_output(nasm, "-v")
-    if retcode:
-        # mac stub binary
-        return None
-
-    version = stdout.splitlines()[0].split()[2]
-    return Version(version)
-
-
-@depends_if(nasm_version)
-def nasm_major_version(nasm_version):
-    return str(nasm_version.major)
-
-
-@depends_if(nasm_version)
-def nasm_minor_version(nasm_version):
-    return str(nasm_version.minor)
-
-
-set_config("NASM_MAJOR_VERSION", nasm_major_version)
-set_config("NASM_MINOR_VERSION", nasm_minor_version)
-
-
-@depends(nasm, target)
-def nasm_asflags(nasm, target):
-    if nasm:
-        asflags = {
-            ("OSX", "x86"): ["-f", "macho32"],
-            ("OSX", "x86_64"): ["-f", "macho64"],
-            ("WINNT", "x86"): ["-f", "win32"],
-            ("WINNT", "x86_64"): ["-f", "win64"],
-        }.get((target.os, target.cpu), None)
-        if asflags is None:
-            # We're assuming every x86 platform we support that's
-            # not Windows or Mac is ELF.
-            if target.cpu == "x86":
-                asflags = ["-f", "elf32"]
-            elif target.cpu == "x86_64":
-                asflags = ["-f", "elf64"]
-        return asflags
-
-
-set_config("NASM_ASFLAGS", nasm_asflags)
-
-
-@depends(nasm_asflags)
-def have_nasm(value):
-    if value:
-        return True
-
-
-@depends(yasm_asflags)
-def have_yasm(yasm_asflags):
-    if yasm_asflags:
-        return True
-
-
-set_config("HAVE_NASM", have_nasm)
-
-set_config("HAVE_YASM", have_yasm)
-# Until the YASM variable is not necessary in old-configure.
-add_old_configure_assignment("YASM", have_yasm)
-
-
 # Code Coverage
 # ==============================================================
 
@@ -2011,11 +1966,11 @@ set_config("MOZ_CODE_COVERAGE", code_coverage)
 set_define("MOZ_CODE_COVERAGE", code_coverage)
 
 
-@depends(target, c_compiler, vc_path, check_build_environment, when=code_coverage)
+@depends(target, c_compiler, check_build_environment, when=code_coverage)
 @imports("os")
 @imports("re")
 @imports(_from="__builtin__", _import="open")
-def coverage_cflags(target, c_compiler, vc_path, build_env):
+def coverage_cflags(target, c_compiler, build_env):
     cflags = ["--coverage"]
 
     # clang 11 no longer accepts this flag (its behavior became the default)
@@ -2025,16 +1980,25 @@ def coverage_cflags(target, c_compiler, vc_path, build_env):
             "-coverage-no-function-names-in-data",
         ]
 
+    exclude = []
     if target.os == "WINNT" and c_compiler.type == "clang-cl":
-        # The Visual Studio directory is the parent of the Visual C++ directory.
-        vs_path = os.path.dirname(vc_path)
+        # VS files
+        exclude.append("^.*[vV][sS]20[0-9]{2}.*$")
+        # Files in fetches directory.
+        exclude.append("^.*[\\\\/]fetches[\\\\/].*$")
+    elif target.os == "OSX":
+        # Files in fetches directory.
+        exclude.append("^.*/fetches/.*$")
+    elif target.os == "GNU":
+        # Files in fetches directory.
+        exclude.append("^.*/fetches/.*$")
+        # Files in /usr/
+        exclude.append("^/usr/.*$")
 
-        # We need to get the real path of Visual Studio, which can be in a
-        # symlinked directory (for example, on automation).
-        vs_path = os.path.realpath(vs_path)
-
+    if exclude:
+        exclude = ";".join(exclude)
         cflags += [
-            "-fprofile-exclude-files=^{}.*$".format(re.escape(vs_path)),
+            f"-fprofile-exclude-files={exclude}",
         ]
 
     response_file_path = os.path.join(build_env.topobjdir, "code_coverage_cflags")
@@ -2046,155 +2010,6 @@ def coverage_cflags(target, c_compiler, vc_path, build_env):
 
 
 set_config("COVERAGE_CFLAGS", coverage_cflags)
-
-# ==============================================================
-
-option(env="RUSTFLAGS", nargs=1, help="Rust compiler flags")
-set_config("RUSTFLAGS", depends("RUSTFLAGS")(lambda flags: flags))
-
-
-# Rust compiler flags
-# ==============================================================
-
-option(
-    env="RUSTC_OPT_LEVEL",
-    nargs=1,
-    help="Rust compiler optimization level (-C opt-level=%s)",
-)
-
-# --enable-release kicks in full optimizations.
-imply_option("RUSTC_OPT_LEVEL", "2", when="--enable-release")
-
-
-@depends("RUSTC_OPT_LEVEL", moz_optimize)
-def rustc_opt_level(opt_level_option, moz_optimize):
-    if opt_level_option:
-        return opt_level_option[0]
-    else:
-        return "1" if moz_optimize.optimize else "0"
-
-
-@depends(
-    rustc_opt_level,
-    debug_rust,
-    target,
-    "--enable-debug-symbols",
-    "--enable-frame-pointers",
-)
-def rust_compile_flags(opt_level, debug_rust, target, debug_symbols, frame_pointers):
-    # Cargo currently supports only two interesting profiles for building:
-    # development and release. Those map (roughly) to --enable-debug and
-    # --disable-debug in Gecko, respectively.
-    #
-    # But we'd also like to support an additional axis of control for
-    # optimization level. Since Cargo only supports 2 profiles, we're in
-    # a bit of a bind.
-    #
-    # Code here derives various compiler options given other configure options.
-    # The options defined here effectively override defaults specified in
-    # Cargo.toml files.
-
-    debug_assertions = None
-    debug_info = None
-
-    # opt-level=0 implies -C debug-assertions, which may not be desired
-    # unless Rust debugging is enabled.
-    if opt_level == "0" and not debug_rust:
-        debug_assertions = False
-
-    if debug_symbols:
-        debug_info = "2"
-
-    opts = []
-
-    if opt_level is not None:
-        opts.append("opt-level=%s" % opt_level)
-    if debug_assertions is not None:
-        opts.append("debug-assertions=%s" % ("yes" if debug_assertions else "no"))
-    if debug_info is not None:
-        opts.append("debuginfo=%s" % debug_info)
-    if frame_pointers:
-        opts.append("force-frame-pointers=yes")
-    # CFG for arm64 is crashy, see `def security_hardening_cflags`.
-    if target.kernel == "WINNT" and target.cpu != "aarch64":
-        opts.append("control-flow-guard=yes")
-
-    flags = []
-    for opt in opts:
-        flags.extend(["-C", opt])
-
-    return flags
-
-
-# Rust incremental compilation
-# ==============================================================
-
-
-option("--disable-cargo-incremental", help="Disable incremental rust compilation.")
-
-
-@depends(
-    rustc_opt_level,
-    debug_rust,
-    "MOZ_AUTOMATION",
-    code_coverage,
-    "--disable-cargo-incremental",
-    using_sccache,
-    "RUSTC_WRAPPER",
-)
-@imports("os")
-def cargo_incremental(
-    opt_level,
-    debug_rust,
-    automation,
-    code_coverage,
-    enabled,
-    using_sccache,
-    rustc_wrapper,
-):
-    """Return a value for the CARGO_INCREMENTAL environment variable."""
-
-    if not enabled:
-        return "0"
-
-    # We never want to use incremental compilation in automation.  sccache
-    # handles our automation use case much better than incremental compilation
-    # would.
-    if automation:
-        return "0"
-
-    # Coverage instrumentation doesn't play well with incremental compilation
-    # https://github.com/rust-lang/rust/issues/50203.
-    if code_coverage:
-        return "0"
-
-    # Incremental compilation doesn't work as well as it should, and if we're
-    # using sccache, it's better to use sccache than incremental compilation.
-    if not using_sccache and rustc_wrapper:
-        rustc_wrapper = os.path.basename(rustc_wrapper[0])
-        if os.path.splitext(rustc_wrapper)[0].lower() == "sccache":
-            using_sccache = True
-    if using_sccache:
-        return "0"
-
-    # Incremental compilation is automatically turned on for debug builds, so
-    # we don't need to do anything special here.
-    if debug_rust:
-        return
-
-    # --enable-release automatically sets -O2 for Rust code, and people can
-    # set RUSTC_OPT_LEVEL to 2 or even 3 if they want to profile Rust code.
-    # Let's assume that if Rust code is using -O2 or higher, we shouldn't
-    # be using incremental compilation, because we'd be imposing a
-    # significant runtime cost.
-    if opt_level not in ("0", "1"):
-        return
-
-    # We're clear to use incremental compilation!
-    return "1"
-
-
-set_config("CARGO_INCREMENTAL", cargo_incremental)
 
 # Linker detection
 # ==============================================================
@@ -2344,25 +2159,28 @@ def select_linker(
         )
 
     result = try_linker(linker)
-    if result is None:
-        if linker:
-            die("Could not use {} as linker".format(linker))
-        die("Failed to find a linker")
+    if result is None and linker:
+        die("Could not use {} as linker".format(linker))
 
     if (
         linker is None
         and enable_gold.origin == "default"
         and developer_options
-        and result.KIND in ("bfd", "gold")
+        and (result is None or result.KIND in ("bfd", "gold"))
     ):
         # try and use lld if available.
         tried = try_linker("lld")
-        if result.KIND != "gold" and (tried is None or tried.KIND != "lld"):
+        if (result is None or result.KIND != "gold") and (
+            tried is None or tried.KIND != "lld"
+        ):
             tried = try_linker("gold")
             if tried is None or tried.KIND != "gold":
                 tried = None
         if tried:
             result = tried
+
+    if result is None:
+        die("Failed to find a linker")
 
     # If an explicit linker was given, error out if what we found is different.
     if linker and not linker.startswith(result.KIND):
@@ -2374,15 +2192,24 @@ def select_linker(
 set_config("LINKER_KIND", select_linker.KIND)
 
 
-@depends_if(select_linker, macos_sdk)
-def linker_ldflags(linker, macos_sdk):
+@depends_if(select_linker, target, macos_sdk, sysroot_path, multiarch_dir)
+@imports("os")
+def linker_ldflags(linker, target, macos_sdk, sysroot_path, multiarch_dir):
     flags = list((linker and linker.LINKER_FLAG) or [])
-    if macos_sdk:
+    if target.kernel == "Darwin":
         if linker and linker.KIND == "ld64":
             flags.append("-Wl,-syslibroot,%s" % macos_sdk)
         else:
             flags.append("-Wl,--sysroot=%s" % macos_sdk)
 
+    # rpath-link is irrelevant to wasm, see for more info https://github.com/emscripten-core/emscripten/issues/11076.
+    if sysroot_path and multiarch_dir and target.os != "WASI":
+        for d in ("lib", "usr/lib"):
+            multiarch_lib_dir = os.path.join(sysroot_path, d, multiarch_dir)
+            if os.path.exists(multiarch_lib_dir):
+                # Non-Debian-patched binutils linkers (both BFD and gold) don't lookup
+                # in multi-arch directories.
+                flags.append("-Wl,-rpath-link,%s" % multiarch_lib_dir)
     return flags
 
 
@@ -2628,8 +2455,26 @@ add_gcc_flag(
 option("--enable-fuzzing", help="Enable fuzzing support")
 
 
+@depends(build_project)
+def js_build(build_project):
+    return build_project == "js"
+
+
+option(
+    "--enable-js-fuzzilli",
+    when=js_build,
+    help="Enable fuzzilli support for the JS engine",
+)
+
+
 @depends("--enable-fuzzing")
 def enable_fuzzing(value):
+    if value:
+        return True
+
+
+@depends("--enable-js-fuzzilli", when=js_build)
+def enable_js_fuzzilli(value):
     if value:
         return True
 
@@ -2650,9 +2495,9 @@ def enable_libfuzzer(fuzzing, afl, c_compiler, target):
         return True
 
 
-@depends(enable_fuzzing, enable_aflfuzzer, enable_libfuzzer)
-def enable_fuzzing_interfaces(fuzzing, afl, libfuzzer):
-    if fuzzing and (afl or libfuzzer):
+@depends(enable_fuzzing, enable_aflfuzzer, enable_libfuzzer, enable_js_fuzzilli)
+def enable_fuzzing_interfaces(fuzzing, afl, libfuzzer, enable_js_fuzzilli):
+    if fuzzing and (afl or libfuzzer) and not enable_js_fuzzilli:
         return True
 
 
@@ -2667,6 +2512,9 @@ set_config("FUZZING_INTERFACES", enable_fuzzing_interfaces)
 set_define("FUZZING_INTERFACES", enable_fuzzing_interfaces)
 add_old_configure_assignment("FUZZING_INTERFACES", enable_fuzzing_interfaces)
 
+set_config("FUZZING_JS_FUZZILLI", enable_js_fuzzilli)
+set_define("FUZZING_JS_FUZZILLI", enable_js_fuzzilli)
+
 
 @depends(
     c_compiler.try_compile(
@@ -2675,8 +2523,9 @@ add_old_configure_assignment("FUZZING_INTERFACES", enable_fuzzing_interfaces)
         check_msg="whether the C compiler supports -fsanitize=fuzzer-no-link",
     ),
     tsan,
+    enable_js_fuzzilli,
 )
-def libfuzzer_flags(value, tsan):
+def libfuzzer_flags(value, tsan, enable_js_fuzzilli):
     if tsan:
         # With ThreadSanitizer, we should not use any libFuzzer instrumentation because
         # it is incompatible (e.g. there are races on global sanitizer coverage counters).
@@ -2689,7 +2538,11 @@ def libfuzzer_flags(value, tsan):
         #   - dom/media/webrtc/transport/third_party/nICEr/nicer.gyp
         return namespace(no_link_flag_supported=False, use_flags=[])
 
-    if value:
+    if enable_js_fuzzilli:
+        # Fuzzilli comes with its own trace-pc interceptors and flag requirements.
+        no_link_flag_supported = False
+        use_flags = ["-fsanitize-coverage=trace-pc-guard", "-g"]
+    elif value:
         no_link_flag_supported = True
         # recommended for (and only supported by) clang >= 6
         use_flags = ["-fsanitize=fuzzer-no-link"]
@@ -2752,7 +2605,7 @@ def make_shared_library(target, compiler):
 
     cc = ["$(CC)", "$(COMPUTED_C_LDFLAGS)"]
     cxx = ["$(CXX)", "$(COMPUTED_CXX_LDFLAGS)"]
-    flags = ["$(PGO_CFLAGS)", "$(DSO_PIC_CFLAGS)", "$(DSO_LDOPTS)"]
+    flags = ["$(PGO_CFLAGS)", "$(DSO_LDOPTS)"]
     output = ["-o", "$@"]
 
     if target.kernel == "Darwin":
@@ -2840,3 +2693,78 @@ check_prog("NM", nm_names, paths=clang_search_path, when=target_is_linux)
 option("--enable-cpp-rtti", help="Enable C++ RTTI")
 
 add_old_configure_assignment("_MOZ_USE_RTTI", "1", when="--enable-cpp-rtti")
+
+
+option(
+    "--enable-path-remapping",
+    nargs="*",
+    choices=("c", "rust"),
+    help="Enable remapping source and object paths in compiled outputs.",
+)
+
+
+@depends("--enable-path-remapping")
+def path_remapping(value):
+    if len(value):
+        return value
+    if bool(value):
+        return ["c", "rust"]
+    return []
+
+
+@depends(
+    target,
+    check_build_environment,
+    sysroot_path,
+    macos_sdk,
+    windows_sdk_dir,
+    vc_path,
+    when="--enable-path-remapping",
+)
+def path_remappings(
+    target, build_env, sysroot_path, macos_sdk, windows_sdk_dir, vc_path
+):
+    win = target.kernel == "WINNT"
+
+    # The prefix maps are processed in the order they're specified on the
+    # command line.  Therefore, to accommodate object directories in the source
+    # directory, it's important that we map the topobjdir before the topsrcdir,
+    # 'cuz we might have /src/obj/=/o/ and /src/=/s/.  The various other
+    # directories might be subdirectories of topsrcdir as well, so they come
+    # earlier still.
+
+    path_remappings = []
+
+    # We will have only one sysroot or SDK, so all can have the same mnemonic: K
+    # for "kit" (since S is taken for "source").  See
+    # https://blog.llvm.org/2019/11/deterministic-builds-with-clang-and-lld.html
+    # for how to use the Windows `subst` command to map these in debuggers and
+    # IDEs.
+    if sysroot_path:
+        path_remappings.append((sysroot_path, "k:/" if win else "/sysroot/"))
+    if macos_sdk:
+        path_remappings.append((macos_sdk, "k:/" if win else "/sysroot/"))
+    if windows_sdk_dir:
+        path_remappings.append((windows_sdk_dir, "k:/" if win else "/windows_sdk/"))
+    if vc_path:
+        path_remappings.append((vc_path, "v:/" if win else "/vc/"))
+
+    path_remappings += [
+        (build_env.topobjdir, "o:/" if win else "/topobjdir/"),
+        (build_env.topsrcdir, "s:/" if win else "/topsrcdir/"),
+    ]
+
+    path_remappings = [
+        (normsep(old).rstrip("/") + "/", new) for old, new in path_remappings
+    ]
+
+    # It is tempting to sort these, but we want the order to be the same across
+    # machines so that we can share cache hits.  Therefore we reject bad
+    # configurations rather than trying to make the configuration good.
+    for i in range(len(path_remappings) - 1):
+        p = path_remappings[i][0]
+        for q, _ in path_remappings[i + 1 :]:
+            if q.startswith(p):
+                die(f"Cannot remap paths because {p} is an ancestor of {q}")
+
+    return path_remappings

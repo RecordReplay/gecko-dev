@@ -135,6 +135,30 @@ already_AddRefed<MatchPatternSet> ParseMatches(
   return result.forget();
 }
 
+WebAccessibleResource::WebAccessibleResource(
+    GlobalObject& aGlobal, const WebAccessibleResourceInit& aInit,
+    ErrorResult& aRv) {
+  ParseGlobs(aGlobal, aInit.mResources, mWebAccessiblePaths, aRv);
+  if (aRv.Failed()) {
+    return;
+  }
+
+  if (aInit.mMatches.WasPassed()) {
+    MatchPatternOptions options;
+    options.mRestrictSchemes = true;
+    mMatches = ParseMatches(aGlobal, aInit.mMatches.Value(), options,
+                            ErrorBehavior::CreateEmptyPattern, aRv);
+  }
+}
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(WebAccessibleResource)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTION(WebAccessibleResource)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(WebAccessibleResource)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(WebAccessibleResource)
+
 /*****************************************************************************
  * WebExtensionPolicy
  *****************************************************************************/
@@ -150,15 +174,6 @@ WebExtensionPolicy::WebExtensionPolicy(GlobalObject& aGlobal,
       mLocalizeCallback(aInit.mLocalizeCallback),
       mIsPrivileged(aInit.mIsPrivileged),
       mPermissions(new AtomSet(aInit.mPermissions)) {
-  if (!ParseGlobs(aGlobal, aInit.mWebAccessibleResources, mWebAccessiblePaths,
-                  aRv)) {
-    return;
-  }
-
-  // We set this here to prevent this policy changing after creation.
-  mAllowPrivateBrowsingByDefault =
-      StaticPrefs::extensions_allowPrivateBrowsingByDefault();
-
   MatchPatternOptions options;
   options.mRestrictSchemes = !HasPermission(nsGkAtoms::mozillaAddons);
 
@@ -181,6 +196,16 @@ WebExtensionPolicy::WebExtensionPolicy(GlobalObject& aGlobal,
 
   if (mExtensionPageCSP.IsVoid()) {
     EPS().GetDefaultCSP(mExtensionPageCSP);
+  }
+
+  mWebAccessibleResources.SetCapacity(aInit.mWebAccessibleResources.Length());
+  for (const auto& resourceInit : aInit.mWebAccessibleResources) {
+    RefPtr<WebAccessibleResource> resource =
+        new WebAccessibleResource(aGlobal, resourceInit, aRv);
+    if (aRv.Failed()) {
+      return;
+    }
+    mWebAccessibleResources.AppendElement(std::move(resource));
   }
 
   mContentScripts.SetCapacity(aInit.mContentScripts.Length());
@@ -280,8 +305,9 @@ bool WebExtensionPolicy::Enable() {
   }
 
   if (XRE_IsParentProcess()) {
-    // Reserve a BrowsingContextGroup ID for use by this WebExtensionPolicy.
-    mBrowsingContextGroupId = nsContentUtils::GenerateBrowsingContextId();
+    // Reserve a BrowsingContextGroup for use by this WebExtensionPolicy.
+    RefPtr<BrowsingContextGroup> group = BrowsingContextGroup::Create();
+    mBrowsingContextGroup = group->MakeKeepAlivePtr();
   }
 
   Unused << Proto()->SetSubstitution(MozExtensionHostname(), mBaseURI);
@@ -296,6 +322,12 @@ bool WebExtensionPolicy::Disable() {
 
   if (!EPS().UnregisterExtension(*this)) {
     return false;
+  }
+
+  if (XRE_IsParentProcess()) {
+    // Clear our BrowsingContextGroup reference. A new instance will be created
+    // when the extension is next activated.
+    mBrowsingContextGroup = nullptr;
   }
 
   Unused << Proto()->SetSubstitution(MozExtensionHostname(), nullptr);
@@ -510,8 +542,7 @@ void WebExtensionPolicy::GetContentScripts(
 }
 
 bool WebExtensionPolicy::PrivateBrowsingAllowed() const {
-  return mAllowPrivateBrowsingByDefault ||
-         HasPermission(nsGkAtoms::privateBrowsingAllowedPermission);
+  return HasPermission(nsGkAtoms::privateBrowsingAllowedPermission);
 }
 
 bool WebExtensionPolicy::CanAccessContext(nsILoadContext* aContext) const {
@@ -541,7 +572,7 @@ void WebExtensionPolicy::GetReadyPromise(
 
 uint64_t WebExtensionPolicy::GetBrowsingContextGroupId() const {
   MOZ_ASSERT(XRE_IsParentProcess() && mActive);
-  return mBrowsingContextGroupId;
+  return mBrowsingContextGroup ? mBrowsingContextGroup->Id() : 0;
 }
 
 uint64_t WebExtensionPolicy::GetBrowsingContextGroupId(ErrorResult& aRv) {
@@ -554,11 +585,9 @@ uint64_t WebExtensionPolicy::GetBrowsingContextGroupId(ErrorResult& aRv) {
   return 0;
 }
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_WEAK_PTR(WebExtensionPolicy, mParent,
-                                               mLocalizeCallback,
-                                               mHostPermissions,
-                                               mWebAccessiblePaths,
-                                               mContentScripts)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_WEAK_PTR(
+    WebExtensionPolicy, mParent, mBrowsingContextGroup, mLocalizeCallback,
+    mHostPermissions, mWebAccessibleResources, mContentScripts)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(WebExtensionPolicy)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY

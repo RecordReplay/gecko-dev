@@ -14,7 +14,6 @@
 #include "nsJSUtils.h"
 
 #include <utility>
-#include "GeckoProfiler.h"
 #include "MainThreadUtils.h"
 #include "js/ComparisonOperators.h"
 #include "js/CompilationAndEvaluation.h"
@@ -32,6 +31,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/fallible.h"
+#include "mozilla/ProfilerLabels.h"
 #include "nsContentUtils.h"
 #include "nsDebug.h"
 #include "nsGlobalWindowInner.h"
@@ -72,6 +72,29 @@ uint64_t nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(JSContext* aContext) {
 
   nsGlobalWindowInner* win = xpc::CurrentWindowOrNull(aContext);
   return win ? win->WindowID() : 0;
+}
+
+nsresult nsJSUtils::UpdateFunctionDebugMetadata(
+    AutoJSAPI& jsapi, JS::Handle<JSObject*> aFun, JS::CompileOptions& aOptions,
+    JS::Handle<JSString*> aElementAttributeName,
+    JS::Handle<JS::Value> aPrivateValue) {
+  JSContext* cx = jsapi.cx();
+
+  JS::Rooted<JSFunction*> fun(cx, JS_GetObjectFunction(aFun));
+  if (!fun) {
+    return NS_ERROR_FAILURE;
+  }
+
+  JS::RootedScript script(cx, JS_GetFunctionScript(cx, fun));
+  if (!script) {
+    return NS_OK;
+  }
+
+  if (!JS::UpdateDebugMetadata(cx, script, aOptions, aPrivateValue,
+                               aElementAttributeName, nullptr, nullptr)) {
+    return NS_ERROR_FAILURE;
+  }
+  return NS_OK;
 }
 
 nsresult nsJSUtils::CompileFunction(AutoJSAPI& jsapi,

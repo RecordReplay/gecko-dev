@@ -107,6 +107,7 @@ urlbar-tip-icon-description =
 ## homepage of their default search engine.
 ## Variables:
 ##  $engineName (String): The name of the user's default search engine. e.g. "Google" or "DuckDuckGo".
+
 urlbar-search-tips-onboard = Type less, find more: Search { $engineName } right from your address bar.
 urlbar-search-tips-redirect-2 = Start your search in the address bar to see suggestions from { $engineName } and your browsing history.
 
@@ -159,59 +160,10 @@ urlbar-star-add-bookmark =
 
 ## Page Action Context Menu
 
-page-action-add-to-urlbar =
-    .label = Add to Address Bar
 page-action-manage-extension =
     .label = Manage Extension…
-page-action-remove-from-urlbar =
-    .label = Remove from Address Bar
 page-action-remove-extension =
     .label = Remove Extension
-
-## Page Action menu
-
-# Variables
-# $tabCount (integer) - Number of tabs selected
-page-action-send-tabs-panel =
-  .label = { $tabCount ->
-      [1] Send Tab to Device
-     *[other] Send { $tabCount } Tabs to Device
-  }
-page-action-send-tabs-urlbar =
-  .tooltiptext = { $tabCount ->
-      [1] Send Tab to Device
-     *[other] Send { $tabCount } Tabs to Device
-  }
-page-action-pocket-panel =
-  .label = Save Page to { -pocket-brand-name }
-page-action-copy-url-panel =
-  .label = Copy Link
-page-action-copy-url-urlbar =
-  .tooltiptext = Copy Link
-page-action-email-link-panel =
-  .label = Email Link…
-page-action-email-link-urlbar =
-  .tooltiptext = Email Link…
-page-action-share-url-panel =
-  .label = Share
-page-action-share-url-urlbar =
-  .tooltiptext = Share
-page-action-share-more-panel =
-  .label = More…
-page-action-send-tab-not-ready =
-  .label = Syncing Devices…
-# "Pin" is being used as a metaphor for expressing the fact that these tabs
-# are "pinned" to the left edge of the tabstrip. Really we just want the
-# string to express the idea that this is a lightweight and reversible
-# action that keeps your tab where you can reach it easily.
-page-action-pin-tab-panel =
-  .label = Pin Tab
-page-action-pin-tab-urlbar =
-  .tooltiptext = Pin Tab
-page-action-unpin-tab-panel =
-  .label = Unpin Tab
-page-action-unpin-tab-urlbar =
-  .tooltiptext = Unpin Tab
 
 ## Auto-hide Context Menu
 
@@ -228,10 +180,6 @@ full-screen-exit =
 # the Urlbar and searchbar.
 search-one-offs-with-title = This time, search with:
 
-# This string won't wrap, so if the translated string is longer,
-# consider translating it as if it said only "Search Settings".
-search-one-offs-change-settings-button =
-    .label = Change Search Settings
 search-one-offs-change-settings-compact-button =
     .tooltiptext = Change search settings
 
@@ -252,6 +200,19 @@ search-one-offs-context-set-as-default-private =
 search-one-offs-engine-with-alias =
     .tooltiptext = { $engineName } ({ $alias })
 
+# Shown when adding new engines from the address bar shortcut buttons or context
+# menu, or from the search bar shortcut buttons.
+# Variables:
+#  $engineName (String): The name of the engine.
+search-one-offs-add-engine =
+    .label = Add “{ $engineName }”
+    .tooltiptext = Add search engine “{ $engineName }”
+    .aria-label = Add search engine “{ $engineName }”
+# When more than 5 engines are offered by a web page, they are grouped in a
+# submenu using this as its label.
+search-one-offs-add-engine-menu =
+    .label = Add search engine
+
 ## Local search mode one-off buttons
 ## Variables:
 ##  $restrict (String): The restriction token corresponding to the search mode.
@@ -268,12 +229,25 @@ search-one-offs-history =
 
 ## Bookmark Panel
 
+bookmarks-add-bookmark = Add bookmark
+bookmarks-edit-bookmark = Edit bookmark
+bookmark-panel-cancel =
+    .label = Cancel
+    .accesskey = C
+# Variables:
+#  $count (number): number of bookmarks that will be removed
+bookmark-panel-remove =
+    .label =
+        { $count ->
+            [1] Remove bookmark
+           *[other] Remove { $count } bookmarks
+        }
+    .accesskey = R
 bookmark-panel-show-editor-checkbox =
     .label = Show editor when saving
     .accesskey = S
-
-bookmark-panel-done-button =
-    .label = Done
+bookmark-panel-save-button =
+    .label = Save
 
 # Width of the bookmark panel.
 # Should be large enough to fully display the Done and
@@ -283,8 +257,16 @@ bookmark-panel =
 
 ## Identity Panel
 
+# Variables
+#  $host (String): the hostname of the site that is being displayed.
+identity-site-information = Site information for { $host }
+# Variables
+#  $host (String): the hostname of the site that is being displayed.
+identity-header-security-with-host =
+    .title = Connection security for { $host }
 identity-connection-not-secure = Connection not secure
 identity-connection-secure = Connection secure
+identity-connection-failure = Connection failure
 identity-connection-internal = This is a secure { -brand-short-name } page.
 identity-connection-file = This page is stored on your computer.
 identity-extension-page = This page is loaded from an extension.
@@ -307,15 +289,13 @@ identity-https-only-info-turn-on2 = Turn on HTTPS-Only Mode for this site if you
 identity-https-only-info-turn-off2 = If the page seems broken, you may want to turn off HTTPS-Only Mode for this site to reload using insecure HTTP.
 identity-https-only-info-no-upgrade = Unable to upgrade connection from HTTP.
 
-identity-permissions =
-    .value = Permissions
 identity-permissions-storage-access-header = Cross-site cookies
 identity-permissions-storage-access-hint = These parties can use cross-site cookies and site data while you are on this site.
+identity-permissions-storage-access-learn-more = Learn more
 
 identity-permissions-reload-hint = You may need to reload the page for changes to apply.
-identity-permissions-empty = You have not granted this site any special permissions.
 identity-clear-site-data =
-    .label = Clear Cookies and Site Data…
+    .label = Clear cookies and site data…
 identity-connection-not-secure-security-view = You are not securely connected to this site.
 identity-connection-verified = You are securely connected to this site.
 identity-ev-owner-label = Certificate issued to:
@@ -357,8 +337,36 @@ browser-window-close-button =
 
 ## Tab actions
 
-browser-tab-audio-playing = Playing
-browser-tab-audio-muted = Muted
+# This label should be written in all capital letters if your locale supports them.
+browser-tab-audio-playing2 = PLAYING
+# This label should be written in all capital letters if your locale supports them.
+browser-tab-audio-muted2 = MUTED
+# This label should be written in all capital letters if your locale supports them.
+browser-tab-audio-blocked = AUTOPLAY BLOCKED
+# This label should be written in all capital letters if your locale supports them.
+browser-tab-audio-pip = PICTURE-IN-PICTURE
+
+## These labels should be written in all capital letters if your locale supports them.
+## Variables:
+##  $count (number): number of affected tabs
+
+browser-tab-mute =
+    { $count ->
+        [1] MUTE TAB
+       *[other] MUTE { $count } TABS
+    }
+
+browser-tab-unmute =
+    { $count ->
+        [1] UNMUTE TAB
+       *[other] UNMUTE { $count } TABS
+    }
+
+browser-tab-unblock =
+    { $count ->
+        [1] PLAY TAB
+       *[other] PLAY { $count } TABS
+    }
 
 ## Bookmarks toolbar items
 
@@ -370,24 +378,29 @@ bookmarks-toolbar-empty-message = For quick access, place your bookmarks here on
 
 ## WebRTC Pop-up notifications
 
-popup-select-camera =
-    .value = Camera to share:
+popup-select-camera-device =
+    .value = Camera:
     .accesskey = C
-popup-select-microphone =
-    .value = Microphone to share:
+popup-select-camera-icon =
+    .tooltiptext = Camera
+popup-select-microphone-device =
+    .value = Microphone:
     .accesskey = M
+popup-select-microphone-icon =
+    .tooltiptext = Microphone
+popup-select-speaker-icon =
+    .tooltiptext = Speakers
 popup-all-windows-shared = All visible windows on your screen will be shared.
 
-popup-screen-sharing-not-now =
-  .label = Not Now
+popup-screen-sharing-block =
+  .label = Block
+  .accesskey = B
+
+popup-screen-sharing-always-block =
+  .label = Always block
   .accesskey = w
 
-popup-screen-sharing-never =
-  .label = Never Allow
-  .accesskey = N
-
-popup-silence-notifications-checkbox = Disable notifications from { -brand-short-name } while sharing
-popup-silence-notifications-checkbox-warning = { -brand-short-name } will not display notifications while you are sharing.
+popup-mute-notifications-checkbox = Mute website notifications while sharing
 
 ## WebRTC window or screen share tab switch warning
 
@@ -401,7 +414,6 @@ sharing-warning-disable-for-session =
 ## DevTools F12 popup
 
 enable-devtools-popup-description = To use the F12 shortcut, first open DevTools via the Web Developer menu.
-
 
 ## URL Bar
 
@@ -447,8 +459,12 @@ urlbar-placeholder-search-mode-other-tabs =
 #  $name (String): the name of the user's default search engine
 urlbar-placeholder-with-name =
   .placeholder = Search with { $name } or enter address
-urlbar-remote-control-notification-anchor =
-  .tooltiptext = Browser is under remote control
+
+# Variables
+#  $component (String): the name of the component which forces remote control.
+#    Example: "DevTools", "Marionette", "RemoteAgent".
+urlbar-remote-control-notification-anchor2 =
+  .tooltiptext = Browser is under remote control (reason: { $component })
 urlbar-permissions-granted =
   .tooltiptext = You have granted this website additional permissions.
 urlbar-switch-to-tab =
@@ -462,8 +478,6 @@ urlbar-go-button =
   .tooltiptext = Go to the address in the Location Bar
 urlbar-page-action-button =
   .tooltiptext = Page actions
-urlbar-pocket-button =
-  .tooltiptext = Save to { -pocket-brand-name }
 
 ## Action text shown in urlbar results, usually appended after the search
 ## string or the url, like "result value - action text".
@@ -504,6 +518,13 @@ urlbar-result-action-tabtosearch-web = Search with { $engine } directly from the
 #  $engine (String): the name of a search engine that searches a specific site
 #  (e.g. Amazon).
 urlbar-result-action-tabtosearch-other-engine = Search { $engine } directly from the address bar
+# Action text for copying to clipboard.
+urlbar-result-action-copy-to-clipboard = Copy
+# Shows the result of a formula expression being calculated, the last = sign will be shown
+# as part of the result (e.g. "= 2").
+# Variables
+#  $result (String): the string representation for a formula result
+urlbar-result-action-calculator-result = = { $result }
 
 ## Action text shown in urlbar results, usually appended after the search
 ## string or the url, like "result value - action text".
@@ -535,48 +556,58 @@ pointerlock-warning-no-domain = This document has control of your pointer. Press
 ## Subframe crash notification
 
 crashed-subframe-message = <strong>Part of this page crashed.</strong> To let { -brand-product-name } know about this issue and get it fixed faster, please submit a report.
-crashed-subframe-learnmore =
-  .label = Learn More
-  .accesskey = L
+
+# The string for crashed-subframe-title.title should match crashed-subframe-message,
+# but without any markup.
+crashed-subframe-title =
+  .title = Part of this page crashed. To let { -brand-product-name } know about this issue and get it fixed faster, please submit a report.
+crashed-subframe-learnmore-link =
+  .value = Learn more
 crashed-subframe-submit =
-  .label = Submit Report
+  .label = Submit report
   .accesskey = S
 
 ## Bookmarks panels, menus and toolbar
 
-bookmarks-show-all-bookmarks =
-  .label = Show All Bookmarks
-bookmarks-recent-bookmarks =
-  .value = Recently Bookmarked
+bookmarks-manage-bookmarks =
+  .label = Manage bookmarks
+bookmarks-recent-bookmarks-panel-subheader = Recent bookmarks
 bookmarks-toolbar-chevron =
   .tooltiptext = Show more bookmarks
 bookmarks-sidebar-content =
   .aria-label = Bookmarks
 bookmarks-menu-button =
-  .label = Bookmarks Menu
+  .label = Bookmarks menu
 bookmarks-other-bookmarks-menu =
-  .label = Other Bookmarks
+  .label = Other bookmarks
 bookmarks-mobile-bookmarks-menu =
-  .label = Mobile Bookmarks
+  .label = Mobile bookmarks
 bookmarks-tools-sidebar-visibility =
   .label = { $isVisible ->
-     [true] Hide Bookmarks Sidebar
-    *[other] View Bookmarks Sidebar
+     [true] Hide bookmarks sidebar
+    *[other] View bookmarks sidebar
   }
-bookmarks-tools-toolbar-visibility =
+bookmarks-tools-toolbar-visibility-menuitem =
   .label = { $isVisible ->
      [true] Hide Bookmarks Toolbar
     *[other] View Bookmarks Toolbar
   }
+bookmarks-tools-toolbar-visibility-panel =
+  .label = { $isVisible ->
+     [true] Hide bookmarks toolbar
+    *[other] Show bookmarks toolbar
+  }
 bookmarks-tools-menu-button-visibility =
   .label = { $isVisible ->
-     [true] Remove Bookmarks Menu from Toolbar
-    *[other] Add Bookmarks Menu to Toolbar
+     [true] Remove bookmarks menu from toolbar
+    *[other] Add bookmarks menu to toolbar
   }
 bookmarks-search =
-  .label = Search Bookmarks
+  .label = Search bookmarks
 bookmarks-tools =
   .label = Bookmarking Tools
+bookmarks-bookmark-edit-panel =
+  .label = Edit this bookmark
 
 # The aria-label is a spoken label that should not include the word "toolbar" or
 # such, because screen readers already know that this container is a toolbar.
@@ -586,25 +617,80 @@ bookmarks-toolbar =
   .accesskey = B
   .aria-label = Bookmarks
 bookmarks-toolbar-menu =
-  .label = Bookmarks Toolbar
+  .label = Bookmarks toolbar
 bookmarks-toolbar-placeholder =
-  .title = Bookmarks Toolbar Items
+  .title = Bookmarks toolbar items
 bookmarks-toolbar-placeholder-button =
-  .label = Bookmarks Toolbar Items
+  .label = Bookmarks toolbar items
+
+# "Bookmark" is a verb, as in "Add current tab to bookmarks".
+bookmarks-current-tab =
+  .label = Bookmark current tab
 
 ## Library Panel items
 
 library-bookmarks-menu =
   .label = Bookmarks
-library-bookmarks-bookmark-this-page =
-  .label = Bookmark This Page
-library-bookmarks-bookmark-edit =
-  .label = Edit This Bookmark
 library-recent-activity-title =
   .value = Recent Activity
+
+## Pocket toolbar button
+
+save-to-pocket-button =
+  .label = Save to { -pocket-brand-name }
+  .tooltiptext = Save to { -pocket-brand-name }
+
+## Repair text encoding toolbar button
+
+repair-text-encoding-button =
+  .label = Repair text encoding
+  .tooltiptext = Guess correct text encoding from page content
+
+## Customize Toolbar Buttons
+
+# Variables:
+#  $shortcut (String): keyboard shortcut to open the add-ons manager
+toolbar-addons-themes-button =
+  .label = Add-ons and themes
+  .tooltiptext = Manage your add-ons and themes ({ $shortcut })
+
+# Variables:
+#  $shortcut (String): keyboard shortcut to open settings (only on macOS)
+toolbar-settings-button =
+  .label = Settings
+  .tooltiptext = { PLATFORM() ->
+      [macos] Open settings ({ $shortcut })
+     *[other] Open settings
+  }
 
 ## More items
 
 more-menu-go-offline =
   .label = Work Offline
   .accesskey = k
+
+## EME notification panel
+
+eme-notifications-drm-content-playing = Some audio or video on this site uses DRM software, which may limit what { -brand-short-name } can let you do with it.
+eme-notifications-drm-content-playing-manage = Manage settings
+eme-notifications-drm-content-playing-manage-accesskey = M
+eme-notifications-drm-content-playing-dismiss = Dismiss
+eme-notifications-drm-content-playing-dismiss-accesskey = D
+
+## Password save/update panel
+
+panel-save-update-username = Username
+panel-save-update-password = Password
+
+## Add-on removal warning
+
+# Variables:
+#  $name (String): The name of the addon that will be removed.
+addon-removal-title = Remove { $name }?
+addon-removal-abuse-report-checkbox = Report this extension to { -vendor-short-name }
+
+## Remote / Synced tabs
+
+remote-tabs-manage-account =
+  .label = Manage Account
+remote-tabs-sync-now = Sync Now

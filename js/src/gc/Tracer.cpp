@@ -17,8 +17,10 @@
 #include "util/Memory.h"
 #include "util/Text.h"
 #include "vm/BigIntType.h"
+#include "vm/GetterSetter.h"
 #include "vm/JSFunction.h"
 #include "vm/JSScript.h"
+#include "vm/PropMap.h"
 #include "vm/Shape.h"
 #include "vm/SymbolType.h"
 
@@ -29,59 +31,6 @@
 using namespace js;
 using namespace js::gc;
 using mozilla::DebugOnly;
-
-/*** Callback Tracer Dispatch ***********************************************/
-
-template <typename T>
-bool DoCallback(GenericTracer* trc, T** thingp, const char* name) {
-  CheckTracedThing(trc, *thingp);
-  JS::AutoTracingName ctx(trc, name);
-
-  T* thing = *thingp;
-  T* post = DispatchToOnEdge(trc, thing);
-  if (post != thing) {
-    *thingp = post;
-  }
-
-  return post;
-}
-#define INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS(name, type, _, _1) \
-  template bool DoCallback<type>(GenericTracer*, type**, const char*);
-JS_FOR_EACH_TRACEKIND(INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS);
-#undef INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS
-
-template <typename T>
-bool DoCallback(GenericTracer* trc, T* thingp, const char* name) {
-  JS::AutoTracingName ctx(trc, name);
-
-  // Return true by default. For some types the lambda below won't be called.
-  bool ret = true;
-  auto thing = MapGCThingTyped(*thingp, [trc, &ret](auto thing) {
-    CheckTracedThing(trc, thing);
-
-    auto* post = DispatchToOnEdge(trc, thing);
-    if (!post) {
-      ret = false;
-      return TaggedPtr<T>::empty();
-    }
-
-    return TaggedPtr<T>::wrap(post);
-  });
-
-  // Only update *thingp if the value changed, to avoid TSan false positives for
-  // template objects when using DumpHeapTracer or UbiNode tracers while Ion
-  // compiling off-thread.
-  if (thing.isSome() && thing.value() != *thingp) {
-    *thingp = thing.value();
-  }
-
-  return ret;
-}
-template bool DoCallback<JS::Value>(GenericTracer*, JS::Value*, const char*);
-template bool DoCallback<JS::PropertyKey>(GenericTracer*, JS::PropertyKey*,
-                                          const char*);
-template bool DoCallback<TaggedProto>(GenericTracer*, TaggedProto*,
-                                      const char*);
 
 void JS::TracingContext::getEdgeName(char* buffer, size_t bufferSize) {
   MOZ_ASSERT(bufferSize > 0);
@@ -136,45 +85,12 @@ void js::gc::TraceIncomingCCWs(JSTracer* trc,
 /*** Cycle Collector Helpers ************************************************/
 
 // This function is used by the Cycle Collector (CC) to trace through -- or in
-// CC parlance, traverse -- a Shape tree. The CC does not care about Shapes or
-// BaseShapes, only the JSObjects held live by them. Thus, we walk the Shape
-// lineage, but only report non-Shape things. This effectively makes the entire
-// shape lineage into a single node in the CC, saving tremendous amounts of
-// space and time in its algorithms.
-//
-// The algorithm implemented here uses only bounded stack space. This would be
-// possible to implement outside the engine, but would require much extra
-// infrastructure and many, many more slow GOT lookups. We have implemented it
-// inside SpiderMonkey, despite the lack of general applicability, for the
-// simplicity and performance of FireFox's embedding of this engine.
+// CC parlance, traverse -- a Shape. The CC does not care about Shapes,
+// BaseShapes or PropMaps, only the JSObjects held live by them. Thus, we only
+// report non-Shape things.
 void gc::TraceCycleCollectorChildren(JS::CallbackTracer* trc, Shape* shape) {
-  do {
-    MOZ_ASSERT(shape->base());
-    shape->base()->assertConsistency();
-
-    // Don't trace the propid because the CC doesn't care about jsid.
-
-    if (shape->hasGetterObject()) {
-      JSObject* tmp = shape->getterObject();
-      DoCallback(trc, &tmp, "getter");
-      MOZ_ASSERT(tmp == shape->getterObject());
-    }
-
-    if (shape->hasSetterObject()) {
-      JSObject* tmp = shape->setterObject();
-      DoCallback(trc, &tmp, "setter");
-      MOZ_ASSERT(tmp == shape->setterObject());
-    }
-
-    shape = shape->previous();
-  } while (shape);
-}
-
-void gc::TraceCycleCollectorChildren(JS::CallbackTracer* trc,
-                                     ObjectGroup* group) {
-  MOZ_ASSERT(trc->isCallbackTracer());
-
-  group->traceChildren(trc);
+  shape->base()->traceChildren(trc);
+  // Don't trace the PropMap because the CC doesn't care about PropertyKey.
 }
 
 /*** Traced Edge Printer ****************************************************/
@@ -235,6 +151,14 @@ void js::gc::GetTraceThingInfo(char* buf, size_t bufsize, void* thing,
       name = "base_shape";
       break;
 
+    case JS::TraceKind::GetterSetter:
+      name = "getter_setter";
+      break;
+
+    case JS::TraceKind::PropMap:
+      name = "prop_map";
+      break;
+
     case JS::TraceKind::JitCode:
       name = "jitcode";
       break;
@@ -247,10 +171,6 @@ void js::gc::GetTraceThingInfo(char* buf, size_t bufsize, void* thing,
       name = static_cast<JSObject*>(thing)->getClass()->name;
       break;
     }
-
-    case JS::TraceKind::ObjectGroup:
-      name = "object_group";
-      break;
 
     case JS::TraceKind::RegExpShared:
       name = "reg_exp_shared";

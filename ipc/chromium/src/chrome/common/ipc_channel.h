@@ -12,6 +12,8 @@
 #include "base/basictypes.h"
 #include "build/build_config.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/WeakPtr.h"
+#include "chrome/common/ipc_message.h"
 
 #ifdef OS_WIN
 #  include <string>
@@ -39,9 +41,12 @@ class Channel {
 #endif
 
   // Implemented by consumers of a Channel to receive messages.
-  class Listener {
+  //
+  // All listeners will only be called on the IO thread, and must be destroyed
+  // on the IO thread.
+  class Listener : public mozilla::SupportsWeakPtr {
    public:
-    virtual ~Listener() {}
+    virtual ~Listener() = default;
 
     // Called when a message is received.
     virtual void OnMessageReceived(Message&& message) = 0;
@@ -62,11 +67,18 @@ class Channel {
   enum Mode { MODE_SERVER, MODE_CLIENT };
 
   enum {
-    // The maximum message size in bytes. Attempting to receive a
-    // message of this size or bigger results in a channel error.
-    kMaximumMessageSize = 256 * 1024 * 1024,
 
-    // Ammount of data to read at once from the pipe.
+  // The maximum message size in bytes. Attempting to receive a
+  // message of this size or bigger results in a channel error.
+  // This is larger in fuzzing builds to allow the fuzzing of passing
+  // large data structures into DOM methods without crashing.
+#ifndef FUZZING
+    kMaximumMessageSize = 256 * 1024 * 1024,
+#else
+    kMaximumMessageSize = 1792 * 1024 * 1024,  // 1.75GB
+#endif
+
+    // Amount of data to read at once from the pipe.
     kReadBufferSize = 4 * 1024,
 
     // Maximum size of a message that we allow to be copied (rather than moved).
@@ -120,6 +132,10 @@ class Channel {
   // If you Send() a message on a Close()'d channel, we delete the message
   // immediately.
   bool Send(mozilla::UniquePtr<Message> message);
+
+  // The PID which this channel has been opened with. This will be
+  // `-1` until `OnChannelConnected` has been called.
+  int32_t OtherPid() const;
 
   // Unsound_IsClosed() and Unsound_NumQueuedMessages() are safe to call from
   // any thread, but the value returned may be out of date, because we don't

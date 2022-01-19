@@ -113,14 +113,8 @@ Http2PushedStream::Http2PushedStream(
     uint64_t aCurrentForegroundTabOuterContentWindowId)
     : Http2Stream(aTransaction, aSession, 0,
                   aCurrentForegroundTabOuterContentWindowId),
-      mConsumerStream(nullptr),
       mAssociatedTransaction(aAssociatedStream->Transaction()),
-      mBufferedPush(aTransaction),
-      mStatus(NS_OK),
-      mPushCompleted(false),
-      mDeferCleanupOnSuccess(true),
-      mDeferCleanupOnPush(false),
-      mOnPushFailed(false) {
+      mBufferedPush(aTransaction) {
   LOG3(("Http2PushedStream ctor this=%p 0x%X\n", this, aID));
   mStreamID = aID;
   MOZ_ASSERT(!(aID & 1));  // must be even to be a pushed stream
@@ -232,7 +226,7 @@ nsresult Http2PushedStream::ReadSegments(nsAHttpSegmentReader* reader, uint32_t,
       // be present
       mSocketTransport->GetOriginAttributes(&originAttributes);
       CreatePushHashKey(mHeaderScheme, mHeaderHost, originAttributes,
-                        mSession->Serial(), mHeaderPath, mOrigin, mHashKey);
+                        Session()->Serial(), mHeaderPath, mOrigin, mHashKey);
 
       LOG3(("Http2PushStream 0x%X hash key %s\n", mStreamID, mHashKey.get()));
 
@@ -273,7 +267,7 @@ void Http2PushedStream::AdjustInitialWindow() {
     Http2Stream::AdjustInitialWindow();
     // Http2PushedStream::ReadSegments is needed to call TransmitFrame()
     // and actually get this information into the session bytestream
-    mSession->TransactionHasDataToWrite(this);
+    Session()->TransactionHasDataToWrite(this);
   }
   // Otherwise, when we get hooked up, the initial window will get bumped
   // anyway, so we're good to go.
@@ -295,7 +289,7 @@ bool Http2PushedStream::GetHashKey(nsCString& key) {
 }
 
 void Http2PushedStream::ConnectPushedStream(Http2Stream* stream) {
-  mSession->ConnectPushedStream(stream);
+  Session()->ConnectPushedStream(stream);
 }
 
 bool Http2PushedStream::IsOrphaned(TimeStamp now) {
@@ -327,29 +321,30 @@ nsresult Http2PushedStream::GetBufferedData(char* buf, uint32_t count,
   nsresult rv = mBufferedPush->GetBufferedData(buf, count, countWritten);
   if (NS_FAILED(rv)) return rv;
 
-  if (!*countWritten)
+  if (!*countWritten) {
     rv = GetPushComplete() ? NS_BASE_STREAM_CLOSED : NS_BASE_STREAM_WOULD_BLOCK;
+  }
 
   return rv;
 }
 
-void Http2PushedStream::TopLevelOuterContentWindowIdChanged(uint64_t windowId) {
+void Http2PushedStream::TopBrowsingContextIdChanged(uint64_t id) {
   if (mConsumerStream) {
     // Pass through to our sink, who will handle things appropriately.
-    mConsumerStream->TopLevelOuterContentWindowIdChangedInternal(windowId);
+    mConsumerStream->TopBrowsingContextIdChanged(id);
     return;
   }
 
   MOZ_ASSERT(gHttpHandler->ActiveTabPriority());
 
-  mCurrentForegroundTabOuterContentWindowId = windowId;
+  mCurrentTopBrowsingContextId = id;
 
-  if (!mSession->UseH2Deps()) {
+  if (!Session()->UseH2Deps()) {
     return;
   }
 
   uint32_t oldDependency = mPriorityDependency;
-  if (mTransactionTabId != mCurrentForegroundTabOuterContentWindowId) {
+  if (mTransactionTabId != mCurrentTopBrowsingContextId) {
     mPriorityDependency = Http2Session::kBackgroundGroupID;
     nsHttp::NotifyActiveTabLoadOptimization();
   } else {
@@ -357,8 +352,8 @@ void Http2PushedStream::TopLevelOuterContentWindowIdChanged(uint64_t windowId) {
   }
 
   if (mPriorityDependency != oldDependency) {
-    mSession->SendPriorityFrame(mStreamID, mPriorityDependency,
-                                mPriorityWeight);
+    Session()->SendPriorityFrame(mStreamID, mPriorityDependency,
+                                 mPriorityWeight);
   }
 }
 
@@ -370,14 +365,7 @@ void Http2PushedStream::TopLevelOuterContentWindowIdChanged(uint64_t windowId) {
 
 NS_IMPL_ISUPPORTS0(Http2PushTransactionBuffer)
 
-Http2PushTransactionBuffer::Http2PushTransactionBuffer()
-    : mStatus(NS_OK),
-      mRequestHead(nullptr),
-      mPushStream(nullptr),
-      mIsDone(false),
-      mBufferedHTTP1Size(kDefaultBufferSize),
-      mBufferedHTTP1Used(0),
-      mBufferedHTTP1Consumed(0) {
+Http2PushTransactionBuffer::Http2PushTransactionBuffer() {
   mBufferedHTTP1 = MakeUnique<char[]>(mBufferedHTTP1Size);
 }
 

@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+@namespace html "http://www.w3.org/1999/xhtml";
 
 .notificationbox-stack {
   /* Prevent the animation from overlapping the navigation toolbar */
@@ -13,11 +14,10 @@
   /* Create a stacking context for the box-shadow */
   position: relative;
   z-index: 1;
-  box-shadow: 0 3px 10px -7px #000;
 }
 
 notification {
-  height: 56px;
+  min-height: 40px;
   padding-inline-start: 16px;
   background: var(--notification-background);
   color: var(--notification-text);
@@ -48,6 +48,7 @@ notification[type="info"]:-moz-lwtheme-brighttext {
   --notification-button-background-active: rgba(249,249,250,.3);
 }
 
+html|notification-message.animated,
 notification.animated {
   transition: margin-top 300ms var(--animation-easing-function), opacity 300ms var(--animation-easing-function);
 }
@@ -71,30 +72,32 @@ notification[type="critical"] {
 }
 
 notification[type="critical"] > .close-icon:hover {
-  fill-opacity: .2;
+  background-color: color-mix(in srgb, currentColor 20%, transparent);
 }
 
 notification[type="critical"] > .close-icon:hover:active {
-  fill-opacity: .3;
+  background-color: color-mix(in srgb, currentColor 30%, transparent);
 }
 
 .messageText {
   margin-inline-start: 12px !important;
-  margin-block: 12px;
+  margin-block: 0;
 }
 
 .messageText > .text-link {
-  color: inherit !important;
   text-decoration: underline;
-  margin-top: 0;
-  margin-bottom: 0;
-  margin-inline-start: 0;
-  margin-inline-end: 0;
+  margin-block: 0;
+}
+
+.messageText > .text-link:not(.notification-link) {
+  color: inherit !important;
+  margin-inline: 0;
 }
 
 .messageImage {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
+  margin: 4px 0;
   -moz-context-properties: fill;
   fill: currentColor;
 }
@@ -118,11 +121,10 @@ notification[type="critical"] > hbox > .messageImage {
 
 .messageCloseButton > .toolbarbutton-icon {
   padding: 6px;
-  /* Override width and height from close-icon.css */
+  /* Override width from close-icon.css */
   width: 32px !important;
-  height: 32px !important;
   /* Close button needs to be clickable from the edge of the window */
-  margin-inline-end: 16px;
+  margin-inline-end: 8px;
 }
 
 .messageCloseButton:-moz-focusring {
@@ -132,19 +134,17 @@ notification[type="critical"] > hbox > .messageImage {
 
 .messageCloseButton:-moz-focusring > .toolbarbutton-icon {
   outline: var(--toolbarbutton-focus-outline, 2px solid currentColor);
-  -moz-outline-radius: var(--toolbarbutton-border-radius, 4px);
 }
 
 .notification-button {
   appearance: none;
   border: 1px solid transparent;
-  border-radius: 2px;
+  border-radius: 4px;
   background-color: var(--notification-button-background);
-  /* Override button.css hover & active styles */
-  color: var(--notification-button-text) !important;
-  padding: 0 8px;
+  color: var(--notification-button-text);
+  padding: 0 6px;
   margin: 4px 8px;
-  height: 32px;
+  height: 24px;
 }
 
 .notification-button[disabled] {
@@ -161,7 +161,6 @@ notification[type="critical"] > hbox > .messageImage {
 
 .notification-button:-moz-focusring {
   outline: var(--toolbarbutton-focus-outline, 2px solid currentColor);
-  -moz-outline-radius: var(--toolbarbutton-border-radius, 4px);
 }
 
 .notification-button.primary {
@@ -181,6 +180,11 @@ notification[type="critical"] > hbox > .messageImage {
 
 .notification-button.primary:not([disabled]):hover:active {
   background-color: var(--notification-primary-button-background-active);
+}
+
+.notificationbox-stack {
+  background-color: var(--toolbar-bgcolor);
+  width: 100%;
 }
 
 /* [Replay] */

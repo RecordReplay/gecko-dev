@@ -15,7 +15,7 @@
 #include "nsHashKeys.h"
 #include "nsISupports.h"
 #include "nsStringFwd.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 
 // XXX Remove this dependency.
 #include "mozilla/dom/LocalStorageCommon.h"
@@ -37,10 +37,10 @@ struct Nullable;
 
 namespace mozilla::dom::quota {
 
+struct OriginMetadata;
 class OriginScope;
 class QuotaManager;
 class UsageInfo;
-struct GroupAndOrigin;
 
 // An abstract interface for quota manager clients.
 // Each storage API must provide an implementation of this interface in order
@@ -59,10 +59,10 @@ class Client {
   };
 
   class DirectoryLockIdTable final {
-    nsTHashtable<nsUint64HashKey> mIds;
+    nsTHashSet<uint64_t> mIds;
 
    public:
-    void Put(const int64_t aId) { mIds.PutEntry(aId); }
+    void Put(const int64_t aId) { mIds.Insert(aId); }
 
     bool Has(const int64_t aId) const { return mIds.Contains(aId); }
 
@@ -97,21 +97,11 @@ class Client {
 
   template <typename T>
   static bool IsLockForObjectContainedInLockTable(
-      const T& aObject, const DirectoryLockIdTable& aIds) {
-    const auto& maybeDirectoryLock = aObject.MaybeDirectoryLockRef();
-
-    MOZ_ASSERT(maybeDirectoryLock.isSome());
-
-    return aIds.Has(maybeDirectoryLock->Id());
-  }
+      const T& aObject, const DirectoryLockIdTable& aIds);
 
   template <typename T>
   static bool IsLockForObjectAcquiredAndContainedInLockTable(
-      const T& aObject, const DirectoryLockIdTable& aIds) {
-    const auto& maybeDirectoryLock = aObject.MaybeDirectoryLockRef();
-
-    return maybeDirectoryLock && aIds.Has(maybeDirectoryLock->Id());
-  }
+      const T& aObject, const DirectoryLockIdTable& aIds);
 
   NS_INLINE_DECL_PURE_VIRTUAL_REFCOUNTING
 
@@ -131,15 +121,15 @@ class Client {
   }
 
   virtual Result<UsageInfo, nsresult> InitOrigin(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+      PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
       const AtomicBool& aCanceled) = 0;
 
   virtual nsresult InitOriginWithoutTracking(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+      PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
       const AtomicBool& aCanceled) = 0;
 
   virtual Result<UsageInfo, nsresult> GetUsageForOrigin(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+      PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
       const AtomicBool& aCanceled) = 0;
 
   // This method is called when origins are about to be cleared

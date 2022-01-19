@@ -10,8 +10,9 @@ use crate::packet::PACKET_BIT_LONG;
 use crate::{Error, QuicVersion};
 
 use neqo_common::{Datagram, Decoder, Encoder};
+use std::mem;
 use std::time::Duration;
-use test_fixture::{self, loopback, now};
+use test_fixture::{self, addr, now};
 
 // The expected PTO duration after the first Initial is sent.
 const INITIAL_PTO: Duration = Duration::from_millis(300);
@@ -20,18 +21,14 @@ const INITIAL_PTO: Duration = Duration::from_millis(300);
 fn unknown_version() {
     let mut client = default_client();
     // Start the handshake.
-    let _ = client.process(None, now()).dgram();
+    mem::drop(client.process(None, now()).dgram());
 
     let mut unknown_version_packet = vec![0x80, 0x1a, 0x1a, 0x1a, 0x1a];
     unknown_version_packet.resize(1200, 0x0);
-    let _ = client.process(
-        Some(Datagram::new(
-            loopback(),
-            loopback(),
-            unknown_version_packet,
-        )),
+    mem::drop(client.process(
+        Some(Datagram::new(addr(), addr(), unknown_version_packet)),
         now(),
-    );
+    ));
     assert_eq!(1, client.stats().dropped_rx);
 }
 
@@ -44,11 +41,7 @@ fn server_receive_unknown_first_packet() {
 
     assert_eq!(
         server.process(
-            Some(Datagram::new(
-                loopback(),
-                loopback(),
-                unknown_version_packet,
-            )),
+            Some(Datagram::new(addr(), addr(), unknown_version_packet,)),
             now(),
         ),
         Output::None
@@ -89,7 +82,7 @@ fn version_negotiation_current_version() {
         &[0x1a1a_1a1a, QuicVersion::default().as_u32()],
     );
 
-    let dgram = Datagram::new(loopback(), loopback(), vn);
+    let dgram = Datagram::new(addr(), addr(), vn);
     let delay = client.process(Some(dgram), now()).callback();
     assert_eq!(delay, INITIAL_PTO);
     assert_eq!(*client.state(), State::WaitInitial);
@@ -108,7 +101,7 @@ fn version_negotiation_only_reserved() {
 
     let vn = create_vn(&initial_pkt, &[0x1a1a_1a1a, 0x2a2a_2a2a]);
 
-    let dgram = Datagram::new(loopback(), loopback(), vn);
+    let dgram = Datagram::new(addr(), addr(), vn);
     assert_eq!(client.process(Some(dgram), now()), Output::None);
     match client.state() {
         State::Closed(err) => {
@@ -130,7 +123,7 @@ fn version_negotiation_corrupted() {
 
     let vn = create_vn(&initial_pkt, &[0x1a1a_1a1a, 0x2a2a_2a2a]);
 
-    let dgram = Datagram::new(loopback(), loopback(), &vn[..vn.len() - 1]);
+    let dgram = Datagram::new(addr(), addr(), &vn[..vn.len() - 1]);
     let delay = client.process(Some(dgram), now()).callback();
     assert_eq!(delay, INITIAL_PTO);
     assert_eq!(*client.state(), State::WaitInitial);
@@ -149,7 +142,7 @@ fn version_negotiation_empty() {
 
     let vn = create_vn(&initial_pkt, &[]);
 
-    let dgram = Datagram::new(loopback(), loopback(), vn);
+    let dgram = Datagram::new(addr(), addr(), vn);
     let delay = client.process(Some(dgram), now()).callback();
     assert_eq!(delay, INITIAL_PTO);
     assert_eq!(*client.state(), State::WaitInitial);
@@ -169,7 +162,7 @@ fn version_negotiation_not_supported() {
     let vn = create_vn(&initial_pkt, &[0x1a1a_1a1a, 0x2a2a_2a2a, 0xff00_0001]);
 
     assert_eq!(
-        client.process(Some(Datagram::new(loopback(), loopback(), vn)), now(),),
+        client.process(Some(Datagram::new(addr(), addr(), vn)), now(),),
         Output::None
     );
     match client.state() {
@@ -193,7 +186,7 @@ fn version_negotiation_bad_cid() {
     let mut vn = create_vn(&initial_pkt, &[0x1a1a_1a1a, 0x2a2a_2a2a, 0xff00_0001]);
     vn[6] ^= 0xc4;
 
-    let dgram = Datagram::new(loopback(), loopback(), vn);
+    let dgram = Datagram::new(addr(), addr(), vn);
     let delay = client.process(Some(dgram), now()).callback();
     assert_eq!(delay, INITIAL_PTO);
     assert_eq!(*client.state(), State::WaitInitial);

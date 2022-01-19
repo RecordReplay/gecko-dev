@@ -1,5 +1,5 @@
 /*
- * Copyright © 2018, VideoLAN and dav1d authors
+ * Copyright © 2018-2021, VideoLAN and dav1d authors
  * Copyright © 2018, Two Orioles, LLC
  * All rights reserved.
  *
@@ -33,6 +33,7 @@
 
 #include "dav1d/data.h"
 
+#include "common/frame.h"
 #include "common/intops.h"
 
 #include "src/decode.h"
@@ -406,7 +407,7 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
     else
         hdr->force_integer_mv = 0;
 
-    if (!(hdr->frame_type & 1))
+    if (IS_KEY_OR_INTRA(hdr))
         hdr->force_integer_mv = 1;
 
     if (seqhdr->frame_id_numbers_present)
@@ -420,7 +421,7 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
 #endif
     hdr->frame_offset = seqhdr->order_hint ?
                         dav1d_get_bits(gb, seqhdr->order_hint_n_bits) : 0;
-    hdr->primary_ref_frame = !hdr->error_resilient_mode && hdr->frame_type & 1 ?
+    hdr->primary_ref_frame = !hdr->error_resilient_mode && IS_INTER_OR_SWITCH(hdr) ?
                              dav1d_get_bits(gb, 3) : DAV1D_PRIMARY_REF_NONE;
 
     if (seqhdr->decoder_model_info_present) {
@@ -439,9 +440,7 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
         }
     }
 
-    if (hdr->frame_type == DAV1D_FRAME_TYPE_KEY ||
-        hdr->frame_type == DAV1D_FRAME_TYPE_INTRA)
-    {
+    if (IS_KEY_OR_INTRA(hdr)) {
         hdr->refresh_frame_flags = (hdr->frame_type == DAV1D_FRAME_TYPE_KEY &&
                                     hdr->show_frame) ? 0xff : dav1d_get_bits(gb, 8);
         if (hdr->refresh_frame_flags != 0xff && hdr->error_resilient_mode && seqhdr->order_hint)
@@ -569,7 +568,7 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
         hdr->switchable_motion_mode = dav1d_get_bits(gb, 1);
         hdr->use_ref_frame_mvs = !hdr->error_resilient_mode &&
             seqhdr->ref_frame_mvs && seqhdr->order_hint &&
-            hdr->frame_type & 1 && dav1d_get_bits(gb, 1);
+            IS_INTER_OR_SWITCH(hdr) && dav1d_get_bits(gb, 1);
     }
 #if DEBUG_FRAME_HDR
     printf("HDR: post-frametype-specific-bits: off=%td\n",
@@ -916,13 +915,13 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
     printf("HDR: post-txfmmode: off=%td\n",
            (gb->ptr - init_ptr) * 8 - gb->bits_left);
 #endif
-    hdr->switchable_comp_refs = hdr->frame_type & 1 ? dav1d_get_bits(gb, 1) : 0;
+    hdr->switchable_comp_refs = IS_INTER_OR_SWITCH(hdr) ? dav1d_get_bits(gb, 1) : 0;
 #if DEBUG_FRAME_HDR
     printf("HDR: post-refmode: off=%td\n",
            (gb->ptr - init_ptr) * 8 - gb->bits_left);
 #endif
     hdr->skip_mode_allowed = 0;
-    if (hdr->switchable_comp_refs && hdr->frame_type & 1 && seqhdr->order_hint) {
+    if (hdr->switchable_comp_refs && IS_INTER_OR_SWITCH(hdr) && seqhdr->order_hint) {
         const unsigned poc = hdr->frame_offset;
         unsigned off_before = 0xFFFFFFFFU;
         int off_after = -1;
@@ -982,7 +981,7 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
     printf("HDR: post-extskip: off=%td\n",
            (gb->ptr - init_ptr) * 8 - gb->bits_left);
 #endif
-    hdr->warp_motion = !hdr->error_resilient_mode && hdr->frame_type & 1 &&
+    hdr->warp_motion = !hdr->error_resilient_mode && IS_INTER_OR_SWITCH(hdr) &&
         seqhdr->warped_motion && dav1d_get_bits(gb, 1);
 #if DEBUG_FRAME_HDR
     printf("HDR: post-warpmotionbit: off=%td\n",
@@ -997,7 +996,7 @@ static int parse_frame_hdr(Dav1dContext *const c, GetBits *const gb) {
     for (int i = 0; i < 7; i++)
         hdr->gmv[i] = dav1d_default_wm_params;
 
-    if (hdr->frame_type & 1) {
+    if (IS_INTER_OR_SWITCH(hdr)) {
         for (int i = 0; i < 7; i++) {
             hdr->gmv[i].type = !dav1d_get_bits(gb, 1) ? DAV1D_WM_TYPE_IDENTITY :
                                 dav1d_get_bits(gb, 1) ? DAV1D_WM_TYPE_ROT_ZOOM :
@@ -1234,7 +1233,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in, const int globa
 
     switch (type) {
     case DAV1D_OBU_SEQ_HDR: {
-        Dav1dRef *ref = dav1d_ref_create_using_pool(&c->seq_hdr_pool,
+        Dav1dRef *ref = dav1d_ref_create_using_pool(c->seq_hdr_pool,
                                                     sizeof(Dav1dSequenceHeader));
         if (!ref) return DAV1D_ERR(ENOMEM);
         Dav1dSequenceHeader *seq_hdr = ref->data;
@@ -1250,11 +1249,13 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in, const int globa
         // If we have read a sequence header which is different from
         // the old one, this is a new video sequence and can't use any
         // previous state. Free that state.
-        if (!c->seq_hdr)
+
+        if (!c->seq_hdr) {
             c->frame_hdr = NULL;
+            c->frame_flags |= PICTURE_FLAG_NEW_SEQUENCE;
         // see 7.5, operating_parameter_info is allowed to change in
         // sequence headers of a single sequence
-        else if (memcmp(seq_hdr, c->seq_hdr, offsetof(Dav1dSequenceHeader, operating_parameter_info))) {
+        } else if (memcmp(seq_hdr, c->seq_hdr, offsetof(Dav1dSequenceHeader, operating_parameter_info))) {
             c->frame_hdr = NULL;
             c->mastering_display = NULL;
             c->content_light = NULL;
@@ -1267,6 +1268,12 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in, const int globa
                 dav1d_ref_dec(&c->refs[i].refmvs);
                 dav1d_cdf_thread_unref(&c->cdf[i]);
             }
+            c->frame_flags |= PICTURE_FLAG_NEW_SEQUENCE;
+        // If operating_parameter_info changed, signal it
+        } else if (memcmp(seq_hdr->operating_parameter_info, c->seq_hdr->operating_parameter_info,
+                          sizeof(seq_hdr->operating_parameter_info)))
+        {
+            c->frame_flags |= PICTURE_FLAG_NEW_OP_PARAMS_INFO;
         }
         dav1d_ref_dec(&c->seq_hdr_ref);
         c->seq_hdr_ref = ref;
@@ -1281,7 +1288,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in, const int globa
         if (global) break;
         if (!c->seq_hdr) goto error;
         if (!c->frame_hdr_ref) {
-            c->frame_hdr_ref = dav1d_ref_create_using_pool(&c->frame_hdr_pool,
+            c->frame_hdr_ref = dav1d_ref_create_using_pool(c->frame_hdr_pool,
                                                            sizeof(Dav1dFrameHeader));
             if (!c->frame_hdr_ref) return DAV1D_ERR(ENOMEM);
         }
@@ -1538,6 +1545,7 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in, const int globa
                 dav1d_picture_ref(&c->out,
                                   &c->refs[c->frame_hdr->existing_frame_idx].p.p);
                 dav1d_data_props_copy(&c->out.m, &in->m);
+                c->event_flags |= dav1d_picture_get_event_flags(&c->refs[c->frame_hdr->existing_frame_idx].p);
             } else {
                 // need to append this to the frame output queue
                 const unsigned next = c->frame_thread.next++;
@@ -1554,8 +1562,10 @@ int dav1d_parse_obus(Dav1dContext *const c, Dav1dData *const in, const int globa
                 if (out_delayed->p.data[0]) {
                     const unsigned progress = atomic_load_explicit(&out_delayed->progress[1],
                                                                    memory_order_relaxed);
-                    if (out_delayed->visible && progress != FRAME_ERROR)
+                    if (out_delayed->visible && progress != FRAME_ERROR) {
                         dav1d_picture_ref(&c->out, &out_delayed->p);
+                        c->event_flags |= dav1d_picture_get_event_flags(out_delayed);
+                    }
                     dav1d_thread_picture_unref(out_delayed);
                 }
                 dav1d_thread_picture_ref(out_delayed,

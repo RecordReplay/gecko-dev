@@ -10,6 +10,31 @@
   const { AppConstants } = ChromeUtils.import(
     "resource://gre/modules/AppConstants.jsm"
   );
+  const { Services } = ChromeUtils.import(
+    "resource://gre/modules/Services.jsm"
+  );
+
+  // For the Windows 10 custom context menu styling, we need to know if we need
+  // a gutter for checkboxes. To do this, check whether there are any
+  // radio/checkbox type menuitems in a menupopup when showing it. We use a
+  // system bubbling event listener to ensure we run *after* the "normal"
+  // popupshowing listeners, so (visibility) changes they make to their items
+  // take effect first, before we check for checkable menuitems.
+  if (AppConstants.isPlatformAndVersionAtLeast("win", "6.4")) {
+    Services.els.addSystemEventListener(
+      document,
+      "popupshowing",
+      function(e) {
+        if (e.target.nodeName == "menupopup") {
+          let haveCheckableChild = e.target.querySelector(
+            ":scope > menuitem:not([hidden]):is([type=checkbox],[type=radio])"
+          );
+          e.target.toggleAttribute("needsgutter", haveCheckableChild);
+        }
+      },
+      false
+    );
+  }
 
   class MozMenuPopup extends MozElements.MozElementMixin(XULPopupElement) {
     constructor() {
@@ -82,6 +107,7 @@
         <html:link rel="stylesheet" href="chrome://global/skin/global.css"/>
         <html:style>${this.styles}</html:style>
         <arrowscrollbox class="menupopup-arrowscrollbox"
+                        part="arrowscrollbox content"
                         exportparts="scrollbox: arrowscrollbox-scrollbox"
                         flex="1"
                         orient="vertical"
@@ -92,7 +118,7 @@
     }
 
     get styles() {
-      let s = `
+      return `
         :host(.in-menulist) arrowscrollbox::part(scrollbutton-up),
         :host(.in-menulist) arrowscrollbox::part(scrollbutton-down) {
           display: none;
@@ -105,21 +131,6 @@
           overflow: visible;
         }
       `;
-
-      switch (AppConstants.platform) {
-        case "macosx":
-          s += `
-            :host(.in-menulist) arrowscrollbox {
-              padding: 0;
-            }
-          `;
-          break;
-
-        default:
-          break;
-      }
-
-      return s;
     }
 
     get scrollBox() {

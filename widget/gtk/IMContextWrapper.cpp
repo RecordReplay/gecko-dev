@@ -15,6 +15,7 @@
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/StaticPrefs_intl.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
@@ -211,6 +212,11 @@ const static bool kUseSimpleContextDefault = false;
  * to refer selection colors of GtkTextView via our widget.
  ******************************************************************************/
 
+static Maybe<nscolor> GetSystemColor(LookAndFeel::ColorID aId) {
+  return LookAndFeel::GetColor(aId, LookAndFeel::ColorScheme::Light,
+                               LookAndFeel::UseStandins::No);
+}
+
 class SelectionStyleProvider final {
  public:
   static SelectionStyleProvider* GetInstance() {
@@ -254,31 +260,27 @@ class SelectionStyleProvider final {
     // colors can be controlled by a ":selected" CSS rule.
     nsAutoCString style(":selected{");
     // FYI: LookAndFeel always returns selection colors of GtkTextView.
-    nscolor selectionForegroundColor;
-    if (NS_SUCCEEDED(
-            LookAndFeel::GetColor(LookAndFeel::ColorID::TextSelectForeground,
-                                  &selectionForegroundColor))) {
+    if (auto selectionForegroundColor =
+            GetSystemColor(LookAndFeel::ColorID::TextSelectForeground)) {
       double alpha =
-          static_cast<double>(NS_GET_A(selectionForegroundColor)) / 0xFF;
+          static_cast<double>(NS_GET_A(*selectionForegroundColor)) / 0xFF;
       style.AppendPrintf("color:rgba(%u,%u,%u,",
-                         NS_GET_R(selectionForegroundColor),
-                         NS_GET_G(selectionForegroundColor),
-                         NS_GET_B(selectionForegroundColor));
+                         NS_GET_R(*selectionForegroundColor),
+                         NS_GET_G(*selectionForegroundColor),
+                         NS_GET_B(*selectionForegroundColor));
       // We can't use AppendPrintf here, because it does locale-specific
       // formatting of floating-point values.
       style.AppendFloat(alpha);
       style.AppendPrintf(");");
     }
-    nscolor selectionBackgroundColor;
-    if (NS_SUCCEEDED(
-            LookAndFeel::GetColor(LookAndFeel::ColorID::TextSelectBackground,
-                                  &selectionBackgroundColor))) {
+    if (auto selectionBackgroundColor =
+            GetSystemColor(LookAndFeel::ColorID::TextSelectBackground)) {
       double alpha =
-          static_cast<double>(NS_GET_A(selectionBackgroundColor)) / 0xFF;
+          static_cast<double>(NS_GET_A(*selectionBackgroundColor)) / 0xFF;
       style.AppendPrintf("background-color:rgba(%u,%u,%u,",
-                         NS_GET_R(selectionBackgroundColor),
-                         NS_GET_G(selectionBackgroundColor),
-                         NS_GET_B(selectionBackgroundColor));
+                         NS_GET_R(*selectionBackgroundColor),
+                         NS_GET_G(*selectionBackgroundColor),
+                         NS_GET_B(*selectionBackgroundColor));
       style.AppendFloat(alpha);
       style.AppendPrintf(");");
     }
@@ -2020,6 +2022,7 @@ bool IMContextWrapper::MaybeDispatchKeyEventAsProcessedByIME(
       case eCompositionStart:
       case eCompositionCommit:
       case eCompositionCommitAsIs:
+      case eContentCommandInsertText:
         dispatchFakeKeyDown = true;
         break;
       // XXX Unfortunately, I don't have a good idea to prevent to
@@ -2319,45 +2322,65 @@ bool IMContextWrapper::DispatchCompositionCommitEvent(
   //       never occurs with remote content.  So, it's okay to fix this
   //       issue later.  (Perhaps, TextEventDisptcher should do it for
   //       all platforms.  E.g., creating WillCommitComposition()?)
-  if (!IsComposing()) {
+  RefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
+  RefPtr<TextEventDispatcher> dispatcher;
+  if (!IsComposing() &&
+      !StaticPrefs::intl_ime_use_composition_events_for_insert_text()) {
     if (!aCommitString || aCommitString->IsEmpty()) {
       MOZ_LOG(gGtkIMLog, LogLevel::Error,
               ("0x%p   DispatchCompositionCommitEvent(), FAILED, "
-               "there is no composition and empty commit string",
+               "did nothing due to inserting empty string without composition",
                this));
       return true;
     }
-    MOZ_LOG(gGtkIMLog, LogLevel::Debug,
-            ("0x%p   DispatchCompositionCommitEvent(), "
-             "the composition wasn't started, force starting...",
-             this));
-    if (!DispatchCompositionStart(aContext)) {
+    if (!MaybeDispatchKeyEventAsProcessedByIME(eContentCommandInsertText)) {
+      MOZ_LOG(gGtkIMLog, LogLevel::Warning,
+              ("0x%p   DispatchCompositionCommitEvent(), Warning, "
+               "MaybeDispatchKeyEventAsProcessedByIME() returned false",
+               this));
+      return false;
+    }
+    MOZ_ASSERT(!dispatcher);
+  } else {
+    if (!IsComposing()) {
+      if (!aCommitString || aCommitString->IsEmpty()) {
+        MOZ_LOG(gGtkIMLog, LogLevel::Error,
+                ("0x%p   DispatchCompositionCommitEvent(), FAILED, "
+                 "there is no composition and empty commit string",
+                 this));
+        return true;
+      }
+      MOZ_LOG(gGtkIMLog, LogLevel::Debug,
+              ("0x%p   DispatchCompositionCommitEvent(), "
+               "the composition wasn't started, force starting...",
+               this));
+      if (!DispatchCompositionStart(aContext)) {
+        return false;
+      }
+    }
+    // If this commit caused by a key press, we need to dispatch eKeyDown or
+    // eKeyUp before dispatching composition events.
+    else if (!MaybeDispatchKeyEventAsProcessedByIME(
+                 aCommitString ? eCompositionCommit : eCompositionCommitAsIs)) {
+      MOZ_LOG(gGtkIMLog, LogLevel::Warning,
+              ("0x%p   DispatchCompositionCommitEvent(), Warning, "
+               "MaybeDispatchKeyEventAsProcessedByIME() returned false",
+               this));
+      mCompositionState = eCompositionState_NotComposing;
+      return false;
+    }
+
+    dispatcher = GetTextEventDispatcher();
+    MOZ_ASSERT(dispatcher);
+    nsresult rv = dispatcher->BeginNativeInputTransaction();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      MOZ_LOG(gGtkIMLog, LogLevel::Error,
+              ("0x%p   DispatchCompositionCommitEvent(), FAILED, "
+               "due to BeginNativeInputTransaction() failure",
+               this));
       return false;
     }
   }
-  // If this commit caused by a key press, we need to dispatch eKeyDown or
-  // eKeyUp before dispatching composition events.
-  else if (!MaybeDispatchKeyEventAsProcessedByIME(
-               aCommitString ? eCompositionCommit : eCompositionCommitAsIs)) {
-    MOZ_LOG(gGtkIMLog, LogLevel::Warning,
-            ("0x%p   DispatchCompositionCommitEvent(), Warning, "
-             "MaybeDispatchKeyEventAsProcessedByIME() returned false",
-             this));
-    mCompositionState = eCompositionState_NotComposing;
-    return false;
-  }
-
-  RefPtr<TextEventDispatcher> dispatcher = GetTextEventDispatcher();
-  nsresult rv = dispatcher->BeginNativeInputTransaction();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    MOZ_LOG(gGtkIMLog, LogLevel::Error,
-            ("0x%p   DispatchCompositionCommitEvent(), FAILED, "
-             "due to BeginNativeInputTransaction() failure",
-             this));
-    return false;
-  }
-
-  RefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
 
   // Emulate selection until receiving actual selection range.
   mSelection.CollapseTo(
@@ -2377,14 +2400,32 @@ bool IMContextWrapper::DispatchCompositionCommitEvent(
   mDispatchedCompositionString.Truncate();
   mSelectedStringRemovedByComposition.Truncate();
 
-  nsEventStatus status;
-  rv = dispatcher->CommitComposition(status, aCommitString);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    MOZ_LOG(gGtkIMLog, LogLevel::Error,
-            ("0x%p   DispatchCompositionChangeEvent(), FAILED, "
-             "due to CommitComposition() failure",
-             this));
-    return false;
+  if (!dispatcher) {
+    MOZ_ASSERT(aCommitString);
+    MOZ_ASSERT(!aCommitString->IsEmpty());
+    nsEventStatus status = nsEventStatus_eIgnore;
+    WidgetContentCommandEvent insertTextEvent(true, eContentCommandInsertText,
+                                              lastFocusedWindow);
+    insertTextEvent.mString.emplace(*aCommitString);
+    lastFocusedWindow->DispatchEvent(&insertTextEvent, status);
+
+    if (!insertTextEvent.mSucceeded) {
+      MOZ_LOG(gGtkIMLog, LogLevel::Error,
+              ("0x%p   DispatchCompositionChangeEvent(), FAILED, inserting "
+               "text failed",
+               this));
+      return false;
+    }
+  } else {
+    nsEventStatus status = nsEventStatus_eIgnore;
+    nsresult rv = dispatcher->CommitComposition(status, aCommitString);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      MOZ_LOG(gGtkIMLog, LogLevel::Error,
+              ("0x%p   DispatchCompositionChangeEvent(), FAILED, "
+               "due to CommitComposition() failure",
+               this));
+      return false;
+    }
   }
 
   if (lastFocusedWindow->IsDestroyed() ||

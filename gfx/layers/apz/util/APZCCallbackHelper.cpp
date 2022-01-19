@@ -9,6 +9,7 @@
 #include "TouchActionHelper.h"
 #include "gfxPlatform.h"  // For gfxPlatform::UseTiling
 
+#include "mozilla/EventForwards.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/BrowserParent.h"
@@ -264,8 +265,11 @@ static void SetDisplayPortMargins(PresShell* aPresShell, nsIContent* aContent,
            ToString(aDisplayPortMargins).c_str(), viewID));
     }
   }
-  DisplayPortUtils::SetDisplayPortMargins(aContent, aPresShell,
-                                          aDisplayPortMargins, 0);
+  DisplayPortUtils::SetDisplayPortMargins(
+      aContent, aPresShell, aDisplayPortMargins,
+      hadDisplayPort ? DisplayPortUtils::ClearMinimalDisplayPortProperty::No
+                     : DisplayPortUtils::ClearMinimalDisplayPortProperty::Yes,
+      0);
   if (!hadDisplayPort) {
     DisplayPortUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(
         aContent->GetPrimaryFrame());
@@ -329,15 +333,49 @@ void APZCCallbackHelper::UpdateRootFrame(const RepaintRequest& aRequest) {
     // the time this repaint request was fired, consider this request out of
     // date and drop it; setting a zoom based on the out-of-date resolution can
     // have the effect of getting us stuck with the stale resolution.
+    // One might think that if the last ResolutionChangeOrigin was apz then the
+    // pres shell resolutions should match but
+    // that is not the case. We can get multiple repaint requests that has the
+    // same pres shell resolution (because apz didn't receive a content layers
+    // update inbetween) if the first has async zoom we apply that and chance
+    // the content pres shell resolution and thus when handling the second
+    // repaint request the pres shell resolution won't match. So that's why we
+    // also check if the last resolution change origin was apz (aka 'us').
     if (!FuzzyEqualsMultiplicative(presShellResolution,
-                                   aRequest.GetPresShellResolution())) {
+                                   aRequest.GetPresShellResolution()) &&
+        presShell->GetLastResolutionChangeOrigin() !=
+            ResolutionChangeOrigin::Apz) {
       return;
     }
 
     // The pres shell resolution is updated by the the async zoom since the
     // last paint.
+    // We want to calculate the new presshell resolution as
+    // |aRequest.GetPresShellResolution() * aRequest.GetAsyncZoom()| but that
+    // calculation can lead to small inaccuracies due to limited floating point
+    // precision. Specifically,
+    // clang-format off
+    // asyncZoom = zoom / layerPixelsPerCSSPixel
+    //           = zoom / (devPixelsPerCSSPixel * cumulativeResolution)
+    // clang-format on
+    // Since this is a root frame we generally do not allow css transforms to
+    // scale it, so it is very likely that cumulativeResolution ==
+    // presShellResoluion. So
+    // clang-format off
+    // newPresShellResoluion = presShellResoluion * asyncZoom
+    // = presShellResoluion * zoom / (devPixelsPerCSSPixel * presShellResoluion)
+    // = zoom / devPixelsPerCSSPixel
+    // clang-format on
+    // However, we want to keep the calculation general and so we do not assume
+    // presShellResoluion == cumulativeResolution, but rather factor those
+    // values out so they cancel and the floating point division has a very high
+    // probability of being exactly 1.
     presShellResolution =
-        aRequest.GetPresShellResolution() * aRequest.GetAsyncZoom().scale;
+        (aRequest.GetPresShellResolution() /
+         aRequest.GetCumulativeResolution().ToScaleFactor().scale) *
+        (aRequest.GetZoom().ToScaleFactor() /
+         aRequest.GetDevPixelsPerCSSPixel())
+            .scale;
     presShell->SetResolutionAndScaleTo(presShellResolution,
                                        ResolutionChangeOrigin::Apz);
 
@@ -419,29 +457,20 @@ void APZCCallbackHelper::InitializeRootDisplayport(PresShell* aPresShell) {
   ScrollableLayerGuid::ViewID viewId;
   if (APZCCallbackHelper::GetOrCreateScrollIdentifiers(content, &presShellId,
                                                        &viewId)) {
-    nsPresContext* pc = aPresShell->GetPresContext();
-    // This code is only correct for root content or toplevel documents.
-    MOZ_ASSERT(!pc || pc->IsRootContentDocumentCrossProcess() ||
-               !pc->GetParentPresContext());
-    nsIFrame* frame = aPresShell->GetRootScrollFrame();
-    if (!frame) {
-      frame = aPresShell->GetRootFrame();
-    }
-    nsRect baseRect;
-    if (frame) {
-      baseRect = nsRect(nsPoint(0, 0),
-                        nsLayoutUtils::CalculateCompositionSizeForFrame(frame));
-    } else if (pc) {
-      baseRect = nsRect(nsPoint(0, 0), pc->GetVisibleArea().Size());
-    }
     MOZ_LOG(
         sDisplayportLog, LogLevel::Debug,
         ("Initializing root displayport on scrollId=%" PRIu64 "\n", viewId));
-    DisplayPortUtils::SetDisplayPortBaseIfNotSet(content, baseRect);
+    Maybe<nsRect> baseRect =
+        DisplayPortUtils::GetRootDisplayportBase(aPresShell);
+    if (baseRect) {
+      DisplayPortUtils::SetDisplayPortBaseIfNotSet(content, *baseRect);
+    }
+
     // Note that we also set the base rect that goes with these margins in
     // nsRootBoxFrame::BuildDisplayList.
     DisplayPortUtils::SetDisplayPortMargins(
-        content, aPresShell, DisplayPortMargins::Empty(content), 0);
+        content, aPresShell, DisplayPortMargins::Empty(content),
+        DisplayPortUtils::ClearMinimalDisplayPortProperty::Yes, 0);
     DisplayPortUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(
         content->GetPrimaryFrame());
   }
@@ -492,6 +521,7 @@ nsEventStatus APZCCallbackHelper::DispatchSynthesizedMouseEvent(
   event.mRefPoint = LayoutDeviceIntPoint::Truncate(aRefPoint.x, aRefPoint.y);
   event.mTime = aTime;
   event.mButton = MouseButton::ePrimary;
+  event.mButtons |= MouseButtonsFlag::ePrimaryFlag;
   event.mInputSource = dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH;
   if (aMsg == eMouseLongTap) {
     event.mFlags.mOnlyChromeDispatch = true;
@@ -507,19 +537,20 @@ nsEventStatus APZCCallbackHelper::DispatchSynthesizedMouseEvent(
   return DispatchWidgetEvent(event);
 }
 
-bool APZCCallbackHelper::DispatchMouseEvent(
+PreventDefaultResult APZCCallbackHelper::DispatchMouseEvent(
     PresShell* aPresShell, const nsString& aType, const CSSPoint& aPoint,
     int32_t aButton, int32_t aClickCount, int32_t aModifiers,
     unsigned short aInputSourceArg, uint32_t aPointerId) {
-  NS_ENSURE_TRUE(aPresShell, true);
+  NS_ENSURE_TRUE(aPresShell, PreventDefaultResult::ByContent);
 
-  bool defaultPrevented = false;
+  PreventDefaultResult preventDefaultResult;
   nsContentUtils::SendMouseEvent(
       aPresShell, aType, aPoint.x, aPoint.y, aButton,
       nsIDOMWindowUtils::MOUSE_BUTTONS_NOT_SPECIFIED, aClickCount, aModifiers,
       /* aIgnoreRootScrollFrame = */ false, 0, aInputSourceArg, aPointerId,
-      false, &defaultPrevented, false, /* aIsWidgetEventSynthesized = */ false);
-  return defaultPrevented;
+      false, &preventDefaultResult, false,
+      /* aIsWidgetEventSynthesized = */ false);
+  return preventDefaultResult;
 }
 
 void APZCCallbackHelper::FireSingleTapEvent(const LayoutDevicePoint& aPoint,
@@ -615,7 +646,7 @@ static bool PrepareForSetTargetAPZCNotification(
   if (!guidIsValid) {
     return false;
   }
-  if (DisplayPortUtils::HasDisplayPort(dpElement)) {
+  if (DisplayPortUtils::HasNonMinimalNonZeroDisplayPort(dpElement)) {
     // If the element has a displayport but it hasn't been painted yet,
     // we want the caller to wait for the paint to happen, but we don't
     // need to set the displayport here since it's already been set.
@@ -646,13 +677,18 @@ static bool PrepareForSetTargetAPZCNotification(
   nsIFrame* frame = do_QueryFrame(scrollAncestor);
   DisplayPortUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(frame);
 
-  return true;
+  return !DisplayPortUtils::HasPaintedDisplayPort(dpElement);
 }
 
 static void SendLayersDependentApzcTargetConfirmation(
-    PresShell* aPresShell, uint64_t aInputBlockId,
+    nsPresContext* aPresContext, uint64_t aInputBlockId,
     nsTArray<ScrollableLayerGuid>&& aTargets) {
-  LayerManager* lm = aPresShell->GetLayerManager();
+  PresShell* ps = aPresContext->GetPresShell();
+  if (!ps) {
+    return;
+  }
+
+  LayerManager* lm = ps->GetLayerManager();
   if (!lm) {
     return;
   }
@@ -680,45 +716,34 @@ static void SendLayersDependentApzcTargetConfirmation(
 }  // namespace
 
 DisplayportSetListener::DisplayportSetListener(
-    nsIWidget* aWidget, PresShell* aPresShell, const uint64_t& aInputBlockId,
-    nsTArray<ScrollableLayerGuid>&& aTargets)
-    : OneShotPostRefreshObserver(aPresShell),
+    nsIWidget* aWidget, nsPresContext* aPresContext,
+    const uint64_t& aInputBlockId, nsTArray<ScrollableLayerGuid>&& aTargets)
+    : ManagedPostRefreshObserver(aPresContext),
       mWidget(aWidget),
       mInputBlockId(aInputBlockId),
       mTargets(std::move(aTargets)) {
   MOZ_ASSERT(!mAction, "Setting Action twice");
-  mAction = [](PresShell* aPresShell,
-               OneShotPostRefreshObserver* aThisObserver) {
-    OnPostRefresh(static_cast<DisplayportSetListener*>(aThisObserver),
-                  aPresShell);
+  mAction = [instance = MOZ_KnownLive(this)](bool aWasCanceled) {
+    instance->OnPostRefresh();
+    return Unregister::Yes;
   };
 }
 
 DisplayportSetListener::~DisplayportSetListener() = default;
 
-bool DisplayportSetListener::Register() {
-  if (nsPresContext* presContext = mPresShell->GetPresContext()) {
-    presContext->RegisterOneShotPostRefreshObserver(this);
-    APZCCH_LOG("Successfully registered post-refresh observer\n");
-    return true;
-  }
-  // In case of failure just send the notification right away
-  APZCCH_LOG("Sending target APZCs for input block %" PRIu64 "\n",
-             mInputBlockId);
-  mWidget->SetConfirmedTargetAPZC(mInputBlockId, mTargets);
-  return false;
+void DisplayportSetListener::Register() {
+  APZCCH_LOG("DisplayportSetListener::Register\n");
+  mPresContext->RegisterManagedPostRefreshObserver(this);
 }
 
-/* static */
-void DisplayportSetListener::OnPostRefresh(DisplayportSetListener* aListener,
-                                           PresShell* aPresShell) {
+void DisplayportSetListener::OnPostRefresh() {
   APZCCH_LOG("Got refresh, sending target APZCs for input block %" PRIu64 "\n",
-             aListener->mInputBlockId);
-  SendLayersDependentApzcTargetConfirmation(
-      aPresShell, aListener->mInputBlockId, std::move(aListener->mTargets));
+             mInputBlockId);
+  SendLayersDependentApzcTargetConfirmation(mPresContext, mInputBlockId,
+                                            std::move(mTargets));
 }
 
-UniquePtr<DisplayportSetListener>
+already_AddRefed<DisplayportSetListener>
 APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
                                                   dom::Document* aDocument,
                                                   const WidgetGUIEvent& aEvent,
@@ -764,8 +789,9 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
           APZCCH_LOG(
               "At least one target got a new displayport, need to wait for "
               "refresh\n");
-          return MakeUnique<DisplayportSetListener>(
-              aWidget, presShell, aInputBlockId, std::move(targets));
+          return MakeAndAddRef<DisplayportSetListener>(
+              aWidget, presShell->GetPresContext(), aInputBlockId,
+              std::move(targets));
         }
         APZCCH_LOG("Sending target APZCs for input block %" PRIu64 "\n",
                    aInputBlockId);

@@ -58,6 +58,21 @@ impl ByteBuf {
     }
 }
 
+#[repr(C)]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct AdapterInformation {
+    id: id::AdapterId,
+    //inner: wgt::AdapterInfo, //TODO: not C-friendly
+    limits: wgt::Limits,
+    features: wgt::Features,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum ShaderModuleSource<'a> {
+    SpirV(Cow<'a, [u32]>),
+    Wgsl(Cow<'a, str>),
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ImplicitLayout<'a> {
     pipeline: id::PipelineLayoutId,
@@ -78,7 +93,11 @@ enum DeviceAction<'a> {
         wgc::binding_model::PipelineLayoutDescriptor<'a>,
     ),
     CreateBindGroup(id::BindGroupId, wgc::binding_model::BindGroupDescriptor<'a>),
-    CreateShaderModule(id::ShaderModuleId, Cow<'a, [u32]>, Cow<'a, str>),
+    CreateShaderModule(
+        id::ShaderModuleId,
+        wgc::pipeline::ShaderModuleDescriptor<'a>,
+        ShaderModuleSource<'a>,
+    ),
     CreateComputePipeline(
         id::ComputePipelineId,
         wgc::pipeline::ComputePipelineDescriptor<'a>,
@@ -91,8 +110,8 @@ enum DeviceAction<'a> {
     ),
     CreateRenderBundle(
         id::RenderBundleId,
-        wgc::command::RenderBundleEncoderDescriptor<'a>,
-        wgc::command::BasePass<wgc::command::RenderCommand>,
+        wgc::command::RenderBundleEncoder,
+        wgc::command::RenderBundleDescriptor<'a>,
     ),
     CreateCommandEncoder(
         id::CommandEncoderId,
@@ -101,14 +120,47 @@ enum DeviceAction<'a> {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+enum QueueWriteAction {
+    Buffer {
+        dst: id::BufferId,
+        offset: wgt::BufferAddress,
+    },
+    Texture {
+        dst: wgt::ImageCopyTexture<id::TextureId>,
+        layout: wgt::ImageDataLayout,
+        size: wgt::Extent3d,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 enum TextureAction<'a> {
     CreateView(id::TextureViewId, wgc::resource::TextureViewDescriptor<'a>),
 }
 
+#[repr(C)]
 #[derive(serde::Serialize, serde::Deserialize)]
 enum DropAction {
+    Adapter(id::AdapterId),
+    Device(id::DeviceId),
+    ShaderModule(id::ShaderModuleId),
+    PipelineLayout(id::PipelineLayoutId),
+    BindGroupLayout(id::BindGroupLayoutId),
+    BindGroup(id::BindGroupId),
+    CommandBuffer(id::CommandBufferId),
+    RenderBundle(id::RenderBundleId),
+    RenderPipeline(id::RenderPipelineId),
+    ComputePipeline(id::ComputePipelineId),
     Buffer(id::BufferId),
     Texture(id::TextureId),
+    TextureView(id::TextureViewId),
     Sampler(id::SamplerId),
-    BindGroupLayout(id::BindGroupLayoutId),
+}
+
+impl DropAction {
+    // helper function to construct byte bufs
+    fn to_byte_buf(&self) -> ByteBuf {
+        let mut data = Vec::new();
+        bincode::serialize_into(&mut data, self).unwrap();
+        ByteBuf::from_vec(data)
+    }
 }

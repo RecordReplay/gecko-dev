@@ -12,17 +12,13 @@ if CONFIG['CPU_ARCH'] != 'aarch64':
     ASFLAGS += ['-I%s/media/ffvpx/libavutil/x86/' % TOPSRCDIR]
 
 if CONFIG['FFVPX_ASFLAGS']:
-    if CONFIG['FFVPX_USE_YASM']:
-        USE_YASM = True
+    if CONFIG['FFVPX_USE_NASM']:
+        USE_NASM = True
 
     if CONFIG['OS_ARCH'] == 'WINNT':
        # Fix inline symbols and math defines for windows.
         DEFINES['_USE_MATH_DEFINES'] = True
         DEFINES['inline'] = "__inline"
-
-    if USE_YASM and not CONFIG['YASM_HAS_AVX2']:
-        DEFINES['YASM_MISSING_AVX2'] = True
-
 
 LOCAL_INCLUDES += ['/media/ffvpx']
 

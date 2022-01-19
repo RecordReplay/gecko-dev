@@ -15,6 +15,7 @@
 #include "mozilla/Keyframe.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/RestyleManager.h"
 #include "mozilla/ServoStyleRuleMap.h"
@@ -47,11 +48,9 @@
 #include "nsHTMLStyleSheet.h"
 #include "nsIAnonymousContentCreator.h"
 #include "mozilla/dom/DocumentInlines.h"
-#include "nsMediaFeatures.h"
 #include "nsPrintfCString.h"
 #include "gfxUserFontSet.h"
 #include "nsWindowSizes.h"
-#include "GeckoProfiler.h"
 
 namespace mozilla {
 
@@ -130,8 +129,7 @@ nsPresContext* ServoStyleSet::GetPresContext() {
 template <typename Functor>
 static void EnumerateShadowRoots(const Document& aDoc, const Functor& aCb) {
   const Document::ShadowRootSet& shadowRoots = aDoc.ComposedShadowRoots();
-  for (auto iter = shadowRoots.ConstIter(); !iter.Done(); iter.Next()) {
-    ShadowRoot* root = iter.Get()->GetKey();
+  for (ShadowRoot* root : shadowRoots) {
     MOZ_ASSERT(root);
     MOZ_DIAGNOSTIC_ASSERT(root->IsInComposedDoc());
     aCb(*root);
@@ -220,12 +218,14 @@ RestyleHint ServoStyleSet::MediumFeaturesChanged(
     }
   });
 
-  bool mayAffectDefaultStyle =
+  const bool mayAffectDefaultStyle =
       bool(aReason & kMediaFeaturesAffectingDefaultStyle);
-
+  const bool viewportChanged =
+      bool(aReason & MediaFeatureChangeReason::ViewportChange);
   const MediumFeaturesChangedResult result =
-      Servo_StyleSet_MediumFeaturesChanged(mRawSet.get(), &nonDocumentStyles,
-                                           mayAffectDefaultStyle);
+      Servo_StyleSet_MediumFeaturesChanged(
+          mRawSet.get(), &nonDocumentStyles, mayAffectDefaultStyle,
+          viewportChanged, mDocument->GetRootElement());
 
   const bool rulesChanged =
       result.mAffectsDocumentRules || result.mAffectsNonDocumentRules;
@@ -241,12 +241,6 @@ RestyleHint ServoStyleSet::MediumFeaturesChanged(
   if (rulesChanged) {
     // TODO(emilio): This could be more granular.
     return RestyleHint::RestyleSubtree();
-  }
-
-  const bool viewportChanged =
-      bool(aReason & MediaFeatureChangeReason::ViewportChange);
-  if (result.mUsesViewportUnits && viewportChanged) {
-    return RestyleHint::RecascadeSubtree();
   }
 
   return RestyleHint{0};
@@ -340,8 +334,6 @@ void ServoStyleSet::PreTraverseSync() {
   mDocument->FlushUserFontSet();
 
   ResolveMappedAttrDeclarationBlocks();
-
-  nsMediaFeatures::InitSystemMetrics();
 
   LookAndFeel::NativeInit();
 
@@ -528,12 +520,6 @@ ServoStyleSet::ResolveInheritingAnonymousBoxStyle(PseudoStyleType aType,
 already_AddRefed<ComputedStyle>
 ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(PseudoStyleType aType) {
   MOZ_ASSERT(PseudoStyle::IsNonInheritingAnonBox(aType));
-  MOZ_ASSERT(aType != PseudoStyleType::pageContent,
-             "If pageContent ends up non-inheriting, check "
-             "whether we need to do anything to move the "
-             "@page handling from ResolveInheritingAnonymousBoxStyle to "
-             "ResolveNonInheritingAnonymousBoxStyle");
-
   nsCSSAnonBoxes::NonInheriting type =
       nsCSSAnonBoxes::NonInheritingTypeForPseudoType(aType);
   RefPtr<ComputedStyle>& cache = mNonInheritingComputedStyles[type];
@@ -687,20 +673,35 @@ bool ServoStyleSet::GeneratedContentPseudoExists(
     if (!aParentStyle.StyleDisplay()->IsListItem()) {
       return false;
     }
-    // display:none is equivalent to not having the pseudo-element at all.
+    const auto& content = aPseudoStyle.StyleContent()->mContent;
+    // ::marker does not exist if 'content' is 'none' (this trumps
+    // any 'list-style-type' or 'list-style-image' values).
+    if (content.IsNone()) {
+      return false;
+    }
+    // ::marker only exist if we have 'content' or at least one of
+    // 'list-style-type' or 'list-style-image'.
+    if (aPseudoStyle.StyleList()->mCounterStyle.IsNone() &&
+        aPseudoStyle.StyleList()->mListStyleImage.IsNone() &&
+        content.IsNormal()) {
+      return false;
+    }
+    // display:none is equivalent to not having a pseudo at all.
     if (aPseudoStyle.StyleDisplay()->mDisplay == StyleDisplay::None) {
       return false;
     }
   }
 
-  // For :before and :after pseudo-elements, having display: none or no
-  // 'content' property is equivalent to not having the pseudo-element
-  // at all.
+  // For ::before and ::after pseudo-elements, no 'content' items is
+  // equivalent to not having the pseudo-element at all.
   if (type == PseudoStyleType::before || type == PseudoStyleType::after) {
-    if (aPseudoStyle.StyleDisplay()->mDisplay == StyleDisplay::None) {
+    if (!aPseudoStyle.StyleContent()->mContent.IsItems()) {
       return false;
     }
-    if (!aPseudoStyle.StyleContent()->ContentCount()) {
+    MOZ_ASSERT(aPseudoStyle.StyleContent()->ContentCount() > 0,
+               "IsItems() implies we have at least one item");
+    // display:none is equivalent to not having a pseudo at all.
+    if (aPseudoStyle.StyleDisplay()->mDisplay == StyleDisplay::None) {
       return false;
     }
   }
@@ -1191,6 +1192,7 @@ void ServoStyleSet::UpdateStylist() {
         Servo_AuthorStyles_Flush(authorStyles, mRawSet.get());
       }
     });
+    Servo_StyleSet_RemoveUniqueEntriesFromAuthorStylesCache(mRawSet.get());
   }
 
   mStylistState = StylistState::NotDirty;
@@ -1226,11 +1228,9 @@ bool ServoStyleSet::ShouldTraverseInParallel() const {
   if (!mDocument->GetPresShell()->IsActive()) {
     return false;
   }
-#ifdef MOZ_GECKO_PROFILER
   if (profiler_feature_active(ProfilerFeature::SequentialStyle)) {
     return false;
   }
-#endif
   return true;
 }
 

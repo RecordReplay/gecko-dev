@@ -69,85 +69,6 @@ for (let canonicalId of ["canonical", "canonical-001", "canonical-002"]) {
       hasParams(engines, "Google", "searchbar", "channel=fs") &&
       hasTelemetryId(engines, "Google", "google-canonical"),
   });
-
-  tests.push({
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "DuckDuckGo", "searchbar", "t=canonical"),
-  });
-
-  tests.push({
-    locale: "en-US",
-    region: "US",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.com", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "de",
-    region: "DE",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.de", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "en-GB",
-    region: "GB",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.co.uk", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "fr",
-    region: "FR",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.fr", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "it",
-    region: "IT",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.it", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "ja",
-    region: "JP",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.co.jp", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "ur",
-    region: "IN",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "Amazon.in", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "zh-CN",
-    region: "CN",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "亚马逊", "searchbar", "tag=wwwcanoniccom-20"),
-  });
-
-  tests.push({
-    locale: "zh-CN",
-    region: "CN",
-    distribution: canonicalId,
-    test: engines =>
-      hasParams(engines, "百度", "searchbar", "tn=ubuntuu_cb") &&
-      hasParams(engines, "百度", "suggestions", "tn=ubuntuu_cb"),
-  });
 }
 
 tests.push({
@@ -296,6 +217,7 @@ tests.push({
 
 tests.push({
   locale: "zh-CN",
+  region: "CN",
   distribution: "MozillaOnline",
   test: engines =>
     hasParams(engines, "百度", "searchbar", "tn=monline_4_dg") &&
@@ -310,15 +232,15 @@ tests.push({
 
 tests.push({
   locale: "zh-CN",
+  region: "CN",
   distribution: "MozillaOnline",
   test: engines =>
-    hasParams(engines, "亚马逊", "searchbar", "engine=amazon_shopping") &&
+    hasParams(engines, "亚马逊", "searchbar", "ie=UTF8") &&
     hasParams(engines, "亚马逊", "suggestions", "tag=mozilla") &&
-    hasParams(engines, "亚马逊", "homepage", "create=2028") &&
-    hasParams(engines, "亚马逊", "homepage", "adid=1NZNRHJZ2Q87NTS7YW6N") &&
-    hasParams(engines, "亚马逊", "homepage", "campaign=408") &&
-    hasParams(engines, "亚马逊", "homepage", "create=2028") &&
-    hasParams(engines, "亚马逊", "homepage", "mode=blended") &&
+    hasParams(engines, "亚马逊", "homepage", "camp=536") &&
+    hasParams(engines, "亚马逊", "homepage", "creative=3200") &&
+    hasParams(engines, "亚马逊", "homepage", "index=aps") &&
+    hasParams(engines, "亚马逊", "homepage", "linkCode=ur2") &&
     hasEnginesFirst(engines, ["百度", "Bing", "Google", "亚马逊", "维基百科"]),
 });
 
@@ -369,6 +291,7 @@ for (const locale of ["en-US", "en-GB", "fr", "de"]) {
     distribution: "sweetlabs-b-oem1",
     test: engines =>
       hasParams(engines, "Bing", "searchbar", "pc=MZSL01") &&
+      hasParams(engines, "Bing", "searchbar", "ptag=MOZZ0000000020") &&
       hasDefault(engines, "Bing") &&
       hasEnginesFirst(engines, ["Bing"]),
   });
@@ -378,6 +301,7 @@ for (const locale of ["en-US", "en-GB", "fr", "de"]) {
     distribution: "sweetlabs-b-r-oem1",
     test: engines =>
       hasParams(engines, "Bing", "searchbar", "pc=MZSL01") &&
+      hasParams(engines, "Bing", "searchbar", "ptag=MOZZ0000000020") &&
       hasDefault(engines, "Bing") &&
       hasEnginesFirst(engines, ["Bing"]),
   });
@@ -387,6 +311,7 @@ for (const locale of ["en-US", "en-GB", "fr", "de"]) {
     distribution: "sweetlabs-b-oem2",
     test: engines =>
       hasParams(engines, "Bing", "searchbar", "pc=MZSL02") &&
+      hasParams(engines, "Bing", "searchbar", "ptag=MOZZ0000000020") &&
       hasDefault(engines, "Bing") &&
       hasEnginesFirst(engines, ["Bing"]),
   });
@@ -396,6 +321,7 @@ for (const locale of ["en-US", "en-GB", "fr", "de"]) {
     distribution: "sweetlabs-b-r-oem2",
     test: engines =>
       hasParams(engines, "Bing", "searchbar", "pc=MZSL02") &&
+      hasParams(engines, "Bing", "searchbar", "ptag=MOZZ0000000020") &&
       hasDefault(engines, "Bing") &&
       hasEnginesFirst(engines, ["Bing"]),
   });
@@ -405,6 +331,7 @@ for (const locale of ["en-US", "en-GB", "fr", "de"]) {
     distribution: "sweetlabs-b-oem3",
     test: engines =>
       hasParams(engines, "Bing", "searchbar", "pc=MZSL03") &&
+      hasParams(engines, "Bing", "searchbar", "ptag=MOZZ0000000020") &&
       hasDefault(engines, "Bing") &&
       hasEnginesFirst(engines, ["Bing"]),
   });
@@ -414,48 +341,9 @@ for (const locale of ["en-US", "en-GB", "fr", "de"]) {
     distribution: "sweetlabs-b-r-oem3",
     test: engines =>
       hasParams(engines, "Bing", "searchbar", "pc=MZSL03") &&
+      hasParams(engines, "Bing", "searchbar", "ptag=MOZZ0000000020") &&
       hasDefault(engines, "Bing") &&
       hasEnginesFirst(engines, ["Bing"]),
-  });
-
-  tests.push({
-    locale,
-    distribution: "sweetlabs-oem1",
-    test: engines =>
-      hasParams(engines, "Google", "searchbar", "client=firefox-b-oem1") &&
-      hasDefault(engines, "Google") &&
-      hasEnginesFirst(engines, ["Google"]) &&
-      hasTelemetryId(engines, "Google", "google-sweetlabs"),
-  });
-
-  tests.push({
-    locale,
-    distribution: "sweetlabs-r-oem1",
-    test: engines =>
-      hasParams(engines, "Google", "searchbar", "client=firefox-b-oem1") &&
-      hasDefault(engines, "Google") &&
-      hasEnginesFirst(engines, ["Google"]) &&
-      hasTelemetryId(engines, "Google", "google-sweetlabs"),
-  });
-
-  tests.push({
-    locale,
-    distribution: "sweetlabs-oem2",
-    test: engines =>
-      hasParams(engines, "Google", "searchbar", "client=firefox-b-oem2") &&
-      hasDefault(engines, "Google") &&
-      hasEnginesFirst(engines, ["Google"]) &&
-      hasTelemetryId(engines, "Google", "google-sweetlabs"),
-  });
-
-  tests.push({
-    locale,
-    distribution: "sweetlabs-r-oem2",
-    test: engines =>
-      hasParams(engines, "Google", "searchbar", "client=firefox-b-oem2") &&
-      hasDefault(engines, "Google") &&
-      hasEnginesFirst(engines, ["Google"]) &&
-      hasTelemetryId(engines, "Google", "google-sweetlabs"),
   });
 }
 

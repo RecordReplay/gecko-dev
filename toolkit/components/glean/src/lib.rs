@@ -17,6 +17,15 @@
 //! [privacy-policy]: https://www.mozilla.org/privacy/
 //! [docs]: https://firefox-source-docs.mozilla.org/toolkit/components/glean/
 
+// Skip everything on Android.
+//
+// FOG is disabled on Android until we enable it in GeckoView.
+// See https://bugzilla.mozilla.org/show_bug.cgi?id=1670261.
+//
+// This also ensures no one will actually be able to use the Rust API,
+// because that will fail the build.
+#![cfg(not(target_os = "android"))]
+
 // No one is currently using the Glean SDK, so let's export it, so we know it gets
 // compiled.
 pub extern crate fog;
@@ -26,20 +35,24 @@ extern crate cstr;
 #[macro_use]
 extern crate xpcom;
 
-use std::ffi::CStr;
-use std::os::raw::c_char;
+use std::env;
+use std::ffi::CString;
+use std::ops::DerefMut;
+use std::path::PathBuf;
 
 use nserror::{nsresult, NS_ERROR_FAILURE, NS_OK};
-use nsstring::{nsACString, nsAString, nsCStr, nsCString, nsStr, nsString};
-use xpcom::interfaces::{
-    mozIViaduct, nsIFile, nsIObserver, nsIPrefBranch, nsIPropertyBag2, nsISupports, nsIXULAppInfo,
-};
-use xpcom::{RefPtr, XpCom};
+use nsstring::{nsACString, nsCString, nsString};
+use xpcom::interfaces::{mozIViaduct, nsIFile, nsIXULAppInfo};
+use xpcom::XpCom;
 
 use glean::{ClientInfoMetrics, Configuration};
 
+mod upload_pref;
+mod user_activity;
 mod viaduct_uploader;
 
+use crate::upload_pref::UploadPrefObserver;
+use crate::user_activity::UserActivityObserver;
 use crate::viaduct_uploader::ViaductUploader;
 
 /// Project FOG's entry point.
@@ -47,27 +60,28 @@ use crate::viaduct_uploader::ViaductUploader;
 /// This assembles client information and the Glean configuration and then initializes the global
 /// Glean instance.
 #[no_mangle]
-pub unsafe extern "C" fn fog_init() -> nsresult {
+pub unsafe extern "C" fn fog_init(
+    data_path_override: &nsACString,
+    app_id_override: &nsACString,
+) -> nsresult {
     fog::metrics::fog::initialization.start();
 
     log::debug!("Initializing FOG.");
 
-    let data_path = match get_data_path() {
-        Ok(dp) => dp,
-        Err(e) => return e,
+    let data_path_str = if data_path_override.is_empty() {
+        match get_data_path() {
+            Ok(dp) => dp,
+            Err(e) => return e,
+        }
+    } else {
+        data_path_override.to_utf8().to_string()
     };
+    let data_path = PathBuf::from(&data_path_str);
 
     let (app_build, app_display_version, channel) = match get_app_info() {
         Ok(ai) => ai,
         Err(e) => return e,
     };
-
-    let (os_version, _architecture) = match get_system_info() {
-        Ok(si) => si,
-        Err(e) => return e,
-    };
-
-    fog::metrics::fog_validation::os_version.set(os_version);
 
     let client_info = ClientInfoMetrics {
         app_build,
@@ -75,10 +89,17 @@ pub unsafe extern "C" fn fog_init() -> nsresult {
     };
     log::debug!("Client Info: {:#?}", client_info);
 
-    let pref_observer = UploadPrefObserver::allocate(InitUploadPrefObserver {});
-    if let Err(e) = pref_observer.begin_observing() {
+    if let Err(e) = UploadPrefObserver::begin_observing() {
         log::error!(
             "Could not observe data upload pref. Abandoning FOG init due to {:?}",
+            e
+        );
+        return e;
+    }
+
+    if let Err(e) = UserActivityObserver::begin_observing() {
+        log::error!(
+            "Could not observe user activity. Abandoning FOG init due to {:?}",
             e
         );
         return e;
@@ -92,17 +113,23 @@ pub unsafe extern "C" fn fog_init() -> nsresult {
         String::from(SERVER)
     };
 
+    let application_id = if app_id_override.is_empty() {
+        "firefox.desktop".to_string()
+    } else {
+        app_id_override.to_utf8().to_string()
+    };
+
     let upload_enabled = static_prefs::pref!("datareporting.healthreport.uploadEnabled");
-    let data_path = data_path.to_string();
     let configuration = Configuration {
         upload_enabled,
         data_path,
-        application_id: "firefox.desktop".to_string(),
+        application_id,
         max_events: None,
         delay_ping_lifetime_io: false,
         channel: Some(channel),
         server_endpoint: Some(server),
         uploader: Some(Box::new(crate::ViaductUploader) as Box<dyn glean::net::PingUploader>),
+        use_core_mps: true,
     };
 
     log::debug!("Configuration: {:#?}", configuration);
@@ -120,15 +147,20 @@ pub unsafe extern "C" fn fog_init() -> nsresult {
         log::error!("Failed to create Viaduct via XPCOM. Ping upload may not be available.");
     }
 
-    if configuration.data_path.len() > 0 {
-        glean::initialize(configuration, client_info);
-
-        // Register all custom pings before we initialize.
-        fog::pings::register_pings();
-
-        fog::metrics::fog::initialization.stop();
-        schedule_fog_validation_ping();
+    // If we're operating in automation without any specific source tags to set,
+    // set the tag "automation" so any pings that escape don't clutter the tables.
+    // See https://mozilla.github.io/glean/book/user/debugging/index.html#enabling-debugging-features-through-environment-variables
+    // IMPORTANT: Call this before glean::initialize until bug 1706729 is sorted.
+    if env::var("MOZ_AUTOMATION").is_ok() && env::var("GLEAN_SOURCE_TAGS").is_err() {
+        glean::set_source_tags(vec!["automation".to_string()]);
     }
+
+    glean::initialize(configuration, client_info);
+
+    // Register all custom pings before we initialize.
+    fog::pings::register_pings();
+
+    fog::metrics::fog::initialization.stop();
 
     NS_OK
 }
@@ -171,9 +203,27 @@ fn get_data_path() -> Result<String, nsresult> {
 fn get_app_info() -> Result<(String, String, String), nsresult> {
     let xul = xpcom::services::get_XULRuntime().ok_or(NS_ERROR_FAILURE)?;
 
+    let pref_service = xpcom::services::get_PrefService().ok_or(NS_ERROR_FAILURE)?;
+    let branch = xpcom::getter_addrefs(|p| {
+        // Safe because:
+        //  * `null` is explicitly allowed per documentation
+        //  * `p` is a valid outparam guaranteed by `getter_addrefs`
+        unsafe { pref_service.GetDefaultBranch(std::ptr::null(), p) }
+    })?;
+    let pref_name = CString::new("app.update.channel").map_err(|_| NS_ERROR_FAILURE)?;
     let mut channel = nsCString::new();
+    // Safe because:
+    //  * `branch` is non-null (otherwise `getter_addrefs` would've been `Err`
+    //  * `pref_name` exists so a pointer to it is valid for the life of the function
+    //  * `channel` exists so a pointer to it is valid, and it can be written to
     unsafe {
-        xul.GetDefaultUpdateChannel(&mut *channel).to_result()?;
+        if (*branch)
+            .GetCharPref(pref_name.as_ptr(), channel.deref_mut() as *mut nsACString)
+            .to_result()
+            .is_err()
+        {
+            channel = "unknown".into();
+        }
     }
 
     let app_info = match xul.query_interface::<nsIXULAppInfo>() {
@@ -204,81 +254,6 @@ fn get_app_info() -> Result<(String, String, String), nsresult> {
         version.to_string(),
         channel.to_string(),
     ))
-}
-
-/// Return a tuple of os_version and architecture, or an error.
-fn get_system_info() -> Result<(String, String), nsresult> {
-    let info_service = xpcom::get_service::<nsIPropertyBag2>(cstr!("@mozilla.org/system-info;1"))
-        .ok_or(NS_ERROR_FAILURE)?;
-
-    let os_version_key: Vec<u16> = "version".encode_utf16().collect();
-    let os_version_key = &nsStr::from(&os_version_key) as &nsAString;
-    let mut os_version = nsCString::new();
-    unsafe {
-        info_service
-            .GetPropertyAsACString(os_version_key, &mut *os_version)
-            .to_result()?;
-    }
-
-    let arch_key: Vec<u16> = "arch".encode_utf16().collect();
-    let arch_key = &nsStr::from(&arch_key) as &nsAString;
-    let mut arch = nsCString::new();
-    unsafe {
-        info_service
-            .GetPropertyAsACString(arch_key, &mut *arch)
-            .to_result()?;
-    }
-
-    Ok((os_version.to_string(), arch.to_string()))
-}
-
-// Partially cargo-culted from https://searchfox.org/mozilla-central/rev/598e50d2c3cd81cd616654f16af811adceb08f9f/security/manager/ssl/cert_storage/src/lib.rs#1192
-#[derive(xpcom)]
-#[xpimplements(nsIObserver)]
-#[refcnt = "atomic"]
-struct InitUploadPrefObserver {}
-
-#[allow(non_snake_case)]
-impl UploadPrefObserver {
-    unsafe fn begin_observing(&self) -> Result<(), nsresult> {
-        let pref_service = xpcom::services::get_PrefService().ok_or(NS_ERROR_FAILURE)?;
-        let pref_branch: RefPtr<nsIPrefBranch> =
-            (*pref_service).query_interface().ok_or(NS_ERROR_FAILURE)?;
-        let pref_nscstr = &nsCStr::from("datareporting.healthreport.uploadEnabled") as &nsACString;
-        (*pref_branch)
-            .AddObserverImpl(pref_nscstr, self.coerce::<nsIObserver>(), false)
-            .to_result()?;
-        Ok(())
-    }
-
-    unsafe fn Observe(
-        &self,
-        _subject: *const nsISupports,
-        topic: *const c_char,
-        pref_name: *const i16,
-    ) -> nserror::nsresult {
-        let topic = CStr::from_ptr(topic).to_str().unwrap();
-        // Conversion utf16 to utf8 is messy.
-        // We should only ever observe changes to the one pref we want,
-        // but just to be on the safe side let's assert.
-
-        // cargo-culted from https://searchfox.org/mozilla-central/rev/598e50d2c3cd81cd616654f16af811adceb08f9f/security/manager/ssl/cert_storage/src/lib.rs#1606-1612
-        // (with a little transformation)
-        let len = (0..).take_while(|&i| *pref_name.offset(i) != 0).count(); // find NUL.
-        let slice = std::slice::from_raw_parts(pref_name as *const u16, len);
-        let pref_name = match String::from_utf16(slice) {
-            Ok(name) => name,
-            Err(_) => return NS_ERROR_FAILURE,
-        };
-        log::info!("Observed {:?}, {:?}", topic, pref_name);
-        debug_assert!(
-            topic == "nsPref:changed" && pref_name == "datareporting.healthreport.uploadEnabled"
-        );
-
-        let upload_enabled = static_prefs::pref!("datareporting.healthreport.uploadEnabled");
-        glean::set_upload_enabled(upload_enabled);
-        NS_OK
-    }
 }
 
 static mut PENDING_BUF: Vec<u8> = Vec::new();
@@ -351,14 +326,4 @@ pub unsafe extern "C" fn fog_submit_ping(ping_name: &nsACString) -> nsresult {
 pub unsafe extern "C" fn fog_set_log_pings(value: bool) -> nsresult {
     glean::set_log_pings(value);
     NS_OK
-}
-
-fn schedule_fog_validation_ping() {
-    std::thread::spawn(|| {
-        loop {
-            // Sleep for an hour before and between submissions.
-            std::thread::sleep(std::time::Duration::from_secs(60 * 60));
-            fog::pings::fog_validation.submit(None);
-        }
-    });
 }

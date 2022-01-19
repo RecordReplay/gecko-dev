@@ -12,7 +12,7 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/WeakPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsCOMPtr.h"
 #include "nsTObserverArray.h"
 #include "nsThreadUtils.h"
@@ -68,21 +68,21 @@ inline Progress LoadCompleteProgress(bool aLastPart, bool aError,
  * values since WeakPtr's lose the knowledge of which object they used to point
  * to when that object is destroyed.
  *
- * ObserverTable subclasses nsDataHashtable to add reference counting support
- * and a copy constructor, both of which are needed for use with CopyOnWrite<T>.
+ * ObserverTable subclasses nsTHashMap to add reference counting
+ * support and a copy constructor, both of which are needed for use with
+ * CopyOnWrite<T>.
  */
-class ObserverTable : public nsDataHashtable<nsPtrHashKey<IProgressObserver>,
-                                             WeakPtr<IProgressObserver>> {
+class ObserverTable : public nsTHashMap<nsPtrHashKey<IProgressObserver>,
+                                        WeakPtr<IProgressObserver>> {
  public:
   NS_INLINE_DECL_REFCOUNTING(ObserverTable);
 
   ObserverTable() = default;
 
-  ObserverTable(const ObserverTable& aOther) {
+  ObserverTable(const ObserverTable& aOther)
+      : nsTHashMap<nsPtrHashKey<IProgressObserver>, WeakPtr<IProgressObserver>>(
+            aOther.Clone()) {
     NS_WARNING("Forced to copy ObserverTable due to nested notifications");
-    for (auto iter = aOther.ConstIter(); !iter.Done(); iter.Next()) {
-      this->Put(iter.Key(), iter.Data());
-    }
   }
 
  private:

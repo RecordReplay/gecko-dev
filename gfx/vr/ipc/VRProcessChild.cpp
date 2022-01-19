@@ -8,7 +8,7 @@
 
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/ipc/IOThreadChild.h"
-#include "ProcessUtils.h"
+#include "mozilla/ipc/ProcessUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -72,8 +72,7 @@ bool VRProcessChild::Init(int aArgc, char* aArgv[]) {
   }
 
   sVRParent = new VRParent();
-  sVRParent->Init(ParentPid(), parentBuildID, IOThreadChild::message_loop(),
-                  IOThreadChild::TakeChannel());
+  sVRParent->Init(ParentPid(), parentBuildID, IOThreadChild::TakeInitialPort());
 
   return true;
 }

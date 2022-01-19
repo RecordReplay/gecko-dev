@@ -32,8 +32,8 @@ class nsNativeThemeWin : private nsNativeTheme, public nsITheme {
   // The nsITheme interface.
   NS_IMETHOD DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                   StyleAppearance aAppearance,
-                                  const nsRect& aRect,
-                                  const nsRect& aDirtyRect) override;
+                                  const nsRect& aRect, const nsRect& aDirtyRect,
+                                  DrawOverflow) override;
 
   [[nodiscard]] LayoutDeviceIntMargin GetWidgetBorder(
       nsDeviceContext* aContext, nsIFrame* aFrame,
@@ -72,12 +72,14 @@ class nsNativeThemeWin : private nsNativeTheme, public nsITheme {
 
   bool ThemeNeedsComboboxDropmarker() override;
 
-  virtual bool WidgetAppearanceDependsOnWindowFocus(
-      StyleAppearance aAppearance) override;
+  bool WidgetAppearanceDependsOnWindowFocus(StyleAppearance) override;
 
   enum { eThemeGeometryTypeWindowButtons = eThemeGeometryTypeUnknown + 1 };
-  virtual ThemeGeometryType ThemeGeometryTypeForWidget(
-      nsIFrame* aFrame, StyleAppearance aAppearance) override;
+  ThemeGeometryType ThemeGeometryTypeForWidget(nsIFrame*,
+                                               StyleAppearance) override;
+
+  ScrollbarSizes GetScrollbarSizes(nsPresContext*, StyleScrollbarWidth,
+                                   Overlay) override;
 
   nsNativeThemeWin();
 

@@ -1,6 +1,60 @@
 "use strict";
 
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
+
+/**
+ * Set the findbar value to the given text, start a search for that text, and
+ * return a promise that resolves when the find has completed.
+ *
+ * @param gBrowser tabbrowser to search in the current tab.
+ * @param searchText text to search for.
+ * @param highlightOn true if highlight mode should be enabled before searching.
+ * @returns Promise resolves when find is complete.
+ */
+async function promiseFindFinished(gBrowser, searchText, highlightOn = false) {
+  let findbar = await gBrowser.getFindBar();
+  findbar.startFind(findbar.FIND_NORMAL);
+  let highlightElement = findbar.getElement("highlight");
+  if (highlightElement.checked != highlightOn) {
+    highlightElement.click();
+  }
+  return new Promise(resolve => {
+    executeSoon(() => {
+      findbar._findField.value = searchText;
+
+      let resultListener;
+      // When highlighting is on the finder sends a second "FOUND" message after
+      // the search wraps. This causes timing problems with e10s. waitMore
+      // forces foundOrTimeout wait for the second "FOUND" message before
+      // resolving the promise.
+      let waitMore = highlightOn;
+      let findTimeout = setTimeout(() => foundOrTimedout(null), 2000);
+      let foundOrTimedout = function(aData) {
+        if (aData !== null && waitMore) {
+          waitMore = false;
+          return;
+        }
+        if (aData === null) {
+          info("Result listener not called, timeout reached.");
+        }
+        clearTimeout(findTimeout);
+        findbar.browser.finder.removeResultListener(resultListener);
+        resolve();
+      };
+
+      resultListener = {
+        onFindResult: foundOrTimedout,
+        onCurrentSelection() {},
+        onMatchesCountResult() {},
+        onHighlightFinished() {},
+      };
+      findbar.browser.finder.addResultListener(resultListener);
+      findbar._find();
+    });
+  });
+}
 
 /**
  * A wrapper for the findbar's method "close", which is not synchronous
@@ -84,41 +138,6 @@ async function waitForTabPlayingEvent(tab, expectPlaying) {
   }
 }
 
-function getTestPlugin(pluginName) {
-  var ph = SpecialPowers.Cc["@mozilla.org/plugin/host;1"].getService(
-    SpecialPowers.Ci.nsIPluginHost
-  );
-  var tags = ph.getPluginTags();
-  var name = pluginName || "Test Plug-in";
-  for (var tag of tags) {
-    if (tag.name == name) {
-      return tag;
-    }
-  }
-
-  ok(false, "Could not find plugin tag with plugin name '" + name + "'");
-  return null;
-}
-
-async function setTestPluginEnabledState(newEnabledState, pluginName) {
-  var oldEnabledState = await SpecialPowers.setTestPluginEnabledState(
-    newEnabledState,
-    pluginName
-  );
-  if (!oldEnabledState) {
-    return;
-  }
-  var plugin = getTestPlugin(pluginName);
-  // Run a nested event loop to wait for the preference change to
-  // propagate to the child. Yuck!
-  SpecialPowers.Services.tm.spinEventLoopUntil(() => {
-    return plugin.enabledState == newEnabledState;
-  });
-  SimpleTest.registerCleanupFunction(function() {
-    return SpecialPowers.setTestPluginEnabledState(oldEnabledState, pluginName);
-  });
-}
-
 function disable_non_test_mouse(disable) {
   let utils = window.windowUtils;
   utils.disableNonTestMouseEvents(disable);
@@ -194,19 +213,25 @@ class DateTimeTestHelper {
   async waitForPickerReady() {
     let readyPromise;
     let loadPromise = new Promise(resolve => {
-      this.frame.addEventListener(
-        "load",
-        () => {
-          // Add the PickerReady event listener directly inside the load event
-          // listener to avoid missing the event.
-          readyPromise = BrowserTestUtils.waitForEvent(
-            this.frame.contentDocument,
-            "PickerReady"
-          );
-          resolve();
-        },
-        { capture: true, once: true }
-      );
+      let listener = () => {
+        if (
+          this.frame.browsingContext.currentURI.spec !=
+          "chrome://global/content/datepicker.xhtml"
+        ) {
+          return;
+        }
+
+        this.frame.removeEventListener("load", listener, { capture: true });
+        // Add the PickerReady event listener directly inside the load event
+        // listener to avoid missing the event.
+        readyPromise = BrowserTestUtils.waitForEvent(
+          this.frame.contentDocument,
+          "PickerReady"
+        );
+        resolve();
+      };
+
+      this.frame.addEventListener("load", listener, { capture: true });
     });
 
     await loadPromise;
@@ -247,7 +272,7 @@ class DateTimeTestHelper {
    * Close the panel and the tab
    */
   async tearDown() {
-    if (!this.panel.hidden) {
+    if (this.panel.state != "closed") {
       let pickerClosePromise = this.promisePickerClosed();
       this.panel.hidePopup();
       await pickerClosePromise;

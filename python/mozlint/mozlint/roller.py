@@ -25,7 +25,7 @@ from mozversioncontrol import (
     InvalidRepoPath,
 )
 
-from .errors import LintersNotConfigured
+from .errors import LintersNotConfigured, NoValidLinter
 from .parser import Parser
 from .pathutils import findobject
 from .result import ResultSummary
@@ -54,14 +54,26 @@ def _run_worker(config, paths, **lintargs):
         return result
 
     # Override warnings setup for code review
-    # Only activating when code_review_warnings is set on a linter.yml in use
-    if os.environ.get("CODE_REVIEW") == "1" and config.get("code_review_warnings"):
+    # Only disactivating when code_review_warnings is set to False on a linter.yml in use
+    if os.environ.get("CODE_REVIEW") == "1" and config.get(
+        "code_review_warnings", True
+    ):
         lintargs["show_warnings"] = True
 
     func = supported_types[config["type"]]
     start_time = time.time()
     try:
-        res = func(paths, config, **lintargs) or []
+        res = func(paths, config, **lintargs)
+        # Some linters support fixed operations
+        # dict returned - {"results":results,"fixed":fixed}
+        if isinstance(res, dict):
+            result.fixed += res["fixed"]
+            res = res["results"] or []
+        elif isinstance(res, list):
+            res = res or []
+        else:
+            print("Unexpected type received")
+            assert False
     except Exception:
         traceback.print_exc()
         res = 1
@@ -182,6 +194,8 @@ class LintRoller(object):
             paths = (paths,)
 
         for linter in chain(*[self.parse(p) for p in paths]):
+            # Add only the excludes present in paths
+            linter["local_exclude"] = linter.get("exclude", [])[:]
             # Add in our global excludes
             linter.setdefault("exclude", []).extend(self.exclude)
             self.linters.append(linter)
@@ -189,7 +203,7 @@ class LintRoller(object):
     def setup(self, virtualenv_manager=None):
         """Run setup for applicable linters"""
         if not self.linters:
-            raise LintersNotConfigured
+            raise NoValidLinter
 
         for linter in self.linters:
             if "setup" not in linter:
@@ -198,6 +212,9 @@ class LintRoller(object):
             try:
                 setupargs = copy.deepcopy(self.lintargs)
                 setupargs["name"] = linter["name"]
+                setupargs["log"] = logging.LoggerAdapter(
+                    self.log, {"lintname": linter["name"]}
+                )
                 if virtualenv_manager is not None:
                     setupargs["virtualenv_manager"] = virtualenv_manager
                 start_time = time.time()

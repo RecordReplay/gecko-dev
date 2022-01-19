@@ -18,13 +18,19 @@
 
 "use strict";
 
-const { PureComponent } = require("devtools/client/shared/vendor/react");
+const {
+  PureComponent,
+  createFactory,
+} = require("devtools/client/shared/vendor/react");
 const {
   b,
   button,
   div,
   p,
 } = require("devtools/client/shared/vendor/react-dom-factories");
+const Localized = createFactory(
+  require("devtools/client/shared/vendor/fluent-react").Localized
+);
 
 const Services = require("Services");
 const { openDocLink } = require("devtools/client/shared/link");
@@ -95,45 +101,55 @@ class OnboardingMessage extends PureComponent {
       return null;
     }
 
-    const learnMoreLink = button(
-      {
-        className: "perf-external-link",
-        onClick: this.handleLearnMoreClick,
-      },
-      "Learn more"
-    );
+    /** @type {any} */
+    const anyWindow = window;
 
-    const settingsLink = button(
-      {
-        className: "perf-external-link",
-        onClick: this.handleSettingsClick,
-      },
-      "Settings > Advanced"
-    );
+    // If gToolbox is not defined on window, the component is rendered in
+    // about:debugging, and no onboarding message should be displayed.
+    if (!anyWindow.gToolbox) {
+      return null;
+    }
 
-    const closeButton = button({
-      "aria-label": "Close the onboarding message",
-      className:
-        "perf-onboarding-close-button perf-photon-button perf-photon-button-ghost",
-      onClick: this.handleCloseIconClick,
+    const learnMoreLink = button({
+      className: "perf-external-link",
+      onClick: this.handleLearnMoreClick,
     });
+
+    const settingsLink = button({
+      className: "perf-external-link",
+      onClick: this.handleSettingsClick,
+    });
+
+    const closeButton = Localized(
+      {
+        id: "perftools-onboarding-close-button",
+        attrs: { "aria-label": true },
+      },
+      button({
+        className:
+          "perf-onboarding-close-button perf-photon-button perf-photon-button-ghost",
+        onClick: this.handleCloseIconClick,
+      })
+    );
 
     return div(
       { className: "perf-onboarding" },
       div(
         { className: "perf-onboarding-message" },
-        p(
-          { className: "perf-onboarding-message-row" },
-          b({}, "New"),
-          ": Firefox Profiler is now integrated into Developer Tools. ",
-          learnMoreLink,
-          " about this powerful new tool."
+        Localized(
+          {
+            id: "perftools-onboarding-message",
+            b: b(),
+            a: learnMoreLink,
+          },
+          p({ className: "perf-onboarding-message-row" })
         ),
-        p(
-          { className: "perf-onboarding-message-row" },
-          "(For a limited time, you can access the original Performance panel via ",
-          settingsLink,
-          ")"
+        Localized(
+          {
+            id: "perftools-onboarding-reenable-old-panel",
+            a: settingsLink,
+          },
+          p({ className: "perf-onboarding-message-row" })
         )
       ),
       closeButton

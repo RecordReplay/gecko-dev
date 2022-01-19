@@ -241,13 +241,37 @@ public class GeckoResult<T> {
 
     /**
      * A GeckoResult that resolves to AllowOrDeny.ALLOW
+     * @deprecated use {@link #allow} instead.
      */
+    @Deprecated
+    @DeprecationSchedule(id = "allowdeny", version = 92)
     public static final GeckoResult<AllowOrDeny> ALLOW = GeckoResult.fromValue(AllowOrDeny.ALLOW);
 
     /**
      * A GeckoResult that resolves to AllowOrDeny.DENY
+     * @deprecated use {@link #deny} instead.
      */
+    @Deprecated
+    @DeprecationSchedule(id = "allowdeny", version = 92)
     public static final GeckoResult<AllowOrDeny> DENY = GeckoResult.fromValue(AllowOrDeny.DENY);
+
+    /**
+     * @return a {@link GeckoResult} that resolves to {@link AllowOrDeny#DENY}
+     */
+    @AnyThread
+    @NonNull
+    public static GeckoResult<AllowOrDeny> deny() {
+        return GeckoResult.fromValue(AllowOrDeny.DENY);
+    }
+
+    /**
+     * @return a {@link GeckoResult} that resolves to {@link AllowOrDeny#ALLOW}
+     */
+    @AnyThread
+    @NonNull
+    public static GeckoResult<AllowOrDeny> allow() {
+        return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+    }
 
     // The default dispatcher for listeners on this GeckoResult. Other dispatchers can be specified
     // when the listener is registered.
@@ -536,7 +560,7 @@ public class GeckoResult<T> {
                     result.mIsUncaughtError = mIsUncaughtError;
                     result.completeExceptionally(mError);
                 }
-            } catch (Throwable e) {
+            } catch (final Throwable e) {
                 if (!result.mComplete) {
                     result.mIsUncaughtError = true;
                     result.completeExceptionally(e);
@@ -723,8 +747,8 @@ public class GeckoResult<T> {
         }
 
         for (int i = 0; i < mListeners.size(); ++i) {
-            Dispatcher dispatcher = mListeners.keyAt(i);
-            ArrayList<Runnable> jobs = mListeners.valueAt(i);
+            final Dispatcher dispatcher = mListeners.keyAt(i);
+            final ArrayList<Runnable> jobs = mListeners.valueAt(i);
             dispatcher.dispatch(() -> {
                 for (final Runnable job : jobs) {
                     job.run();
@@ -800,7 +824,7 @@ public class GeckoResult<T> {
         while (!mComplete && remaining > 0) {
             try {
                 wait(remaining);
-            } catch (InterruptedException e) {
+            } catch (final InterruptedException e) {
             }
 
             remaining = timeoutMillis - (SystemClock.uptimeMillis() - start);
@@ -981,7 +1005,7 @@ public class GeckoResult<T> {
                 if (value) {
                     try {
                         this.completeExceptionally(new CancellationException());
-                    } catch (IllegalStateException e) {
+                    } catch (final IllegalStateException e) {
                         // Can't really do anything about this.
                     }
                 }

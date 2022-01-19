@@ -5,10 +5,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ClientLayerManager.h"
-#include "GeckoProfiler.h"       // for AUTO_PROFILER_LABEL
 #include "gfxEnv.h"              // for gfxEnv
 #include "mozilla/Assertions.h"  // for MOZ_ASSERT, etc
 #include "mozilla/Hal.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layers.h"
@@ -129,12 +130,13 @@ void ClientLayerManager::Destroy() {
     // pending transaction. Do this at the top of the event loop so we don't
     // cause a paint to occur during compositor shutdown.
     RefPtr<TransactionIdAllocator> allocator = mTransactionIdAllocator;
-    TransactionId id = mLatestTransactionId;
 
     RefPtr<Runnable> task = NS_NewRunnableFunction(
         "TransactionIdAllocator::NotifyTransactionCompleted",
-        [allocator, id]() -> void {
-          allocator->NotifyTransactionCompleted(id);
+        [allocator, pending = std::move(mPendingTransactions)]() -> void {
+          for (auto& id : pending) {
+            allocator->NotifyTransactionCompleted(id);
+          }
         });
     NS_DispatchToMainThread(task.forget());
   }
@@ -295,13 +297,8 @@ bool ClientLayerManager::EndTransactionInternal(
   // Wait for any previous async paints to complete before starting to paint
   // again. Do this outside the profiler and telemetry block so this doesn't
   // count as time spent rasterizing.
-  {
-    PaintTelemetry::AutoRecord record(
-        PaintTelemetry::Metric::FlushRasterization);
-    FlushAsyncPaints();
-  }
+  FlushAsyncPaints();
 
-  PaintTelemetry::AutoRecord record(PaintTelemetry::Metric::Rasterization);
   AUTO_PROFILER_TRACING_MARKER("Paint", "Rasterize", GRAPHICS);
   PerfStats::AutoMetricRecording<PerfStats::Metric::Rasterizing> autoRecording;
 
@@ -384,13 +381,6 @@ bool ClientLayerManager::EndTransactionInternal(
   }
 
   return !mTransactionIncomplete;
-}
-
-void ClientLayerManager::StorePluginWidgetConfigurations(
-    const nsTArray<nsIWidget::Configuration>& aConfigurations) {
-  if (mForwarder) {
-    mForwarder->StorePluginWidgetConfigurations(aConfigurations);
-  }
 }
 
 void ClientLayerManager::EndTransaction(DrawPaintedLayerCallback aCallback,
@@ -524,6 +514,8 @@ void ClientLayerManager::DidComposite(TransactionId aTransactionId,
   for (size_t i = 0; i < mDidCompositeObservers.Length(); i++) {
     mDidCompositeObservers[i]->DidComposite();
   }
+
+  mPendingTransactions.RemoveElement(aTransactionId);
 }
 
 void ClientLayerManager::GetCompositorSideAPZTestData(
@@ -744,6 +736,8 @@ void ClientLayerManager::ForwardTransaction(bool aScheduleComposite) {
     // have a compositor.
     mTransactionIdAllocator->RevokeTransactionId(mLatestTransactionId);
     mLatestTransactionId = mLatestTransactionId.Prev();
+  } else {
+    mPendingTransactions.AppendElement(mLatestTransactionId);
   }
 
   mPhase = PHASE_NONE;

@@ -17,6 +17,7 @@
 #include "jsfriendapi.h"
 #include "js/CompilationAndEvaluation.h"  // JS::Compile
 #include "js/ContextOptions.h"
+#include "js/Initialization.h"
 #include "js/PropertySpec.h"
 #include "js/SourceText.h"  // JS::Source{Ownership,Text}
 #include "js/Utility.h"
@@ -33,6 +34,8 @@
 #if defined(XP_MACOSX)
 #  include "nsMacUtilsImpl.h"
 #endif
+
+#include "XPCSelfHostedShmem.h"
 
 namespace mozilla {
 namespace net {
@@ -94,7 +97,7 @@ static const char sAsciiPacUtils[] =
     "}\n"
     ""
     "function isPlainHostName(host) {\n"
-    "    return (host.search('\\\\.') == -1);\n"
+    "    return (host.search('(\\\\.)|:') == -1);\n"
     "}\n"
     ""
     "function isResolvable(host) {\n"
@@ -374,8 +377,9 @@ static void PACLogErrorOrWarning(const nsAString& aKind,
   nsString formattedMessage(u"PAC Execution "_ns);
   formattedMessage += aKind;
   formattedMessage += u": "_ns;
-  if (aReport->message())
+  if (aReport->message()) {
     formattedMessage.Append(NS_ConvertUTF8toUTF16(aReport->message().c_str()));
+  }
   formattedMessage += u" ["_ns;
   formattedMessage.Append(aReport->linebuf(), aReport->linebufLength());
   formattedMessage += u"]"_ns;
@@ -426,11 +430,8 @@ static bool PACResolve(const nsCString& aHostName, NetAddr* aNetAddr,
 }
 
 ProxyAutoConfig::ProxyAutoConfig()
-    : mJSContext(nullptr),
-      mJSNeedsSetup(false),
-      mShutdown(true),
-      mIncludePath(false),
-      mExtraHeapSize(0) {
+
+{
   MOZ_COUNT_CTOR(ProxyAutoConfig);
 }
 
@@ -485,11 +486,7 @@ bool ProxyAutoConfig::ResolveAddress(const nsCString& aHostName,
   }
 
   nsCOMPtr<nsIDNSAddrRecord> rec = do_QueryInterface(helper->mResponse);
-  if (!rec || NS_FAILED(rec->GetNextAddr(0, aNetAddr))) {
-    return false;
-  }
-
-  return true;
+  return !(!rec || NS_FAILED(rec->GetNextAddr(0, aNetAddr)));
 }
 
 static bool PACResolveToString(const nsCString& aHostName,
@@ -499,8 +496,9 @@ static bool PACResolveToString(const nsCString& aHostName,
   if (!PACResolve(aHostName, &netAddr, aTimeout)) return false;
 
   char dottedDecimal[128];
-  if (!netAddr.ToStringBuffer(dottedDecimal, sizeof(dottedDecimal)))
+  if (!netAddr.ToStringBuffer(dottedDecimal, sizeof(dottedDecimal))) {
     return false;
+  }
 
   aDottedDecimal.Assign(dottedDecimal);
   return true;
@@ -642,8 +640,15 @@ class JSContextWrapper {
 
     JS::SetWarningReporter(mContext, PACWarningReporter);
 
-    if (!JS::InitSelfHostedCode(mContext)) {
-      return NS_ERROR_OUT_OF_MEMORY;
+    // When available, set the self-hosted shared memory to be read, so that
+    // we can decode the self-hosted content instead of parsing it.
+    {
+      auto& shm = xpc::SelfHostedShmem::GetSingleton();
+      JS::SelfHostedCache selfHostedContent = shm.Content();
+
+      if (!JS::InitSelfHostedCode(mContext, selfHostedContent)) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
     }
 
     JS::RealmOptions options;
@@ -922,8 +927,9 @@ bool ProxyAutoConfig::SrcAddress(const NetAddr* remoteAddress,
 
   char dottedDecimal[128];
   if (PR_NetAddrToString(&localName, dottedDecimal, sizeof(dottedDecimal)) !=
-      PR_SUCCESS)
+      PR_SUCCESS) {
     return false;
+  }
 
   localAddress.Assign(dottedDecimal);
 
@@ -980,9 +986,7 @@ bool ProxyAutoConfig::MyIPAddress(const JS::CallArgs& aArgs) {
     }
   } else {
     // we can still do the fancy multi homing thing if the host is a literal
-    PRNetAddr tempAddr;
-    memset(&tempAddr, 0, sizeof(PRNetAddr));
-    if ((PR_StringToNetAddr(mRunningHost.get(), &tempAddr) == PR_SUCCESS) &&
+    if (HostIsIPLiteral(mRunningHost) &&
         (!MyIPAddressTryHost(mRunningHost, kTimeout, aArgs, &rvalAssigned) ||
          rvalAssigned)) {
       return rvalAssigned;

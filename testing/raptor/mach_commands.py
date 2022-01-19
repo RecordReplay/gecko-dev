@@ -29,9 +29,9 @@ from mozbuild.base import MachCommandConditions as Conditions
 HERE = os.path.dirname(os.path.realpath(__file__))
 
 BENCHMARK_REPOSITORY = "https://github.com/mozilla/perf-automation"
-BENCHMARK_REVISION = "e19a0865c946ae2f9a64dd25614b1c275a3996b2"
+BENCHMARK_REVISION = "54c3c3d9d3f651f0d8ebb809d25232f72b5b06f2"
 
-ANDROID_BROWSERS = ["fennec", "geckoview", "refbrow", "fenix", "chrome-m"]
+ANDROID_BROWSERS = ["geckoview", "refbrow", "fenix", "chrome-m"]
 
 
 class RaptorRunner(MozbuildObject):
@@ -63,9 +63,10 @@ class RaptorRunner(MozbuildObject):
         self.cpu_test = kwargs["cpu_test"]
         self.live_sites = kwargs["live_sites"]
         self.disable_perf_tuning = kwargs["disable_perf_tuning"]
-        self.conditioned_profile_scenario = kwargs["conditioned_profile_scenario"]
+        self.conditioned_profile = kwargs["conditioned_profile"]
         self.device_name = kwargs["device_name"]
         self.enable_marionette_trace = kwargs["enable_marionette_trace"]
+        self.browsertime_visualmetrics = kwargs["browsertime_visualmetrics"]
 
         if Conditions.is_android(self) or kwargs["app"] in ANDROID_BROWSERS:
             self.binary_path = None
@@ -94,7 +95,6 @@ class RaptorRunner(MozbuildObject):
         external_repo_path = os.path.join(get_state_dir(), "performance-tests")
 
         print("Updating external benchmarks from {}".format(BENCHMARK_REPOSITORY))
-        print("Cloning the benchmarks to {}".format(external_repo_path))
 
         try:
             subprocess.check_output(["git", "--version"])
@@ -106,6 +106,7 @@ class RaptorRunner(MozbuildObject):
             raise ex
 
         if not os.path.isdir(external_repo_path):
+            print("Cloning the benchmarks to {}".format(external_repo_path))
             subprocess.check_call(
                 ["git", "clone", BENCHMARK_REPOSITORY, external_repo_path]
             )
@@ -172,10 +173,11 @@ class RaptorRunner(MozbuildObject):
             "cpu_test": self.cpu_test,
             "live_sites": self.live_sites,
             "disable_perf_tuning": self.disable_perf_tuning,
-            "conditioned_profile_scenario": self.conditioned_profile_scenario,
+            "conditioned_profile": self.conditioned_profile,
             "is_release_build": self.is_release_build,
             "device_name": self.device_name,
             "enable_marionette_trace": self.enable_marionette_trace,
+            "browsertime_visualmetrics": self.browsertime_visualmetrics,
         }
 
         sys.path.insert(0, os.path.join(self.topsrcdir, "tools", "browsertime"))
@@ -195,6 +197,37 @@ class RaptorRunner(MozbuildObject):
                 }
             )
 
+            def _get_browsertime_package():
+                with open(
+                    os.path.join(
+                        self.topsrcdir,
+                        "tools",
+                        "browsertime",
+                        "node_modules",
+                        "browsertime",
+                        "package.json",
+                    )
+                ) as package:
+                    return json.load(package)
+
+            def _get_browsertime_resolved():
+                try:
+                    with open(
+                        os.path.join(
+                            self.topsrcdir,
+                            "tools",
+                            "browsertime",
+                            "node_modules",
+                            ".package-lock.json",
+                        )
+                    ) as package_lock:
+                        return json.load(package_lock)["packages"][
+                            "node_modules/browsertime"
+                        ]["resolved"]
+                except FileNotFoundError:
+                    # Older versions of node/npm add this metadata to package.json
+                    return _get_browsertime_package()["_from"]
+
             def _should_install():
                 # If browsertime doesn't exist, install it
                 if not os.path.exists(
@@ -205,37 +238,19 @@ class RaptorRunner(MozbuildObject):
                 # Browsertime exists, check if it's outdated
                 with open(
                     os.path.join(self.topsrcdir, "tools", "browsertime", "package.json")
-                ) as new, open(
-                    os.path.join(
-                        self.topsrcdir,
-                        "tools",
-                        "browsertime",
-                        "node_modules",
-                        "browsertime",
-                        "package.json",
-                    )
-                ) as old:
-                    old_pkg = json.load(old)
+                ) as new:
                     new_pkg = json.load(new)
 
-                return not old_pkg["_from"].endswith(
+                return not _get_browsertime_resolved().endswith(
                     new_pkg["devDependencies"]["browsertime"]
                 )
 
             def _get_browsertime_version():
-                # Returns the (current commit, version number) used
-                with open(
-                    os.path.join(
-                        self.topsrcdir,
-                        "tools",
-                        "browsertime",
-                        "node_modules",
-                        "browsertime",
-                        "package.json",
-                    )
-                ) as existing:
-                    package = json.load(existing)
-                return package["version"], package["_from"]
+                # Returns the (version number, current commit) used
+                return (
+                    _get_browsertime_package()["version"],
+                    _get_browsertime_resolved(),
+                )
 
             # Check if browsertime scripts exist and try to install them if
             # they aren't
@@ -303,7 +318,7 @@ class MachRaptor(MachCommandBase):
         description="Run Raptor performance tests.",
         parser=create_parser,
     )
-    def run_raptor(self, **kwargs):
+    def run_raptor(self, command_context, **kwargs):
         # Defers this import so that a transitive dependency doesn't
         # stop |mach bootstrap| from running
         from raptor.power import enable_charging, disable_charging
@@ -379,5 +394,5 @@ class MachRaptor(MachCommandBase):
         description="Run Raptor performance tests.",
         parser=create_parser,
     )
-    def run_raptor_test(self, **kwargs):
-        return self.run_raptor(**kwargs)
+    def run_raptor_test(self, command_context, **kwargs):
+        return self.run_raptor(command_context, **kwargs)

@@ -30,7 +30,7 @@ XPCOMUtils.defineLazyServiceGetter(
 const TELEMETRY_EVENT_CATEGORY = "pwmgr";
 const TELEMETRY_MIN_MS_BETWEEN_OPEN_MANAGEMENT = 5000;
 
-let lastOpenManagementOuterWindowID = null;
+let lastOpenManagementBrowserId = null;
 let lastOpenManagementEventTime = Number.NEGATIVE_INFINITY;
 let masterPasswordPromise;
 
@@ -111,8 +111,17 @@ class AboutLoginsChild extends JSWindowActorChild {
         );
         break;
       }
+      case "AboutLoginsImportReportInit": {
+        this.sendAsyncMessage("AboutLogins:ImportReportInit");
+        let documentElement = this.document.documentElement;
+        documentElement.classList.toggle(
+          "official-branding",
+          AppConstants.MOZILLA_OFFICIAL
+        );
+        break;
+      }
       case "AboutLoginsCopyLoginDetail": {
-        ClipboardHelper.copyString(event.detail);
+        ClipboardHelper.copyString(event.detail, ClipboardHelper.Sensitive);
         break;
       }
       case "AboutLoginsCreateLogin": {
@@ -171,14 +180,14 @@ class AboutLoginsChild extends JSWindowActorChild {
           // compare that number between different tabs and this JSM is shared.
           let now = docShell.now();
           if (
-            docShell.outerWindowID == lastOpenManagementOuterWindowID &&
+            this.browsingContext.browserId == lastOpenManagementBrowserId &&
             now - lastOpenManagementEventTime <
               TELEMETRY_MIN_MS_BETWEEN_OPEN_MANAGEMENT
           ) {
             return;
           }
           lastOpenManagementEventTime = now;
-          lastOpenManagementOuterWindowID = docShell.outerWindowID;
+          lastOpenManagementBrowserId = this.browsingContext.browserId;
         }
         recordTelemetryEvent(event.detail);
         break;
@@ -210,6 +219,9 @@ class AboutLoginsChild extends JSWindowActorChild {
 
   receiveMessage(message) {
     switch (message.name) {
+      case "AboutLogins:ImportReportData":
+        this.sendToContent("ImportReportData", message.data);
+        break;
       case "AboutLogins:MasterPasswordResponse":
         if (masterPasswordPromise) {
           masterPasswordPromise.resolve(message.data.result);

@@ -20,6 +20,7 @@ var info = window.arguments[0].info;
 var SimpleTest = window.arguments[0].SimpleTest;
 var gWbp;
 var gPrintPreviewWindow;
+var gPrintPreviewBrowser;
 var ctx1;
 var ctx2;
 var counter = 0;
@@ -82,7 +83,24 @@ function printpreview(options = {}) {
   function afterprint() { ++after; }
   frameElts[0].contentWindow.addEventListener("beforeprint", beforeprint, true);
   frameElts[0].contentWindow.addEventListener("afterprint", afterprint, true);
-  gPrintPreviewWindow = frameElts[0].contentWindow.printPreview(settings, listener);
+  {
+    let bc = frameElts[0].contentWindow.browsingContext;
+    let browser = document.createXULElement("browser");
+    browser.setAttribute("type", "content");
+    browser.setAttribute("width", "800");
+    browser.setAttribute("height", "800");
+    browser.style.maxWidth = "800px"; // Deal with XUL silliness.
+    browser.setAttribute("initialBrowsingContextGroupId", bc.group.id);
+    browser.setAttribute("nodefaultsrc", "true");
+    document.documentElement.appendChild(browser);
+    gPrintPreviewBrowser = browser;
+
+    // Force contentViewer creation and layout.
+    browser.browsingContext.docShell.document;
+    browser.getBoundingClientRect();
+
+    gPrintPreviewWindow = frameElts[0].contentWindow.printPreview(settings, listener, browser.browsingContext.docShell);
+  }
   gWbp = gPrintPreviewWindow.docShell.contentViewer;
   gWbp.QueryInterface(Ci.nsIWebBrowserPrint);
   is(before, 1, "Should have called beforeprint listener!");
@@ -98,7 +116,7 @@ function printpreview(options = {}) {
 
 function exitprintpreview() {
   gPrintPreviewWindow.docShell.exitPrintPreview();
-  gPrintPreviewWindow.close();
+  gPrintPreviewBrowser.remove();
 }
 
 function finish() {
@@ -148,7 +166,7 @@ function addHTMLContent(parent) {
   n.innerHTML = s;
 }
 
-function startTest1() {
+async function startTest1() {
   ctx1 = document.getElementsByTagName("canvas")[0].getContext("2d");
   ctx2 = document.getElementsByTagName("canvas")[1].getContext("2d");
   frameElts[0].contentDocument.body.innerHTML = "<div> </div><div>" + counter + " timers</div><div> </div>";
@@ -161,7 +179,7 @@ function startTest1() {
   frameElts[0].contentWindow.setTimeout(frameElts[0].contentWindow.counterTimeout, 0);
   frameElts[0].contentDocument.body.firstChild.innerHTML = "Print preview";
 
-  let ppfinished = printpreview();
+  await printpreview();
   drawPrintPreviewWindow(ctx1);
   frameElts[0].contentDocument.body.firstChild.innerHTML = "Galley presentation";
 
@@ -172,13 +190,10 @@ function startTest1() {
   // And readd.
   addHTMLContent(frameElts[0].contentDocument.body.lastChild);
 
-  setTimeout(function() {
-    finalizeTest1(ppfinished)
-  }, 1000);
+  setTimeout(finalizeTest1, 1000);
 }
 
-async function finalizeTest1(ppfinished) {
-  await ppfinished;
+function finalizeTest1() {
   drawPrintPreviewWindow(ctx2);
   exitprintpreview();
   ok(compareCanvases(), "Canvas should be the same!");
@@ -390,9 +405,11 @@ async function runTest9() {
 }
 
 function drawPrintPreviewWindow(ctx) {
-  ctx.canvas.width = gPrintPreviewWindow.innerWidth;
-  ctx.canvas.height = gPrintPreviewWindow.innerHeight;
-  ctx.drawWindow(gPrintPreviewWindow, 0, 0, gPrintPreviewWindow.innerWidth, gPrintPreviewWindow.innerHeight, "rgb(255, 255, 255)");
+  let width = gPrintPreviewWindow.innerWidth;
+  let height = gPrintPreviewWindow.innerHeight;
+  ctx.canvas.width = width;
+  ctx.canvas.height = height;
+  ctx.drawWindow(gPrintPreviewWindow, 0, 0, width, height, "rgb(255, 255, 255)");
 }
 
 // Test for bug 1524640
@@ -974,7 +991,7 @@ async function runTest36() {
 // more details).
 async function runTest37() {
   let fuzz = navigator.platform.includes("Win") ?
-      { maxDifferent: 151350, maxDifference: 255 } :
+      { maxDifferent: 152268, maxDifference: 255 } :
       { maxDifferent: 0, maxDifference: 0 };
 
   let test = "printpreview_pps_uw9.html";
@@ -1077,7 +1094,7 @@ async function runTest39() {
       { maxDifferent: 0, maxDifference: 0 };
 
   let test = "data:text/html,Unwriteable-Margins-Too-Tall-To-See-This";
-  let ref = "about:blank";
+  let ref = "data:text/html,<!-- runTest39 -->";
   await compareFiles(test, ref, {
     maxDifferent: fuzz.maxDifferent,
     maxDifference: fuzz.maxDifference,
@@ -1112,7 +1129,7 @@ async function runTest40() {
       { maxDifferent: 0, maxDifference: 0 };
 
   let test = "data:text/html,Unwriteable-Margins-Too-Wide-To-See-This";
-  let ref = "about:blank";
+  let ref = "data:text/html,<!-- runTest40 -->";
   await compareFiles(test, ref, {
     maxDifferent: fuzz.maxDifferent,
     maxDifference: fuzz.maxDifference,
@@ -1134,6 +1151,110 @@ async function runTest40() {
     },
   });
 
+  requestAnimationFrame(() => setTimeout(runTest41));
+}
+
+// Drawing headers/footers with very large unwriteable margins. The specific
+// bug occurs when combined unwriteable are larger than half of the page's
+// dimensions.
+async function runTest41() {
+  // This test compares a rendered page to the headers/footers that print code
+  // generates. On Windows, workaround bug 1680838. On OS X, the headers/
+  // footers are sometimes slightly offset. See bug 1714217.
+  // It's not too big a deal to have a higher fuzz factor, since when
+  // bug 1713404 occurs no headers/footers at all are rendered. These higher
+  // fuzz factors will still catch this worst case on OS X.
+  if (navigator.platform.includes("Win")) {
+    var fuzz = { maxDifferent: 133, maxDifference: 255 }; // Bug 1680838
+  }
+  else if (navigator.platform.includes("Mac")) {
+    var fuzz = { maxDifferent: 60, maxDifference: 200 }; // Bug 1714217
+  }
+  else {
+    var fuzz = { maxDifferent: 6, maxDifference: 16 };
+  }
+
+  let test = "data:text/html,<!-- runTest41 -->";
+  let ref = "printpreview_bug1713404_ref.html";
+  await compareFiles(test, ref, {
+    maxDifferent: fuzz.maxDifferent,
+    maxDifference: fuzz.maxDifference,
+    test: {
+      settings: {
+        paperWidth: 5,
+        paperHeight: 5,
+        paperSizeUnit: Ci.nsIPrintSettings.kPaperSizeInches,
+        unwriteableMarginLeft: 2,
+        unwriteableMarginRight: 2,
+        unwriteableMarginTop: 2,
+        unwriteableMarginBottom: 2,
+        headerStrLeft: "|",
+        headerStrRight: "||",
+        footerStrLeft: "|||",
+        footerStrRight: "||||",
+      },
+    },
+    ref: {
+      settings: {
+        paperWidth: 5,
+        paperHeight: 5,
+        paperSizeUnit: Ci.nsIPrintSettings.kPaperSizeInches,
+        unwriteableMarginLeft: 0,
+        unwriteableMarginRight: 0,
+        unwriteableMarginTop: 0,
+        unwriteableMarginBottom: 0,
+      },
+    },
+  });
+
+  requestAnimationFrame(() => setTimeout(runTest42));
+}
+
+// Test that @page{ size: ... } works correctly with a smaller specified
+// @page{ size: ... } than the paper we are printing to. The test and ref use
+// varying margin and size properties to place elements in the same location.
+// This depends on Firefox's current behavior of putting undersized pages into
+// the upper left corner, rather than scaling or centering the page.
+async function runTest42() {
+  if (navigator.platform.includes("Mac")) {
+    var fuzz = { maxDifferent: 15, maxDifference: 8 };
+  }
+  let test = "print_page_size1.html";
+  let ref = "print_page_size1_ref.html";
+  await compareFiles(test, ref, fuzz);
+
+  requestAnimationFrame(() => setTimeout(runTest43));
+}
+
+// Test that @page{ size: ... } works correctly with a larger specified
+// @page{ size: ... } than the paper we are printing to. This specifically
+// tests scaling when only one page edge is too large.
+// This depends on Firefox's current behavior of scaling down any oversized
+// pages to fit onto a single physical page, and putting this aligned to the
+// upper left corner rather than centering the page.
+async function runTest43() {
+  if (navigator.platform.includes("Mac")) {
+    var fuzz = { maxDifferent: 15, maxDifference: 8 };
+  }
+  let test = "print_page_size2.html";
+  let ref = "print_page_size2_ref.html";
+  await compareFiles(test, ref, fuzz);
+
+  requestAnimationFrame(() => setTimeout(runTest44));
+}
+
+// Test that @page{ size: ... } works correctly with a smaller specified
+// @page{ size: ... } than the paper we are printing to. The test case uses
+// only the size property and the ref case uses only absolute positioning.
+// This depends on Firefox's current behavior of putting undersized pages into
+// the upper left corner, rather than scaling or centering the page.
+async function runTest44() {
+  if (navigator.platform.includes("Mac")) {
+    var fuzz = { maxDifferent: 15, maxDifference: 8 };
+  }
+  let test = "print_page_size3.html";
+  let ref = "print_page_size3_ref.html";
+  await compareFiles(test, ref, fuzz);
   finish();
 }
 
@@ -1141,7 +1262,7 @@ async function runTest40() {
 <table style="border: 1px solid black;" xmlns="http://www.w3.org/1999/xhtml">
 <tr><th>Print preview canvas 1</th><th>Print preview canvas 2</th></tr>
 <tr>
-<td><canvas height="400" width="400"></canvas></td>
-<td><canvas height="400" width="400"></canvas></td>
+<td><canvas height="800" width="800"></canvas></td>
+<td><canvas height="800" width="800"></canvas></td>
 </tr></table>
 </window>

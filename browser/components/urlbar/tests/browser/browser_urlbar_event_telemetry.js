@@ -241,7 +241,7 @@ const tests = [
         numWords: "2",
         selIndex: "0",
         selType: "keyword",
-        provider: "UnifiedComplete",
+        provider: "BookmarkKeywords",
       },
     };
   },
@@ -360,7 +360,7 @@ const tests = [
         numWords: "1",
         selIndex: val => parseInt(val) > 0,
         selType: "bookmark",
-        provider: "UnifiedComplete",
+        provider: "Places",
       },
     };
   },
@@ -420,7 +420,7 @@ const tests = [
         numWords: "1",
         selIndex: val => parseInt(val) > 0,
         selType: "bookmark",
-        provider: "UnifiedComplete",
+        provider: "InputHistory",
       },
     };
   },
@@ -533,9 +533,9 @@ const tests = [
   async function(win) {
     info("Type an @alias, then space, then search and press enter.");
     const alias = "testalias";
-    let aliasEngine = await Services.search.addEngineWithDetails("AliasTest", {
-      alias,
-      template: "http://example.com/?search={searchTerms}",
+    await SearchTestUtils.installSearchExtension({
+      name: "AliasTest",
+      keyword: alias,
     });
 
     await UrlbarTestUtils.promiseAutocompleteResultPopup({
@@ -557,7 +557,6 @@ const tests = [
     EventUtils.synthesizeKey("VK_RETURN", {}, win);
     await promise;
 
-    await Services.search.removeEngine(aliasEngine);
     return {
       category: "urlbar",
       method: "engagement",
@@ -578,7 +577,7 @@ const tests = [
     info("Drop something.");
     let promise = BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser);
     EventUtils.synthesizeDrop(
-      win.document.getElementById("home-button"),
+      win.document.getElementById("back-button"),
       win.gURLBar.inputField,
       [[{ type: "text/plain", data: "www.example.com" }]],
       "copy",
@@ -602,7 +601,7 @@ const tests = [
   },
 
   async function(win) {
-    info("Paste & Go something.");
+    info("Paste and Go something.");
     let promise = BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser);
     await SimpleTest.promiseClipboardChange("www.example.com", () => {
       clipboardHelper.copyString("www.example.com");
@@ -620,7 +619,7 @@ const tests = [
     );
     await cxmenuPromise;
     let menuitem = inputBox.getMenuItem("paste-and-go");
-    EventUtils.synthesizeMouseAtCenter(menuitem, {}, win);
+    cxmenu.activateItem(menuitem);
     await promise;
     return {
       category: "urlbar",
@@ -1331,7 +1330,9 @@ const noEventTests = [
           value: "x",
           fireInputEvent: true,
         });
-        UrlbarTestUtils.getOneOffSearchButtons(win).settingsButton.click();
+        UrlbarTestUtils.getOneOffSearchButtons(
+          win
+        ).settingsButtonCompact.click();
         await promise;
       }
     );
@@ -1354,7 +1355,7 @@ const noEventTests = [
         Assert.ok(
           UrlbarTestUtils.getOneOffSearchButtons(
             win
-          ).selectedButton.classList.contains("search-setting-button-compact"),
+          ).selectedButton.classList.contains("search-setting-button"),
           "Should have selected the settings button"
         );
         EventUtils.synthesizeKey("VK_RETURN", {}, win);
@@ -1383,13 +1384,11 @@ add_task(async function test() {
   await Services.search.setDefault(engine);
   await Services.search.moveEngine(engine, 0);
 
-  let aliasEngine = await Services.search.addEngineWithDetails(
-    TEST_ENGINE_NAME,
-    {
-      alias: TEST_ENGINE_ALIAS,
-      template: `http://${TEST_ENGINE_DOMAIN}/?search={searchTerms}`,
-    }
-  );
+  await SearchTestUtils.installSearchExtension({
+    name: TEST_ENGINE_NAME,
+    keyword: TEST_ENGINE_ALIAS,
+    search_url: `https://${TEST_ENGINE_DOMAIN}/`,
+  });
 
   // Add a bookmark and a keyword.
   let bm = await PlacesUtils.bookmarks.insert({
@@ -1408,13 +1407,28 @@ add_task(async function test() {
     },
   ]);
 
+  // This test used to rely on the initial timer of
+  // TestUtils.waitForCondition. See bug 1667216.
+  let originalWaitForCondition = TestUtils.waitForCondition;
+  TestUtils.waitForCondition = async function(
+    condition,
+    msg,
+    interval = 100,
+    maxTries = 50
+  ) {
+    // eslint-disable-next-line mozilla/no-arbitrary-setTimeout
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    return originalWaitForCondition(condition, msg, interval, maxTries);
+  };
+
   registerCleanupFunction(async function() {
     await Services.search.setDefault(oldDefaultEngine);
-    await Services.search.removeEngine(aliasEngine);
     await PlacesUtils.keywords.remove("kw");
     await PlacesUtils.bookmarks.remove(bm);
     await PlacesUtils.history.clear();
     await UrlbarTestUtils.formHistory.clear(window);
+    TestUtils.waitForCondition = originalWaitForCondition;
   });
 
   // This is not necessary after each loop, because assertEvents does it.

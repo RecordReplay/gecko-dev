@@ -261,7 +261,7 @@ var loadContextInfo = Services.loadContextInfo.fromLoadContext(
   window.docShell.QueryInterface(Ci.nsILoadContext),
   false
 );
-var diskStorage = cacheService.diskCacheStorage(loadContextInfo, false);
+var diskStorage = cacheService.diskCacheStorage(loadContextInfo);
 
 const nsICookiePermission = Ci.nsICookiePermission;
 
@@ -458,10 +458,10 @@ async function loadTab(args) {
 
 function openCacheEntry(key, cb) {
   var checkCacheListener = {
-    onCacheEntryCheck(entry, appCache) {
+    onCacheEntryCheck(entry) {
       return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
     },
-    onCacheEntryAvailable(entry, isNew, appCache, status) {
+    onCacheEntryAvailable(entry, isNew, status) {
       cb(entry);
     },
   };
@@ -1130,6 +1130,6 @@ function checkProtocol(img) {
   var url = img[COL_IMAGE_ADDRESS];
   return (
     /^data:image\//i.test(url) ||
-    /^(https?|ftp|file|about|chrome|resource):/.test(url)
+    /^(https?|file|about|chrome|resource):/.test(url)
   );
 }

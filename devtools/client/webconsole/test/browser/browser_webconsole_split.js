@@ -79,7 +79,7 @@ add_task(async function() {
     const containerHeight = deck.parentNode.getBoundingClientRect().height;
     const deckHeight = deck.getBoundingClientRect().height;
     const webconsoleHeight = webconsolePanel.getBoundingClientRect().height;
-    const splitterVisibility = !splitter.getAttribute("hidden");
+    const splitterVisibility = !splitter.hidden;
     // Splitter height will be 1px since the margin is negative.
     const splitterHeight = splitterVisibility ? 1 : 0;
     const openedConsolePanel = toolbox.currentToolId === "webconsole";
@@ -109,7 +109,7 @@ add_task(async function() {
       // Toobox toolbar buttons are handled with arrow keys.
       nonNegativeTabIndexRule: false,
     });
-    await EventUtils.sendMouseEvent({ type: "click" }, button);
+    EventUtils.sendMouseEvent({ type: "click" }, button);
     AccessibilityUtils.resetEnv();
     await onPopupShown;
 
@@ -344,8 +344,8 @@ add_task(async function() {
   }
 
   async function openPanel(toolId) {
-    const target = await TargetFactory.forTab(gBrowser.selectedTab);
-    toolbox = await gDevTools.showToolbox(target, toolId);
+    const tab = gBrowser.selectedTab;
+    toolbox = await gDevTools.showToolboxForTab(tab, { toolId });
   }
 
   async function openAndCheckPanel(toolId) {

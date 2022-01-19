@@ -16,6 +16,7 @@
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/layers/WebRenderCanvasRenderer.h"
 #include "mozilla/layers/RenderRootStateManager.h"
+#include "BasicLayers.h"
 #include "mozilla/webgpu/CanvasContext.h"
 #include "nsDisplayList.h"
 #include "nsLayoutUtils.h"
@@ -211,7 +212,7 @@ class nsDisplayCanvas final : public nsPaintedDisplayItem {
         const bool preferCompositorSurface = true;
         const wr::ImageDescriptor imageDesc(
             canvasSizeInPx, targetStride, canvasData->mFormat,
-            wr::OpacityType::Opaque, preferCompositorSurface);
+            wr::OpacityType::HasAlphaChannel, preferCompositorSurface);
 
         wr::ImageKey imageKey;
         auto imageKeyMaybe = canvasContext->GetImageKey();
@@ -302,6 +303,27 @@ class nsDisplayCanvas final : public nsPaintedDisplayItem {
     nsHTMLCanvasFrame* f = static_cast<nsHTMLCanvasFrame*>(Frame());
     HTMLCanvasElement* canvas = HTMLCanvasElement::FromNode(f->GetContent());
     return canvas->MaybeModified();
+  }
+
+  virtual void Paint(nsDisplayListBuilder* aBuilder,
+                     gfxContext* aCtx) override {
+    // This currently uses BasicLayerManager to re-use the code for extracting
+    // the current CanvasRenderer/Image and generating DrawTarget rendering
+    // commands for it.
+    // Ideally we'll factor out that code and use it directly soon.
+    RefPtr<BasicLayerManager> layerManager =
+        new BasicLayerManager(BasicLayerManager::BLM_OFFSCREEN);
+
+    layerManager->BeginTransactionWithTarget(aCtx);
+    RefPtr<Layer> layer =
+        BuildLayer(aBuilder, layerManager, ContainerLayerParameters());
+    if (!layer) {
+      layerManager->AbortTransaction();
+      return;
+    }
+
+    layerManager->SetRoot(layer);
+    layerManager->EndEmptyTransaction();
   }
 };
 
@@ -404,10 +426,11 @@ AspectRatio nsHTMLCanvasFrame::GetIntrinsicRatio() const {
 nsIFrame::SizeComputationResult nsHTMLCanvasFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
   return {ComputeSizeWithIntrinsicDimensions(
               aRenderingContext, aWM, GetIntrinsicSize(), GetAspectRatio(),
-              aCBSize, aMargin, aBorderPadding, aFlags),
+              aCBSize, aMargin, aBorderPadding, aSizeOverrides, aFlags),
           AspectRatioUsage::None};
 }
 
@@ -495,7 +518,9 @@ already_AddRefed<Layer> nsHTMLCanvasFrame::BuildLayer(
     return nullptr;
 
   Layer* oldLayer =
-      aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, aItem);
+      aManager->GetLayerBuilder()
+          ? aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, aItem)
+          : nullptr;
   RefPtr<Layer> layer = element->GetCanvasLayer(aBuilder, oldLayer, aManager);
   if (!layer) return nullptr;
 

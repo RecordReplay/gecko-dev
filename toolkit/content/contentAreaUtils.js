@@ -31,8 +31,24 @@ var ContentAreaUtils = {
   },
 };
 
-function urlSecurityCheck(aURL, aPrincipal, aFlags) {
-  return BrowserUtils.urlSecurityCheck(aURL, aPrincipal, aFlags);
+function urlSecurityCheck(
+  aURL,
+  aPrincipal,
+  aFlags = Services.scriptSecurityManager
+) {
+  if (aURL instanceof Ci.nsIURI) {
+    Services.scriptSecurityManager.checkLoadURIWithPrincipal(
+      aPrincipal,
+      aURL,
+      aFlags
+    );
+  } else {
+    Services.scriptSecurityManager.checkLoadURIStrWithPrincipal(
+      aPrincipal,
+      aURL,
+      aFlags
+    );
+  }
 }
 
 // Clientele: (Make sure you don't break any of these)
@@ -1037,7 +1053,8 @@ function getDefaultFileName(
     // This is something like a data: and so forth URI... no filename here.
   }
 
-  if (docTitle) {
+  // Don't use the title if it's from a data URI
+  if (docTitle && aURI?.scheme != "data") {
     // 4) Use the document title
     return docTitle;
   }
@@ -1119,6 +1136,7 @@ const kImageExtensions = new Set([
   "svg",
   "webp",
   "avif",
+  "jxl",
 ]);
 
 function getNormalizedLeafName(aFile, aDefaultExtension) {

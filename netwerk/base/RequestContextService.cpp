@@ -61,7 +61,7 @@ class RequestContext final : public nsIRequestContext, public nsITimerCallback {
   Atomic<uint32_t> mBlockingTransactionCount;
   UniquePtr<SpdyPushCache> mSpdyCache;
 
-  typedef nsCOMPtr<nsIRequestTailUnblockCallback> PendingTailRequest;
+  using PendingTailRequest = nsCOMPtr<nsIRequestTailUnblockCallback>;
   // Number of known opened non-tailed requets
   uint32_t mNonTailRequests;
   // Queue of requests that have been tailed, when conditions are met
@@ -423,8 +423,7 @@ RequestContextService* RequestContextService::sSelf = nullptr;
 
 NS_IMPL_ISUPPORTS(RequestContextService, nsIRequestContextService, nsIObserver)
 
-RequestContextService::RequestContextService()
-    : mRCIDNamespace(0), mNextRCID(1) {
+RequestContextService::RequestContextService() {
   MOZ_ASSERT(!sSelf, "multiple rcs instances!");
   MOZ_ASSERT(NS_IsMainThread());
   sSelf = this;
@@ -464,8 +463,8 @@ void RequestContextService::Shutdown() {
   MOZ_ASSERT(NS_IsMainThread());
   // We need to do this to prevent the requests from being scheduled after
   // shutdown.
-  for (auto iter = mTable.Iter(); !iter.Done(); iter.Next()) {
-    iter.Data()->CancelTailPendingRequests(NS_ERROR_ABORT);
+  for (const auto& data : mTable.Values()) {
+    data->CancelTailPendingRequests(NS_ERROR_ABORT);
   }
   mTable.Clear();
   sShutdown = true;
@@ -509,11 +508,10 @@ RequestContextService::GetRequestContext(const uint64_t rcID,
     return NS_ERROR_INVALID_ARG;
   }
 
-  if (!mTable.Get(rcID, rc)) {
-    nsCOMPtr<nsIRequestContext> newSC = new RequestContext(rcID);
-    mTable.Put(rcID, newSC);
-    newSC.swap(*rc);
-  }
+  *rc = do_AddRef(mTable.LookupOrInsertWith(rcID, [&] {
+          nsCOMPtr<nsIRequestContext> newSC = new RequestContext(rcID);
+          return newSC;
+        })).take();
 
   return NS_OK;
 }
@@ -547,7 +545,7 @@ RequestContextService::NewRequestContext(nsIRequestContext** rc) {
       mNextRCID++;
 
   nsCOMPtr<nsIRequestContext> newSC = new RequestContext(rcID);
-  mTable.Put(rcID, newSC);
+  mTable.InsertOrUpdate(rcID, newSC);
   newSC.swap(*rc);
 
   return NS_OK;

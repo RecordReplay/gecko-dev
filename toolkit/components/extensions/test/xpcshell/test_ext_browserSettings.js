@@ -56,7 +56,18 @@ add_task(async function test_browser_settings() {
   async function background() {
     let listeners = new Set([]);
     browser.test.onMessage.addListener(async (msg, apiName, value) => {
-      let apiObj = browser.browserSettings[apiName];
+      let apiObj = browser.browserSettings;
+      let apiNameSplit = apiName.split(".");
+      for (let apiPart of apiNameSplit) {
+        apiObj = apiObj[apiPart];
+      }
+      if (msg == "get") {
+        browser.test.sendMessage("settingData", await apiObj.get({}));
+        return;
+      }
+
+      // set and setNoOp
+
       // Don't add more than one listner per apiName.  We leave the
       // listener to ensure we do not get more calls than we expect.
       if (!listeners.has(apiName)) {
@@ -207,12 +218,14 @@ add_task(async function test_browser_settings() {
     });
   }
 
-  await testSetting("ftpProtocolEnabled", false, {
-    "network.ftp.enabled": false,
-  });
-  await testSetting("ftpProtocolEnabled", true, {
-    "network.ftp.enabled": true,
-  });
+  extension.sendMessage("get", "ftpProtocolEnabled");
+  let data = await extension.awaitMessage("settingData");
+  equal(data.value, false);
+  equal(
+    data.levelOfControl,
+    "not_controllable",
+    `ftpProtocolEnabled is not controllable.`
+  );
 
   await testSetting("newTabPosition", "afterCurrent", {
     "browser.tabs.insertRelatedAfterCurrent": false,
@@ -277,6 +290,30 @@ add_task(async function test_browser_settings() {
   });
   await testSetting("zoomSiteSpecific", false, {
     "browser.zoom.siteSpecific": false,
+  });
+
+  await testSetting("colorManagement.mode", "off", {
+    "gfx.color_management.mode": 0,
+  });
+  await testSetting("colorManagement.mode", "full", {
+    "gfx.color_management.mode": 1,
+  });
+  await testSetting("colorManagement.mode", "tagged_only", {
+    "gfx.color_management.mode": 2,
+  });
+
+  await testSetting("colorManagement.useNativeSRGB", false, {
+    "gfx.color_management.native_srgb": false,
+  });
+  await testSetting("colorManagement.useNativeSRGB", true, {
+    "gfx.color_management.native_srgb": true,
+  });
+
+  await testSetting("colorManagement.useWebRenderCompositor", false, {
+    "gfx.webrender.compositor": false,
+  });
+  await testSetting("colorManagement.useWebRenderCompositor", true, {
+    "gfx.webrender.compositor": true,
   });
 
   await extension.unload();

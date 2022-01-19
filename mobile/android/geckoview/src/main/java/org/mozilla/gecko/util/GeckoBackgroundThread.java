@@ -43,8 +43,6 @@ final class GeckoBackgroundThread extends Thread {
 
     private static void startThread(final Runnable initialRunnable) {
         thread = new GeckoBackgroundThread(initialRunnable);
-        ThreadUtils.setBackgroundThread(thread);
-
         thread.setDaemon(true);
         thread.start();
     }
@@ -70,9 +68,5 @@ final class GeckoBackgroundThread extends Thread {
             return;
         }
         getHandler().post(runnable);
-    }
-
-    /*package*/ static void postDelayed(final Runnable runnable, final long timeout) {
-        getHandler().postDelayed(runnable, timeout);
     }
 }

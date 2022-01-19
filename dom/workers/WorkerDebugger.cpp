@@ -245,7 +245,7 @@ WorkerDebugger::GetType(uint32_t* aResult) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  *aResult = mWorkerPrivate->Type();
+  *aResult = mWorkerPrivate->Kind();
   return NS_OK;
 }
 
@@ -508,7 +508,7 @@ RefPtr<PerformanceInfoPromise> WorkerDebugger::ReportPerformanceInfo() {
     BrowsingContext* context = win->GetBrowsingContext();
     if (context) {
       top = context->Top();
-      if (top) {
+      if (top && top->GetCurrentWindowContext()) {
         windowID = top->GetCurrentWindowContext()->OuterWindowId();
         isTopLevel = context->IsTop();
       }

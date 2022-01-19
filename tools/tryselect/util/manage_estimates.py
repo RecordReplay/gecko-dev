@@ -2,7 +2,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from __future__ import absolute_import, print_function
 
 import os
 import requests
@@ -32,7 +31,7 @@ def check_downloaded_history(tag_file, duration_cache, quantile_cache):
         )
         if download_date < datetime.now() - timedelta(days=7):
             return False
-    except (IOError, ValueError):
+    except (OSError, ValueError):
         return False
 
     if not os.path.isfile(duration_cache):
@@ -68,6 +67,7 @@ def download_task_history_data(cache_dir):
 
     try:
         r = requests.get(TASK_DURATION_URL, stream=True)
+        r.raise_for_status()
     except requests.exceptions.RequestException as exc:
         # This is fine, the durations just won't be in the preview window.
         print(
@@ -91,6 +91,7 @@ def download_task_history_data(cache_dir):
 
     try:
         r = requests.get(GRAPH_QUANTILES_URL, stream=True)
+        r.raise_for_status()
     except requests.exceptions.RequestException as exc:
         # This is fine, the percentile just won't be in the preview window.
         print(

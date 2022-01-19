@@ -218,8 +218,10 @@ add_task(async function testDeletingMenuItems() {
   await popupEventPromise;
 
   info("Delete bookmark menu item from popup.");
-  let deleteMenuItem = document.getElementById("placesContext_delete");
-  EventUtils.synthesizeMouseAtCenter(deleteMenuItem, {});
+  let deleteMenuBookmark = document.getElementById(
+    "placesContext_deleteBookmark"
+  );
+  placesContext.activateItem(deleteMenuBookmark);
 
   await TestUtils.waitForCondition(() => {
     let popup = document.querySelector("#OtherBookmarksPopup");
@@ -385,7 +387,7 @@ add_task(async function testOtherBookmarksToolbarOverFlow() {
 /**
  * Tests whether or not the "Other Bookmarks" folder is visible.
  *
- * @param {Boolean} expected
+ * @param {boolean} expected
  *        The expected state of the Other Bookmarks folder. There are 3:
  *        - the folder node isn't initialized and is therefore not visible,
  *        - the folder node is initialized and is hidden
@@ -412,9 +414,9 @@ async function testIsOtherBookmarksHidden(expected) {
 /**
  * Tests number of menu items in Other Bookmarks popup.
  *
- * @param {String}  selector
+ * @param {string}  selector
  *        The selector for getting the menupopup element we want to test.
- * @param {Number}  expected
+ * @param {number}  expected
  *        The expected number of menuitem elements inside the menupopup.
  */
 function testNumberOfMenuPopupChildren(selector, expected) {
@@ -432,7 +434,7 @@ function testNumberOfMenuPopupChildren(selector, expected) {
  * Test helper for checking the 'checked' state of the "Show Other Bookmarks" menu item
  * after selecting it from the context menu.
  *
- * @param {Boolean} expectedCheckedState
+ * @param {boolean} expectedCheckedState
  *        Whether or not the menu item is checked.
  */
 async function testOtherBookmarksCheckedState(expectedCheckedState) {
@@ -456,7 +458,7 @@ async function testOtherBookmarksCheckedState(expectedCheckedState) {
  * Test helper for checking whether or not the 'Show Other Bookmarks' menu item
  * appears in the toolbar's context menu.
  *
- * @param {Boolean} expected
+ * @param {boolean} expected
  *        Whether or not the menu item appears in the toolbar conext menu.
  */
 async function testIsOtherBookmarksMenuItemShown(expected) {
@@ -478,9 +480,9 @@ async function testIsOtherBookmarksMenuItemShown(expected) {
 /**
  * Helper for opening a menu popup.
  *
- * @param {String}  popupSelector
+ * @param {string}  popupSelector
  *        The selector for the menupopup element we want to open.
- * @param {String}  targetSelector
+ * @param {string}  targetSelector
  *        The selector for the element with the popup showing event.
  */
 async function openMenuPopup(popupSelector, targetSelector) {
@@ -495,7 +497,7 @@ async function openMenuPopup(popupSelector, targetSelector) {
 /**
  * Helper for closing a menu popup.
  *
- * @param {String}  popupSelector
+ * @param {string}  popupSelector
  *        The selector for the menupopup element we want to close.
  */
 async function closeMenuPopup(popupSelector) {
@@ -509,7 +511,7 @@ async function closeMenuPopup(popupSelector) {
 /**
  * Helper for opening the toolbar context menu.
  *
- * @param {String}  toolbarSelector
+ * @param {string}  toolbarSelector
  *        Optional. The selector for the toolbar context menu.
  *        Defaults to #PlacesToolbarItems.
  */
@@ -549,6 +551,8 @@ async function closeToolbarContextMenu() {
  * Helper for setting up the bookmarks toolbar state. This ensures the beginning
  * of a task will always have the bookmark toolbar in a state that makes the
  * Other Bookmarks folder testable.
+ *
+ * @param {object} [win]
  */
 async function setupBookmarksToolbar(win = window) {
   let toolbar = win.document.getElementById("PersonalToolbar");
@@ -566,7 +570,7 @@ async function setupBookmarksToolbar(win = window) {
  * Helper for selecting the "Show Other Bookmarks" menu item from the bookmarks
  * toolbar context menu.
  *
- * @param {String}  selector
+ * @param {string}  selector
  *        Optional. The selector for the node that triggers showing the
  *        "Show Other Bookmarks" context menu item in the toolbar.
  *        Defaults to #PlacesToolbarItem when `openToolbarContextMenu` is
@@ -581,7 +585,7 @@ async function selectShowOtherBookmarksMenuItem(selector) {
   );
   let contextMenu = document.getElementById("placesContext");
 
-  EventUtils.synthesizeMouseAtCenter(otherBookmarksMenuItem, {});
+  contextMenu.activateItem(otherBookmarksMenuItem);
 
   await BrowserTestUtils.waitForPopupEvent(contextMenu, "hidden");
   await closeToolbarContextMenu();

@@ -188,11 +188,7 @@ fn host_device_or_default_storage_as_auto() {
     let device = host
         .device_or_default::<String>(None, AndroidStorageInput::Auto)
         .expect("connected device");
-    if device.is_rooted {
-        assert_eq!(device.storage, AndroidStorage::Internal);
-    } else {
-        assert_eq!(device.storage, AndroidStorage::App);
-    }
+    assert_eq!(device.storage, AndroidStorage::Sdcard);
 }
 
 #[test]
@@ -504,5 +500,26 @@ fn device_push_dir() {
                 assert!(output.contains(path.to_str().unwrap()));
             }
         },
+    );
+}
+
+#[test]
+fn format_own_device_error_types() {
+    assert_eq!(
+        format!("{}", DeviceError::InvalidStorage),
+        "Invalid storage".to_string()
+    );
+    assert_eq!(
+        format!("{}", DeviceError::MissingPackage),
+        "Missing package".to_string()
+    );
+    assert_eq!(
+        format!("{}", DeviceError::MultipleDevices),
+        "Multiple Android devices online".to_string()
+    );
+
+    assert_eq!(
+        format!("{}", DeviceError::Adb("foo".to_string())),
+        "foo".to_string()
     );
 }

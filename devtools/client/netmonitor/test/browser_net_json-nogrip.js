@@ -23,8 +23,7 @@ add_task(async function() {
 
   const onResponsePanelReady = waitForDOM(
     document,
-    "#response-panel .accordion-item",
-    2
+    "#response-panel .data-header"
   );
 
   const onPropsViewReady = waitForDOM(
@@ -34,7 +33,7 @@ add_task(async function() {
   );
 
   store.dispatch(Actions.toggleNetworkDetails());
-  await clickOnSidebarTab(document, "response");
+  clickOnSidebarTab(document, "response");
   await Promise.all([onResponsePanelReady, onPropsViewReady]);
 
   const tabpanel = document.querySelector("#response-panel");

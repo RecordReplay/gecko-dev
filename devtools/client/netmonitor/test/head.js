@@ -55,6 +55,8 @@ const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 /* eslint-disable no-unused-vars, max-len */
 const EXAMPLE_URL =
   "http://example.com/browser/devtools/client/netmonitor/test/";
+const EXAMPLE_ORG_URL =
+  "http://example.org/browser/devtools/client/netmonitor/test/";
 const HTTPS_EXAMPLE_URL =
   "https://example.com/browser/devtools/client/netmonitor/test/";
 /* Since the test server will proxy `ws://example.com` to websocket server on 9988,
@@ -93,6 +95,7 @@ const JSON_TEXT_MIME_URL = EXAMPLE_URL + "html_json-text-mime-test-page.html";
 const JSON_B64_URL = EXAMPLE_URL + "html_json-b64.html";
 const JSON_BASIC_URL = EXAMPLE_URL + "html_json-basic.html";
 const JSON_EMPTY_URL = EXAMPLE_URL + "html_json-empty.html";
+const FONTS_URL = EXAMPLE_URL + "html_fonts-test-page.html";
 const SORTING_URL = EXAMPLE_URL + "html_sorting-test-page.html";
 const FILTERING_URL = EXAMPLE_URL + "html_filter-test-page.html";
 const INFINITE_GET_URL = EXAMPLE_URL + "html_infinite-get-page.html";
@@ -196,24 +199,16 @@ registerCleanupFunction(() => {
   Services.cookies.removeAll();
 });
 
-function waitForNavigation(target) {
-  return new Promise(resolve => {
-    target.once("will-navigate", () => {
-      target.once("navigate", () => {
-        resolve();
-      });
-    });
-  });
-}
-
-function toggleCache(target, disabled) {
-  const options = { cacheDisabled: disabled, performReload: true };
-  const navigationFinished = waitForNavigation(target);
+async function toggleCache(toolbox, disabled) {
+  const options = { cacheDisabled: disabled };
 
   // Disable the cache for any toolbox that it is opened from this point on.
   Services.prefs.setBoolPref("devtools.cache.disabled", disabled);
 
-  return target.reconfigure({ options }).then(() => navigationFinished);
+  await toolbox.commands.targetConfigurationCommand.updateConfiguration(
+    options
+  );
+  await toolbox.commands.targetCommand.reloadTopLevelTarget();
 }
 
 /**
@@ -319,9 +314,9 @@ function initNetMonitor(
     const tab = await addTab(url);
     info("Net tab added successfully: " + url);
 
-    const target = await TargetFactory.forTab(tab);
-
-    const toolbox = await gDevTools.showToolbox(target, "netmonitor");
+    const toolbox = await gDevTools.showToolboxForTab(tab, {
+      toolId: "netmonitor",
+    });
     info("Network monitor pane shown successfully.");
 
     const monitor = toolbox.getCurrentPanel();
@@ -341,7 +336,7 @@ function initNetMonitor(
         expectedEventTimings,
       });
       const markersDone = waitForTimelineMarkers(monitor);
-      await toggleCache(target, true);
+      await toggleCache(toolbox, true);
       await Promise.all([requestsDone, markersDone]);
       info("Clearing requests in the UI.");
       store.dispatch(Actions.clearRequests());
@@ -470,24 +465,6 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
     panel.api.on(EVENTS.PAYLOAD_READY, onPayloadReady);
     panel.api.on(EVENTS.RECEIVED_EVENT_TIMINGS, onEventTimings);
   });
-}
-/**
- * Waits for the avalibilty of network resources on the frontend
- * @param {object} toolbox
- * @param {number} noOfExpectedResources
- * @return {object} Promise
- */
-async function waitForNetworkResource(toolbox, noOfExpectedResources = 1) {
-  let countOfAvailableResources = 0;
-  return waitForNextResource(
-    toolbox.resourceWatcher,
-    toolbox.resourceWatcher.TYPES.NETWORK_EVENT,
-    {
-      ignoreExistingResources: true,
-      predicate: resource =>
-        ++countOfAvailableResources >= noOfExpectedResources,
-    }
-  );
 }
 
 function verifyRequestItemTarget(
@@ -763,27 +740,6 @@ function verifyRequestItemTarget(
 }
 
 /**
- * Wait for an action of the provided type to be dispatched on the provided
- * store.
- *
- * @param {Object} store
- *        The redux store (wait-service middleware required).
- * @param {String} type
- *        Type of the action to wait for.
- */
-function waitForDispatch(store, type) {
-  return new Promise(resolve => {
-    store.dispatch({
-      type: "@@service/waitUntil",
-      predicate: action => action.type === type,
-      run: (dispatch, getState, action) => {
-        resolve(action);
-      },
-    });
-  });
-}
-
-/**
  * Tests if a button for a filter of given type is the only one checked.
  *
  * @param string filterType
@@ -977,7 +933,7 @@ async function hideColumn(monitor, column) {
   const { document } = monitor.panelWin;
 
   info(`Clicking context-menu item for ${column}`);
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "contextmenu" },
     document.querySelector(".requests-list-headers")
   );
@@ -1000,7 +956,7 @@ async function showColumn(monitor, column) {
   const { document } = monitor.panelWin;
 
   info(`Clicking context-menu item for ${column}`);
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "contextmenu" },
     document.querySelector(".requests-list-headers")
   );
@@ -1031,7 +987,7 @@ async function selectIndexAndWaitForSourceEditor(monitor, index) {
   );
   // Select the request first, as it may try to fetch whatever is the current request's
   // responseContent if we select the ResponseTab first.
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "mousedown" },
     document.querySelectorAll(".request-list-item")[index]
   );
@@ -1273,7 +1229,7 @@ async function waitForDOMIfNeeded(target, selector, expectedLength = 1) {
  *        The action, block or unblock, to construct a corresponding context menu id.
  */
 async function toggleBlockedUrl(element, monitor, store, action = "block") {
-  await EventUtils.sendMouseEvent({ type: "contextmenu" }, element);
+  EventUtils.sendMouseEvent({ type: "contextmenu" }, element);
   const contextMenuId = `request-list-context-${action}-url`;
   const contextBlockToggle = getContextMenuItem(monitor, contextMenuId);
   const onRequestComplete = waitForDispatch(
@@ -1348,13 +1304,13 @@ function compareValues(first, second) {
  * @param {String} name
  *        Network panel sidebar tab name.
  */
-const clickOnSidebarTab = async (doc, name) => {
+const clickOnSidebarTab = (doc, name) => {
   AccessibilityUtils.setEnv({
     // Keyboard accessibility is handled on the sidebar tabs container level
     // (nav). Users can use arrow keys to navigate between and select tabs.
     nonNegativeTabIndexRule: false,
   });
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "click" },
     doc.querySelector(`#${name}-tab`)
   );

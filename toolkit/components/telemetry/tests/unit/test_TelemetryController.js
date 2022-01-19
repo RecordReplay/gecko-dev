@@ -13,22 +13,32 @@ const { CommonUtils } = ChromeUtils.import(
 );
 const { ClientID } = ChromeUtils.import("resource://gre/modules/ClientID.jsm");
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryController.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryStorage.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetrySend.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryArchive.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", this);
+const { TelemetryController } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryController.jsm"
+);
+const { TelemetryStorage } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryStorage.jsm"
+);
+const { TelemetrySend } = ChromeUtils.import(
+  "resource://gre/modules/TelemetrySend.jsm"
+);
+const { TelemetryArchive } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryArchive.jsm"
+);
+const { TelemetryUtils } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryUtils.jsm"
+);
 const { Preferences } = ChromeUtils.import(
   "resource://gre/modules/Preferences.jsm"
 );
-ChromeUtils.import("resource://testing-common/ContentTaskUtils.jsm", this);
+const { ContentTaskUtils } = ChromeUtils.import(
+  "resource://testing-common/ContentTaskUtils.jsm"
+);
 const { TestUtils } = ChromeUtils.import(
   "resource://testing-common/TestUtils.jsm"
 );
-ChromeUtils.import(
-  "resource://testing-common/TelemetryArchiveTesting.jsm",
-  this
+const { TelemetryArchiveTesting } = ChromeUtils.import(
+  "resource://testing-common/TelemetryArchiveTesting.jsm"
 );
 
 ChromeUtils.defineModuleGetter(
@@ -46,10 +56,6 @@ ChromeUtils.defineModuleGetter(
 const PING_FORMAT_VERSION = 4;
 const DELETION_REQUEST_PING_TYPE = "deletion-request";
 const TEST_PING_TYPE = "test-ping-type";
-
-const PLATFORM_VERSION = "1.9.2";
-const APP_VERSION = "1";
-const APP_NAME = "XPCShell";
 
 var gClientID = null;
 
@@ -132,7 +138,12 @@ function checkPingFormat(aPing, aType, aHasClientId, aHasEnvironment) {
 add_task(async function test_setup() {
   // Addon manager needs a profile directory
   do_get_profile();
-  loadAddonManager("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
+  await loadAddonManager(
+    "xpcshell@tests.mozilla.org",
+    "XPCShell",
+    "1",
+    "1.9.2"
+  );
   finishAddonManagerStartup();
   fakeIntlReady();
   // Make sure we don't generate unexpected pings due to pref changes.
@@ -251,8 +262,6 @@ add_task(async function test_disableDataUpload() {
     secondClientId,
     "The client id must have changed"
   );
-  let secondEcosystemClientId = await ClientID.getEcosystemClientID();
-
   // Simulate a failure in sending the deletion-request ping by disabling the HTTP server.
   await PingServer.stop();
 
@@ -324,15 +333,6 @@ add_task(async function test_disableDataUpload() {
     ping.clientId,
     "Deletion must be requested for correct client id"
   );
-  if (AppConstants.MOZ_APP_NAME != "thunderbird") {
-    // We don't record the old ecosystem client ID on Thunderbird,
-    // since the FxA and telemetry infrastructure is different there.
-    Assert.equal(
-      secondEcosystemClientId,
-      ping.payload.scalars.parent["deletion.request.ecosystem_client_id"],
-      "Deletion must be requested for correct ecosystem client ID"
-    );
-  }
 
   // Wait on ping activity to settle before moving on to the next test. If we were
   // to shut down telemetry, even though the PingServer caught the expected pings,

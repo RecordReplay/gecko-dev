@@ -116,17 +116,17 @@ static std::string Resolve(const std::string& fqdn, int address_family) {
 
 class StunTest : public MtransportTest {
  public:
-  StunTest() : MtransportTest() {
-    stun_server_hostname_ = kDefaultStunServerHostname;
-  }
+  StunTest() : MtransportTest() {}
 
   void SetUp() override {
     MtransportTest::SetUp();
 
+    stun_server_hostname_ = kDefaultStunServerHostname;
     // If only a STUN server FQDN was provided, look up its IP address for the
     // address-only tests.
     if (stun_server_address_.empty() && !stun_server_hostname_.empty()) {
       stun_server_address_ = Resolve(stun_server_hostname_, AF_INET);
+      ASSERT_TRUE(!stun_server_address_.empty());
     }
 
     // Make sure NrIceCtx is in a testable state.
@@ -1466,6 +1466,10 @@ class WebRtcIceGatherTest : public StunTest {
 
     stun_servers->push_back(
         *NrIceStunServer::Create(stun_addr, stun_port, proto.c_str()));
+
+    if (family == AF_INET6 && !fqdn.empty()) {
+      stun_servers->back().SetUseIPv6IfFqdn();
+    }
   }
 
   void UseFakeStunUdpServerWithResponse(
@@ -1610,8 +1614,6 @@ class WebRtcIceConnectTest : public StunTest {
 
       stun_servers.push_back(*NrIceStunServer::Create(
           stun_server_address_, kDefaultStunServerPort, kNrIceTransportUdp));
-      stun_servers.push_back(*NrIceStunServer::Create(
-          stun_server_address_, kDefaultStunServerPort, kNrIceTransportTcp));
 
       peer->SetStunServers(stun_servers);
     }
@@ -1896,7 +1898,8 @@ class WebRtcIcePrioritizerTest : public StunTest {
     int r = nr_str_port_to_transport_addr(str_addr.c_str(), 0, IPPROTO_UDP,
                                           &(local_addr.addr));
     ASSERT_EQ(0, r);
-    strncpy(local_addr.addr.ifname, ifname.c_str(), MAXIFNAME);
+    strncpy(local_addr.addr.ifname, ifname.c_str(), MAXIFNAME - 1);
+    local_addr.addr.ifname[MAXIFNAME - 1] = '\0';
 
     r = nr_interface_prioritizer_add_interface(prioritizer_, &local_addr);
     ASSERT_EQ(0, r);
@@ -2050,7 +2053,9 @@ TEST_F(WebRtcIceGatherTest, TestGatherFakeStunServerHostnameNoResolver) {
   Gather();
 }
 
-TEST_F(WebRtcIceGatherTest, TestGatherFakeStunServerTcpHostnameNoResolver) {
+// Disabled because google isn't running any TCP stun servers right now
+TEST_F(WebRtcIceGatherTest,
+       DISABLED_TestGatherFakeStunServerTcpHostnameNoResolver) {
   if (stun_server_hostname_.empty()) {
     return;
   }
@@ -2140,7 +2145,8 @@ TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerIpAddress) {
   ASSERT_TRUE(StreamHasMatchingCandidate(0, "typ srflx raddr"));
 }
 
-TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerIpAddressTcp) {
+// Disabled because google isn't running any TCP stun servers right now
+TEST_F(WebRtcIceGatherTest, DISABLED_TestGatherDNSStunServerIpAddressTcp) {
   if (stun_server_address_.empty()) {
     return;
   }
@@ -2176,7 +2182,8 @@ TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerHostname) {
   ASSERT_TRUE(StreamHasMatchingCandidate(0, "typ srflx raddr"));
 }
 
-TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerHostnameTcp) {
+// Disabled because google isn't running any TCP stun servers right now
+TEST_F(WebRtcIceGatherTest, DISABLED_TestGatherDNSStunServerHostnameTcp) {
   NrIceCtx::GlobalConfig config;
   config.mTcpEnabled = true;
   NrIceCtx::InitializeGlobals(config);
@@ -2192,7 +2199,9 @@ TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerHostnameTcp) {
   ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype active", " 9 "));
 }
 
-TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerHostnameBothUdpTcp) {
+// Disabled because google isn't running any TCP stun servers right now
+TEST_F(WebRtcIceGatherTest,
+       DISABLED_TestGatherDNSStunServerHostnameBothUdpTcp) {
   if (stun_server_hostname_.empty()) {
     return;
   }
@@ -2214,7 +2223,9 @@ TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerHostnameBothUdpTcp) {
   ASSERT_TRUE(StreamHasMatchingCandidate(0, " TCP "));
 }
 
-TEST_F(WebRtcIceGatherTest, TestGatherDNSStunServerIpAddressBothUdpTcp) {
+// Disabled because google isn't running any TCP stun servers right now
+TEST_F(WebRtcIceGatherTest,
+       DISABLED_TestGatherDNSStunServerIpAddressBothUdpTcp) {
   if (stun_server_address_.empty()) {
     return;
   }
@@ -2247,7 +2258,8 @@ TEST_F(WebRtcIceGatherTest, TestGatherDNSStunBogusHostname) {
   ASSERT_TRUE(StreamHasMatchingCandidate(0, " UDP "));
 }
 
-TEST_F(WebRtcIceGatherTest, TestGatherDNSStunBogusHostnameTcp) {
+// Disabled because google isn't running any TCP stun servers right now
+TEST_F(WebRtcIceGatherTest, DISABLED_TestGatherDNSStunBogusHostnameTcp) {
   NrIceCtx::GlobalConfig config;
   config.mTcpEnabled = true;
   NrIceCtx::InitializeGlobals(config);

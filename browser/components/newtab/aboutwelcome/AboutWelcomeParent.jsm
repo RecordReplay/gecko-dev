@@ -13,7 +13,6 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
-  AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
   FxAccounts: "resource://gre/modules/FxAccounts.jsm",
   MigrationUtils: "resource:///modules/MigrationUtils.jsm",
   OS: "resource://gre/modules/osfile.jsm",
@@ -21,9 +20,11 @@ XPCOMUtils.defineLazyModuleGetters(this, {
     "resource://messaging-system/lib/SpecialMessageActions.jsm",
   AboutWelcomeTelemetry:
     "resource://activity-stream/aboutwelcome/lib/AboutWelcomeTelemetry.jsm",
-  AttributionCode: "resource:///modules/AttributionCode.jsm",
+  AboutWelcomeDefaults:
+    "resource://activity-stream/aboutwelcome/lib/AboutWelcomeDefaults.jsm",
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
   Region: "resource://gre/modules/Region.jsm",
+  ShellService: "resource:///modules/ShellService.jsm",
 });
 
 XPCOMUtils.defineLazyGetter(this, "log", () => {
@@ -41,7 +42,6 @@ XPCOMUtils.defineLazyGetter(
 
 const DID_SEE_ABOUT_WELCOME_PREF = "trailhead.firstrun.didSeeAboutWelcome";
 const AWTerminate = {
-  UNKNOWN: "unknown",
   WINDOW_CLOSED: "welcome-window-closed",
   TAB_CLOSED: "welcome-tab-closed",
   APP_SHUT_DOWN: "app-shut-down",
@@ -104,7 +104,7 @@ class AboutWelcomeObserver {
       return;
     }
 
-    this.terminateReason = AWTerminate.UNKNOWN;
+    this.terminateReason = AWTerminate.ADDRESS_BAR_NAVIGATED;
 
     this.onWindowClose = () => {
       this.terminateReason = AWTerminate.WINDOW_CLOSED;
@@ -147,11 +147,9 @@ class RegionHomeObserver {
   observe(aSubject, aTopic, aData) {
     switch (aTopic) {
       case Region.REGION_TOPIC:
-        if (aData === Region.REGION_UPDATED) {
-          Services.obs.removeObserver(this, Region.REGION_TOPIC);
-          this.regionHomeDeferred.resolve(Region.home);
-          this.regionHomeDeferred = null;
-        }
+        Services.obs.removeObserver(this, Region.REGION_TOPIC);
+        this.regionHomeDeferred.resolve(Region.home);
+        this.regionHomeDeferred = null;
         break;
     }
   }
@@ -226,27 +224,14 @@ class AboutWelcomeParent extends JSWindowActorParent {
         break;
       case "AWPage:FXA_METRICS_FLOW_URI":
         return FxAccounts.config.promiseMetricsFlowURI("aboutwelcome");
-      case "AWPage:GET_ATTRIBUTION_DATA":
-        return AttributionCode.getAttrDataAsync();
       case "AWPage:IMPORTABLE_SITES":
         return getImportableSites();
       case "AWPage:TELEMETRY_EVENT":
         Telemetry.sendTelemetry(data);
         break;
-      case "AWPage:LOCATION_CHANGED":
-        this.AboutWelcomeObserver.terminateReason =
-          AWTerminate.ADDRESS_BAR_NAVIGATED;
-        break;
-      case "AWPage:GET_ADDON_FROM_REPOSITORY":
-        const [addonInfo] = await AddonRepository.getAddonsByIDs([data]);
-        if (addonInfo.sourceURI.scheme !== "https") {
-          return null;
-        }
-        return {
-          name: addonInfo.name,
-          url: addonInfo.sourceURI.spec,
-          iconURL: addonInfo.icons["64"] || addonInfo.icons["32"],
-        };
+      case "AWPage:GET_ATTRIBUTION_DATA":
+        let attributionData = await AboutWelcomeDefaults.getAttributionContent();
+        return attributionData;
       case "AWPage:SELECT_THEME":
         return AddonManager.getAddonByID(
           LIGHT_WEIGHT_THEMES[data]
@@ -269,6 +254,16 @@ class AboutWelcomeParent extends JSWindowActorParent {
           this.RegionHomeObserver = new RegionHomeObserver(this);
         }
         return this.RegionHomeObserver.promiseRegionHome();
+      case "AWPage:DOES_APP_NEED_PIN":
+        return ShellService.doesAppNeedPin();
+      case "AWPage:IS_DEFAULT_BROWSER":
+        return ShellService.isDefaultBrowser();
+      case "AWPage:NEED_DEFAULT":
+        // Only need to set default if we're supposed to check and not default.
+        return (
+          Services.prefs.getBoolPref("browser.shell.checkDefaultBrowser") &&
+          !ShellService.isDefaultBrowser()
+        );
       case "AWPage:WAIT_FOR_MIGRATION_CLOSE":
         return new Promise(resolve =>
           Services.ww.registerNotification(function observer(subject, topic) {

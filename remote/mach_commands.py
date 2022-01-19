@@ -54,14 +54,13 @@ def setup():
 
 @CommandProvider
 class RemoteCommands(MachCommandBase):
-    def __init__(self, *args, **kwargs):
-        super(RemoteCommands, self).__init__(*args, **kwargs)
-        self.remotedir = os.path.join(self.topsrcdir, "remote")
+    def remotedir(self):
+        return os.path.join(self.topsrcdir, "remote")
 
     @Command(
         "remote", category="misc", description="Remote protocol related operations."
     )
-    def remote(self):
+    def remote(self, command_context):
         """The remote subcommands all relate to the remote protocol."""
         self._sub_mach(["help", "remote"])
         return 1
@@ -88,12 +87,12 @@ class RemoteCommands(MachCommandBase):
         default=True,
         help="Do not install the just-pulled Puppeteer package,",
     )
-    def vendor_puppeteer(self, repository, commitish, install):
-        puppeteer_dir = os.path.join(self.remotedir, "test", "puppeteer")
+    def vendor_puppeteer(self, command_context, repository, commitish, install):
+        puppeteer_dir = os.path.join(self.remotedir(), "test", "puppeteer")
 
         # Preserve our custom mocha reporter
         shutil.move(
-            os.path.join(puppeteer_dir, "json-mocha-reporter.js"), self.remotedir
+            os.path.join(puppeteer_dir, "json-mocha-reporter.js"), self.remotedir()
         )
         shutil.rmtree(puppeteer_dir, ignore_errors=True)
         os.makedirs(puppeteer_dir)
@@ -124,7 +123,7 @@ class RemoteCommands(MachCommandBase):
                 shutil.rmtree(dir_path)
 
         shutil.move(
-            os.path.join(self.remotedir, "json-mocha-reporter.js"), puppeteer_dir
+            os.path.join(self.remotedir(), "json-mocha-reporter.js"), puppeteer_dir
         )
 
         import yaml
@@ -405,6 +404,8 @@ class PuppeteerRunner(MozbuildObject):
         `extra_prefs`:
           Dictionary of extra preferences to write to the profile,
           before invoking npm.  Overrides default preferences.
+        `enable_webrender`:
+          Boolean to indicate whether to enable WebRender compositor in Gecko.
         `write_results`:
           Path to write the results json file
         `subset`
@@ -442,6 +443,9 @@ class PuppeteerRunner(MozbuildObject):
         if product == "firefox":
             env["BINARY"] = binary
             env["PUPPETEER_PRODUCT"] = "firefox"
+
+            env["MOZ_WEBRENDER"] = "%d" % params.get("enable_webrender", False)
+
         command = ["run", "unit", "--"] + mocha_options
 
         env["HEADLESS"] = str(params.get("headless", False))
@@ -457,7 +461,7 @@ class PuppeteerRunner(MozbuildObject):
             env["EXTRA_LAUNCH_OPTIONS"] = json.dumps(extra_options)
 
         expected_path = os.path.join(
-            os.path.dirname(__file__), "puppeteer-expected.json"
+            os.path.dirname(__file__), "test", "puppeteer-expected.json"
         )
         if product == "firefox" and os.path.exists(expected_path):
             with open(expected_path) as f:
@@ -508,9 +512,19 @@ def create_parser_puppeteer():
         help="Path to browser binary.  Defaults to local Firefox build.",
     )
     p.add_argument(
+        "--ci",
+        action="store_true",
+        help="Flag that indicates that tests run in a CI environment.",
+    )
+    p.add_argument(
         "--enable-fission",
         action="store_true",
         help="Enable Fission (site isolation) in Gecko.",
+    )
+    p.add_argument(
+        "--enable-webrender",
+        action="store_true",
+        help="Enable the WebRender compositor in Gecko.",
     )
     p.add_argument(
         "-z", "--headless", action="store_true", help="Run browser in headless mode."
@@ -543,7 +557,9 @@ def create_parser_puppeteer():
         action="store",
         nargs="?",
         default=None,
-        const=os.path.join(os.path.dirname(__file__), "puppeteer-expected.json"),
+        const=os.path.join(
+            os.path.dirname(__file__), "test", "puppeteer-expected.json"
+        ),
         help="Path to write updated results to (defaults to the "
         "expectations file if the argument is provided but "
         "no path is passed)",
@@ -570,8 +586,11 @@ class PuppeteerTest(MachCommandBase):
     )
     def puppeteer_test(
         self,
+        command_context,
         binary=None,
+        ci=False,
         enable_fission=False,
+        enable_webrender=False,
         headless=False,
         extra_prefs=None,
         extra_options=None,
@@ -582,6 +601,8 @@ class PuppeteerTest(MachCommandBase):
         subset=False,
         **kwargs
     ):
+
+        self.ci = ci
 
         logger = mozlog.commandline.setup_logging(
             "puppeteer-test", kwargs, {"mach": sys.stdout}
@@ -618,9 +639,7 @@ class PuppeteerTest(MachCommandBase):
             options[kv[0]] = kv[1].strip()
 
         if enable_fission:
-            prefs.update(
-                {"fission.autostart": True, "dom.serviceWorkers.parent_intercept": True}
-            )
+            prefs.update({"fission.autostart": True})
 
         if verbosity == 1:
             prefs["remote.log.level"] = "Debug"
@@ -634,6 +653,7 @@ class PuppeteerTest(MachCommandBase):
         params = {
             "binary": binary,
             "headless": headless,
+            "enable_webrender": enable_webrender,
             "extra_prefs": prefs,
             "product": product,
             "extra_launcher_options": options,
@@ -669,7 +689,9 @@ class PuppeteerTest(MachCommandBase):
         if changed_files and os.path.isdir(lib_dir):
             # clobber lib to force `tsc compile` step
             shutil.rmtree(lib_dir)
-        npm("ci", cwd=os.path.join(self.topsrcdir, puppeteer_dir), env=env)
+
+        command = "ci" if self.ci else "install"
+        npm(command, cwd=os.path.join(self.topsrcdir, puppeteer_dir), env=env)
 
 
 def exit(code, error=None):

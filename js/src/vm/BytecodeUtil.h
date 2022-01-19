@@ -234,7 +234,7 @@ static inline void SetLoopHeadDepthHint(jsbytecode* pc, unsigned loopDepth) {
 static inline bool IsBackedgePC(jsbytecode* pc) {
   switch (JSOp(*pc)) {
     case JSOp::Goto:
-    case JSOp::IfNe:
+    case JSOp::JumpIfTrue:
       return GET_JUMP_OFFSET(pc) < 0;
     default:
       return false;
@@ -244,28 +244,6 @@ static inline bool IsBackedgePC(jsbytecode* pc) {
 static inline bool IsBackedgeForLoopHead(jsbytecode* pc, jsbytecode* loopHead) {
   MOZ_ASSERT(JSOp(*loopHead) == JSOp::LoopHead);
   return IsBackedgePC(pc) && pc + GET_JUMP_OFFSET(pc) == loopHead;
-}
-
-static inline void SetClassConstructorOperands(jsbytecode* pc,
-                                               js::GCThingIndex atomIndex,
-                                               uint32_t sourceStart,
-                                               uint32_t sourceEnd) {
-  MOZ_ASSERT(JSOp(*pc) == JSOp::ClassConstructor ||
-             JSOp(*pc) == JSOp::DerivedConstructor);
-  SET_GCTHING_INDEX(pc, atomIndex);
-  SET_UINT32(pc + 4, sourceStart);
-  SET_UINT32(pc + 8, sourceEnd);
-}
-
-static inline void GetClassConstructorOperands(jsbytecode* pc,
-                                               js::GCThingIndex* atomIndex,
-                                               uint32_t* sourceStart,
-                                               uint32_t* sourceEnd) {
-  MOZ_ASSERT(JSOp(*pc) == JSOp::ClassConstructor ||
-             JSOp(*pc) == JSOp::DerivedConstructor);
-  *atomIndex = GET_GCTHING_INDEX(pc);
-  *sourceStart = GET_UINT32(pc + 4);
-  *sourceEnd = GET_UINT32(pc + 8);
 }
 
 /*
@@ -308,8 +286,6 @@ struct JSCodeSpec {
   int8_t nuses;    /* arity, -1 if variadic */
   int8_t ndefs;    /* number of stack results */
   uint32_t format; /* immediate operand format */
-
-  uint32_t type() const { return JOF_TYPE(format); }
 };
 
 namespace js {
@@ -453,39 +429,6 @@ static inline unsigned GetBytecodeLength(const jsbytecode* pc) {
 static inline bool BytecodeIsPopped(jsbytecode* pc) {
   jsbytecode* next = pc + GetBytecodeLength(pc);
   return JSOp(*next) == JSOp::Pop;
-}
-
-static inline bool BytecodeFlowsToBitop(jsbytecode* pc) {
-  // Look for simple bytecode for integer conversions like (x | 0) or (x & -1).
-  jsbytecode* next = pc + GetBytecodeLength(pc);
-  if (JSOp(*next) == JSOp::BitOr || JSOp(*next) == JSOp::BitAnd) {
-    return true;
-  }
-  if (JSOp(*next) == JSOp::Int8 && GET_INT8(next) == -1) {
-    next += GetBytecodeLength(next);
-    if (JSOp(*next) == JSOp::BitAnd) {
-      return true;
-    }
-    return false;
-  }
-  if (JSOp(*next) == JSOp::One) {
-    next += GetBytecodeLength(next);
-    if (JSOp(*next) == JSOp::Neg) {
-      next += GetBytecodeLength(next);
-      if (JSOp(*next) == JSOp::BitAnd) {
-        return true;
-      }
-    }
-    return false;
-  }
-  if (JSOp(*next) == JSOp::Zero) {
-    next += GetBytecodeLength(next);
-    if (JSOp(*next) == JSOp::BitOr) {
-      return true;
-    }
-    return false;
-  }
-  return false;
 }
 
 extern bool IsValidBytecodeOffset(JSContext* cx, JSScript* script,
@@ -632,7 +575,7 @@ inline void GetCheckPrivateFieldOperands(jsbytecode* pc,
 
   MOZ_ASSERT(*throwCondition == ThrowCondition::ThrowHas ||
              *throwCondition == ThrowCondition::ThrowHasNot ||
-             *throwCondition == ThrowCondition::NoThrow);
+             *throwCondition == ThrowCondition::OnlyCheckRhs);
 
   MOZ_ASSERT(*throwKind == ThrowMsgKind::PrivateDoubleInit ||
              *throwKind == ThrowMsgKind::MissingPrivateOnGet ||
@@ -707,7 +650,7 @@ enum class DisassembleSkeptically { No, Yes };
 /*
  * Disassemblers, for debugging only.
  */
-extern MOZ_MUST_USE bool Disassemble(
+[[nodiscard]] extern bool Disassemble(
     JSContext* cx, JS::Handle<JSScript*> script, bool lines, Sprinter* sp,
     DisassembleSkeptically skeptically = DisassembleSkeptically::No);
 
@@ -716,7 +659,7 @@ unsigned Disassemble1(JSContext* cx, JS::Handle<JSScript*> script,
 
 #endif
 
-extern MOZ_MUST_USE bool DumpRealmPCCounts(JSContext* cx);
+[[nodiscard]] extern bool DumpRealmPCCounts(JSContext* cx);
 
 }  // namespace js
 

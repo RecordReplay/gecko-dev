@@ -242,7 +242,8 @@ class LinearGradientPattern : public Pattern {
  public:
   /// For constructor parameter description, see member data documentation.
   LinearGradientPattern(const Point& aBegin, const Point& aEnd,
-                        GradientStops* aStops, const Matrix& aMatrix = Matrix())
+                        already_AddRefed<GradientStops> aStops,
+                        const Matrix& aMatrix = Matrix())
       : mBegin(aBegin), mEnd(aEnd), mStops(aStops), mMatrix(aMatrix) {}
 
   PatternType GetType() const override { return PatternType::LINEAR_GRADIENT; }
@@ -268,7 +269,8 @@ class RadialGradientPattern : public Pattern {
  public:
   /// For constructor parameter description, see member data documentation.
   RadialGradientPattern(const Point& aCenter1, const Point& aCenter2,
-                        Float aRadius1, Float aRadius2, GradientStops* aStops,
+                        Float aRadius1, Float aRadius2,
+                        already_AddRefed<GradientStops> aStops,
                         const Matrix& aMatrix = Matrix())
       : mCenter1(aCenter1),
         mCenter2(aCenter2),
@@ -299,7 +301,7 @@ class ConicGradientPattern : public Pattern {
  public:
   /// For constructor parameter description, see member data documentation.
   ConicGradientPattern(const Point& aCenter, Float aAngle, Float aStartOffset,
-                       Float aEndOffset, GradientStops* aStops,
+                       Float aEndOffset, already_AddRefed<GradientStops> aStops,
                        const Matrix& aMatrix = Matrix())
       : mCenter(aCenter),
         mAngle(aAngle),
@@ -451,6 +453,8 @@ class SourceSurface : public external::AtomicRefCounted<SourceSurface> {
       case SurfaceType::DATA_SHARED:
       case SurfaceType::DATA_RECYCLING_SHARED:
       case SurfaceType::DATA_ALIGNED:
+      case SurfaceType::DATA_SHARED_WRAPPER:
+      case SurfaceType::DATA_MAPPED:
         return true;
       default:
         return false;
@@ -1074,6 +1078,11 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
   virtual bool IsCaptureDT() const { return false; }
 
   /**
+   * Method to generate hyperlink in PDF output (with appropriate backend).
+   */
+  virtual void Link(const char* aDestination, const Rect& aRect) {}
+
+  /**
    * Returns a SourceSurface which is a snapshot of the current contents of the
    * DrawTarget. Multiple calls to Snapshot() without any drawing operations in
    * between will normally return the same SourceSurface object.
@@ -1530,6 +1539,7 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
    * Create a similar DrawTarget in the same space as this DrawTarget whose
    * device size may be clipped based on the active clips intersected with
    * aBounds (if it is not empty).
+   * aRect is a rectangle in user space.
    */
   virtual RefPtr<DrawTarget> CreateClippedDrawTarget(const Rect& aBounds,
                                                      SurfaceFormat aFormat) = 0;

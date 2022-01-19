@@ -1,20 +1,26 @@
 use crate::auxv_reader::AuxvType;
+use crate::errors::SectionDsoDebugError;
 use crate::linux_ptrace_dumper::LinuxPtraceDumper;
 use crate::minidump_format::*;
 use crate::sections::{write_string_to_location, MemoryArrayWriter, MemoryWriter};
-use crate::Result;
 use libc;
 use std::collections::HashMap;
 use std::io::Cursor;
 
-#[cfg(target_pointer_width = "64")]
-type ElfPhdr = libc::Elf64_Phdr;
-#[cfg(target_pointer_width = "32")]
-type ElfPhdr = libc::Elf32_Phdr;
+type Result<T> = std::result::Result<T, SectionDsoDebugError>;
 
-#[cfg(target_pointer_width = "64")]
+#[cfg(all(target_pointer_width = "32"))]
+use goblin::elf::program_header::program_header32::SIZEOF_PHDR;
+#[cfg(all(target_pointer_width = "64"))]
+use goblin::elf::program_header::program_header64::SIZEOF_PHDR;
+
+#[cfg(all(target_pointer_width = "64", target_arch = "arm"))]
+type ElfAddr = u64;
+#[cfg(all(target_pointer_width = "64", not(target_arch = "arm")))]
 type ElfAddr = libc::Elf64_Addr;
-#[cfg(target_pointer_width = "32")]
+#[cfg(all(target_pointer_width = "32", target_arch = "arm"))]
+type ElfAddr = u32;
+#[cfg(all(target_pointer_width = "32", not(target_arch = "arm")))]
 type ElfAddr = libc::Elf32_Addr;
 
 // COPY from <link.h>
@@ -69,14 +75,30 @@ pub fn write_dso_debug_stream(
     blamed_thread: i32,
     auxv: &HashMap<AuxvType, AuxvType>,
 ) -> Result<MDRawDirectory> {
-    let phnum_max = *auxv.get(&libc::AT_PHNUM).ok_or("Could not find AT_PHNUM")? as usize;
-    let phdr = *auxv.get(&libc::AT_PHDR).ok_or("Could not find AT_PHDR")? as usize;
+    let at_phnum;
+    let at_phdr;
+    #[cfg(target_arch = "arm")]
+    {
+        at_phdr = 3;
+        at_phnum = 5;
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        at_phdr = libc::AT_PHDR;
+        at_phnum = libc::AT_PHNUM;
+    }
+    let phnum_max = *auxv
+        .get(&at_phnum)
+        .ok_or(SectionDsoDebugError::CouldNotFind("AT_PHNUM in auxv"))?
+        as usize;
+    let phdr = *auxv
+        .get(&at_phdr)
+        .ok_or(SectionDsoDebugError::CouldNotFind("AT_PHDR in auxv"))? as usize;
 
-    let phdr_size = std::mem::size_of::<ElfPhdr>();
     let ph = LinuxPtraceDumper::copy_from_process(
         blamed_thread,
         phdr as *mut libc::c_void,
-        (phdr_size * phnum_max) as isize,
+        SIZEOF_PHDR * phnum_max,
     )?;
     let program_headers;
     #[cfg(target_pointer_width = "64")]
@@ -108,7 +130,9 @@ pub fn write_dso_debug_stream(
     }
 
     if dyn_addr == 0 {
-        return Err("Could not find dyn_addr".into());
+        return Err(SectionDsoDebugError::CouldNotFind(
+            "dyn_addr in program headers",
+        ));
     }
 
     dyn_addr += base as ElfAddr;
@@ -124,7 +148,7 @@ pub fn write_dso_debug_stream(
         let dyn_data = LinuxPtraceDumper::copy_from_process(
             blamed_thread,
             (dyn_addr as usize + dynamic_length) as *mut libc::c_void,
-            dyn_size as isize,
+            dyn_size,
         )?;
         dynamic_length += dyn_size;
 
@@ -157,7 +181,7 @@ pub fn write_dso_debug_stream(
     let debug_entry_data = LinuxPtraceDumper::copy_from_process(
         blamed_thread,
         r_debug as *mut libc::c_void,
-        std::mem::size_of::<RDebug>() as isize,
+        std::mem::size_of::<RDebug>(),
     )?;
 
     // goblin::elf::Dyn doesn't have padding bytes
@@ -172,7 +196,7 @@ pub fn write_dso_debug_stream(
         let link_map_data = LinuxPtraceDumper::copy_from_process(
             blamed_thread,
             curr_map as *mut libc::c_void,
-            std::mem::size_of::<LinkMap>() as isize,
+            std::mem::size_of::<LinkMap>(),
         )?;
 
         // LinkMap is repr(C) and doesn't have padding bytes, so this should be safe
@@ -237,7 +261,7 @@ pub fn write_dso_debug_stream(
     let dso_debug_data = LinuxPtraceDumper::copy_from_process(
         blamed_thread,
         dyn_addr as *mut libc::c_void,
-        dynamic_length as isize,
+        dynamic_length,
     )?;
     MemoryArrayWriter::<u8>::alloc_from_array(buffer, &dso_debug_data)?;
 

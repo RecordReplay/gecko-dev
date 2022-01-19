@@ -25,7 +25,9 @@
 #include "jsfriendapi.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/ContextOptions.h"
+#include "js/Initialization.h"
 #include "js/LocaleSensitive.h"
+#include "js/WasmFeatures.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
@@ -63,6 +65,7 @@
 #include "nsXPCOMPrivate.h"
 #include "OSFileConstants.h"
 #include "xpcpublic.h"
+#include "XPCSelfHostedShmem.h"
 
 #if defined(XP_MACOSX)
 #  include "nsMacUtilsImpl.h"
@@ -274,21 +277,20 @@ void LoadContextOptions(const char* aPrefName, void* /* aClosure */) {
 #else
       .setWasmIon(GetWorkerPref<bool>("wasm_optimizingjit"_ns))
 #endif
-      .setWasmReftypes(GetWorkerPref<bool>("wasm_reftypes"_ns))
-#ifdef ENABLE_WASM_MULTI_VALUE
-      .setWasmMultiValue(GetWorkerPref<bool>("wasm_multi_value"_ns))
-#endif
-#ifdef ENABLE_WASM_SIMD
-      .setWasmSimd(GetWorkerPref<bool>("wasm_simd"_ns))
-#endif
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
-      .setWasmFunctionReferences(
-          GetWorkerPref<bool>("wasm_function_references"_ns))
-#endif
-#ifdef ENABLE_WASM_GC
-      .setWasmGc(GetWorkerPref<bool>("wasm_gc"_ns))
-#endif
+      .setWasmBaseline(GetWorkerPref<bool>("wasm_baselinejit"_ns))
       .setWasmVerbose(GetWorkerPref<bool>("wasm_verbose"_ns))
+#define WASM_FEATURE(NAME, LOWER_NAME, COMPILE_PRED, COMPILER_PRED, FLAG_PRED, \
+                     SHELL, PREF)                                              \
+  .setWasm##NAME(GetWorkerPref<bool>("wasm_" PREF ""_ns))
+          JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE)
+#undef WASM_FEATURE
+#ifdef ENABLE_WASM_SIMD_WORMHOLE
+#  ifdef EARLY_BETA_OR_EARLIER
+      .setWasmSimdWormhole(GetWorkerPref<bool>("wasm_simd_wormhole"_ns))
+#  else
+      .setWasmSimdWormhole(false)
+#  endif
+#endif
       .setThrowOnAsmJSValidationFailure(
           GetWorkerPref<bool>("throw_on_asmjs_validation_failure"_ns))
       .setSourcePragmas(GetWorkerPref<bool>("source_pragmas"_ns))
@@ -297,8 +299,14 @@ void LoadContextOptions(const char* aPrefName, void* /* aClosure */) {
           GetWorkerPref<bool>("asyncstack_capture_debuggee_only"_ns))
       .setPrivateClassFields(
           GetWorkerPref<bool>("experimental.private_fields"_ns))
+#ifdef NIGHTLY_BUILD
+      .setClassStaticBlocks(
+          GetWorkerPref<bool>("experimental.class_static_blocks"_ns))
+#endif
       .setPrivateClassMethods(
           GetWorkerPref<bool>("experimental.private_methods"_ns))
+      .setErgnomicBrandChecks(
+          GetWorkerPref<bool>("experimental.ergonomic_brand_checks"_ns))
       .setTopLevelAwait(GetWorkerPref<bool>("experimental.top_level_await"_ns));
 
   nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
@@ -736,7 +744,12 @@ bool InitJSContextForWorker(WorkerPrivate* aWorkerPrivate,
   JS::InitConsumeStreamCallback(aWorkerCx, ConsumeStream,
                                 FetchUtil::ReportJSStreamError);
 
-  if (!JS::InitSelfHostedCode(aWorkerCx)) {
+  // When available, set the self-hosted shared memory to be read, so that we
+  // can decode the self-hosted content instead of parsing it.
+  auto& shm = xpc::SelfHostedShmem::GetSingleton();
+  JS::SelfHostedCache selfHostedContent = shm.Content();
+
+  if (!JS::InitSelfHostedCode(aWorkerCx, selfHostedContent)) {
     NS_WARNING("Could not init self-hosted code!");
     return false;
   }
@@ -925,7 +938,7 @@ class WorkerJSContext final : public mozilla::CycleCollectedJSContext {
     MOZ_ASSERT(!NS_IsMainThread());
     MOZ_ASSERT(runnable);
 
-    std::queue<RefPtr<MicroTaskRunnable>>* microTaskQueue = nullptr;
+    std::deque<RefPtr<MicroTaskRunnable>>* microTaskQueue = nullptr;
 
     JSContext* cx = Context();
     NS_ASSERTION(cx, "This should never be null!");
@@ -947,7 +960,7 @@ class WorkerJSContext final : public mozilla::CycleCollectedJSContext {
     }
 
     JS::JobQueueMayNotBeEmpty(cx);
-    microTaskQueue->push(std::move(runnable));
+    microTaskQueue->push_back(std::move(runnable));
   }
 
   bool IsSystemCaller() const override {
@@ -1156,15 +1169,19 @@ bool RuntimeService::RegisterWorker(WorkerPrivate& aWorkerPrivate) {
   {
     MutexAutoLock lock(mMutex);
 
-    const auto& domainInfo =
-        mDomainMap.LookupForAdd(domain).OrInsert([&domain, parent]() {
-          NS_ASSERTION(!parent, "Shouldn't have a parent here!");
-          Unused
-              << parent;  // silence clang -Wunused-lambda-capture in opt builds
-          WorkerDomainInfo* wdi = new WorkerDomainInfo();
-          wdi->mDomain = domain;
-          return wdi;
-        });
+    auto* const domainInfo =
+        mDomainMap
+            .LookupOrInsertWith(
+                domain,
+                [&domain, parent] {
+                  NS_ASSERTION(!parent, "Shouldn't have a parent here!");
+                  Unused << parent;  // silence clang -Wunused-lambda-capture in
+                                     // opt builds
+                  auto wdi = MakeUnique<WorkerDomainInfo>();
+                  wdi->mDomain = domain;
+                  return wdi;
+                })
+            .get();
 
     queued = gMaxWorkersPerDomain &&
              domainInfo->ActiveWorkerCount() >= gMaxWorkersPerDomain &&
@@ -1224,9 +1241,8 @@ bool RuntimeService::RegisterWorker(WorkerPrivate& aWorkerPrivate) {
     if (!isServiceWorker) {
       // Service workers are excluded since their lifetime is separate from
       // that of dom windows.
-      const auto& windowArray = mWindowMap.LookupForAdd(window).OrInsert(
-          []() { return new nsTArray<WorkerPrivate*>(1); });
-      if (!windowArray->Contains(&aWorkerPrivate)) {
+      if (auto* const windowArray = mWindowMap.GetOrInsertNew(window, 1);
+          !windowArray->Contains(&aWorkerPrivate)) {
         windowArray->AppendElement(&aWorkerPrivate);
       } else {
         MOZ_ASSERT(aWorkerPrivate.IsSharedWorker());
@@ -1676,9 +1692,7 @@ void RuntimeService::CrashIfHanging() {
   ActiveWorkerStats activeStats;
   uint32_t inactiveWorkers = 0;
 
-  for (const auto& entry : mDomainMap) {
-    const WorkerDomainInfo* const aData = entry.GetData().get();
-
+  for (const auto& aData : mDomainMap.Values()) {
     activeStats.Update<&ActiveWorkerStats::mWorkers>(aData->mActiveWorkers);
     activeStats.Update<&ActiveWorkerStats::mServiceWorkers>(
         aData->mActiveServiceWorkers);
@@ -1834,9 +1848,7 @@ void RuntimeService::Cleanup() {
 
 void RuntimeService::AddAllTopLevelWorkersToArray(
     nsTArray<WorkerPrivate*>& aWorkers) {
-  for (const auto& entry : mDomainMap) {
-    WorkerDomainInfo* const aData = entry.GetData().get();
-
+  for (const auto& aData : mDomainMap.Values()) {
 #ifdef DEBUG
     for (const auto& activeWorker : aData->mActiveWorkers) {
       MOZ_ASSERT(!activeWorker->GetParent(),

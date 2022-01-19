@@ -122,14 +122,15 @@ nsresult nsHttpAuthCache::SetAuthEntry(const char* scheme, const char* host,
 
   if (!node) {
     // create a new entry node and set the given entry
-    node = new nsHttpAuthNode();
-    LOG(("  new nsHttpAuthNode %p for key='%s'", node, key.get()));
+    auto node = UniquePtr<nsHttpAuthNode>(new nsHttpAuthNode);
+    LOG(("  new nsHttpAuthNode %p for key='%s'", node.get(), key.get()));
     rv = node->SetAuthEntry(path, realm, creds, challenge, ident, metadata);
-    if (NS_FAILED(rv))
-      delete node;
-    else
-      mDB.Put(key, node);
-    return rv;
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+
+    mDB.InsertOrUpdate(key, std::move(node));
+    return NS_OK;
   }
 
   return node->SetAuthEntry(path, realm, creds, challenge, ident, metadata);
@@ -207,9 +208,7 @@ void nsHttpAuthCache::ClearOriginData(OriginAttributesPattern const& pattern) {
 }
 
 void nsHttpAuthCache::CollectKeys(nsTArray<nsCString>& aValue) {
-  for (auto iter = mDB.Iter(); !iter.Done(); iter.Next()) {
-    aValue.AppendElement(iter.Key());
-  }
+  AppendToArray(aValue, mDB.Keys());
 }
 
 //-----------------------------------------------------------------------------
@@ -285,8 +284,9 @@ nsresult nsHttpAuthEntry::AddPath(const char* aPath) {
   nsHttpAuthPath* tempPtr = mRoot;
   while (tempPtr) {
     const char* curpath = tempPtr->mPath;
-    if (strncmp(aPath, curpath, strlen(curpath)) == 0)
+    if (strncmp(aPath, curpath, strlen(curpath)) == 0) {
       return NS_OK;  // subpath already exists in the list
+    }
 
     tempPtr = tempPtr->mNext;
   }
@@ -300,10 +300,11 @@ nsresult nsHttpAuthEntry::AddPath(const char* aPath) {
   memcpy(newAuthPath->mPath, aPath, newpathLen + 1);
   newAuthPath->mNext = nullptr;
 
-  if (!mRoot)
+  if (!mRoot) {
     mRoot = newAuthPath;  // first entry
-  else
+  } else {
     mTail->mNext = newAuthPath;  // Append newAuthPath
+  }
 
   // update the tail pointer.
   mTail = newAuthPath;

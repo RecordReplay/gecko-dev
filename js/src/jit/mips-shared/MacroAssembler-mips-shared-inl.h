@@ -238,6 +238,17 @@ void MacroAssembler::negateDouble(FloatRegister reg) { as_negd(reg, reg); }
 
 void MacroAssembler::negateFloat(FloatRegister reg) { as_negs(reg, reg); }
 
+void MacroAssembler::abs32(Register src, Register dest) {
+  // TODO: There's probably a better way to do this.
+  if (src != dest) {
+    move32(src, dest);
+  }
+  Label positive;
+  branchTest32(Assembler::NotSigned, dest, dest, &positive);
+  neg32(dest);
+  bind(&positive);
+}
+
 void MacroAssembler::absFloat32(FloatRegister src, FloatRegister dest) {
   as_abss(dest, src);
 }
@@ -494,6 +505,13 @@ void MacroAssembler::branchPtr(Condition cond, const BaseIndex& lhs,
   branchPtr(cond, SecondScratchReg, rhs, label);
 }
 
+void MacroAssembler::branchPtr(Condition cond, const BaseIndex& lhs,
+                               Register rhs, Label* label) {
+  SecondScratchRegisterScope scratch(*this);
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
+}
+
 void MacroAssembler::branchFloat(DoubleCondition cond, FloatRegister lhs,
                                  FloatRegister rhs, Label* label) {
   ma_bc1s(lhs, rhs, label, cond);
@@ -519,11 +537,11 @@ void MacroAssembler::branchAdd32(Condition cond, T src, Register dest,
                                  Label* overflow) {
   switch (cond) {
     case Overflow:
-      ma_addTestOverflow(dest, dest, src, overflow);
+      ma_add32TestOverflow(dest, dest, src, overflow);
       break;
     case CarryClear:
     case CarrySet:
-      ma_addTestCarry(cond, dest, dest, src, overflow);
+      ma_add32TestCarry(cond, dest, dest, src, overflow);
       break;
     default:
       MOZ_CRASH("NYI");
@@ -535,7 +553,7 @@ void MacroAssembler::branchSub32(Condition cond, T src, Register dest,
                                  Label* overflow) {
   switch (cond) {
     case Overflow:
-      ma_subTestOverflow(dest, dest, src, overflow);
+      ma_sub32TestOverflow(dest, dest, src, overflow);
       break;
     case NonZero:
     case Zero:
@@ -553,7 +571,7 @@ template <typename T>
 void MacroAssembler::branchMul32(Condition cond, T src, Register dest,
                                  Label* overflow) {
   MOZ_ASSERT(cond == Assembler::Overflow);
-  ma_mul_branch_overflow(dest, dest, src, overflow);
+  ma_mul32TestOverflow(dest, dest, src, overflow);
 }
 
 template <typename T>
@@ -573,18 +591,42 @@ void MacroAssembler::branchNeg32(Condition cond, Register reg, Label* label) {
 template <typename T>
 void MacroAssembler::branchAddPtr(Condition cond, T src, Register dest,
                                   Label* label) {
-  MOZ_CRASH("NYI");
+  switch (cond) {
+    case Overflow:
+      ma_addPtrTestOverflow(dest, dest, src, label);
+      break;
+    case CarryClear:
+    case CarrySet:
+      ma_addPtrTestCarry(cond, dest, dest, src, label);
+      break;
+    default:
+      MOZ_CRASH("NYI");
+  }
 }
 
 template <typename T>
 void MacroAssembler::branchSubPtr(Condition cond, T src, Register dest,
                                   Label* label) {
-  MOZ_CRASH("NYI");
+  switch (cond) {
+    case Overflow:
+      ma_subPtrTestOverflow(dest, dest, src, label);
+      break;
+    case NonZero:
+    case Zero:
+    case Signed:
+    case NotSigned:
+      subPtr(src, dest);
+      ma_b(dest, dest, label, cond);
+      break;
+    default:
+      MOZ_CRASH("NYI");
+  }
 }
 
 void MacroAssembler::branchMulPtr(Condition cond, Register src, Register dest,
                                   Label* label) {
-  MOZ_CRASH("NYI");
+  MOZ_ASSERT(cond == Assembler::Overflow);
+  ma_mulPtrTestOverflow(dest, dest, src, label);
 }
 
 void MacroAssembler::decBranchPtr(Condition cond, Register lhs, Imm32 rhs,
@@ -983,6 +1025,21 @@ void MacroAssembler::spectreBoundsCheck32(Register index, const Address& length,
                                           Label* failure) {
   MOZ_RELEASE_ASSERT(!JitOptions.spectreIndexMasking);
   branch32(Assembler::BelowOrEqual, length, index, failure);
+}
+
+void MacroAssembler::spectreBoundsCheckPtr(Register index, Register length,
+                                           Register maybeScratch,
+                                           Label* failure) {
+  MOZ_RELEASE_ASSERT(!JitOptions.spectreIndexMasking);
+  branchPtr(Assembler::BelowOrEqual, length, index, failure);
+}
+
+void MacroAssembler::spectreBoundsCheckPtr(Register index,
+                                           const Address& length,
+                                           Register maybeScratch,
+                                           Label* failure) {
+  MOZ_RELEASE_ASSERT(!JitOptions.spectreIndexMasking);
+  branchPtr(Assembler::BelowOrEqual, length, index, failure);
 }
 
 void MacroAssembler::spectreMovePtr(Condition cond, Register src,

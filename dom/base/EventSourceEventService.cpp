@@ -201,11 +201,7 @@ EventSourceEventService::AddListener(uint64_t aInnerWindowID,
   }
   ++mCountListeners;
 
-  WindowListener* listener = mWindows.Get(aInnerWindowID);
-  if (!listener) {
-    listener = new WindowListener();
-    mWindows.Put(aInnerWindowID, listener);
-  }
+  WindowListener* listener = mWindows.GetOrInsertNew(aInnerWindowID);
 
   listener->mListeners.AppendElement(aListener);
 

@@ -117,6 +117,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsICertOverrideService.h"
+#include "nsIPublicKeyPinningService.h"
 #include "nsISiteSecurityService.h"
 #include "nsISocketProvider.h"
 #include "nsThreadPool.h"
@@ -428,18 +429,24 @@ static nsresult OverrideAllowedForHost(
     return rv;
   }
 
-  rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, uri,
-                        aProviderFlags, aOriginAttributes, nullptr, nullptr,
-                        &strictTransportSecurityEnabled);
+  rv = sss->IsSecureURI(uri, aProviderFlags, aOriginAttributes, nullptr,
+                        nullptr, &strictTransportSecurityEnabled);
   if (NS_FAILED(rv)) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
             ("[0x%" PRIx64 "] checking for HSTS failed", aPtrForLog));
     return rv;
   }
 
-  rv = sss->IsSecureURI(nsISiteSecurityService::STATIC_PINNING, uri,
-                        aProviderFlags, aOriginAttributes, nullptr, nullptr,
-                        &isStaticallyPinned);
+  nsCOMPtr<nsIPublicKeyPinningService> pkps =
+      do_GetService(NS_PKPSERVICE_CONTRACTID, &rv);
+  if (!pkps) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("[0x%" PRIx64
+             "] Couldn't get nsIPublicKeyPinningService to check pinning",
+             aPtrForLog));
+    return NS_ERROR_FAILURE;
+  }
+  rv = pkps->HostHasPins(uri, &isStaticallyPinned);
   if (NS_FAILED(rv)) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
             ("[0x%" PRIx64 "] checking for static pin failed", aPtrForLog));
@@ -748,16 +755,15 @@ void GatherCertificateTransparencyTelemetry(
 // CertVerificationThread. When the socket process is used this will be called
 // on the parent process.
 static void CollectCertTelemetry(
-    mozilla::pkix::Result aCertVerificationResult, SECOidTag aEvOidPolicy,
+    mozilla::pkix::Result aCertVerificationResult, EVStatus aEVStatus,
     CertVerifier::OCSPStaplingStatus aOcspStaplingStatus,
     KeySizeStatus aKeySizeStatus, SHA1ModeResult aSha1ModeResult,
     const PinningTelemetryInfo& aPinningTelemetryInfo,
     const UniqueCERTCertList& aBuiltCertChain,
-    const CertificateTransparencyInfo& aCertificateTransparencyInfo,
-    const CRLiteLookupResult& aCRLiteLookupResult) {
+    const CertificateTransparencyInfo& aCertificateTransparencyInfo) {
   uint32_t evStatus = (aCertVerificationResult != Success) ? 0  // 0 = Failure
-                      : (aEvOidPolicy == SEC_OID_UNKNOWN)  ? 1  // 1 = DV
-                                                           : 2;  // 2 = EV
+                      : (aEVStatus != EVStatus::EV)        ? 1  // 1 = DV
+                                                           : 2;        // 2 = EV
   Telemetry::Accumulate(Telemetry::CERT_EV_STATUS, evStatus);
 
   if (aOcspStaplingStatus != CertVerifier::OCSP_STAPLING_NEVER_CHECKED) {
@@ -788,45 +794,9 @@ static void CollectCertTelemetry(
 
   if (aCertVerificationResult == Success) {
     GatherSuccessfulValidationTelemetry(aBuiltCertChain);
-    GatherCertificateTransparencyTelemetry(
-        aBuiltCertChain,
-        /*isEV*/ aEvOidPolicy != SEC_OID_UNKNOWN, aCertificateTransparencyInfo);
-  }
-
-  switch (aCRLiteLookupResult) {
-    case CRLiteLookupResult::FilterNotAvailable:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::FilterNotAvailable);
-      break;
-    case CRLiteLookupResult::IssuerNotEnrolled:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::IssuerNotEnrolled);
-      break;
-    case CRLiteLookupResult::CertificateTooNew:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::CertificateTooNew);
-      break;
-    case CRLiteLookupResult::CertificateValid:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::CertificateValid);
-      break;
-    case CRLiteLookupResult::CertificateRevoked:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::CertificateRevoked);
-      break;
-    case CRLiteLookupResult::LibraryFailure:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::LibraryFailure);
-      break;
-    case CRLiteLookupResult::CertRevokedByStash:
-      Telemetry::AccumulateCategorical(
-          Telemetry::LABELS_CRLITE_RESULT::CertRevokedByStash);
-      break;
-    case CRLiteLookupResult::NeverChecked:
-      break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unhandled CRLiteLookupResult value?");
-      break;
+    GatherCertificateTransparencyTelemetry(aBuiltCertChain,
+                                           aEVStatus == EVStatus::EV,
+                                           aCertificateTransparencyInfo);
   }
 }
 
@@ -837,7 +807,6 @@ static void AuthCertificateSetResults(
     uint16_t aCertificateTransparencyStatus, EVStatus aEvStatus,
     bool aSucceeded, bool aIsCertChainRootBuiltInRoot) {
   MOZ_ASSERT(aInfoObject);
-
   if (aSucceeded) {
     // Certificate verification succeeded. Delete any potential record of
     // certificate error bits.
@@ -871,22 +840,16 @@ Result AuthCertificate(
     const Maybe<DelegatedCredentialInfo>& dcInfo, uint32_t providerFlags,
     Time time, uint32_t certVerifierFlags,
     /*out*/ UniqueCERTCertList& builtCertChain,
-    /*out*/ SECOidTag& evOidPolicy,
+    /*out*/ EVStatus& evStatus,
     /*out*/ CertificateTransparencyInfo& certificateTransparencyInfo,
     /*out*/ bool& aIsCertChainRootBuiltInRoot) {
   MOZ_ASSERT(cert);
-
-  // We want to avoid storing any intermediate cert information when browsing
-  // in private, transient contexts.
-  bool saveIntermediates =
-      !(providerFlags & nsISocketProvider::NO_PERMANENT_STORAGE);
 
   CertVerifier::OCSPStaplingStatus ocspStaplingStatus =
       CertVerifier::OCSP_STAPLING_NEVER_CHECKED;
   KeySizeStatus keySizeStatus = KeySizeStatus::NeverChecked;
   SHA1ModeResult sha1ModeResult = SHA1ModeResult::NeverChecked;
   PinningTelemetryInfo pinningTelemetryInfo;
-  CRLiteLookupResult crliteTelemetryInfo;
 
   nsTArray<nsTArray<uint8_t>> peerCertsBytes;
   // Don't include the end-entity certificate.
@@ -900,14 +863,14 @@ Result AuthCertificate(
   Result rv = certVerifier.VerifySSLServerCert(
       cert, time, aPinArg, aHostName, builtCertChain, certVerifierFlags,
       Some(std::move(peerCertsBytes)), stapledOCSPResponse,
-      sctsFromTLSExtension, dcInfo, aOriginAttributes, saveIntermediates,
-      &evOidPolicy, &ocspStaplingStatus, &keySizeStatus, &sha1ModeResult,
-      &pinningTelemetryInfo, &certificateTransparencyInfo, &crliteTelemetryInfo,
+      sctsFromTLSExtension, dcInfo, aOriginAttributes, &evStatus,
+      &ocspStaplingStatus, &keySizeStatus, &sha1ModeResult,
+      &pinningTelemetryInfo, &certificateTransparencyInfo,
       &aIsCertChainRootBuiltInRoot);
 
-  CollectCertTelemetry(rv, evOidPolicy, ocspStaplingStatus, keySizeStatus,
+  CollectCertTelemetry(rv, evStatus, ocspStaplingStatus, keySizeStatus,
                        sha1ModeResult, pinningTelemetryInfo, builtCertChain,
-                       certificateTransparencyInfo, crliteTelemetryInfo);
+                       certificateTransparencyInfo);
 
   return rv;
 }
@@ -977,8 +940,8 @@ PRErrorCode AuthCertificateParseResults(
         return SEC_ERROR_NO_MEMORY;
       }
       nsresult rv = overrideService->HasMatchingOverride(
-          aHostName, aPort, aOriginAttributes.mUserContextId, nssCert,
-          &overrideBits, &isTemporaryOverride, &haveOverride);
+          aHostName, aPort, aOriginAttributes.mUserContextId, aOriginAttributes,
+          nssCert, &overrideBits, &isTemporaryOverride, &haveOverride);
       if (NS_SUCCEEDED(rv) && haveOverride) {
         // remove the errors that are already overriden
         remainingDisplayErrors &= ~overrideBits;
@@ -1091,13 +1054,13 @@ SSLServerCertVerificationJob::Run() {
 
   TimeStamp jobStartTime = TimeStamp::Now();
   UniqueCERTCertList builtCertChain;
-  SECOidTag evOidPolicy;
+  EVStatus evStatus;
   CertificateTransparencyInfo certificateTransparencyInfo;
   bool isCertChainRootBuiltInRoot = false;
   Result rv = AuthCertificate(
       *certVerifier, mPinArg, mCert, mPeerCertChain, mHostName,
       mOriginAttributes, mStapledOCSPResponse, mSCTsFromTLSExtension, mDCInfo,
-      mProviderFlags, mTime, mCertVerifierFlags, builtCertChain, evOidPolicy,
+      mProviderFlags, mTime, mCertVerifierFlags, builtCertChain, evStatus,
       certificateTransparencyInfo, isCertChainRootBuiltInRoot);
 
   RefPtr<nsNSSCertificate> nsc = nsNSSCertificate::Create(mCert.get());
@@ -1110,13 +1073,11 @@ SSLServerCertVerificationJob::Run() {
 
     certBytesArray =
         TransportSecurityInfo::CreateCertBytesArray(builtCertChain);
-    EVStatus evStatus =
-        evOidPolicy == SEC_OID_UNKNOWN ? EVStatus::NotEV : EVStatus::EV;
     mResultTask->Dispatch(
         nsc, std::move(certBytesArray), std::move(mPeerCertChain),
         TransportSecurityInfo::ConvertCertificateTransparencyInfoToStatus(
             certificateTransparencyInfo),
-        evStatus, true, 0, 0, isCertChainRootBuiltInRoot);
+        evStatus, true, 0, 0, isCertChainRootBuiltInRoot, mProviderFlags);
     return NS_OK;
   }
 
@@ -1134,7 +1095,8 @@ SSLServerCertVerificationJob::Run() {
   mResultTask->Dispatch(
       nsc, std::move(certBytesArray), std::move(mPeerCertChain),
       nsITransportSecurityInfo::CERTIFICATE_TRANSPARENCY_NOT_APPLICABLE,
-      EVStatus::NotEV, false, finalError, collectedErrors, false);
+      EVStatus::NotEV, false, finalError, collectedErrors, false,
+      mProviderFlags);
   return NS_OK;
 }
 
@@ -1365,14 +1327,15 @@ SSLServerCertVerificationResult::SSLServerCertVerificationResult(
       mEVStatus(EVStatus::NotEV),
       mSucceeded(false),
       mFinalError(0),
-      mCollectedErrors(0) {}
+      mCollectedErrors(0),
+      mProviderFlags(0) {}
 
 void SSLServerCertVerificationResult::Dispatch(
     nsNSSCertificate* aCert, nsTArray<nsTArray<uint8_t>>&& aBuiltChain,
     nsTArray<nsTArray<uint8_t>>&& aPeerCertChain,
     uint16_t aCertificateTransparencyStatus, EVStatus aEVStatus,
     bool aSucceeded, PRErrorCode aFinalError, uint32_t aCollectedErrors,
-    bool aIsCertChainRootBuiltInRoot) {
+    bool aIsCertChainRootBuiltInRoot, uint32_t aProviderFlags) {
   mCert = aCert;
   mBuiltChain = std::move(aBuiltChain);
   mPeerCertChain = std::move(aPeerCertChain);
@@ -1382,6 +1345,7 @@ void SSLServerCertVerificationResult::Dispatch(
   mFinalError = aFinalError;
   mCollectedErrors = aCollectedErrors;
   mIsBuiltCertChainRootBuiltInRoot = aIsCertChainRootBuiltInRoot;
+  mProviderFlags = aProviderFlags;
 
   nsresult rv;
   nsCOMPtr<nsIEventTarget> stsTarget =
@@ -1405,6 +1369,12 @@ SSLServerCertVerificationResult::Run() {
 
   MOZ_ASSERT(onSTSThread);
 #endif
+
+  if (mSucceeded && !XRE_IsSocketProcess() &&
+      !(mProviderFlags & nsISocketProvider::NO_PERMANENT_STORAGE)) {
+    // This dispatches an event that will run when the socket thread is idle.
+    SaveIntermediateCerts(mBuiltChain);
+  }
 
   AuthCertificateSetResults(mInfoObject, mCert, std::move(mBuiltChain),
                             std::move(mPeerCertChain),

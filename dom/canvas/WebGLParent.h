@@ -14,6 +14,7 @@
 namespace mozilla {
 
 class HostWebGLContext;
+class WebGLChild;
 
 namespace layers {
 class SharedSurfaceTextureClient;
@@ -29,9 +30,8 @@ class WebGLParent : public PWebGLParent, public SupportsWeakPtr {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(WebGLParent, override);
   using OtherSideActor = WebGLChild;
 
-  mozilla::ipc::IPCResult RecvInitialize(
-      const webgl::InitContextDesc&, UniquePtr<HostWebGLCommandSinkP>&& aSinkP,
-      UniquePtr<HostWebGLCommandSinkI>&& aSinkI, webgl::InitContextResult* out);
+  mozilla::ipc::IPCResult RecvInitialize(const webgl::InitContextDesc&,
+                                         webgl::InitContextResult* out);
 
   WebGLParent();  // For IPDL
 

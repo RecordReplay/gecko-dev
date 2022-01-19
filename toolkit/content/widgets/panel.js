@@ -10,12 +10,11 @@
   class MozPanel extends MozElements.MozElementMixin(XULPopupElement) {
     static get markup() {
       return `
-      <html:link rel="stylesheet" href="chrome://global/skin/global.css"/>
       <vbox class="panel-arrowcontainer" flex="1">
         <box class="panel-arrowbox" part="arrowbox">
           <image class="panel-arrow" part="arrow"/>
         </box>
-        <box class="panel-arrowcontent" flex="1" part="arrowcontent"><html:slot/></box>
+        <html:slot part="content" />
       </vbox>
       `;
     }
@@ -59,7 +58,7 @@
 
     initialize() {
       // As an optimization, we don't slot contents if the panel is [hidden] in
-      // connecetedCallack this means we can avoid running this code at startup
+      // connectedCallack this means we can avoid running this code at startup
       // and only need to do it when a panel is about to be shown.
       // We then override the `hidden` setter and `removeAttribute` and call this
       // function if the node is about to be shown.
@@ -68,20 +67,27 @@
       }
 
       if (!this.isArrowPanel) {
-        this.shadowRoot.appendChild(document.createElement("slot"));
+        let slot = document.createElement("slot");
+        slot.part = "content";
+        this.shadowRoot.appendChild(slot);
       } else {
         this.shadowRoot.appendChild(this.constructor.fragment);
       }
     }
 
+    get panelContent() {
+      return this.shadowRoot.querySelector("[part=content]");
+    }
+
     get hidden() {
       return super.hidden;
     }
+
     set hidden(v) {
       if (!v) {
         this.initialize();
       }
-      return (super.hidden = v);
+      super.hidden = v;
     }
 
     removeAttribute(name) {
@@ -153,6 +159,13 @@
 
     on_popupshowing(event) {
       if (this.isArrowPanel && event.target == this) {
+        if (this.isAnchored && this.anchorNode) {
+          let anchorRoot =
+            this.anchorNode.closest("toolbarbutton, .anchor-root") ||
+            this.anchorNode;
+          anchorRoot.setAttribute("open", "true");
+        }
+
         var arrow = this.shadowRoot.querySelector(".panel-arrow");
         arrow.hidden = !this.isAnchored;
         this.shadowRoot
@@ -221,6 +234,13 @@
           }
         } else if (animate) {
           this.setAttribute("animate", "cancel");
+        }
+
+        if (this.isAnchored && this.anchorNode) {
+          let anchorRoot =
+            this.anchorNode.closest("toolbarbutton, .anchor-root") ||
+            this.anchorNode;
+          anchorRoot.removeAttribute("open");
         }
       }
 

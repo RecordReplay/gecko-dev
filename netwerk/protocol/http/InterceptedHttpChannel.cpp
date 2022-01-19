@@ -7,6 +7,7 @@
 #include "InterceptedHttpChannel.h"
 #include "nsContentSecurityManager.h"
 #include "nsEscape.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/dom/ChannelInfo.h"
@@ -133,7 +134,7 @@ void InterceptedHttpChannel::AsyncOpenInternal() {
   // to fall back to network.  We only cancel if the reset fails.
   auto autoReset = MakeScopeExit([&] {
     if (NS_FAILED(rv)) {
-      rv = ResetInterception();
+      rv = ResetInterception(false);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         Cancel(rv);
       }
@@ -547,13 +548,6 @@ InterceptedHttpChannel::LogMimeTypeMismatch(const nsACString& aMessageName,
 }
 
 NS_IMETHODIMP
-InterceptedHttpChannel::SetupFallbackChannel(const char* aFallbackKey) {
-  // AppCache should not be used with service worker intercepted channels.
-  // This should never be called.
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
 InterceptedHttpChannel::GetIsAuthChannel(bool* aIsAuthChannel) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -607,11 +601,11 @@ InterceptedHttpChannel::ResetInterceptionWithURI(nsIURI* aURI) {
   if (aURI) {
     mURI = aURI;
   }
-  return ResetInterception();
+  return ResetInterception(false);
 }
 
 NS_IMETHODIMP
-InterceptedHttpChannel::ResetInterception(void) {
+InterceptedHttpChannel::ResetInterception(bool aBypass) {
   if (mCanceled) {
     return mStatus;
   }
@@ -621,6 +615,13 @@ InterceptedHttpChannel::ResetInterception(void) {
   nsCOMPtr<nsIChannel> newChannel;
   nsCOMPtr<nsILoadInfo> redirectLoadInfo =
       CloneLoadInfoForRedirect(mURI, flags);
+
+  if (aBypass) {
+    redirectLoadInfo->ClearController();
+    // TODO: Audit whether we should also be calling
+    // ServiceWorkerManager::StopControllingClient for maximum correctness.
+  }
+
   nsresult rv =
       NS_NewChannelInternal(getter_AddRefs(newChannel), mURI, redirectLoadInfo,
                             nullptr,  // PerformanceStorage
@@ -628,6 +629,34 @@ InterceptedHttpChannel::ResetInterception(void) {
                             nullptr,  // aCallbacks
                             mLoadFlags);
   NS_ENSURE_SUCCESS(rv, rv);
+
+#ifdef MOZ_GECKO_PROFILER
+  if (profiler_can_accept_markers()) {
+    nsAutoCString requestMethod;
+    GetRequestMethod(requestMethod);
+
+    int32_t priority = PRIORITY_NORMAL;
+    GetPriority(&priority);
+
+    uint64_t size = 0;
+    GetEncodedBodySize(&size);
+
+    nsAutoCString contentType;
+    if (mResponseHead) {
+      mResponseHead->ContentType(contentType);
+    }
+
+    RefPtr<HttpBaseChannel> newBaseChannel = do_QueryObject(newChannel);
+    MOZ_ASSERT(newBaseChannel,
+               "The redirect channel should be a base channel.");
+    profiler_add_network_marker(
+        mURI, requestMethod, priority, mChannelId,
+        NetworkLoadType::LOAD_REDIRECT, mAsyncOpenTime, TimeStamp::Now(), size,
+        kCacheUnknown, mLoadInfo->GetInnerWindowID(), &mTransactionTimings,
+        std::move(mSource), Some(nsDependentCString(contentType.get())), mURI,
+        flags, newBaseChannel->ChannelId());
+  }
+#endif
 
   rv = SetupReplacementChannel(mURI, newChannel, true, flags);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1023,8 +1052,21 @@ InterceptedHttpChannel::OnStartRequest(nsIRequest* aRequest) {
     GetCallback(mProgressSink);
   }
 
+  if (!EnsureOpaqueResponseIsAllowed()) {
+    // XXXtt: Return an error code or make the response body null.
+    // We silence the error result now because we only want to get how many
+    // response will get allowed or blocked by ORB.
+  }
+
   if (mPump && mLoadFlags & LOAD_CALL_CONTENT_SNIFFERS) {
     mPump->PeekStream(CallTypeSniffers, static_cast<nsIChannel*>(this));
+  }
+
+  auto isAllowedOrErr = EnsureOpaqueResponseIsAllowedAfterSniff();
+  if (isAllowedOrErr.isErr() || !isAllowedOrErr.inspect()) {
+    // XXXtt: Return an error code or make the response body null.
+    // We silence the error result now because we only want to get how many
+    // response will get allowed or blocked by ORB.
   }
 
   nsresult rv = ProcessCrossOriginEmbedderPolicyHeader();
@@ -1078,6 +1120,30 @@ InterceptedHttpChannel::OnStopRequest(nsIRequest* aRequest, nsresult aStatus) {
 
   // Register entry to the PerformanceStorage resource timing
   MaybeReportTimingData();
+
+#ifdef MOZ_GECKO_PROFILER
+  if (profiler_can_accept_markers()) {
+    // These do allocations/frees/etc; avoid if not active
+    nsAutoCString requestMethod;
+    GetRequestMethod(requestMethod);
+
+    int32_t priority = PRIORITY_NORMAL;
+    GetPriority(&priority);
+
+    uint64_t size = 0;
+    GetEncodedBodySize(&size);
+
+    nsAutoCString contentType;
+    if (mResponseHead) {
+      mResponseHead->ContentType(contentType);
+    }
+    profiler_add_network_marker(
+        mURI, requestMethod, priority, mChannelId, NetworkLoadType::LOAD_STOP,
+        mAsyncOpenTime, TimeStamp::Now(), size, kCacheUnknown,
+        mLoadInfo->GetInnerWindowID(), &mTransactionTimings, std::move(mSource),
+        Some(nsDependentCString(contentType.get())));
+  }
+#endif
 
   nsresult rv = NS_OK;
   if (mListener) {

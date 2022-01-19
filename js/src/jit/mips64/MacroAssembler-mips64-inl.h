@@ -56,6 +56,10 @@ void MacroAssembler::move32To64SignExtend(Register src, Register64 dest) {
   ma_sll(dest.reg, src, Imm32(0));
 }
 
+void MacroAssembler::move32SignExtendToPtr(Register src, Register dest) {
+  ma_sll(dest, src, Imm32(0));
+}
+
 void MacroAssembler::move32ZeroExtendToPtr(Register src, Register dest) {
   ma_dext(dest, src, Imm32(0), Imm32(32));
 }
@@ -235,6 +239,15 @@ void MacroAssembler::sub64(Imm64 imm, Register64 dest) {
   MOZ_ASSERT(dest.reg != ScratchRegister);
   mov(ImmWord(imm.value), ScratchRegister);
   as_dsubu(dest.reg, dest.reg, ScratchRegister);
+}
+
+void MacroAssembler::mulPtr(Register rhs, Register srcDest) {
+#ifdef MIPSR6
+  as_dmulu(srcDest, srcDest, rhs);
+#else
+  as_dmultu(srcDest, rhs);
+  as_mflo(srcDest);
+#endif
 }
 
 void MacroAssembler::mul64(Imm64 imm, const Register64& dest) {
@@ -644,6 +657,12 @@ void MacroAssembler::branchTestMagic(Condition cond, const Address& valaddr,
   ma_b(scratch, ImmWord(magic), label, cond);
 }
 
+void MacroAssembler::branchTestValue(Condition cond, const BaseIndex& lhs,
+                                     const ValueOperand& rhs, Label* label) {
+  MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
+  branchPtr(cond, lhs, rhs.valueReg(), label);
+}
+
 void MacroAssembler::branchTruncateDoubleMaybeModUint32(FloatRegister src,
                                                         Register dest,
                                                         Label* fail) {
@@ -740,6 +759,26 @@ inline void MacroAssembler::cmp32Set(Assembler::Condition cond, Address lhs,
   MOZ_ASSERT(rhs != ScratchRegister);
   load32(lhs, ScratchRegister);
   cmp32Set(cond, ScratchRegister, rhs, dest);
+}
+
+void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs, Register rhs,
+                                   Register src, Register dest) {
+  Register scratch = ScratchRegister;
+  MOZ_ASSERT(src != scratch && dest != scratch);
+  cmpPtrSet(cond, lhs, rhs, scratch);
+#ifdef MIPSR6
+  as_selnez(src, src, scratch);
+  as_seleqz(dest, dest, scratch);
+  as_or(dest, dest, src);
+#else
+  as_movn(dest, src, scratch);
+#endif
+}
+
+void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs,
+                                   const Address& rhs, Register src,
+                                   Register dest) {
+  MOZ_CRASH("NYI");
 }
 
 void MacroAssemblerMIPS64Compat::incrementInt32Value(const Address& addr) {

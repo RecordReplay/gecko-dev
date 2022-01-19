@@ -53,11 +53,11 @@ const char* const sExecutableExts[] = {
   ".fxp",         // FoxPro compiled app
   ".hlp",
   ".hta",
+  ".inetloc",     // Apple finder internet location data file
   ".inf",
   ".ins",
   ".isp",
   ".jar",         // java application bundle
-  ".jnlp",
   ".js",
   ".jse",
   ".lnk",

@@ -126,8 +126,8 @@ add_task(async function() {
   // Check restore defaults button is enabled.
   ok(!button.disabled, "Reset button should not be disabled anymore");
   ok(
-    /light/i.test(themesButtonIcon.style.backgroundImage),
-    `Button should show light theme thumbnail - was: "${themesButtonIcon.style.backgroundImage}"`
+    themesButtonIcon.style.backgroundImage === "",
+    `Button should still show no theme - was: "${themesButtonIcon.style.backgroundImage}"`
   );
 
   popupShownPromise = popupShown(popup);

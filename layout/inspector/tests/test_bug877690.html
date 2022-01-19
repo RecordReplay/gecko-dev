@@ -218,10 +218,10 @@ function do_test() {
   ok(testValues(values, expected), "property clip's values");
 
   // Regression test for bug 1255380.
-  var expected = [ "normal", "none", "url", "counter", "counters",
+  var expected = [ "normal", "none", "counter", "counters",
                    "attr", "open-quote", "close-quote", "no-open-quote",
                    "no-close-quote", "inherit", "initial", "unset", "revert",
-                   "-moz-alt-content" ];
+                   "-moz-alt-content", "image-set", "url" ];
   var values = InspectorUtils.getCSSValuesForProperty("content");
   ok(testValues(values, expected), "property counter's values");
 
@@ -242,6 +242,11 @@ function do_test() {
                   "ethiopic-numeric", "symbols", "inherit", "initial", "unset", "revert" ];
   var values = InspectorUtils.getCSSValuesForProperty("list-style-type");
   ok(testValues(values, expected), "property list-style-type's values");
+
+  // Regression test for bug 1696677.
+  var values = InspectorUtils.getCSSValuesForProperty("cursor");
+  ok(values.includes("url"), "property cursor values include url");
+  ok(values.includes("image-set"), "property cursor values include image-set");
 
   SimpleTest.finish();
 }

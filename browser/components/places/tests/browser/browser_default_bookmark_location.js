@@ -122,7 +122,9 @@ add_task(async function test_context_menu_link() {
         win.gBrowser.selectedBrowser
       );
       await promisePopupShown;
-      win.document.getElementById("context-bookmarklink").click();
+      contextMenu.activateItem(
+        win.document.getElementById("context-bookmarklink")
+      );
     },
     async function test(dialogWin) {
       let expectedFolder = win.gBookmarksToolbar2h2020
@@ -135,7 +137,7 @@ add_task(async function test_context_menu_link() {
       );
 
       // Check the initial state of the folder picker.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () => folderPicker.selectedItem.label == expectedFolderName,
         "The folder is the expected one."
       );
@@ -174,9 +176,13 @@ add_task(async function test_change_location_panel() {
   let itemGuid = win.gEditItemOverlay._paneInfo.itemGuid;
   // Make sure we wait for the move to complete.
   let itemMovedPromise = PlacesTestUtils.waitForNotification(
-    "onItemMoved",
-    (id, oldParentId, oldIndex, newParentId, newIndex, type, guid) =>
-      newParentId == PlacesUtils.bookmarksMenuFolderId && guid == itemGuid
+    "bookmark-moved",
+    events =>
+      events.some(
+        e =>
+          e.guid === itemGuid && e.parentGuid === PlacesUtils.bookmarks.menuGuid
+      ),
+    "places"
   );
 
   // Wait for the pref to change

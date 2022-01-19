@@ -11,13 +11,13 @@
 #include <algorithm>
 
 // Helper classes
-#include "GeckoProfiler.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 #include "nsWidgetsCID.h"
 #include "nsThreadUtils.h"
 #include "nsNetCID.h"
 #include "nsQueryObject.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/Sprintf.h"
 
 // Interfaces needed to be included
@@ -71,6 +71,7 @@
 
 #ifdef XP_WIN
 #  include "mozilla/PreXULSkeletonUI.h"
+#  include "nsIWindowsUIUtils.h"
 #endif
 
 #ifdef MOZ_NEW_XULSTORE
@@ -80,7 +81,7 @@
 #include "mozilla/dom/DocumentL10n.h"
 
 #ifdef XP_MACOSX
-#  include "nsINativeMenuService.h"
+#  include "mozilla/widget/NativeMenuSupport.h"
 #  define USE_NATIVE_MENUS
 #endif
 
@@ -957,6 +958,9 @@ NS_IMETHODIMP AppWindow::SetVisibility(bool aVisibility) {
   if (mDebuting) {
     return NS_OK;
   }
+
+  NS_ENSURE_STATE(mDocShell);
+
   mDebuting = true;  // (Show / Focus is recursive)
 
   // XXXTAB Do we really need to show docshell and the window?  Isn't
@@ -1011,12 +1015,6 @@ NS_IMETHODIMP AppWindow::GetMainWidget(nsIWidget** aMainWidget) {
 
   *aMainWidget = mWindow;
   NS_IF_ADDREF(*aMainWidget);
-  return NS_OK;
-}
-
-NS_IMETHODIMP AppWindow::SetFocus() {
-  // XXX First Check In
-  NS_ASSERTION(false, "Not Yet Implemented");
   return NS_OK;
 }
 
@@ -1914,7 +1912,38 @@ nsresult AppWindow::MaybeSaveEarlyWindowPersistentValues(
 
   settings.rtlEnabled = intl::LocaleService::GetInstance()->IsAppLocaleRTL();
 
-  PersistPreXULSkeletonUIValues(settings);
+  bool isInTabletMode = false;
+  bool autoTouchModePref =
+      Preferences::GetBool("browser.touchmode.auto", false);
+  if (autoTouchModePref) {
+    nsCOMPtr<nsIWindowsUIUtils> uiUtils(
+        do_GetService("@mozilla.org/windows-ui-utils;1"));
+    if (!NS_WARN_IF(!uiUtils)) {
+      uiUtils->GetInTabletMode(&isInTabletMode);
+    }
+  }
+
+  if (isInTabletMode) {
+    settings.uiDensity = SkeletonUIDensity::Touch;
+  } else {
+    int uiDensityPref = Preferences::GetInt("browser.uidensity", 0);
+    switch (uiDensityPref) {
+      case 0: {
+        settings.uiDensity = SkeletonUIDensity::Default;
+        break;
+      }
+      case 1: {
+        settings.uiDensity = SkeletonUIDensity::Compact;
+        break;
+      }
+      case 2: {
+        settings.uiDensity = SkeletonUIDensity::Touch;
+        break;
+      }
+    }
+  }
+
+  Unused << PersistPreXULSkeletonUIValues(settings);
 #endif
 
   return NS_OK;
@@ -2911,6 +2940,15 @@ void AppWindow::FinishFullscreenChange(bool aInFullscreen) {
   }
 }
 
+void AppWindow::MacFullscreenMenubarOverlapChanged(
+    mozilla::DesktopCoord aOverlapAmount) {
+  if (mDocShell) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> ourWindow = mDocShell->GetWindow()) {
+      ourWindow->MacFullscreenMenubarOverlapChanged(aOverlapAmount);
+    }
+  }
+}
+
 void AppWindow::OcclusionStateChanged(bool aIsFullyOccluded) {
   nsCOMPtr<nsPIDOMWindowOuter> ourWindow =
       mDocShell ? mDocShell->GetWindow() : nullptr;
@@ -2987,11 +3025,6 @@ static void LoadNativeMenus(Document* aDoc, nsIWidget* aParentWindow) {
   if (gfxPlatform::IsHeadless()) {
     return;
   }
-  nsCOMPtr<nsINativeMenuService> nms =
-      do_GetService("@mozilla.org/widget/nativemenuservice;1");
-  if (!nms) {
-    return;
-  }
 
   // Find the menubar tag (if there is more than one, we ignore all but
   // the first).
@@ -3005,11 +3038,12 @@ static void LoadNativeMenus(Document* aDoc, nsIWidget* aParentWindow) {
     menubarNode = menubarElements->Item(0);
   }
 
+  using widget::NativeMenuSupport;
   if (menubarNode) {
     nsCOMPtr<Element> menubarContent(do_QueryInterface(menubarNode));
-    nms->CreateNativeMenuBar(aParentWindow, menubarContent);
+    NativeMenuSupport::CreateNativeMenuBar(aParentWindow, menubarContent);
   } else {
-    nms->CreateNativeMenuBar(aParentWindow, nullptr);
+    NativeMenuSupport::CreateNativeMenuBar(aParentWindow, nullptr);
   }
 }
 
@@ -3145,7 +3179,7 @@ AppWindow::OnStateChange(nsIWebProgress* aProgress, nsIRequest* aRequest,
         RefPtr<Promise> promise = l10n->Ready();
         MOZ_ASSERT(promise);
         RefPtr<L10nReadyPromiseHandler> handler =
-          new L10nReadyPromiseHandler(menubarDoc, mWindow);
+            new L10nReadyPromiseHandler(menubarDoc, mWindow);
         promise->AppendNativeHandler(handler);
       } else {
         // Something went wrong loading the doc and l10n wasn't created. This
@@ -3299,6 +3333,12 @@ void AppWindow::WidgetListenerDelegate::FullscreenWillChange(
 void AppWindow::WidgetListenerDelegate::FullscreenChanged(bool aInFullscreen) {
   RefPtr<AppWindow> holder = mAppWindow;
   holder->FullscreenChanged(aInFullscreen);
+}
+
+void AppWindow::WidgetListenerDelegate::MacFullscreenMenubarOverlapChanged(
+    DesktopCoord aOverlapAmount) {
+  RefPtr<AppWindow> holder = mAppWindow;
+  return holder->MacFullscreenMenubarOverlapChanged(aOverlapAmount);
 }
 
 void AppWindow::WidgetListenerDelegate::OcclusionStateChanged(

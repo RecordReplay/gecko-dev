@@ -13,7 +13,6 @@
 #include "prnetdb.h"
 #include "plstr.h"
 #include "nsISupportsImpl.h"
-#include "mozilla/LinkedList.h"
 #include "mozilla/MemoryReporting.h"
 #include "nsTArray.h"
 
@@ -140,6 +139,12 @@ union NetAddr {
   NetAddr() { memset(this, 0, sizeof(NetAddr)); }
   explicit NetAddr(const PRNetAddr* prAddr);
 
+  // Will parse aString into a NetAddr using PR_StringToNetAddr.
+  // Returns an error code if parsing fails.
+  // If aPort is non-0 will set the NetAddr's port to (the network endian
+  // value of) that.
+  nsresult InitFromString(const nsACString& aString, uint16_t aPort = 0);
+
   bool IsIPAddrAny() const;
   bool IsLoopbackAddr() const;
   bool IsLoopBackAddressWithoutIPv6Mapping() const;
@@ -150,6 +155,40 @@ union NetAddr {
   nsresult GetPort(uint16_t* aResult) const;
   bool ToStringBuffer(char* buf, uint32_t bufSize) const;
 };
+
+#define ODOH_VERSION 0xff06
+static const char kODoHQuery[] = "odoh query";
+static const char hODoHConfigID[] = "odoh key id";
+static const char kODoHResponse[] = "odoh response";
+static const char kODoHKey[] = "odoh key";
+static const char kODoHNonce[] = "odoh nonce";
+
+struct ObliviousDoHConfigContents {
+  uint16_t mKemId{};
+  uint16_t mKdfId{};
+  uint16_t mAeadId{};
+  nsTArray<uint8_t> mPublicKey;
+};
+
+struct ObliviousDoHConfig {
+  uint16_t mVersion{};
+  uint16_t mLength{};
+  ObliviousDoHConfigContents mContents;
+  nsTArray<uint8_t> mConfigId;
+};
+
+enum ObliviousDoHMessageType : uint8_t {
+  ODOH_QUERY = 1,
+  ODOH_RESPONSE = 2,
+};
+
+struct ObliviousDoHMessage {
+  ObliviousDoHMessageType mType{ODOH_QUERY};
+  nsTArray<uint8_t> mKeyId;
+  nsTArray<uint8_t> mEncryptedMessage;
+};
+
+enum class DNSResolverType : uint32_t { Native = 0, TRR, ODoH };
 
 class AddrInfo {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AddrInfo)
@@ -165,17 +204,24 @@ class AddrInfo {
   // Creates a basic AddrInfo object (initialize only the host, cname and TRR
   // type).
   explicit AddrInfo(const nsACString& host, const nsACString& cname,
-                    unsigned int aTRR, nsTArray<NetAddr>&& addresses);
+                    DNSResolverType aResolverType, unsigned int aTRRType,
+                    nsTArray<NetAddr>&& addresses);
 
   // Creates a basic AddrInfo object (initialize only the host and TRR status).
-  explicit AddrInfo(const nsACString& host, unsigned int aTRR,
-                    nsTArray<NetAddr>&& addresses, uint32_t aTTL = NO_TTL_DATA);
+  explicit AddrInfo(const nsACString& host, DNSResolverType aResolverType,
+                    unsigned int aTRRType, nsTArray<NetAddr>&& addresses,
+                    uint32_t aTTL = NO_TTL_DATA);
 
   explicit AddrInfo(const AddrInfo* src);  // copy
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 
-  unsigned int IsTRR() { return mFromTRR; }
+  bool IsTRROrODoH() const {
+    return mResolverType == DNSResolverType::TRR ||
+           mResolverType == DNSResolverType::ODoH;
+  }
+  DNSResolverType ResolverType() const { return mResolverType; }
+  unsigned int TRRType() { return mTRRType; }
 
   double GetTrrFetchDuration() { return mTrrFetchDuration; }
   double GetTrrFetchDurationNetworkOnly() {
@@ -223,8 +269,8 @@ class AddrInfo {
 
   nsCString mHostName;
   nsCString mCanonicalName;
-
-  unsigned int mFromTRR = 0;
+  DNSResolverType mResolverType = DNSResolverType::Native;
+  unsigned int mTRRType = 0;
   double mTrrFetchDuration = 0;
   double mTrrFetchDurationNetworkOnly = 0;
 
@@ -240,6 +286,8 @@ void PRNetAddrToNetAddr(const PRNetAddr* prAddr, NetAddr* addr);
 void NetAddrToPRNetAddr(const NetAddr* addr, PRNetAddr* prAddr);
 
 bool IsLoopbackHostname(const nsACString& aAsciiHost);
+
+bool HostIsIPLiteral(const nsACString& aAsciiHost);
 
 }  // namespace net
 }  // namespace mozilla

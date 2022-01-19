@@ -5,10 +5,10 @@
 
 #include "WebGLContext.h"
 
-#include "GeckoProfiler.h"
 #include "MozFramebuffer.h"
 #include "GLContext.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "nsPrintfCString.h"
 #include "WebGLBuffer.h"
@@ -54,7 +54,7 @@ static bool ValidateNoSamplingFeedback(const WebGLTexture& tex,
   for (const auto& attach : texAttachments) {
     if (attach->Texture() != &tex) continue;
 
-    const auto& srcBase = tex.BaseMipmapLevel();
+    const auto& srcBase = tex.Es3_level_base();
     const auto srcLast = srcBase + sampledLevels - 1;
     const auto& dstLevel = attach->MipLevel();
     if (MOZ_UNLIKELY(srcBase <= dstLevel && dstLevel <= srcLast)) {

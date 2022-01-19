@@ -14,7 +14,9 @@
 #include "mozilla/UniquePtr.h"
 #include "nsIFrame.h"
 #include "nsRefPtrHashtable.h"
+#include "nsTHashSet.h"
 #include "ImageTypes.h"
+#include "DisplayItemClip.h"
 
 class nsDisplayItemGeometry;
 
@@ -61,8 +63,7 @@ class WebRenderBackgroundData {
 /// to an nsFrame.
 class WebRenderUserData {
  public:
-  typedef nsTHashtable<nsRefPtrHashKey<WebRenderUserData>>
-      WebRenderUserDataRefTable;
+  typedef nsTHashSet<RefPtr<WebRenderUserData>> WebRenderUserDataRefTable;
 
   static bool SupportsAsyncUpdate(nsIFrame* aFrame);
 
@@ -91,6 +92,7 @@ class WebRenderUserData {
     eRemote,
     eGroup,
     eMask,
+    eBlobImage,  // SVG image
   };
 
   virtual UserDataType GetType() = 0;
@@ -183,6 +185,28 @@ class WebRenderImageData : public WebRenderUserData {
   bool mOwnsKey;
 };
 
+/// Holds some data used to share blob recordings from VectorImages with the
+/// parent process.
+class WebRenderBlobImageData : public WebRenderUserData {
+ public:
+  WebRenderBlobImageData(RenderRootStateManager* aManager,
+                         nsDisplayItem* aItem);
+  WebRenderBlobImageData(RenderRootStateManager* aManager,
+                         uint32_t aDisplayItemKey, nsIFrame* aFrame);
+  virtual ~WebRenderBlobImageData() {}
+
+  UserDataType GetType() override { return UserDataType::eBlobImage; }
+  static UserDataType Type() { return UserDataType::eBlobImage; }
+  Maybe<wr::BlobImageKey> GetImageKey() { return mKey; }
+
+  Maybe<wr::BlobImageKey> UpdateImageKey(
+      ImageContainer* aContainer, wr::IpcResourceUpdateQueue& aResources);
+
+ protected:
+  Maybe<wr::BlobImageKey> mKey;
+  RefPtr<ImageContainer> mContainer;
+};
+
 /// Used for fallback rendering.
 ///
 /// In most cases this uses blob images but it can also render on the content
@@ -195,6 +219,7 @@ class WebRenderFallbackData : public WebRenderUserData {
   WebRenderFallbackData* AsFallbackData() override { return this; }
   UserDataType GetType() override { return UserDataType::eFallback; }
   static UserDataType Type() { return UserDataType::eFallback; }
+  nsDisplayItemGeometry* GetGeometry() override { return mGeometry.get(); }
 
   void SetInvalid(bool aInvalid) { mInvalid = aInvalid; }
   bool IsInvalid() { return mInvalid; }
@@ -210,8 +235,8 @@ class WebRenderFallbackData : public WebRenderUserData {
   WebRenderImageData* PaintIntoImage();
 
   std::vector<RefPtr<gfx::SourceSurface>> mExternalSurfaces;
-  RefPtr<BasicLayerManager> mBasicLayerManager;
   UniquePtr<nsDisplayItemGeometry> mGeometry;
+  DisplayItemClip mClip;
   nsRect mBounds;
   nsRect mBuildingRect;
   gfx::Size mScale;

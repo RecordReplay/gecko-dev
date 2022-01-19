@@ -39,6 +39,7 @@ let RemotePageAccessManager = {
         "Browser:SSLErrorGoBack",
         "Browser:PrimeMitm",
         "Browser:ResetEnterpriseRootsPref",
+        "DisplayOfflineSupportPage",
       ],
       RPMRecordTelemetryEvent: ["*"],
       RPMAddMessageListener: ["*"],
@@ -63,6 +64,9 @@ let RemotePageAccessManager = {
     "about:httpsonlyerror": {
       RPMGetFormatURLPref: ["app.support.baseURL"],
       RPMSendAsyncMessage: ["goBack", "openInsecure"],
+      RPMAddMessageListener: ["WWWReachable"],
+      RPMTryPingSecureWWWLink: ["*"],
+      RPMOpenSecureWWWLink: ["*"],
     },
     "about:certificate": {
       RPMSendQuery: ["getCertificates"],
@@ -77,6 +81,7 @@ let RemotePageAccessManager = {
         "Browser:PrimeMitm",
         "Browser:ResetEnterpriseRootsPref",
         "ReportBlockingError",
+        "DisplayOfflineSupportPage",
       ],
       RPMAddMessageListener: ["*"],
       RPMRemoveMessageListener: ["*"],
@@ -87,6 +92,7 @@ let RemotePageAccessManager = {
         "security.certerrors.tls.version.show-override",
         "security.xfocsp.errorReporting.automatic",
         "security.xfocsp.errorReporting.enabled",
+        "browser.proton.enabled",
       ],
       RPMSetBoolPref: [
         "security.tls.version.enable-deprecated",
@@ -97,12 +103,23 @@ let RemotePageAccessManager = {
       RPMGetInnerMostURI: ["*"],
       RPMGetHttpResponseHeader: ["*"],
     },
-    "about:newinstall": {
-      RPMGetUpdateChannel: ["*"],
-      RPMGetFxAccountsEndpoint: ["*"],
-    },
     "about:plugins": {
       RPMSendQuery: ["RequestPlugins"],
+    },
+    "about:pocket-saved": {
+      RPMSendAsyncMessage: ["*"],
+      RPMAddMessageListener: ["*"],
+      RPMRemoveMessageListener: ["*"],
+    },
+    "about:pocket-signup": {
+      RPMSendAsyncMessage: ["*"],
+      RPMAddMessageListener: ["*"],
+      RPMRemoveMessageListener: ["*"],
+    },
+    "about:pocket-home": {
+      RPMSendAsyncMessage: ["*"],
+      RPMAddMessageListener: ["*"],
+      RPMRemoveMessageListener: ["*"],
     },
     "about:privatebrowsing": {
       RPMSendAsyncMessage: [
@@ -111,7 +128,11 @@ let RemotePageAccessManager = {
         "OpenSearchPreferences",
         "SearchHandoff",
       ],
-      RPMSendQuery: ["ShouldShowSearchBanner", "ShouldShowVPNPromo"],
+      RPMSendQuery: [
+        "ShouldShowSearch",
+        "ShouldShowSearchBanner",
+        "ShouldShowVPNPromo",
+      ],
       RPMAddMessageListener: ["*"],
       RPMRemoveMessageListener: ["*"],
       RPMGetFormatURLPref: [
@@ -288,7 +309,7 @@ let RemotePageAccessManager = {
       if (!aPrincipal.schemeIs("about")) {
         return null;
       }
-      spec = aPrincipal.prepath + aPrincipal.filePath;
+      spec = aPrincipal.prePath + aPrincipal.filePath;
     }
 
     // Check if there is an entry for that requestying URI in the accessMap;

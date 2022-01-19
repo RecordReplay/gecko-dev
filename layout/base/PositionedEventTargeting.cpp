@@ -15,6 +15,7 @@
 #include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/ToString.h"
 #include "mozilla/dom/MouseEventBinding.h"
+#include "nsContainerFrame.h"
 #include "nsFrameList.h"  // for DEBUG_FRAME_DUMP
 #include "nsHTMLParts.h"
 #include "nsLayoutUtils.h"
@@ -169,10 +170,6 @@ static bool HasTouchListener(nsIContent* aContent) {
 static bool HasPointerListener(nsIContent* aContent) {
   EventListenerManager* elm = aContent->GetExistingListenerManager();
   if (!elm) {
-    return false;
-  }
-
-  if (!StaticPrefs::dom_w3c_pointer_events_enabled()) {
     return false;
   }
 

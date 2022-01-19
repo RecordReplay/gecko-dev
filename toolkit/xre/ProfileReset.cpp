@@ -19,7 +19,6 @@
 #include "mozilla/Components.h"
 #include "mozilla/XREAppData.h"
 
-#include "mozilla/Services.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/Unused.h"
 #include "prtime.h"
@@ -49,7 +48,7 @@ nsresult ProfileResetCleanup(nsToolkitProfileService* aService,
 
   // Get the friendly name for the backup directory.
   nsCOMPtr<nsIStringBundleService> sbs =
-      mozilla::services::GetStringBundleService();
+      mozilla::components::StringBundle::Service();
   if (!sbs) return NS_ERROR_FAILURE;
 
   nsCOMPtr<nsIStringBundle> sb;
@@ -125,9 +124,8 @@ nsresult ProfileResetCleanup(nsToolkitProfileService* aService,
   if (NS_FAILED(rv)) return rv;
 
   // Create a new thread to do the bulk of profile cleanup to stay responsive.
-  nsCOMPtr<nsIThreadManager> tm = do_GetService(NS_THREADMANAGER_CONTRACTID);
   nsCOMPtr<nsIThread> cleanupThread;
-  rv = tm->NewThread(0, 0, getter_AddRefs(cleanupThread));
+  rv = NS_NewNamedThread("ResetCleanup", getter_AddRefs(cleanupThread));
   if (NS_SUCCEEDED(rv)) {
     nsCOMPtr<nsIRunnable> runnable = new ProfileResetCleanupAsyncTask(
         profileDir, profileLocalDir, containerDest, leafName);

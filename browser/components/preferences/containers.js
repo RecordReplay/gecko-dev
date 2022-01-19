@@ -53,11 +53,13 @@ let gContainersPane = {
       outer.appendChild(userContextIcon);
 
       let label = document.createXULElement("label");
+      label.className = "userContext-label-inprefs";
       label.setAttribute("flex", 1);
-      label.setAttribute("crop", "end");
-      label.textContent = ContextualIdentityService.getUserContextLabel(
+      let containerName = ContextualIdentityService.getUserContextLabel(
         container.userContextId
       );
+      label.textContent = containerName;
+      label.setAttribute("tooltiptext", containerName);
       outer.appendChild(label);
 
       let containerButtons = document.createXULElement("hbox");
@@ -69,7 +71,7 @@ let gContainersPane = {
         gContainersPane.onPreferenceCommand(event.originalTarget);
       });
       prefsButton.setAttribute("value", container.userContextId);
-      document.l10n.setAttributes(prefsButton, "containers-preferences-button");
+      document.l10n.setAttributes(prefsButton, "containers-settings-button");
       containerButtons.appendChild(prefsButton);
 
       let removeButton = document.createXULElement("button");

@@ -7,6 +7,7 @@
 
 #include "ApplicationAccessible.h"
 
+#include "AccAttributes.h"
 #include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
 #include "Relation.h"
@@ -15,7 +16,7 @@
 
 #include "nsServiceManagerUtils.h"
 #include "mozilla/dom/Document.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "nsGlobalWindow.h"
 #include "nsIStringBundle.h"
 
@@ -35,7 +36,7 @@ ENameValueFlag ApplicationAccessible::Name(nsString& aName) const {
   aName.Truncate();
 
   nsCOMPtr<nsIStringBundleService> bundleService =
-      mozilla::services::GetStringBundleService();
+      mozilla::components::StringBundle::Service();
 
   NS_ASSERTION(bundleService, "String bundle service must be present!");
   if (!bundleService) return eNameOK;
@@ -66,21 +67,23 @@ uint64_t ApplicationAccessible::State() {
   return IsDefunct() ? states::DEFUNCT : 0;
 }
 
-already_AddRefed<nsIPersistentProperties>
-ApplicationAccessible::NativeAttributes() {
-  return nullptr;
+already_AddRefed<AccAttributes> ApplicationAccessible::NativeAttributes() {
+  RefPtr<AccAttributes> attributes = new AccAttributes();
+  return attributes.forget();
 }
 
 GroupPos ApplicationAccessible::GroupPosition() { return GroupPos(); }
 
-Accessible* ApplicationAccessible::ChildAtPoint(
+LocalAccessible* ApplicationAccessible::LocalChildAtPoint(
     int32_t aX, int32_t aY, EWhichChildAtPoint aWhichChild) {
   return nullptr;
 }
 
-Accessible* ApplicationAccessible::FocusedChild() {
-  Accessible* focus = FocusMgr()->FocusedAccessible();
-  if (focus && focus->Parent() == this) return focus;
+LocalAccessible* ApplicationAccessible::FocusedChild() {
+  LocalAccessible* focus = FocusMgr()->FocusedAccessible();
+  if (focus && focus->LocalParent() == this) {
+    return focus;
+  }
 
   return nullptr;
 }
@@ -95,7 +98,7 @@ nsIntRect ApplicationAccessible::Bounds() const { return nsIntRect(); }
 nsRect ApplicationAccessible::BoundsInAppUnits() const { return nsRect(); }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Accessible public methods
+// LocalAccessible public methods
 
 void ApplicationAccessible::Shutdown() { mAppInfo = nullptr; }
 
@@ -121,8 +124,7 @@ void ApplicationAccessible::Init() {
     return;
   }
 
-  for (auto iter = windowsById->Iter(); !iter.Done(); iter.Next()) {
-    nsGlobalWindowOuter* window = iter.Data();
+  for (const auto& window : windowsById->Values()) {
     if (window->GetDocShell() && window->IsRootOuterWindow()) {
       if (RefPtr<dom::Document> docNode = window->GetExtantDoc()) {
         GetAccService()->GetDocAccessible(docNode);  // ensure creation
@@ -131,8 +133,8 @@ void ApplicationAccessible::Init() {
   }
 }
 
-Accessible* ApplicationAccessible::GetSiblingAtOffset(int32_t aOffset,
-                                                      nsresult* aError) const {
+LocalAccessible* ApplicationAccessible::GetSiblingAtOffset(
+    int32_t aOffset, nsresult* aError) const {
   if (aError) *aError = NS_OK;  // fail peacefully
 
   return nullptr;

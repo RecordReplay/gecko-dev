@@ -48,15 +48,16 @@ pub fn new_glean(tempdir: Option<tempfile::TempDir>) -> (Glean, tempfile::TempDi
         Some(tempdir) => tempdir,
         None => tempfile::tempdir().unwrap(),
     };
-    let tmpname = dir.path().display().to_string();
 
     let cfg = glean_core::Configuration {
-        data_path: tmpname,
+        data_path: dir.path().into(),
         application_id: GLOBAL_APPLICATION_ID.into(),
         language_binding_name: "Rust".into(),
         upload_enabled: true,
         max_events: None,
         delay_ping_lifetime_io: false,
+        app_build: "unknown".into(),
+        use_core_mps: false,
     };
     let glean = Glean::new(cfg).unwrap();
 

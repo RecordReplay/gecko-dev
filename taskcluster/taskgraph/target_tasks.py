@@ -7,13 +7,16 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 import copy
+import os
 import re
 
 import six
+from redo import retry
 from taskgraph import try_option_syntax
 from taskgraph.parameters import Parameters
 from taskgraph.util.attributes import match_run_on_projects, match_run_on_hg_branches
 from taskgraph.util.platforms import platform_family
+from taskgraph.util.taskcluster import find_task_id
 
 _target_task_methods = {}
 
@@ -30,7 +33,7 @@ UNCOMMON_TRY_TASK_LABELS = [
     r"android-hw",
     # Windows tasks
     r"windows10-64-ref-hw",
-    r"windows10-aarch64",
+    r"windows10-aarch64-qr",
     # Linux tasks
     r"linux-",  # hide all linux32 tasks by default - bug 1599197
     r"linux1804-32",  # hide linux32 tests - bug 1599197
@@ -41,34 +44,6 @@ UNCOMMON_TRY_TASK_LABELS = [
     # Hide shippable versions of tests we have opt versions of because the non-shippable
     # versions are faster to run. This is mostly perf tests.
     r"-shippable(?!.*(awsy|browsertime|marionette-headless|mochitest-devtools-chrome-fis|raptor|talos|web-platform-tests-wdspec-headless))",  # noqa - too long
-]
-
-
-# These are live site performance tests we run three times a week
-LIVE_SITES = [
-    "amazon-search",
-    "bbc",
-    "booking-sf",
-    "cnn-ampstories",
-    "discord",
-    "espn",
-    "expedia",
-    "facebook-cristiano",
-    "fashionbeans",
-    "google",
-    "google-accounts",
-    "imdb-firefox",
-    "jianshu",
-    "medium-article",
-    "microsoft-support",
-    "nytimes",
-    "people-article",
-    "reddit-thread",
-    "rumble-fox",
-    "stackoverflow-question",
-    "urbandictionary-define",
-    "wikia-marvel",
-    "youtube-watch",
 ]
 
 
@@ -83,6 +58,17 @@ def _target_task(name):
 def get_method(method):
     """Get a target_task_method to pass to a TaskGraphGenerator."""
     return _target_task_methods[method]
+
+
+def index_exists(index_path, reason=""):
+    print(f"Looking for existing index {index_path} {reason}...")
+    try:
+        task_id = find_task_id(index_path)
+        print(f"Index {index_path} exists: taskId {task_id}")
+        return True
+    except KeyError:
+        print(f"Index {index_path} doesn't exist.")
+        return False
 
 
 def filter_out_shipping_phase(task, parameters):
@@ -268,6 +254,17 @@ def accept_raptor_android_build(platform):
         return True
 
 
+def filter_unsupported_artifact_builds(task, parameters):
+    val = task.attributes.get("supports-artifact-builds") is False and parameters[
+        "try_task_config"
+    ].get("use-artifact-builds", True)
+    return not val
+
+
+def filter_out_shippable(task):
+    return not task.attributes.get("shippable", False)
+
+
 def _try_task_config(full_task_graph, parameters, graph_config):
     requested_tasks = parameters["try_task_config"]["tasks"]
     return list(set(requested_tasks) & full_task_graph.graph.nodes)
@@ -282,7 +279,9 @@ def _try_option_syntax(full_task_graph, parameters, graph_config):
     target_tasks_labels = [
         t.label
         for t in six.itervalues(full_task_graph.tasks)
-        if options.task_matches(t) and filter_by_uncommon_try_tasks(t.label)
+        if options.task_matches(t)
+        and filter_by_uncommon_try_tasks(t.label)
+        and filter_unsupported_artifact_builds(t, parameters)
     ]
 
     attributes = {
@@ -350,42 +349,34 @@ def target_tasks_try(full_task_graph, parameters, graph_config):
 
 @_target_task("try_select_tasks")
 def target_tasks_try_select(full_task_graph, parameters, graph_config):
-    tasks = set()
-    for project in ("autoland", "mozilla-central"):
-        params = dict(parameters)
-        params["project"] = project
-        parameters = Parameters(**params)
-        tasks.update(
-            [
-                l
-                for l, t in six.iteritems(full_task_graph.tasks)
-                if standard_filter(t, parameters)
-                and filter_out_shipping_phase(t, parameters)
-                and filter_out_devedition(t, parameters)
-            ]
-        )
-
+    tasks = target_tasks_try_select_uncommon(full_task_graph, parameters, graph_config)
     return [l for l in tasks if filter_by_uncommon_try_tasks(l)]
 
 
 @_target_task("try_select_tasks_uncommon")
 def target_tasks_try_select_uncommon(full_task_graph, parameters, graph_config):
+    from taskgraph.decision import PER_PROJECT_PARAMETERS
+
+    projects = ("autoland", "mozilla-central")
+    if parameters["project"] not in projects:
+        projects = (parameters["project"],)
+
     tasks = set()
-    for project in ("autoland", "mozilla-central"):
+    for project in projects:
         params = dict(parameters)
         params["project"] = project
         parameters = Parameters(**params)
+
+        try:
+            target_tasks_method = PER_PROJECT_PARAMETERS[project]["target_tasks_method"]
+        except KeyError:
+            target_tasks_method = "default"
+
         tasks.update(
-            [
-                l
-                for l, t in six.iteritems(full_task_graph.tasks)
-                if standard_filter(t, parameters)
-                and filter_out_shipping_phase(t, parameters)
-                and filter_out_devedition(t, parameters)
-            ]
+            get_method(target_tasks_method)(full_task_graph, parameters, graph_config)
         )
 
-    return [l for l in tasks]
+    return sorted(tasks)
 
 
 @_target_task("try_auto")
@@ -414,6 +405,8 @@ def target_tasks_try_auto(full_task_graph, parameters, graph_config):
         and filter_by_uncommon_try_tasks(t.label)
         and filter_by_regex(t.label, include_regexes, mode="include")
         and filter_by_regex(t.label, exclude_regexes, mode="exclude")
+        and filter_unsupported_artifact_builds(t, parameters)
+        and filter_out_shippable(t)
     ]
 
 
@@ -447,9 +440,8 @@ def target_tasks_autoland(full_task_graph, parameters, graph_config):
             return True
 
         build_type = task.attributes.get("build_type")
-        shippable = task.attributes.get("shippable", False)
 
-        if not build_type or build_type != "opt" or not shippable:
+        if not build_type or build_type != "opt" or filter_out_shippable(task):
             return True
 
         return False
@@ -562,7 +554,7 @@ def target_tasks_mozilla_release(full_task_graph, parameters, graph_config):
 @_target_task("mozilla_esr78_tasks")
 def target_tasks_mozilla_esr78(full_task_graph, parameters, graph_config):
     """Select the set of tasks required for a promotable beta or release build
-    of desktop, plus android CI. The candidates build process involves a pipeline
+    of desktop, without android CI. The candidates build process involves a pipeline
     of builds and signing, but does not include beetmover or balrog jobs."""
 
     def filter(task):
@@ -582,6 +574,30 @@ def target_tasks_mozilla_esr78(full_task_graph, parameters, graph_config):
 
         # Don't run QuantumRender tests on esr78.
         if test_platform and "-qr/" in test_platform:
+            return False
+
+        return True
+
+    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
+
+
+@_target_task("mozilla_esr91_tasks")
+def target_tasks_mozilla_esr91(full_task_graph, parameters, graph_config):
+    """Select the set of tasks required for a promotable beta or release build
+    of desktop, without android CI. The candidates build process involves a pipeline
+    of builds and signing, but does not include beetmover or balrog jobs."""
+
+    def filter(task):
+        if not filter_release_tasks(task, parameters):
+            return False
+
+        if not standard_filter(task, parameters):
+            return False
+
+        platform = task.attributes.get("build_platform")
+
+        # Android is not built on esr91.
+        if platform and "android" in platform:
             return False
 
         return True
@@ -748,87 +764,6 @@ def target_tasks_ship_geckoview(full_task_graph, parameters, graph_config):
     return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
 
-@_target_task("fennec_v68")
-def target_tasks_fennec_v68(full_task_graph, parameters, graph_config):
-    """
-    Select tasks required for running weekly fennec v68 tests
-    """
-
-    def filter(task):
-        test_platform = task.attributes.get("test_platform")
-        try_name = task.attributes.get("raptor_try_name")
-
-        vismet = task.attributes.get("kind") == "visual-metrics-dep"
-        if vismet:
-            test_platform = task.task.get("extra").get("treeherder-platform")
-            try_name = task.label
-
-        if task.attributes.get("unittest_suite") != "raptor" and not vismet:
-            return False
-        if not accept_raptor_android_build(test_platform):
-            return False
-        if "-wr" not in try_name:
-            return False
-
-        if "-fennec" in try_name:
-            if "-power" in try_name:
-                return True
-            if "browsertime" in try_name:
-                if "tp6m" in try_name:
-                    return True
-                elif "speedometer" in try_name:
-                    return True
-                else:
-                    return False
-            if "-youtube-playback" in try_name:
-                # Bug 1627898: VP9 tests don't work on G5
-                if "-g5-" in test_platform and "-vp9-" in try_name:
-                    return False
-                # Bug 1639193: AV1 tests are currently broken
-                if "-av1-" in try_name:
-                    return False
-            return True
-
-    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
-
-
-@_target_task("live_site_perf_testing")
-def target_tasks_live_site_perf_testing(full_task_graph, parameters, graph_config):
-    """
-    Select browsertime live site tasks that should only run once a week.
-    """
-
-    def filter(task):
-        platform = task.attributes.get("build_platform")
-        attributes = task.attributes
-        vismet = attributes.get("kind") == "visual-metrics-dep"
-        if attributes.get("unittest_suite") != "raptor" and not vismet:
-            return False
-        try_name = attributes.get("raptor_try_name")
-        if vismet:
-            platform = task.task.get("extra").get("treeherder-platform")
-            try_name = task.label
-
-        if not accept_raptor_android_build(platform):
-            return False
-        if "-wr" not in try_name:
-            return False
-        if "fenix" not in try_name:
-            return False
-        if "browsertime" not in try_name:
-            return False
-        if "live" not in try_name:
-            return False
-        for test in LIVE_SITES:
-            if try_name.endswith(test + "-wr") or try_name.endswith(test + "-wr-e10s"):
-                # These tests run 3 times a week, ignore them
-                return False
-
-        return True
-
-    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
-
-
 @_target_task("general_perf_testing")
 def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config):
     """
@@ -848,18 +783,12 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
             platform = task.task.get("extra").get("treeherder-platform")
             try_name = task.label
 
-        def _run_live_site():
-            for test in LIVE_SITES:
-                if try_name.endswith(test + "-wr") or try_name.endswith(
-                    test + "-wr-e10s"
-                ):
-                    return True
-                elif try_name.endswith(test) or try_name.endswith(test + "-e10s"):
-                    return True
-            return False
-
         # Completely ignore all non-shippable platforms
         if "shippable" not in platform:
+            return False
+
+        # ignore all windows 7 perf jobs scheduled automatically
+        if "windows7" in platform or "windows10-32" in platform:
             return False
 
         # Desktop selection
@@ -867,39 +796,37 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
             # Select some browsertime tasks as desktop smoke-tests
             if "browsertime" in try_name:
                 if "chrome" in try_name:
-                    if "linux" in platform or "macos" in platform:
-                        return True
-                    return False
+                    # See bug 1704092
+                    if "tp6" in try_name and "macosx" in platform:
+                        return False
+                    return True
                 if "chromium" in try_name:
-                    if "linux" in platform or "macos" in platform:
-                        return True
-                    return False
+                    # See bug 1704092
+                    if "tp6" in try_name and "macosx" in platform:
+                        return False
+                    return True
+                if "-live" in try_name:
+                    return True
                 if "-fis" in try_name:
-                    return False
-                if "-wr" in try_name:
                     return False
                 if "linux" in platform:
                     if "speedometer" in try_name:
                         return True
             else:
-                # Run tests on all chrome variants
-                if ("linux" in platform or "macos" in platform) and "tp6" in try_name:
+                # Don't run tp6 raptor tests
+                if "tp6" in try_name:
                     return False
-                if "-chrome" in try_name:
-                    return True
-                if "-chromium" in try_name:
-                    return True
         # Android selection
         elif accept_raptor_android_build(platform):
             # Ignore all fennec tests here, we run those weekly
             if "fennec" in try_name:
                 return False
             # Only run webrender tests
-            if "chrome-m" not in try_name and "-wr" not in try_name:
+            if "chrome-m" not in try_name and "-qr" not in platform:
                 return False
             # Select live site tests
-            if "-live" in try_name and ("fenix" in try_name or "chrome-m" in try_name):
-                return _run_live_site()
+            if "-live" in try_name:
+                return True
             # Select fenix resource usage tests
             if "fenix" in try_name:
                 if "-power" in try_name:
@@ -1019,6 +946,19 @@ def target_tasks_daily_releases(full_task_graph, parameters, graph_config):
 def target_tasks_nightly_desktop(full_task_graph, parameters, graph_config):
     """Select the set of tasks required for a nightly build of linux, mac,
     windows."""
+    index_path = (
+        f"{graph_config['trust-domain']}.v2.{parameters['project']}.revision."
+        f"{parameters['head_rev']}.taskgraph.decision-nightly-desktop"
+    )
+    if os.environ.get("MOZ_AUTOMATION") and retry(
+        index_exists,
+        args=(index_path,),
+        kwargs={
+            "reason": "to avoid triggering multiple nightlies off the same revision",
+        },
+    ):
+        return []
+
     # Tasks that aren't platform specific
     release_filter = make_desktop_nightly_filter({None})
     release_tasks = [
@@ -1064,6 +1004,29 @@ def target_tasks_coverity_full(full_task_graph, parameters, graph_config):
     return ["source-test-coverity-coverity-full-analysis"]
 
 
+# Run build linux64-plain-clang-trunk/opt on mozilla-central/beta with perf tests
+@_target_task("linux64_clang_trunk_perf")
+def target_tasks_build_linux64_clang_trunk_perf(
+    full_task_graph, parameters, graph_config
+):
+    """Select tasks required to run perf test on linux64 build with clang trunk"""
+
+    # Only keep tasks generated from platform `linux1804-64-clang-trunk/opt`
+    def filter(task_label):
+        if "linux1804-64-clang-trunk/opt" in task_label:
+            return True
+        return False
+
+    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t.label)]
+
+
+# Run Updatebot's cron job 4 times daily.
+@_target_task("updatebot_cron")
+def target_tasks_updatebot_cron(full_task_graph, parameters, graph_config):
+    """Select tasks required to run Updatebot's cron job"""
+    return ["updatebot-cron"]
+
+
 @_target_task("customv8_update")
 def target_tasks_customv8_update(full_task_graph, parameters, graph_config):
     """Select tasks required for building latest d8/v8 version."""
@@ -1079,17 +1042,6 @@ def target_tasks_chromium_update(full_task_graph, parameters, graph_config):
         "fetch-win64-chromium",
         "fetch-mac-chromium",
     ]
-
-
-@_target_task("python_dependency_update")
-def target_tasks_python_update(full_task_graph, parameters, graph_config):
-    """Select the set of tasks required to perform nightly in-tree pipfile updates"""
-
-    def filter(task):
-        # For now any task in the repo-update kind is ok
-        return task.kind in ["python-dependency-update"]
-
-    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
 
 @_target_task("file_update")
@@ -1183,6 +1135,7 @@ def target_tasks_release_simulation(full_task_graph, parameters, graph_config):
         "beta": "mozilla-beta",
         "release": "mozilla-release",
         "esr78": "mozilla-esr78",
+        "esr91": "mozilla-esr91",
     }
     target_project = project_by_release.get(parameters["release_type"])
     if target_project is None:
@@ -1262,31 +1215,32 @@ def target_tasks_raptor_tp6m(full_task_graph, parameters, graph_config):
     return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
 
-@_target_task("raptor_tp6_windows10_64_ref_hw_2017")
-def target_tasks_raptor_tp6_windows10_64_ref_hw_2017(
-    full_task_graph, parameters, graph_config
-):
+@_target_task("perftest_s7")
+def target_tasks_perftest_s7(full_task_graph, parameters, graph_config):
     """
-    Select tasks required for running raptor cold tests on raptor_tp6_windows10_64_ref_hw_2017
+    Select tasks required for running raptor page-load tests on geckoview against S7
     """
 
     def filter(task):
-        platform = task.attributes.get("test_platform")
+        build_platform = task.attributes.get("build_platform", "")
+        test_platform = task.attributes.get("test_platform", "")
         attributes = task.attributes
 
+        if build_platform and "android" not in build_platform:
+            return False
         if attributes.get("unittest_suite") != "raptor":
             return False
-
-        if "windows10-64-ref-hw-2017/opt" not in platform:
-            return False
-
         try_name = attributes.get("raptor_try_name")
-        if "raptor" in try_name:
-            if "-tp6" in try_name:
-                if "-cold" in try_name:
+        if "s7" in test_platform and "-qr" in test_platform:
+            if "geckoview" in try_name and (
+                "unity-webgl" in try_name
+                or "speedometer" in try_name
+                or "tp6m-essential" in try_name
+            ):
+                if "power" in try_name:
+                    return False
+                else:
                     return True
-                return False
-            return True
 
     return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]
 
@@ -1335,3 +1289,13 @@ def target_tasks_perftest_autoland(full_task_graph, parameters, graph_config):
             test_name in name for test_name in ["view"]
         ):
             yield name
+
+
+@_target_task("l10n-cross-channel")
+def target_tasks_l10n_cross_channel(full_task_graph, parameters, graph_config):
+    """Select the set of tasks required to run l10n cross-channel."""
+
+    def filter(task):
+        return task.kind in ["l10n-cross-channel"]
+
+    return [l for l, t in six.iteritems(full_task_graph.tasks) if filter(t)]

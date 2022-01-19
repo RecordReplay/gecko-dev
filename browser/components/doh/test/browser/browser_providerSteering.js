@@ -5,7 +5,7 @@
 "use strict";
 
 const TEST_DOMAIN = "doh.test.";
-const AUTO_TRR_URI = "https://dummytrr.com/query";
+const AUTO_TRR_URI = "https://example.com/dns-query";
 
 add_task(setup);
 
@@ -29,10 +29,13 @@ add_task(async function testProviderSteering() {
       uri: "https://bar.provider2.com/query",
     },
   ];
+  let configFlushPromise = DoHTestUtils.waitForConfigFlush();
   Preferences.set(
     prefs.PROVIDER_STEERING_LIST_PREF,
     JSON.stringify(providerTestcases)
   );
+  await configFlushPromise;
+  await checkHeuristicsTelemetry("enable_doh", "startup");
 
   let testNetChangeResult = async (
     expectedURI,

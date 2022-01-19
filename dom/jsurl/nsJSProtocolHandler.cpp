@@ -42,6 +42,7 @@
 #include "nsSandboxFlags.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/CycleCollectedJSContext.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/DOMSecurityMonitor.h"
 #include "mozilla/dom/JSExecutionContext.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -302,9 +303,9 @@ nsresult nsJSThunk::EvaluateScript(
   options.setFileAndLine(mURL.get(), 1);
   options.setIntroductionType("javascriptURL");
   {
-    JSExecutionContext exec(cx, globalJSObject);
+    JSExecutionContext exec(cx, globalJSObject, options);
     exec.SetCoerceToString(true);
-    exec.Compile(options, NS_ConvertUTF8toUTF16(script));
+    exec.Compile(NS_ConvertUTF8toUTF16(script));
     rv = exec.ExecScript(&v);
   }
 

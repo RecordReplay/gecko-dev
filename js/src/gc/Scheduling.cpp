@@ -61,6 +61,8 @@ GCSchedulingTunables::GCSchedulingTunables()
           TuningDefaults::NurseryFreeThresholdForIdleCollection),
       nurseryFreeThresholdForIdleCollectionFraction_(
           TuningDefaults::NurseryFreeThresholdForIdleCollectionFraction),
+      nurseryTimeoutForIdleCollection_(TimeDuration::FromMilliseconds(
+          TuningDefaults::NurseryTimeoutForIdleCollectionMS)),
       pretenureThreshold_(TuningDefaults::PretenureThreshold),
       pretenureGroupThreshold_(TuningDefaults::PretenureGroupThreshold),
       pretenureStringThreshold_(TuningDefaults::PretenureStringThreshold),
@@ -180,6 +182,9 @@ bool GCSchedulingTunables::setParameter(JSGCParamKey key, uint32_t value,
         return false;
       }
       nurseryFreeThresholdForIdleCollectionFraction_ = value / 100.0;
+      break;
+    case JSGC_NURSERY_TIMEOUT_FOR_IDLE_COLLECTION_MS:
+      nurseryTimeoutForIdleCollection_ = TimeDuration::FromMilliseconds(value);
       break;
     case JSGC_PRETENURE_THRESHOLD: {
       // 100 disables pretenuring
@@ -343,6 +348,10 @@ void GCSchedulingTunables::resetParameter(JSGCParamKey key,
       nurseryFreeThresholdForIdleCollectionFraction_ =
           TuningDefaults::NurseryFreeThresholdForIdleCollectionFraction;
       break;
+    case JSGC_NURSERY_TIMEOUT_FOR_IDLE_COLLECTION_MS:
+      nurseryTimeoutForIdleCollection_ = TimeDuration::FromMilliseconds(
+          TuningDefaults::NurseryTimeoutForIdleCollectionMS);
+      break;
     case JSGC_PRETENURE_THRESHOLD:
       pretenureThreshold_ = TuningDefaults::PretenureThreshold;
       break;
@@ -451,9 +460,9 @@ double GCHeapThreshold::computeZoneHeapGrowthFactorForHeapSize(
 
 /* static */
 size_t GCHeapThreshold::computeZoneTriggerBytes(
-    double growthFactor, size_t lastBytes, JSGCInvocationKind gckind,
+    double growthFactor, size_t lastBytes, JS::GCOptions options,
     const GCSchedulingTunables& tunables, const AutoLockGC& lock) {
-  size_t baseMin = gckind == GC_SHRINK
+  size_t baseMin = options == JS::GCOptions::Shrink
                        ? tunables.minEmptyChunkCount(lock) * ChunkSize
                        : tunables.gcZoneAllocThresholdBase();
   size_t base = std::max(lastBytes, baseMin);
@@ -464,7 +473,7 @@ size_t GCHeapThreshold::computeZoneTriggerBytes(
 }
 
 void GCHeapThreshold::updateStartThreshold(size_t lastBytes,
-                                           JSGCInvocationKind gckind,
+                                           JS::GCOptions options,
                                            const GCSchedulingTunables& tunables,
                                            const GCSchedulingState& state,
                                            bool isAtomsZone,
@@ -479,7 +488,7 @@ void GCHeapThreshold::updateStartThreshold(size_t lastBytes,
   }
 
   startBytes_ =
-      computeZoneTriggerBytes(growthFactor, lastBytes, gckind, tunables, lock);
+      computeZoneTriggerBytes(growthFactor, lastBytes, options, tunables, lock);
 
   setIncrementalLimitFromStartBytes(lastBytes, tunables);
 }

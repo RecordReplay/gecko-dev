@@ -277,14 +277,22 @@ class nsRange final : public mozilla::dom::AbstractRange,
   nsRange(const nsRange&);
   nsRange& operator=(const nsRange&);
 
+  template <typename SPT, typename SRT, typename EPT, typename ERT>
+  static void AssertIfMismatchRootAndRangeBoundaries(
+      const mozilla::RangeBoundaryBase<SPT, SRT>& aStartBoundary,
+      const mozilla::RangeBoundaryBase<EPT, ERT>& aEndBoundary,
+      const nsINode* aRootNode, bool aNotInsertedYet = false);
+
   /**
    * Cut or delete the range's contents.
    *
    * @param aFragment DocumentFragment containing the nodes.
    *                  May be null to indicate the caller doesn't want a
-   * fragment.
+   *                  fragment.
+   * @param aRv The error if any.
    */
-  nsresult CutContents(mozilla::dom::DocumentFragment** frag);
+  void CutContents(mozilla::dom::DocumentFragment** aFragment,
+                   ErrorResult& aRv);
 
   static nsresult CloneParentsBetween(nsINode* aAncestor, nsINode* aNode,
                                       nsINode** aClosestAncestor,
@@ -344,8 +352,6 @@ class nsRange final : public mozilla::dom::AbstractRange,
    * Notify the selection listeners after a range has been modified.
    */
   MOZ_CAN_RUN_SCRIPT void NotifySelectionListenersAfterRangeSet();
-
-  typedef nsTHashtable<nsPtrHashKey<nsRange>> RangeHashTable;
 
  protected:
   /**

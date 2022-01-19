@@ -28,9 +28,9 @@ add_task(async function init() {
     await resetEngines();
   });
 
-  await promiseNewEngine(TEST_ENGINE_BASENAME, {
-    setAsCurrent: false,
-  });
+  await SearchTestUtils.promiseNewSearchEngine(
+    getRootDirectory(gTestPath) + TEST_ENGINE_BASENAME
+  );
 });
 
 async function testSearchBarChangeEngine(win, testPrivate, isPrivateWindow) {
@@ -51,13 +51,14 @@ async function testSearchBarChangeEngine(win, testPrivate, isPrivateWindow) {
     TEST_ENGINE_NAME
   );
 
+  const contextMenu = searchOneOff.contextMenuPopup;
   const setDefaultEngineMenuItem = searchOneOff.querySelector(
     ".search-one-offs-context-set-default" + (testPrivate ? "-private" : "")
   );
 
   // Click the set default engine menu item.
   let promise = promiseDefaultEngineChanged(testPrivate);
-  EventUtils.synthesizeMouseAtCenter(setDefaultEngineMenuItem, {}, win);
+  contextMenu.activateItem(setDefaultEngineMenuItem);
 
   // This also checks the engine correctly changed.
   await promise;
@@ -225,11 +226,11 @@ async function promiseClosePopup(popup) {
   await promise;
 
   // Move the cursor out of the panel area to avoid messing with other tests.
-  await EventUtils.synthesizeNativeMouseMove(
-    popup,
-    undefined,
-    undefined,
-    undefined,
-    popup.ownerGlobal
-  );
+  EventUtils.synthesizeNativeMouseEvent({
+    type: "mousemove",
+    target: popup,
+    offsetX: 0,
+    offsetY: 0,
+    win: popup.ownerGlobal,
+  });
 }

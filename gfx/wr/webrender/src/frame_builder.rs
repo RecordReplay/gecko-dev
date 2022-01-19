@@ -9,13 +9,12 @@ use crate::clip::{ClipStore, ClipChainStack};
 use crate::spatial_tree::{SpatialTree, ROOT_SPATIAL_NODE_INDEX, SpatialNodeIndex};
 use crate::composite::{CompositorKind, CompositeState, CompositeStatePreallocator};
 use crate::debug_item::DebugItem;
-use crate::frame_graph::{Pass, SubPassSurface};
 use crate::gpu_cache::{GpuCache, GpuCacheHandle};
 use crate::gpu_types::{PrimitiveHeaders, TransformPalette, ZBufferIdGenerator};
 use crate::gpu_types::TransformData;
 use crate::internal_types::{FastHashMap, PlaneSplitter};
 use crate::picture::{DirtyRegion, PictureUpdateState, SliceId, TileCacheInstance};
-use crate::picture::{SurfaceInfo, SurfaceIndex, ROOT_SURFACE_INDEX, SurfaceRenderTasks};
+use crate::picture::{SurfaceInfo, SurfaceIndex, ROOT_SURFACE_INDEX, SurfaceRenderTasks, SubSliceIndex};
 use crate::picture::{BackdropKind, SubpixelMode, TileCacheLogger, RasterConfig, PictureCompositeMode};
 use crate::prepare::prepare_primitives;
 use crate::prim_store::{PictureIndex, PrimitiveDebugId};
@@ -24,7 +23,7 @@ use crate::profiler::{self, TransactionProfile};
 use crate::render_backend::{DataStores, FrameStamp, FrameId, ScratchBuffer};
 use crate::render_target::{RenderTarget, PictureCacheTarget, TextureCacheRenderTarget};
 use crate::render_target::{RenderTargetContext, RenderTargetKind, AlphaRenderTarget, ColorRenderTarget};
-use crate::render_task_graph::{RenderTaskId, RenderTaskGraph};
+use crate::render_task_graph::{RenderTaskId, RenderTaskGraph, Pass, SubPassSurface};
 use crate::render_task_graph::{RenderPass, RenderTaskGraphBuilder};
 use crate::render_task::{RenderTaskLocation, RenderTaskKind, StaticRenderTaskSurface};
 use crate::resource_cache::{ResourceCache};
@@ -65,6 +64,9 @@ pub struct FrameBuilderConfig {
     pub gpu_supports_advanced_blend: bool,
     pub advanced_blend_is_coherent: bool,
     pub gpu_supports_render_target_partial_update: bool,
+    /// Whether ImageBufferKind::TextureExternal images must first be copied
+    /// to a regular texture before rendering.
+    pub external_images_require_copy: bool,
     pub batch_lookback_count: usize,
     pub background_color: Option<ColorF>,
     pub compositor_kind: CompositorKind,
@@ -72,6 +74,8 @@ pub struct FrameBuilderConfig {
     pub max_depth_ids: i32,
     pub max_target_size: i32,
     pub force_invalidation: bool,
+    pub is_software: bool,
+    pub low_quality_pinch_zoom: bool,
 }
 
 /// A set of common / global resources that are retained between
@@ -210,10 +214,12 @@ impl<'a> FrameBuildingState<'a> {
         &mut self,
         surface_index: SurfaceIndex,
         tasks: Vec<RenderTaskId>,
+        raster_rect: DeviceRect,
     ) {
         let surface = &mut self.surfaces[surface_index.0];
         assert!(surface.render_tasks.is_none());
         surface.render_tasks = Some(SurfaceRenderTasks::Tiled(tasks));
+        surface.raster_rect = Some(raster_rect);
     }
 
     /// Initialize render tasks for a simple surface, that contains only a
@@ -223,10 +229,12 @@ impl<'a> FrameBuildingState<'a> {
         surface_index: SurfaceIndex,
         task_id: RenderTaskId,
         parent_surface_index: SurfaceIndex,
+        raster_rect: DeviceRect,
     ) {
         let surface = &mut self.surfaces[surface_index.0];
         assert!(surface.render_tasks.is_none());
         surface.render_tasks = Some(SurfaceRenderTasks::Simple(task_id));
+        surface.raster_rect = Some(raster_rect);
 
         self.add_child_render_task(
             parent_surface_index,
@@ -243,10 +251,12 @@ impl<'a> FrameBuildingState<'a> {
         root_task_id: RenderTaskId,
         port_task_id: RenderTaskId,
         parent_surface_index: SurfaceIndex,
+        raster_rect: DeviceRect,
     ) {
         let surface = &mut self.surfaces[surface_index.0];
         assert!(surface.render_tasks.is_none());
         surface.render_tasks = Some(SurfaceRenderTasks::Chained { root_task_id, port_task_id });
+        surface.raster_rect = Some(raster_rect);
 
         self.add_child_render_task(
             parent_surface_index,
@@ -274,7 +284,6 @@ impl<'a> FrameBuildingState<'a> {
 pub struct PictureContext {
     pub pic_index: PictureIndex,
     pub apply_local_clip_rect: bool,
-    pub is_passthrough: bool,
     pub surface_spatial_node_index: SpatialNodeIndex,
     pub raster_spatial_node_index: SpatialNodeIndex,
     /// The surface that this picture will render on.
@@ -326,8 +335,6 @@ impl FrameBuilder {
     ) {
         profile_scope!("build_layer_screen_rects_and_cull_layers");
 
-        scratch.begin_frame();
-
         let root_spatial_node_index = scene.spatial_tree.root_reference_frame_index();
 
         const MAX_CLIP_COORD: f32 = 1.0e9;
@@ -337,10 +344,10 @@ impl FrameBuilder {
             scene_properties,
             global_screen_world_rect,
             spatial_tree: &scene.spatial_tree,
-            max_local_clip: LayoutRect::new(
-                LayoutPoint::new(-MAX_CLIP_COORD, -MAX_CLIP_COORD),
-                LayoutSize::new(2.0 * MAX_CLIP_COORD, 2.0 * MAX_CLIP_COORD),
-            ),
+            max_local_clip: LayoutRect {
+                min: LayoutPoint::new(-MAX_CLIP_COORD, -MAX_CLIP_COORD),
+                max: LayoutPoint::new(MAX_CLIP_COORD, MAX_CLIP_COORD),
+            },
             debug_flags,
             fb_config: &scene.config,
         };
@@ -376,6 +383,7 @@ impl FrameBuilder {
                 gpu_cache,
                 &scene.clip_store,
                 data_stores,
+                tile_caches,
             );
         }
 
@@ -406,7 +414,7 @@ impl FrameBuilder {
                 composite_state,
             };
 
-            for pic_index in &scene.tile_cache_pictures {
+            for pic_index in scene.tile_cache_pictures.iter().rev() {
                 update_primitive_visibility(
                     &mut scene.prim_store,
                     *pic_index,
@@ -415,6 +423,7 @@ impl FrameBuilder {
                     &visibility_context,
                     &mut visibility_state,
                     tile_caches,
+                    true,
                 );
             }
 
@@ -447,6 +456,7 @@ impl FrameBuilder {
         );
         default_dirty_region.add_dirty_region(
             frame_context.global_screen_world_rect.cast_unit(),
+            SubSliceIndex::DEFAULT,
             frame_context.spatial_tree,
         );
         frame_state.push_dirty_region(default_dirty_region);
@@ -460,7 +470,7 @@ impl FrameBuilder {
                     root_spatial_node_index,
                     root_spatial_node_index,
                     ROOT_SURFACE_INDEX,
-                    &SubpixelMode::Allow,
+                    SubpixelMode::Allow,
                     &mut frame_state,
                     &frame_context,
                     &mut scratch.primitive,
@@ -518,9 +528,7 @@ impl FrameBuilder {
         gpu_cache: &mut GpuCache,
         rg_builder: &mut RenderTaskGraphBuilder,
         stamp: FrameStamp,
-        global_device_pixel_scale: DevicePixelScale,
         device_origin: DeviceIntPoint,
-        pan: WorldPoint,
         scene_properties: &SceneProperties,
         data_stores: &mut DataStores,
         scratch: &mut ScratchBuffer,
@@ -535,29 +543,29 @@ impl FrameBuilder {
 
         profile.set(profiler::PRIMITIVES, scene.prim_store.prim_count());
         profile.set(profiler::PICTURE_CACHE_SLICES, scene.tile_cache_config.picture_cache_slice_count);
-        resource_cache.begin_frame(stamp);
+        scratch.begin_frame();
+        resource_cache.begin_frame(stamp, profile);
         gpu_cache.begin_frame(stamp);
 
         self.globals.update(gpu_cache);
 
-        scene.spatial_tree.update_tree(
-            pan,
-            global_device_pixel_scale,
-            scene_properties,
-        );
+        scene.spatial_tree.update_tree(scene_properties);
         let mut transform_palette = scene.spatial_tree.build_transform_palette();
-        scene.clip_store.clear_old_instances();
+        scene.clip_store.begin_frame(&mut scratch.clip_store);
 
         rg_builder.begin_frame(stamp.frame_id());
 
-        let output_size = scene.output_rect.size.to_i32();
+        // TODO(dp): Remove me completely!!
+        let global_device_pixel_scale = DevicePixelScale::new(1.0);
+
+        let output_size = scene.output_rect.size();
         let screen_world_rect = (scene.output_rect.to_f32() / global_device_pixel_scale).round_out();
 
         let mut composite_state = CompositeState::new(
             scene.config.compositor_kind,
-            global_device_pixel_scale,
             scene.config.max_depth_ids,
             dirty_rects_are_valid,
+            scene.config.low_quality_pinch_zoom,
         );
 
         self.composite_state_prealloc.preallocate(&mut composite_state);
@@ -582,14 +590,16 @@ impl FrameBuilder {
 
         profile.start_time(profiler::FRAME_BATCHING_TIME);
 
+        let mut deferred_resolves = vec![];
+
         // Finish creating the frame graph and build it.
         let render_tasks = rg_builder.end_frame(
             resource_cache,
             gpu_cache,
+            &mut deferred_resolves,
         );
 
         let mut passes = Vec::new();
-        let mut deferred_resolves = vec![];
         let mut has_texture_cache_tasks = false;
         let mut prim_headers = PrimitiveHeaders::new();
         self.prim_headers_prealloc.preallocate_vec(&mut prim_headers.headers_int);
@@ -677,10 +687,14 @@ impl FrameBuilder {
         self.prim_headers_prealloc.record_vec(&mut prim_headers.headers_int);
         self.composite_state_prealloc.record(&composite_state);
 
+        composite_state.end_frame();
+        scene.clip_store.end_frame(&mut scratch.clip_store);
+        scratch.end_frame();
+
         Frame {
-            device_rect: DeviceIntRect::new(
+            device_rect: DeviceIntRect::from_origin_and_size(
                 device_origin,
-                scene.output_rect.size,
+                scene.output_rect.size(),
             ),
             passes,
             transform_palette: transform_palette.finish(),
@@ -726,7 +740,6 @@ impl FrameBuilder {
                     composite_state.push_surface(
                         tile_cache,
                         device_clip_rect,
-                        ctx.global_device_pixel_scale,
                         ctx.resource_cache,
                         gpu_cache,
                         deferred_resolves,
@@ -792,7 +805,6 @@ pub fn build_render_pass(
                                 render_tasks,
                                 clip_store,
                                 transforms,
-                                deferred_resolves,
                             );
                         }
 
@@ -814,7 +826,6 @@ pub fn build_render_pass(
                                 render_tasks,
                                 clip_store,
                                 transforms,
-                                deferred_resolves,
                             );
                         }
 
@@ -843,15 +854,18 @@ pub fn build_render_pass(
                     .or_insert_with(Vec::new)
                     .push(task_id);
             }
-            SubPassSurface::Persistent { surface: StaticRenderTaskSurface::TextureCache { target_kind, texture, layer, .. } } => {
+            SubPassSurface::Persistent { surface: StaticRenderTaskSurface::TextureCache { target_kind, texture, .. } } => {
                 let texture = pass.texture_cache
-                    .entry((texture, layer))
+                    .entry(texture)
                     .or_insert_with(||
                         TextureCacheRenderTarget::new(target_kind)
                     );
                 for task_id in &sub_pass.task_ids {
-                    texture.add_task(*task_id, render_tasks);
+                    texture.add_task(*task_id, render_tasks, gpu_cache);
                 }
+            }
+            SubPassSurface::Persistent { surface: StaticRenderTaskSurface::ReadOnly { .. } } => {
+                panic!("Should not create a render pass for read-only task locations.");
             }
         }
     }
@@ -878,36 +892,12 @@ pub fn build_render_pass(
             }
         };
 
-        // Determine the clear color for this picture cache.
-        // If the entire tile cache is opaque, we can skip clear completely.
-        // If it's the first layer, clear it to white to allow subpixel AA on that
-        // first layer even if it's technically transparent.
-        // Otherwise, clear to transparent and composite with alpha.
-        // TODO(gw): We can detect per-tile opacity for the clear color here
-        //           which might be a significant win on some pages?
-        let forced_opaque = match tile_cache.background_color {
-            Some(color) => color.a >= 1.0,
-            None => false,
-        };
-        let mut clear_color = if forced_opaque {
-            Some(ColorF::WHITE)
-        } else {
-            Some(ColorF::TRANSPARENT)
-        };
-
-        // If this picture cache has a valid color backdrop, we will use
-        // that as the clear color, skipping the draw of the backdrop
-        // primitive (and anything prior to it) during batching.
-        if let Some(BackdropKind::Color { color }) = tile_cache.backdrop.kind {
-            clear_color = Some(color);
-        }
-
         // Create an alpha batcher for each of the tasks of this picture.
         let mut batchers = Vec::new();
         for task_id in &task_ids {
             let task_id = *task_id;
-            let vis_mask = match render_tasks[task_id].kind {
-                RenderTaskKind::Picture(ref info) => info.vis_mask,
+            let batch_filter = match render_tasks[task_id].kind {
+                RenderTaskKind::Picture(ref info) => info.batch_filter,
                 _ => unreachable!(),
             };
             batchers.push(AlphaBatchBuilder::new(
@@ -916,7 +906,7 @@ pub fn build_render_pass(
                 ctx.batch_lookback_count,
                 task_id,
                 task_id.into(),
-                vis_mask,
+                batch_filter,
                 0,
             ));
         }
@@ -947,7 +937,7 @@ pub fn build_render_pass(
         for (task_id, batcher) in task_ids.into_iter().zip(batchers.into_iter()) {
             profile_scope!("task");
             let task = &render_tasks[task_id];
-            let (target_rect, _) = task.get_target_rect();
+            let target_rect = task.get_target_rect();
 
             match task.location {
                 RenderTaskLocation::Static { surface: StaticRenderTaskSurface::PictureCache { ref surface, .. }, .. } => {
@@ -955,11 +945,30 @@ pub fn build_render_pass(
                     //           designed to support batch merging, which isn't
                     //           relevant for picture cache targets. We
                     //           can restructure / tidy this up a bit.
-                    let (scissor_rect, valid_rect)  = match render_tasks[task_id].kind {
+                    let (scissor_rect, valid_rect, clear_color)  = match render_tasks[task_id].kind {
                         RenderTaskKind::Picture(ref info) => {
+                            let mut clear_color = ColorF::TRANSPARENT;
+
+                            // TODO(gw): The way we check the batch filter for is_primary is a bit hacky, tidy up somehow?
+                            if let Some(batch_filter) = info.batch_filter {
+                                if batch_filter.sub_slice_index.is_primary() {
+                                    if let Some(background_color) = tile_cache.background_color {
+                                        clear_color = background_color;
+                                    }
+
+                                    // If this picture cache has a valid color backdrop, we will use
+                                    // that as the clear color, skipping the draw of the backdrop
+                                    // primitive (and anything prior to it) during batching.
+                                    if let Some(BackdropKind::Color { color }) = tile_cache.backdrop.kind {
+                                        clear_color = color;
+                                    }
+                                }
+                            }
+
                             (
                                 info.scissor_rect.expect("bug: must be set for cache tasks"),
                                 info.valid_rect.expect("bug: must be set for cache tasks"),
+                                clear_color,
                             )
                         }
                         _ => unreachable!(),
@@ -976,7 +985,7 @@ pub fn build_render_pass(
 
                     let target = PictureCacheTarget {
                         surface: surface.clone(),
-                        clear_color,
+                        clear_color: Some(clear_color),
                         alpha_batch_container,
                         dirty_rect: scissor_rect,
                         valid_rect,

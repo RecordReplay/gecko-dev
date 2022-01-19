@@ -1,14 +1,9 @@
-import mock
-import os
 import tempfile
 import shutil
 import sys
+from unittest import mock
 
 import pytest
-
-here = os.path.dirname(__file__)
-root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-sys.path.insert(0, root)
 
 from tools.wpt import run
 from tools import localpaths  # noqa: F401

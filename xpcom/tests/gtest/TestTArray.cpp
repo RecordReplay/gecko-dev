@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/RefPtr.h"
+#include "nsTHashMap.h"
 
 using namespace mozilla;
 
@@ -869,11 +870,11 @@ TEST(TArray, RemoveLastElements_One)
   ASSERT_EQ((nsTArray<int>{1, 2, 3}), array);
 }
 
-static_assert(std::is_copy_assignable<decltype(
-                  MakeBackInserter(std::declval<nsTArray<int>&>()))>::value,
+static_assert(std::is_copy_assignable<decltype(MakeBackInserter(
+                  std::declval<nsTArray<int>&>()))>::value,
               "output iteraror must be copy-assignable");
-static_assert(std::is_copy_constructible<decltype(
-                  MakeBackInserter(std::declval<nsTArray<int>&>()))>::value,
+static_assert(std::is_copy_constructible<decltype(MakeBackInserter(
+                  std::declval<nsTArray<int>&>()))>::value,
               "output iterator must be copy-constructible");
 
 TEST(TArray, MakeBackInserter)
@@ -970,6 +971,91 @@ TEST(TArray, StableSort)
   });
 
   EXPECT_EQ(expected, array);
+}
+
+TEST(TArray, ToArray)
+{
+  const auto src = std::array{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+
+  nsTArray<int> keys = ToArray(src);
+  keys.Sort();
+
+  EXPECT_EQ((nsTArray<int>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}), keys);
+}
+
+// Test this to make sure this properly uses ADL.
+TEST(TArray, ToArray_HashMap)
+{
+  nsTHashMap<uint32_t, uint64_t> src;
+
+  for (uint32_t i = 0; i < 10; ++i) {
+    src.InsertOrUpdate(i, i);
+  }
+
+  nsTArray<uint32_t> keys = ToArray(src.Keys());
+  keys.Sort();
+
+  EXPECT_EQ((nsTArray<uint32_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}), keys);
+}
+
+TEST(TArray, ToTArray)
+{
+  const auto src = std::array{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+
+  auto keys = ToTArray<AutoTArray<uint64_t, 10>>(src);
+  keys.Sort();
+
+  static_assert(std::is_same_v<decltype(keys), AutoTArray<uint64_t, 10>>);
+
+  EXPECT_EQ((nsTArray<uint64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}), keys);
+}
+
+TEST(TArray, RemoveElementsBy)
+{
+  // Removing elements returns the correct number of removed elements.
+  {
+    nsTArray<int> array{8, 1, 1, 3, 3, 5, 2, 3};
+    auto removed = array.RemoveElementsBy([](int i) { return i == 3; });
+    EXPECT_EQ(removed, 3u);
+
+    nsTArray<int> goal{8, 1, 1, 5, 2};
+    EXPECT_EQ(array, goal);
+  }
+
+  // The check is called in order.
+  {
+    int index = 0;
+    nsTArray<int> array{0, 1, 2, 3, 4, 5};
+    auto removed = array.RemoveElementsBy([&](int i) {
+      EXPECT_EQ(index, i);
+      index++;
+      return i == 3;
+    });
+    EXPECT_EQ(removed, 1u);
+
+    nsTArray<int> goal{0, 1, 2, 4, 5};
+    EXPECT_EQ(array, goal);
+  }
+
+  // Removing nothing works
+  {
+    nsTArray<int> array{0, 1, 2, 3, 4};
+    auto removed = array.RemoveElementsBy([](int) { return false; });
+    EXPECT_EQ(removed, 0u);
+
+    nsTArray<int> goal{0, 1, 2, 3, 4};
+    EXPECT_EQ(array, goal);
+  }
+
+  // Removing everything works
+  {
+    nsTArray<int> array{0, 1, 2, 3, 4};
+    auto removed = array.RemoveElementsBy([](int) { return true; });
+    EXPECT_EQ(removed, 5u);
+
+    nsTArray<int> goal{};
+    EXPECT_EQ(array, goal);
+  }
 }
 
 }  // namespace TestTArray

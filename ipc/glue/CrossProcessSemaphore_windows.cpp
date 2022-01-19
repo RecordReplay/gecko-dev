@@ -55,9 +55,17 @@ CrossProcessSemaphore::~CrossProcessSemaphore() {
 
 bool CrossProcessSemaphore::Wait(const Maybe<TimeDuration>& aWaitTime) {
   MOZ_ASSERT(mSemaphore, "Improper construction of semaphore.");
-  HRESULT hr = ::WaitForSingleObject(
-      mSemaphore, aWaitTime.isSome() ? aWaitTime->ToMilliseconds() : INFINITE);
-  return hr == WAIT_OBJECT_0;
+  // The behavior of semaphores used across processes is not currently handled by
+  // the recording driver, similar to accesses on shared memory objects and cross
+  // process semaphores on posix. Manually record/replay the semaphore behavior.
+  bool rv = true;
+  if (!recordreplay::IsReplaying()) {
+    recordreplay::AutoPassThroughThreadEvents pt;
+    HRESULT hr = ::WaitForSingleObject(
+        mSemaphore, aWaitTime.isSome() ? aWaitTime->ToMilliseconds() : INFINITE);
+    rv = hr == WAIT_OBJECT_0;
+  }
+  return recordreplay::RecordReplayValue("CrossProcessSemaphore::Wait", rv);
 }
 
 void CrossProcessSemaphore::Signal() {

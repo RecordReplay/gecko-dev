@@ -28,6 +28,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   HomePage: "resource:///modules/HomePage.jsm",
   AboutNewTab: "resource:///modules/AboutNewTab.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  TelemetryArchive: "resource://gre/modules/TelemetryArchive.jsm",
 });
 
 XPCOMUtils.defineLazyPreferenceGetter(
@@ -94,14 +95,16 @@ XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "snippetsUserPref",
   "browser.newtabpage.activity-stream.feeds.snippets",
-  true
+  false
 );
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "TrackingDBService",
-  "@mozilla.org/tracking-db-service;1",
-  "nsITrackingDBService"
-);
+
+XPCOMUtils.defineLazyServiceGetters(this, {
+  BrowserHandler: ["@mozilla.org/browser/clh;1", "nsIBrowserHandler"],
+  TrackingDBService: [
+    "@mozilla.org/tracking-db-service;1",
+    "nsITrackingDBService",
+  ],
+});
 
 const FXA_USERNAME_PREF = "services.sync.username";
 
@@ -207,8 +210,12 @@ function CheckBrowserNeedsUpdate(
           const checkerInstance = UpdateChecker.createInstance(
             Ci.nsIUpdateChecker
           );
-          checkerInstance.checkForUpdates(updateServiceListener, true);
-          this._lastUpdated = now;
+          if (checkerInstance.canCheckForUpdates) {
+            checkerInstance.checkForUpdates(updateServiceListener, true);
+            this._lastUpdated = now;
+          } else {
+            resolve(false);
+          }
         } else {
           resolve(this._value);
         }
@@ -237,6 +244,7 @@ const QueryCache = {
     CheckBrowserNeedsUpdate: new CheckBrowserNeedsUpdate(),
     RecentBookmarks: new CachedTargetingGetter("getRecentBookmarks"),
     ListAttachedOAuthClients: new CacheListAttachedOAuthClients(),
+    UserMonthlyActivity: new CachedTargetingGetter("getUserMonthlyActivity"),
   },
 };
 
@@ -281,26 +289,12 @@ function sortMessagesByWeightedRank(messages) {
 function getSortedMessages(messages, options = {}) {
   let { ordered } = { ordered: false, ...options };
   let result = messages;
-  let hasScores;
 
   if (!ordered) {
     result = sortMessagesByWeightedRank(result);
   }
 
   result.sort((a, b) => {
-    // If we find at least one score, we need to apply filtering by threshold at the end.
-    if (!isNaN(a.score) || !isNaN(b.score)) {
-      hasScores = true;
-    }
-
-    // First sort by score if we're doing personalization:
-    if (a.score > b.score || (!isNaN(a.score) && isNaN(b.score))) {
-      return -1;
-    }
-    if (a.score < b.score || (isNaN(a.score) && !isNaN(b.score))) {
-      return 1;
-    }
-
     // Next, sort by priority
     if (a.priority > b.priority || (!isNaN(a.priority) && isNaN(b.priority))) {
       return -1;
@@ -329,14 +323,6 @@ function getSortedMessages(messages, options = {}) {
 
     return 0;
   });
-
-  if (hasScores && !isNaN(ASRouterPreferences.personalizedCfrThreshold)) {
-    return result.filter(
-      message =>
-        isNaN(message.score) ||
-        message.score >= ASRouterPreferences.personalizedCfrThreshold
-    );
-  }
 
   return result;
 }
@@ -397,8 +383,6 @@ const TargetingGetters = {
   get browserSettings() {
     const { settings } = TelemetryEnvironment.currentEnvironment;
     return {
-      // This way of getting attribution is deprecated - use atttributionData instead
-      attribution: settings.attribution,
       update: settings.update,
     };
   },
@@ -583,12 +567,6 @@ const TargetingGetters = {
   get platformName() {
     return AppConstants.platform;
   },
-  get scores() {
-    return ASRouterPreferences.personalizedCfrScores;
-  },
-  get scoreThreshold() {
-    return ASRouterPreferences.personalizedCfrThreshold;
-  },
   get isChinaRepack() {
     return (
       Services.prefs
@@ -649,6 +627,46 @@ const TargetingGetters = {
     }
 
     return false;
+  },
+
+  get isMajorUpgrade() {
+    return BrowserHandler.majorUpgrade;
+  },
+
+  get hasActiveEnterprisePolicies() {
+    return Services.policies.status === Services.policies.ACTIVE;
+  },
+
+  get mainPingSubmissions() {
+    return (
+      TelemetryArchive.promiseArchivedPingList()
+        // Filter out non-main pings. Do it before so we compare timestamps
+        // between pings of same type.
+        .then(pings => pings.filter(p => p.type === "main"))
+        .then(pings => {
+          if (pings.length <= 1) {
+            return pings;
+          }
+          // Pings are returned in ascending order.
+          return pings.reduce(
+            (acc, ping) => {
+              if (
+                // Keep only main pings sent a day (or more) apart
+                new Date(ping.timestampCreated).toDateString() !==
+                new Date(acc[acc.length - 1].timestampCreated).toDateString()
+              ) {
+                acc.push(ping);
+              }
+              return acc;
+            },
+            [pings[0]]
+          );
+        })
+    );
+  },
+
+  get userMonthlyActivity() {
+    return QueryCache.queries.UserMonthlyActivity.get();
   },
 };
 

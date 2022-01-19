@@ -216,7 +216,7 @@ function setStorageEntry(storageType, originNoSuffix, firstParty, key, value) {
   let origin = getOrigin(originNoSuffix, firstParty);
 
   if (storageType == "cookie") {
-    SiteDataTestUtils.addToCookies(origin, key, value);
+    SiteDataTestUtils.addToCookies({ origin, name: key, value });
     return;
   }
   // localStorage
@@ -381,6 +381,10 @@ add_task(async function setup() {
       ["dom.storage_access.enabled", true],
       [
         "network.cookie.cookieBehavior",
+        Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
+      ],
+      [
+        "network.cookie.cookieBehavior.pbmode",
         Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
       ],
       ["privacy.trackingprotection.enabled", false],

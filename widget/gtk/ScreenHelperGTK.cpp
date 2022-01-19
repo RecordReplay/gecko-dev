@@ -18,6 +18,7 @@
 #include "gfxPlatformGtk.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/Logging.h"
+#include "mozilla/WidgetUtilsGtk.h"
 #include "nsGtkUtils.h"
 #include "nsTArray.h"
 
@@ -93,7 +94,7 @@ ScreenHelperGTK::ScreenHelperGTK()
                          G_CALLBACK(screen_resolution_changed), this);
 #ifdef MOZ_X11
   gdk_window_add_filter(mRootWindow, root_window_event_filter, this);
-  if (GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+  if (GdkIsX11Display()) {
     mNetWorkareaAtom = XInternAtom(GDK_WINDOW_XDISPLAY(mRootWindow),
                                    "_NET_WORKAREA", X11False);
   }
@@ -112,15 +113,8 @@ ScreenHelperGTK::~ScreenHelperGTK() {
 }
 
 gint ScreenHelperGTK::GetGTKMonitorScaleFactor(gint aMonitorNum) {
-  // Since GDK 3.10
-  static auto sGdkScreenGetMonitorScaleFactorPtr =
-      (gint(*)(GdkScreen*, gint))dlsym(RTLD_DEFAULT,
-                                       "gdk_screen_get_monitor_scale_factor");
-  if (sGdkScreenGetMonitorScaleFactorPtr) {
-    GdkScreen* screen = gdk_screen_get_default();
-    return sGdkScreenGetMonitorScaleFactorPtr(screen, aMonitorNum);
-  }
-  return 1;
+  GdkScreen* screen = gdk_screen_get_default();
+  return gdk_screen_get_monitor_scale_factor(screen, aMonitorNum);
 }
 
 static uint32_t GetGTKPixelDepth() {
@@ -138,20 +132,27 @@ static already_AddRefed<Screen> MakeScreen(GdkScreen* aScreen,
 
   // gdk_screen_get_monitor_geometry / workarea returns application pixels
   // (desktop pixels), so we need to convert it to device pixels with
-  // gdkScaleFactor.
-  LayoutDeviceIntRect rect(
-      monitor.x * gdkScaleFactor, monitor.y * gdkScaleFactor,
-      monitor.width * gdkScaleFactor, monitor.height * gdkScaleFactor);
-  LayoutDeviceIntRect availRect(
-      workarea.x * gdkScaleFactor, workarea.y * gdkScaleFactor,
-      workarea.width * gdkScaleFactor, workarea.height * gdkScaleFactor);
+  // gdkScaleFactor on X11.
+  gint geometryScaleFactor = 1;
+  if (GdkIsX11Display()) {
+    geometryScaleFactor = gdkScaleFactor;
+  }
+
+  LayoutDeviceIntRect rect(monitor.x * geometryScaleFactor,
+                           monitor.y * geometryScaleFactor,
+                           monitor.width * geometryScaleFactor,
+                           monitor.height * geometryScaleFactor);
+  LayoutDeviceIntRect availRect(workarea.x * geometryScaleFactor,
+                                workarea.y * geometryScaleFactor,
+                                workarea.width * geometryScaleFactor,
+                                workarea.height * geometryScaleFactor);
+
   uint32_t pixelDepth = GetGTKPixelDepth();
 
   // Use per-monitor scaling factor in gtk/wayland, or 1.0 otherwise.
   DesktopToLayoutDeviceScale contentsScale(1.0);
 #ifdef MOZ_WAYLAND
-  GdkDisplay* gdkDisplay = gdk_display_get_default();
-  if (!GDK_IS_X11_DISPLAY(gdkDisplay)) {
+  if (GdkIsWaylandDisplay()) {
     contentsScale.scale = gdkScaleFactor;
   }
 #endif

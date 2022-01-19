@@ -58,6 +58,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
         "WinTokenUtils.h",
     ]
     UNIFIED_SOURCES += [
+        "/toolkit/mozapps/update/common/pathhash.cpp",
         "/toolkit/mozapps/update/common/updateutils_win.cpp",
         "DllPrefetchExperimentRegistryInfo.cpp",
         "ModuleEvaluator.cpp",
@@ -286,3 +287,6 @@ if CONFIG["MOZ_IPDL_TESTS"]:
 
 if CONFIG["ENABLE_TESTS"]:
     DIRS += ["test/gtest"]
+
+if CONFIG["MOZ_BACKGROUNDTASKS"]:
+    DEFINES["MOZ_BACKGROUNDTASKS"] = True

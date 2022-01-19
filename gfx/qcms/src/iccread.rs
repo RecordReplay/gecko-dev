@@ -22,11 +22,15 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 use std::{
+    convert::TryInto,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
 
-use crate::transform::{set_rgb_colorants, PrecacheOuput};
+use crate::{
+    double_to_s15Fixed16Number,
+    transform::{set_rgb_colorants, PrecacheOuput},
+};
 use crate::{matrix::Matrix, s15Fixed16Number, s15Fixed16Number_to_float, Intent, Intent::*};
 
 pub static SUPPORTS_ICCV4: AtomicBool = AtomicBool::new(cfg!(feature = "iccv4-enabled"));
@@ -35,9 +39,9 @@ pub const RGB_SIGNATURE: u32 = 0x52474220;
 pub const GRAY_SIGNATURE: u32 = 0x47524159;
 pub const XYZ_SIGNATURE: u32 = 0x58595A20;
 pub const LAB_SIGNATURE: u32 = 0x4C616220;
+pub const CMYK_SIGNATURE: u32 = 0x434D594B; // 'CMYK'
 
 /// A color profile
-#[repr(C)]
 #[derive(Default)]
 pub struct Profile {
     pub(crate) class_type: u32,
@@ -55,10 +59,11 @@ pub struct Profile {
     pub(crate) B2A0: Option<Box<lutType>>,
     pub(crate) mAB: Option<Box<lutmABType>>,
     pub(crate) mBA: Option<Box<lutmABType>>,
-    pub(crate) chromaticAdaption: Matrix,
+    pub(crate) chromaticAdaption: Option<Matrix>,
     pub(crate) output_table_r: Option<Arc<PrecacheOuput>>,
     pub(crate) output_table_g: Option<Arc<PrecacheOuput>>,
     pub(crate) output_table_b: Option<Arc<PrecacheOuput>>,
+    is_srgb: Option<bool>,
 }
 
 #[derive(Default)]
@@ -86,7 +91,7 @@ pub(crate) struct lutmABType {
     pub b_curves: [Option<Box<curveType>>; MAX_CHANNELS],
     pub m_curves: [Option<Box<curveType>>; MAX_CHANNELS],
 }
-
+#[derive(Clone)]
 pub(crate) enum curveType {
     Curve(Vec<uInt16Number>),
     Parametric(Vec<f32>),
@@ -151,8 +156,6 @@ struct Tag {
 /* It might be worth having a unified limit on content controlled
  * allocation per profile. This would remove the need for many
  * of the arbitrary limits that we used */
-pub type be32 = u32;
-pub type be16 = u16;
 
 type TagIndex = [Tag];
 
@@ -174,49 +177,37 @@ fn uInt16Number_to_float(a: uInt16Number) -> f32 {
     a as f32 / 65535.0
 }
 
-fn cpu_to_be32(v: u32) -> be32 {
-    v.to_be()
-}
-fn cpu_to_be16(v: u16) -> be16 {
-    v.to_be()
-}
-fn be32_to_cpu(v: be32) -> u32 {
-    u32::from_be(v)
-}
-fn be16_to_cpu(v: be16) -> u16 {
-    u16::from_be(v)
-}
 fn invalid_source(mut mem: &mut MemSource, reason: &'static str) {
     mem.valid = false;
     mem.invalid_reason = Some(reason);
 }
 fn read_u32(mem: &mut MemSource, offset: usize) -> u32 {
-    /* Subtract from mem->size instead of the more intuitive adding to offset.
-     * This avoids overflowing offset. The subtraction is safe because
-     * mem->size is guaranteed to be > 4 */
-    if offset > mem.buf.len() - 4 {
+    let val = mem.buf.get(offset..offset + 4);
+    if let Some(val) = val {
+        let val = val.try_into().unwrap();
+        u32::from_be_bytes(val)
+    } else {
         invalid_source(mem, "Invalid offset");
         0
-    } else {
-        let k = unsafe { std::ptr::read_unaligned(mem.buf.as_ptr().add(offset) as *const be32) };
-        be32_to_cpu(k)
     }
 }
 fn read_u16(mem: &mut MemSource, offset: usize) -> u16 {
-    if offset > mem.buf.len() - 2 {
-        invalid_source(mem, "Invalid offset");
-        0u16
+    let val = mem.buf.get(offset..offset + 2);
+    if let Some(val) = val {
+        let val = val.try_into().unwrap();
+        u16::from_be_bytes(val)
     } else {
-        let k = unsafe { std::ptr::read_unaligned(mem.buf.as_ptr().add(offset) as *const be16) };
-        be16_to_cpu(k)
+        invalid_source(mem, "Invalid offset");
+        0
     }
 }
 fn read_u8(mem: &mut MemSource, offset: usize) -> u8 {
-    if offset > mem.buf.len() - 1 {
-        invalid_source(mem, "Invalid offset");
-        0u8
+    let val = mem.buf.get(offset);
+    if let Some(val) = val {
+        *val
     } else {
-        unsafe { *(mem.buf.as_ptr().add(offset) as *mut u8) }
+        invalid_source(mem, "Invalid offset");
+        0
     }
 }
 fn read_s15Fixed16Number(mem: &mut MemSource, offset: usize) -> s15Fixed16Number {
@@ -229,22 +220,18 @@ fn read_uInt16Number(mem: &mut MemSource, offset: usize) -> uInt16Number {
     read_u16(mem, offset)
 }
 pub fn write_u32(mem: &mut [u8], offset: usize, value: u32) {
-    if offset <= mem.len() - std::mem::size_of_val(&value) {
-        panic!("OOB");
-    }
-    let mem = mem.as_mut_ptr();
-    unsafe {
-        std::ptr::write_unaligned(mem.add(offset) as *mut u32, cpu_to_be32(value));
-    }
+    // we use get() and expect() instead of [..] so there's only one call to panic
+    // instead of two
+    mem.get_mut(offset..offset + std::mem::size_of_val(&value))
+        .expect("OOB")
+        .copy_from_slice(&value.to_be_bytes());
 }
 pub fn write_u16(mem: &mut [u8], offset: usize, value: u16) {
-    if offset <= mem.len() - std::mem::size_of_val(&value) {
-        panic!("OOB");
-    }
-    let mem = mem.as_mut_ptr();
-    unsafe {
-        std::ptr::write_unaligned(mem.add(offset) as *mut u16, cpu_to_be16(value));
-    }
+    // we use get() and expect() instead of [..] so there's only one call to panic
+    // intead of two
+    mem.get_mut(offset..offset + std::mem::size_of_val(&value))
+        .expect("OOB")
+        .copy_from_slice(&value.to_be_bytes());
 }
 
 /* An arbitrary 4MB limit on profile size */
@@ -299,6 +286,8 @@ fn read_color_space(mut profile: &mut Profile, mem: &mut MemSource) {
     profile.color_space = read_u32(mem, 16);
     match profile.color_space {
         RGB_SIGNATURE | GRAY_SIGNATURE => {}
+        #[cfg(feature = "cmyk")]
+        CMYK_SIGNATURE => {}
         _ => {
             invalid_source(mem, "Unsupported colorspace");
         }
@@ -451,28 +440,20 @@ pub const LUT_MAB_TYPE: u32 = 0x6d414220; // 'mAB '
 pub const LUT_MBA_TYPE: u32 = 0x6d424120; // 'mBA '
 pub const CHROMATIC_TYPE: u32 = 0x73663332; // 'sf32'
 
-fn read_tag_s15Fixed16ArrayType(src: &mut MemSource, index: &TagIndex, tag_id: u32) -> Matrix {
-    let tag = find_tag(index, tag_id);
+fn read_tag_s15Fixed16ArrayType(src: &mut MemSource, tag: &Tag) -> Matrix {
     let mut matrix: Matrix = Matrix {
         m: [[0.; 3]; 3],
-        invalid: false,
     };
-    if let Some(tag) = tag {
-        let offset: u32 = tag.offset;
-        let type_0: u32 = read_u32(src, offset as usize);
-        // Check mandatory type signature for s16Fixed16ArrayType
-        if type_0 != CHROMATIC_TYPE {
-            invalid_source(src, "unexpected type, expected \'sf32\'");
-        }
-        for i in 0..=8 {
-            matrix.m[(i / 3) as usize][(i % 3) as usize] = s15Fixed16Number_to_float(
-                read_s15Fixed16Number(src, (offset + 8 + (i * 4) as u32) as usize),
-            );
-        }
-        matrix.invalid = false
-    } else {
-        matrix.invalid = true;
-        invalid_source(src, "missing sf32tag");
+    let offset: u32 = tag.offset;
+    let type_0: u32 = read_u32(src, offset as usize);
+    // Check mandatory type signature for s16Fixed16ArrayType
+    if type_0 != CHROMATIC_TYPE {
+        invalid_source(src, "unexpected type, expected \'sf32\'");
+    }
+    for i in 0..=8 {
+        matrix.m[(i / 3) as usize][(i % 3) as usize] = s15Fixed16Number_to_float(
+            read_s15Fixed16Number(src, (offset + 8 + (i * 4) as u32) as usize),
+        );
     }
     matrix
 }
@@ -748,18 +729,25 @@ fn read_tag_lutType(src: &mut MemSource, tag: &Tag) -> Option<Box<lutType>> {
     }
     let in_chan = read_u8(src, (offset + 8) as usize);
     let out_chan = read_u8(src, (offset + 9) as usize);
+    if !(in_chan == 3 || in_chan == 4) || out_chan != 3 {
+        invalid_source(src, "CLUT only supports RGB and CMYK");
+        return None;
+    }
+
     let grid_points = read_u8(src, (offset + 10) as usize);
-    let clut_size = (grid_points as f64).powf(in_chan as f64) as u32;
+    let clut_size = match (grid_points as u32).checked_pow(in_chan as u32) {
+        Some(clut_size) => clut_size,
+        _ => {
+            invalid_source(src, "CLUT size overflow");
+            return None;
+        }
+    };
     if clut_size > MAX_LUT_SIZE {
         invalid_source(src, "CLUT too large");
         return None;
     }
     if clut_size <= 0 {
         invalid_source(src, "CLUT must not be empty.");
-        return None;
-    }
-    if in_chan != 3 || out_chan != 3 {
-        invalid_source(src, "CLUT only supports RGB");
         return None;
     }
 
@@ -792,35 +780,20 @@ fn read_tag_lutType(src: &mut MemSource, tag: &Tag) -> Option<Box<lutType>> {
         as u32;
 
     let mut clut_table = Vec::with_capacity((clut_size * out_chan as u32) as usize);
-    for i in (0..clut_size * out_chan as u32).step_by(3) {
+    for i in 0..clut_size * out_chan as u32 {
         if type_0 == LUT8_TYPE {
             clut_table.push(uInt8Number_to_float(read_uInt8Number(
                 src,
-                clut_offset as usize + i as usize * entry_size + 0,
+                clut_offset as usize + i as usize * entry_size,
             )));
-            clut_table.push(uInt8Number_to_float(read_uInt8Number(
-                src,
-                clut_offset as usize + i as usize * entry_size + 1,
-            )));
-            clut_table.push(uInt8Number_to_float(read_uInt8Number(
-                src,
-                clut_offset as usize + i as usize * entry_size + 2,
-            )))
-        } else {
+        } else if type_0 == LUT16_TYPE {
             clut_table.push(uInt16Number_to_float(read_uInt16Number(
                 src,
-                clut_offset as usize + i as usize * entry_size + 0,
+                clut_offset as usize + i as usize * entry_size,
             )));
-            clut_table.push(uInt16Number_to_float(read_uInt16Number(
-                src,
-                clut_offset as usize + i as usize * entry_size + 2,
-            )));
-            clut_table.push(uInt16Number_to_float(read_uInt16Number(
-                src,
-                clut_offset as usize + i as usize * entry_size + 4,
-            )))
         }
     }
+
     let output_offset =
         (clut_offset as usize + (clut_size * out_chan as u32) as usize * entry_size) as u32;
 
@@ -932,6 +905,10 @@ fn curve_from_gamma(gamma: f32) -> Box<curveType> {
     Box::new(curveType::Curve(vec![float_to_u8Fixed8Number(gamma)]))
 }
 
+fn identity_curve() -> Box<curveType> {
+    Box::new(curveType::Curve(Vec::new()))
+}
+
 /* from lcms: cmsWhitePointFromTemp */
 /* tempK must be >= 4000. and <= 25000.
  * Invalid values of tempK will return
@@ -1028,7 +1005,82 @@ impl Profile {
         let D65 = qcms_white_point_sRGB();
         let table = build_sRGB_gamma_table(1024);
 
-        Profile::new_rgb_with_table(D65, Rec709Primaries, &table).unwrap()
+        let mut srgb = Profile::new_rgb_with_table(D65, Rec709Primaries, &table).unwrap();
+        srgb.is_srgb = Some(true);
+        srgb
+    }
+
+    /// Returns true if this profile is sRGB
+    pub fn is_sRGB(&self) -> bool {
+        matches!(self.is_srgb, Some(true))
+    }
+
+    pub(crate) fn new_sRGB_parametric() -> Box<Profile> {
+        let primaries = qcms_CIE_xyYTRIPLE {
+            red: {
+                qcms_CIE_xyY {
+                    x: 0.6400,
+                    y: 0.3300,
+                    Y: 1.0,
+                }
+            },
+            green: {
+                qcms_CIE_xyY {
+                    x: 0.3000,
+                    y: 0.6000,
+                    Y: 1.0,
+                }
+            },
+            blue: {
+                qcms_CIE_xyY {
+                    x: 0.1500,
+                    y: 0.0600,
+                    Y: 1.0,
+                }
+            },
+        };
+        let white_point = qcms_white_point_sRGB();
+        let mut profile = profile_create();
+        set_rgb_colorants(&mut profile, white_point, primaries);
+
+        let curve = Box::new(curveType::Parametric(vec![
+            2.4,
+            1. / 1.055,
+            0.055 / 1.055,
+            1. / 12.92,
+            0.04045,
+        ]));
+        profile.redTRC = Some(curve.clone());
+        profile.blueTRC = Some(curve.clone());
+        profile.greenTRC = Some(curve);
+        profile.class_type = DISPLAY_DEVICE_PROFILE;
+        profile.rendering_intent = Perceptual;
+        profile.color_space = RGB_SIGNATURE;
+        profile.pcs = XYZ_TYPE;
+        profile
+    }
+
+    /// Create a new profile with D50 adopted white and identity transform functions
+    pub fn new_XYZD50() -> Box<Profile> {
+        let mut profile = profile_create();
+        profile.redColorant.X = double_to_s15Fixed16Number(1.);
+        profile.redColorant.Y = double_to_s15Fixed16Number(0.);
+        profile.redColorant.Z = double_to_s15Fixed16Number(0.);
+        profile.greenColorant.X = double_to_s15Fixed16Number(0.);
+        profile.greenColorant.Y = double_to_s15Fixed16Number(1.);
+        profile.greenColorant.Z = double_to_s15Fixed16Number(0.);
+        profile.blueColorant.X = double_to_s15Fixed16Number(0.);
+        profile.blueColorant.Y = double_to_s15Fixed16Number(0.);
+        profile.blueColorant.Z = double_to_s15Fixed16Number(1.);
+        profile.redTRC = Some(identity_curve());
+        profile.blueTRC = Some(identity_curve());
+        profile.greenTRC = Some(identity_curve());
+
+        profile.class_type = DISPLAY_DEVICE_PROFILE;
+        profile.rendering_intent = Perceptual;
+        profile.color_space = RGB_SIGNATURE;
+        profile.pcs = XYZ_TYPE;
+        profile
     }
 
     pub fn new_gray_with_gamma(gamma: f32) -> Box<Profile> {
@@ -1107,10 +1159,10 @@ impl Profile {
             return None;
         }
 
-        if find_tag(&index, TAG_CHAD).is_some() {
-            profile.chromaticAdaption = read_tag_s15Fixed16ArrayType(src, &index, TAG_CHAD)
+        if let Some(chad) = find_tag(&index, TAG_CHAD) {
+            profile.chromaticAdaption = Some(read_tag_s15Fixed16ArrayType(src, chad))
         } else {
-            profile.chromaticAdaption.invalid = true //Signal the data is not present
+            profile.chromaticAdaption = None; //Signal the data is not present
         }
 
         if profile.class_type == DISPLAY_DEVICE_PROFILE
@@ -1158,6 +1210,15 @@ impl Profile {
             } else if profile.color_space == GRAY_SIGNATURE {
                 profile.grayTRC = read_tag_curveType(src, &index, TAG_kTRC);
                 profile.grayTRC.as_ref()?;
+            } else if profile.color_space == CMYK_SIGNATURE {
+                if let Some(A2B0) = find_tag(&index, TAG_A2B0) {
+                    let lut_type = read_u32(src, A2B0.offset as usize);
+                    if lut_type == LUT8_TYPE || lut_type == LUT16_TYPE {
+                        profile.A2B0 = read_tag_lutType(src, A2B0)
+                    } else if lut_type == LUT_MBA_TYPE {
+                        profile.mAB = read_tag_lutmABType(src, A2B0)
+                    }
+                }
             } else {
                 debug_assert!(false, "read_color_space protects against entering here");
                 return None;

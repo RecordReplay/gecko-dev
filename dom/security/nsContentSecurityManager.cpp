@@ -11,6 +11,7 @@
 #include "nsEscape.h"
 #include "nsDataHandler.h"
 #include "nsIChannel.h"
+#include "nsIContentPolicy.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsINode.h"
 #include "nsIStreamListener.h"
@@ -23,6 +24,7 @@
 #include "nsIRedirectHistoryEntry.h"
 #include "nsNetUtil.h"
 #include "nsReadableUtils.h"
+#include "nsSandboxFlags.h"
 #include "nsIXPConnect.h"
 
 #include "mozilla/BasePrincipal.h"
@@ -36,6 +38,7 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/Components.h"
 #include "mozilla/Logging.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_security.h"
@@ -56,6 +59,11 @@ NS_IMPL_ISUPPORTS(nsContentSecurityManager, nsIContentSecurityManager,
 
 mozilla::LazyLogModule sCSMLog("CSMLog");
 
+// These first two are used for off-the-main-thread checks of
+// general.config.filename
+//   (which can't be checked off-main-thread).
+Atomic<bool, mozilla::Relaxed> sJSHacksChecked(false);
+Atomic<bool, mozilla::Relaxed> sJSHacksPresent(false);
 Atomic<bool, mozilla::Relaxed> sTelemetryEventEnabled(false);
 
 /* static */
@@ -260,6 +268,33 @@ static nsresult ValidateSecurityFlags(nsILoadInfo* aLoadInfo) {
   return NS_OK;
 }
 
+static already_AddRefed<nsIPrincipal> GetExtensionSandboxPrincipal(
+    nsILoadInfo* aLoadInfo) {
+  // An extension is allowed to load resources from itself when its pages are
+  // loaded into a sandboxed frame.  Extension resources in a sandbox have
+  // a null principal and no access to extension APIs.  See "sandbox" in
+  // MDN extension docs for more information.
+  if (!aLoadInfo->TriggeringPrincipal()->GetIsNullPrincipal()) {
+    return nullptr;
+  }
+  RefPtr<Document> doc;
+  aLoadInfo->GetLoadingDocument(getter_AddRefs(doc));
+  if (!doc || !(doc->GetSandboxFlags() & SANDBOXED_ORIGIN)) {
+    return nullptr;
+  }
+
+  // node principal is also a null principal here, so we need to
+  // create a principal using documentURI, which is the moz-extension
+  // uri for the page if this is an extension sandboxed page.
+  nsCOMPtr<nsIPrincipal> docPrincipal = BasePrincipal::CreateContentPrincipal(
+      doc->GetDocumentURI(), doc->NodePrincipal()->OriginAttributesRef());
+
+  if (!BasePrincipal::Cast(docPrincipal)->AddonPolicy()) {
+    return nullptr;
+  }
+  return docPrincipal.forget();
+}
+
 static bool IsImageLoadInEditorAppType(nsILoadInfo* aLoadInfo) {
   // Editor apps get special treatment here, editors can load images
   // from anywhere.  This allows editor to insert images from file://
@@ -323,11 +358,20 @@ static nsresult DoCheckLoadURIChecks(nsIURI* aURI, nsILoadInfo* aLoadInfo) {
     return NS_OK;
   }
 
+  nsCOMPtr<nsIPrincipal> triggeringPrincipal = aLoadInfo->TriggeringPrincipal();
+  nsCOMPtr<nsIPrincipal> addonPrincipal =
+      GetExtensionSandboxPrincipal(aLoadInfo);
+  if (addonPrincipal) {
+    // call CheckLoadURIWithPrincipal() as below to continue other checks, but
+    // with the addon principal.
+    triggeringPrincipal = addonPrincipal;
+  }
+
   // Only call CheckLoadURIWithPrincipal() using the TriggeringPrincipal and not
   // the LoadingPrincipal when SEC_ALLOW_CROSS_ORIGIN_* security flags are set,
   // to allow, e.g. user stylesheets to load chrome:// URIs.
   return nsContentUtils::GetSecurityManager()->CheckLoadURIWithPrincipal(
-      aLoadInfo->TriggeringPrincipal(), aURI, aLoadInfo->CheckLoadURIFlags(),
+      triggeringPrincipal, aURI, aLoadInfo->CheckLoadURIFlags(),
       aLoadInfo->GetInnerWindowID());
 }
 
@@ -485,7 +529,8 @@ static nsresult DoContentSecurityChecks(nsIChannel* aChannel,
       break;
     }
 
-    case ExtContentPolicy::TYPE_FONT: {
+    case ExtContentPolicy::TYPE_FONT:
+    case ExtContentPolicy::TYPE_UA_FONT: {
       mimeTypeGuess.Truncate();
       break;
     }
@@ -603,6 +648,39 @@ static nsresult DoContentSecurityChecks(nsIChannel* aChannel,
   }
 
   return NS_OK;
+}
+
+static void LogHTTPSOnlyInfo(nsILoadInfo* aLoadInfo) {
+  MOZ_LOG(sCSMLog, LogLevel::Verbose, ("  - https-only/https-first flags:"));
+  uint32_t httpsOnlyStatus = aLoadInfo->GetHttpsOnlyStatus();
+
+  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_UNINITIALIZED) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose, ("    - HTTPS_ONLY_UNINITIALIZED"));
+  }
+  if (httpsOnlyStatus &
+      nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_NOT_REGISTERED) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose,
+            ("    - HTTPS_ONLY_UPGRADED_LISTENER_NOT_REGISTERED"));
+  }
+  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_UPGRADED_LISTENER_REGISTERED) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose,
+            ("    - HTTPS_ONLY_UPGRADED_LISTENER_REGISTERED"));
+  }
+  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_EXEMPT) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose, ("    - HTTPS_ONLY_EXEMPT"));
+  }
+  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_TOP_LEVEL_LOAD_IN_PROGRESS) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose,
+            ("    - HTTPS_ONLY_TOP_LEVEL_LOAD_IN_PROGRESS"));
+  }
+  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_DO_NOT_LOG_TO_CONSOLE) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose,
+            ("    - HTTPS_ONLY_DO_NOT_LOG_TO_CONSOLE"));
+  }
+  if (httpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_UPGRADED_HTTPS_FIRST) {
+    MOZ_LOG(sCSMLog, LogLevel::Verbose,
+            ("    - HTTPS_ONLY_UPGRADED_HTTPS_FIRST"));
+  }
 }
 
 static void LogPrincipal(nsIPrincipal* aPrincipal,
@@ -780,17 +858,46 @@ static void DebugDoContentSecurityCheck(nsIChannel* aChannel,
     // Security Flags
     MOZ_LOG(sCSMLog, LogLevel::Verbose, ("  - securityFlags:"));
     LogSecurityFlags(aLoadInfo->GetSecurityFlags());
+    LogHTTPSOnlyInfo(aLoadInfo);
     MOZ_LOG(sCSMLog, LogLevel::Debug, ("\n#DebugDoContentSecurityCheck End\n"));
   }
 }
 
 /* static */
 void nsContentSecurityManager::MeasureUnexpectedPrivilegedLoads(
-    nsIURI* aFinalURI, ExtContentPolicyType aContentPolicyType,
-    const nsACString& aRemoteType) {
+    nsILoadInfo* aLoadInfo, nsIURI* aFinalURI, const nsACString& aRemoteType) {
   if (!StaticPrefs::dom_security_unexpected_system_load_telemetry_enabled()) {
     return;
   }
+  ExtContentPolicyType contentPolicyType =
+      aLoadInfo->GetExternalContentPolicyType();
+  // restricting reported types to script and styles
+  // to be continued in follow-ups of bug 1697163.
+  if (contentPolicyType != ExtContentPolicyType::TYPE_SCRIPT &&
+      contentPolicyType != ExtContentPolicyType::TYPE_STYLESHEET) {
+    return;
+  }
+
+  // Gather redirected schemes in string
+  nsAutoCString loggedRedirects;
+  const nsTArray<nsCOMPtr<nsIRedirectHistoryEntry>>& redirects =
+      aLoadInfo->RedirectChain();
+  if (!redirects.IsEmpty()) {
+    nsCOMPtr<nsIRedirectHistoryEntry> end = redirects.LastElement();
+    for (nsIRedirectHistoryEntry* entry : redirects) {
+      nsCOMPtr<nsIPrincipal> principal;
+      entry->GetPrincipal(getter_AddRefs(principal));
+      if (principal) {
+        nsAutoCString scheme;
+        principal->GetScheme(scheme);
+        loggedRedirects.Append(scheme);
+        if (entry != end) {
+          loggedRedirects.AppendLiteral(", ");
+        }
+      }
+    }
+  }
+
   nsAutoCString uriString;
   if (aFinalURI) {
     aFinalURI->GetAsciiSpec(uriString);
@@ -799,7 +906,7 @@ void nsContentSecurityManager::MeasureUnexpectedPrivilegedLoads(
   }
   FilenameTypeAndDetails fileNameTypeAndDetails =
       nsContentSecurityUtils::FilenameToFilenameType(
-          NS_ConvertUTF8toUTF16(uriString), false);
+          NS_ConvertUTF8toUTF16(uriString), true);
 
   nsCString loggedFileDetails = "unknown"_ns;
   if (fileNameTypeAndDetails.second.isSome()) {
@@ -809,7 +916,7 @@ void nsContentSecurityManager::MeasureUnexpectedPrivilegedLoads(
   // sanitize remoteType because it may contain sensitive
   // info, like URLs. e.g. `webIsolated=https://example.com`
   nsAutoCString loggedRemoteType(dom::RemoteTypePrefix(aRemoteType));
-  nsAutoCString loggedContentType(NS_CP_ContentTypeName(aContentPolicyType));
+  nsAutoCString loggedContentType(NS_CP_ContentTypeName(contentPolicyType));
 
   MOZ_LOG(sCSMLog, LogLevel::Debug, ("UnexpectedPrivilegedLoadTelemetry:\n"));
   MOZ_LOG(sCSMLog, LogLevel::Debug,
@@ -821,13 +928,16 @@ void nsContentSecurityManager::MeasureUnexpectedPrivilegedLoads(
   MOZ_LOG(sCSMLog, LogLevel::Debug,
           ("- fileInfo: %s\n", fileNameTypeAndDetails.first.get()));
   MOZ_LOG(sCSMLog, LogLevel::Debug,
-          ("- fileDetails: %s\n\n", loggedFileDetails.get()));
+          ("- fileDetails: %s\n", loggedFileDetails.get()));
+  MOZ_LOG(sCSMLog, LogLevel::Debug,
+          ("- redirects: %s\n\n", loggedRedirects.get()));
 
   // Send Telemetry
   auto extra = Some<nsTArray<EventExtraEntry>>(
       {EventExtraEntry{"contenttype"_ns, loggedContentType},
        EventExtraEntry{"remotetype"_ns, loggedRemoteType},
-       EventExtraEntry{"filedetails"_ns, loggedFileDetails}});
+       EventExtraEntry{"filedetails"_ns, loggedFileDetails},
+       EventExtraEntry{"redirects"_ns, loggedRedirects}});
 
   if (!sTelemetryEventEnabled.exchange(true)) {
     Telemetry::SetEventRecordingEnabled("security"_ns, true);
@@ -909,7 +1019,7 @@ nsresult nsContentSecurityManager::CheckAllowLoadInSystemPrivilegedContext(
 
   // GetInnerURI can return null for malformed nested URIs like moz-icon:trash
   if (!finalURI) {
-    MeasureUnexpectedPrivilegedLoads(finalURI, contentPolicyType, remoteType);
+    MeasureUnexpectedPrivilegedLoads(loadInfo, finalURI, remoteType);
     if (cancelNonLocalSystemPrincipal) {
       aChannel->Cancel(NS_ERROR_CONTENT_BLOCKED);
       return NS_ERROR_CONTENT_BLOCKED;
@@ -933,7 +1043,7 @@ nsresult nsContentSecurityManager::CheckAllowLoadInSystemPrivilegedContext(
   // Telemetry for unexpected privileged loads.
   // pref check & data sanitization happens in the called function
   if (finalURI) {
-    MeasureUnexpectedPrivilegedLoads(finalURI, contentPolicyType, remoteType);
+    MeasureUnexpectedPrivilegedLoads(loadInfo, finalURI, remoteType);
   }
 
   // Relaxing restrictions for our test suites:

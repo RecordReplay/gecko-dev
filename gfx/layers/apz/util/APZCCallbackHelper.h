@@ -18,6 +18,7 @@
 class nsIContent;
 class nsIScrollableFrame;
 class nsIWidget;
+class nsPresContext;
 template <class T>
 struct already_AddRefed;
 template <class T>
@@ -26,6 +27,7 @@ class nsCOMPtr;
 namespace mozilla {
 
 class PresShell;
+enum class PreventDefaultResult : uint8_t;
 
 namespace layers {
 
@@ -35,21 +37,20 @@ typedef std::function<void(uint64_t, const nsTArray<TouchBehaviorFlags>&)>
     SetAllowedTouchBehaviorCallback;
 
 /* Refer to documentation on SendSetTargetAPZCNotification for this class */
-class DisplayportSetListener : public OneShotPostRefreshObserver {
+class DisplayportSetListener : public ManagedPostRefreshObserver {
  public:
-  DisplayportSetListener(nsIWidget* aWidget, PresShell* aPresShell,
+  DisplayportSetListener(nsIWidget* aWidget, nsPresContext*,
                          const uint64_t& aInputBlockId,
                          nsTArray<ScrollableLayerGuid>&& aTargets);
   virtual ~DisplayportSetListener();
-  bool Register();
+  void Register();
 
  private:
   RefPtr<nsIWidget> mWidget;
   uint64_t mInputBlockId;
   nsTArray<ScrollableLayerGuid> mTargets;
 
-  static void OnPostRefresh(DisplayportSetListener* aListener,
-                            PresShell* aPresShell);
+  void OnPostRefresh();
 };
 
 /* This class contains some helper methods that facilitate implementing the
@@ -116,11 +117,10 @@ class APZCCallbackHelper {
    * This is a lightweight wrapper around nsContentUtils::SendMouseEvent()
    * and as such expects |aPoint| to be in layout coordinates. */
   MOZ_CAN_RUN_SCRIPT
-  static bool DispatchMouseEvent(PresShell* aPresShell, const nsString& aType,
-                                 const CSSPoint& aPoint, int32_t aButton,
-                                 int32_t aClickCount, int32_t aModifiers,
-                                 unsigned short aInputSourceArg,
-                                 uint32_t aPointerId);
+  static PreventDefaultResult DispatchMouseEvent(
+      PresShell* aPresShell, const nsString& aType, const CSSPoint& aPoint,
+      int32_t aButton, int32_t aClickCount, int32_t aModifiers,
+      unsigned short aInputSourceArg, uint32_t aPointerId);
 
   /* Fire a single-tap event at the given point. The event is dispatched
    * via the given widget. */
@@ -133,8 +133,8 @@ class APZCCallbackHelper {
    * a displayport, set one.
    *
    * If any displayports need to be set, this function returns a heap-allocated
-   * object. The caller is responsible for calling Register() on that object,
-   * and release()'ing the UniquePtr if that Register() call returns true.
+   * object. The caller is responsible for calling Register() on that object.
+   *
    * The object registers itself as a post-refresh observer on the presShell
    * and ensures that notifications get sent to APZ correctly after the
    * refresh.
@@ -144,7 +144,7 @@ class APZCCallbackHelper {
    * (b) register a post-refresh observer of their own that will run in
    *     a defined ordering relative to the APZ messages.
    */
-  static UniquePtr<DisplayportSetListener> SendSetTargetAPZCNotification(
+  static already_AddRefed<DisplayportSetListener> SendSetTargetAPZCNotification(
       nsIWidget* aWidget, mozilla::dom::Document* aDocument,
       const WidgetGUIEvent& aEvent, const LayersId& aLayersId,
       uint64_t aInputBlockId);

@@ -23,7 +23,7 @@ add_task(async function test_main() {
   }
 
   var utils = SpecialPowers.getDOMWindowUtils(window);
-  var isWebRender = utils.layerManagerType == "WebRender";
+  var isWebRender = utils.layerManagerType.startsWith("WebRender");
 
   // Each of these subtests is a dictionary that contains:
   // file (required): filename of the subtest that will get opened in a new tab
@@ -59,10 +59,20 @@ add_task(async function test_main() {
       file: "helper_fission_tap_in_nested_iframe_on_zoomed.html",
       prefs: [["apz.max_tap_time", 10000]],
     },
+    { file: "helper_fission_scroll_handoff.html" },
+    { file: "helper_fission_large_subframe.html" },
+    { file: "helper_fission_initial_displayport.html" },
+    { file: "helper_fission_checkerboard_severity.html" },
     // add additional tests here
   ];
+  // These tests are to ensure hit-testing works perfectly on the WR
+  // codepath. The layers codepath may need a main-thread fallback to get
+  // these working, but we can't use our synchronous hitTest(...) helpers
+  // for those anyway.
   if (isWebRender) {
     subtests = subtests.concat([
+      { file: "helper_fission_inactivescroller_positionedcontent.html" },
+      { file: "helper_fission_irregular_areas.html" },
       // add WebRender-specific tests here
     ]);
   } else {

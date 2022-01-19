@@ -134,6 +134,7 @@ use style::traversal_flags::{self, TraversalFlags};
 use style::use_counters::UseCounters;
 use style::values::animated::{Animate, Procedure, ToAnimatedZero};
 use style::values::computed::{self, Context, ToComputedValue};
+use style::values::computed::font::{FontFamilyList, FontFamily, GenericFontFamily};
 use style::values::distance::ComputeSquaredDistance;
 use style::values::specified::gecko::IntersectionObserverRootMargin;
 use style::values::specified::source_size_list::SourceSizeList;
@@ -1499,7 +1500,7 @@ pub extern "C" fn Servo_StyleSheet_Empty(
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let origin = mode_to_origin(mode);
     let shared_lock = &global_style_data.shared_lock;
-    Arc::new(StylesheetContents::from_str(
+    StylesheetContents::from_str(
         "",
         unsafe { dummy_url_data() }.clone(),
         origin,
@@ -1511,7 +1512,7 @@ pub extern "C" fn Servo_StyleSheet_Empty(
         /* use_counters = */ None,
         AllowImportRules::Yes,
         /* sanitization_data = */ None,
-    ))
+    )
     .into_strong()
 }
 
@@ -1562,7 +1563,7 @@ pub unsafe extern "C" fn Servo_StyleSheet_FromUTF8Bytes(
 
     let mut sanitization_data = SanitizationData::new(sanitization_kind);
 
-    let contents = Arc::new(StylesheetContents::from_str(
+    let contents = StylesheetContents::from_str(
         input,
         url_data.clone(),
         mode_to_origin(mode),
@@ -1574,7 +1575,7 @@ pub unsafe extern "C" fn Servo_StyleSheet_FromUTF8Bytes(
         use_counters,
         allow_import_rules,
         sanitization_data.as_mut(),
-    ));
+    );
 
     if let Some(data) = sanitization_data {
         sanitized_output
@@ -1635,12 +1636,12 @@ pub unsafe extern "C" fn Servo_StyleSheet_FromSharedData(
     shared_rules: &ServoCssRules,
 ) -> Strong<RawServoStyleSheetContents> {
     let shared_rules = Locked::<CssRules>::as_arc(&shared_rules);
-    Arc::new(StylesheetContents::from_shared_data(
+    StylesheetContents::from_shared_data(
         shared_rules.clone_arc(),
         Origin::UserAgent,
         UrlExtraData::new(extra_data),
         QuirksMode::NoQuirks,
-    ))
+    )
     .into_strong()
 }
 
@@ -1713,19 +1714,19 @@ pub unsafe extern "C" fn Servo_AuthorStyles_RemoveStyleSheet(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_AuthorStyles_ForceDirty(styles: &mut RawServoAuthorStyles) {
+pub extern "C" fn Servo_AuthorStyles_ForceDirty(styles: &mut RawServoAuthorStyles) {
     let styles = AuthorStyles::<GeckoStyleSheet>::from_ffi_mut(styles);
     styles.stylesheets.force_dirty();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_AuthorStyles_IsDirty(styles: &RawServoAuthorStyles) -> bool {
+pub extern "C" fn Servo_AuthorStyles_IsDirty(styles: &RawServoAuthorStyles) -> bool {
     let styles = AuthorStyles::<GeckoStyleSheet>::from_ffi(styles);
     styles.stylesheets.dirty()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_AuthorStyles_Flush(
+pub extern "C" fn Servo_AuthorStyles_Flush(
     styles: &mut RawServoAuthorStyles,
     document_set: &RawServoStyleSet,
 ) {
@@ -1738,13 +1739,19 @@ pub unsafe extern "C" fn Servo_AuthorStyles_Flush(
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let guard = global_style_data.shared_lock.read();
 
-    let document_data = PerDocumentStyleData::from_ffi(document_set).borrow();
-
-    let stylist = &document_data.stylist;
+    let mut document_data = PerDocumentStyleData::from_ffi(document_set).borrow_mut();
 
     // TODO(emilio): This is going to need an element or something to do proper
     // invalidation in Shadow roots.
-    styles.flush::<GeckoElement>(stylist.device(), stylist.quirks_mode(), &guard);
+    styles.flush::<GeckoElement>(&mut document_data.stylist, &guard);
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_StyleSet_RemoveUniqueEntriesFromAuthorStylesCache(
+    document_set: &RawServoStyleSet,
+) {
+    let mut document_data = PerDocumentStyleData::from_ffi(document_set).borrow_mut();
+    document_data.stylist.remove_unique_author_data_cache_entries();
 }
 
 #[no_mangle]
@@ -1801,6 +1808,8 @@ pub unsafe extern "C" fn Servo_StyleSet_MediumFeaturesChanged(
     document_set: &RawServoStyleSet,
     non_document_styles: &mut nsTArray<&mut RawServoAuthorStyles>,
     may_affect_default_style: bool,
+    viewport_changed: bool,
+    root: Option<&RawGeckoElement>,
 ) -> structs::MediumFeaturesChangedResult {
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let guard = global_style_data.shared_lock.read();
@@ -1847,12 +1856,19 @@ pub unsafe extern "C" fn Servo_StyleSet_MediumFeaturesChanged(
         }
     }
 
-    let uses_viewport_units = document_data.stylist.device().used_viewport_size();
+    if viewport_changed && document_data.stylist.device().used_viewport_size() {
+        if let Some(root) = root {
+            if style::invalidation::viewport_units::invalidate(GeckoElement(root)) {
+                // The invalidation machinery propagates the bits up, but we still need
+                // to tell the Gecko restyle root machinery about it.
+                bindings::Gecko_NoteDirtySubtreeForInvalidation(root);
+            }
+        }
+    }
 
     structs::MediumFeaturesChangedResult {
         mAffectsDocumentRules: affects_document_rules,
         mAffectsNonDocumentRules: affects_non_document_rules,
-        mUsesViewportUnits: uses_viewport_units,
     }
 }
 
@@ -2859,6 +2875,10 @@ macro_rules! apply_font_desc_list {
                 eCSSFontDesc_FontVariationSettings => variation_settings,
                 eCSSFontDesc_FontLanguageOverride => language_override,
                 eCSSFontDesc_Display => display,
+                eCSSFontDesc_AscentOverride => ascent_override,
+                eCSSFontDesc_DescentOverride => descent_override,
+                eCSSFontDesc_LineGapOverride => line_gap_override,
+                eCSSFontDesc_SizeAdjust => size_adjust,
             ]
             invalid: [
                 eCSSFontDesc_UNKNOWN,
@@ -2935,7 +2955,7 @@ macro_rules! simple_font_descriptor_getter_impl {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_FontFaceRule_GetFontWeight(
+pub extern "C" fn Servo_FontFaceRule_GetFontWeight(
     rule: &RawServoFontFaceRule,
     out: &mut font_face::ComputedFontWeightRange,
 ) -> bool {
@@ -2943,7 +2963,7 @@ pub unsafe extern "C" fn Servo_FontFaceRule_GetFontWeight(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_FontFaceRule_GetFontStretch(
+pub extern "C" fn Servo_FontFaceRule_GetFontStretch(
     rule: &RawServoFontFaceRule,
     out: &mut font_face::ComputedFontStretchRange,
 ) -> bool {
@@ -2951,7 +2971,7 @@ pub unsafe extern "C" fn Servo_FontFaceRule_GetFontStretch(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_FontFaceRule_GetFontStyle(
+pub extern "C" fn Servo_FontFaceRule_GetFontStyle(
     rule: &RawServoFontFaceRule,
     out: &mut font_face::ComputedFontStyleDescriptor,
 ) -> bool {
@@ -2959,7 +2979,7 @@ pub unsafe extern "C" fn Servo_FontFaceRule_GetFontStyle(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_FontFaceRule_GetFontDisplay(
+pub extern "C" fn Servo_FontFaceRule_GetFontDisplay(
     rule: &RawServoFontFaceRule,
     out: &mut font_face::FontDisplay,
 ) -> bool {
@@ -2967,11 +2987,49 @@ pub unsafe extern "C" fn Servo_FontFaceRule_GetFontDisplay(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_FontFaceRule_GetFontLanguageOverride(
+pub extern "C" fn Servo_FontFaceRule_GetFontLanguageOverride(
     rule: &RawServoFontFaceRule,
     out: &mut computed::FontLanguageOverride,
 ) -> bool {
     simple_font_descriptor_getter_impl!(rule, out, language_override, compute_non_system)
+}
+
+// Returns a Percentage of -1.0 if the override descriptor is present but 'normal'
+// rather than an actual percentage value.
+#[no_mangle]
+pub extern "C" fn Servo_FontFaceRule_GetAscentOverride(
+    rule: &RawServoFontFaceRule,
+    out: &mut computed::Percentage,
+) -> bool {
+    simple_font_descriptor_getter_impl!(rule, out, ascent_override, compute)
+}
+
+// Returns a Percentage of -1.0 if the override descriptor is present but 'normal'
+// rather than an actual percentage value.
+#[no_mangle]
+pub extern "C" fn Servo_FontFaceRule_GetDescentOverride(
+    rule: &RawServoFontFaceRule,
+    out: &mut computed::Percentage,
+) -> bool {
+    simple_font_descriptor_getter_impl!(rule, out, descent_override, compute)
+}
+
+// Returns a Percentage of -1.0 if the override descriptor is present but 'normal'
+// rather than an actual percentage value.
+#[no_mangle]
+pub extern "C" fn Servo_FontFaceRule_GetLineGapOverride(
+    rule: &RawServoFontFaceRule,
+    out: &mut computed::Percentage,
+) -> bool {
+    simple_font_descriptor_getter_impl!(rule, out, line_gap_override, compute)
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_FontFaceRule_GetSizeAdjust(
+    rule: &RawServoFontFaceRule,
+    out: &mut computed::Percentage,
+) -> bool {
+    simple_font_descriptor_getter_impl!(rule, out, size_adjust, compute)
 }
 
 #[no_mangle]
@@ -3096,7 +3154,7 @@ pub unsafe extern "C" fn Servo_FontFaceRule_GetFeatureSettings(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Servo_FontFaceRule_GetDescriptorCssText(
+pub extern "C" fn Servo_FontFaceRule_GetDescriptorCssText(
     rule: &RawServoFontFaceRule,
     desc: nsCSSFontDesc,
     result: &mut nsACString,
@@ -3593,33 +3651,32 @@ pub unsafe extern "C" fn Servo_ComputedValues_GetForAnonymousBox(
 
     let metrics = get_metrics_provider_for_product();
 
-    // If the pseudo element is PageContent, we should append the precomputed
-    // pseudo element declerations with specified page rules.
-    let page_decls = match pseudo {
-        PseudoElement::PageContent => {
-            let mut declarations = vec![];
-            let iter = data.stylist.iter_extra_data_origins_rev();
-            for (data, origin) in iter {
-                let level = match origin {
-                    Origin::UserAgent => CascadeLevel::UANormal,
-                    Origin::User => CascadeLevel::UserNormal,
-                    Origin::Author => CascadeLevel::same_tree_author_normal(),
-                };
-                for rule in data.pages.iter() {
-                    declarations.push(ApplicableDeclarationBlock::from_declarations(
-                        rule.read_with(level.guard(&guards)).block.clone(),
-                        level,
-                    ));
-                }
+    // If the pseudo element is PageContent, we should append @page rules to the
+    // precomputed pseudo.
+    //
+    // TODO(emilio): We'll need a separate code path or extra arguments for
+    // named pages, etc.
+    let mut extra_declarations = vec![];
+    if pseudo == PseudoElement::PageContent {
+        let iter = data.stylist.iter_extra_data_origins_rev();
+        for (data, origin) in iter {
+            let level = match origin {
+                Origin::UserAgent => CascadeLevel::UANormal,
+                Origin::User => CascadeLevel::UserNormal,
+                Origin::Author => CascadeLevel::same_tree_author_normal(),
+            };
+            for rule in data.pages.iter() {
+                extra_declarations.push(ApplicableDeclarationBlock::from_declarations(
+                    rule.read_with(level.guard(&guards)).block.clone(),
+                    level,
+                ));
             }
-            Some(declarations)
-        },
-        _ => None,
-    };
+        }
+    }
 
     let rule_node = data
         .stylist
-        .rule_node_for_precomputed_pseudo(&guards, &pseudo, page_decls);
+        .rule_node_for_precomputed_pseudo(&guards, &pseudo, extra_declarations);
 
     data.stylist
         .precomputed_values_for_pseudo_with_rule_node::<GeckoElement>(
@@ -4022,6 +4079,16 @@ pub extern "C" fn Servo_ComputedValues_EqualForCachedAnonymousContentStyle(
     }
 
     differing_properties.is_empty()
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_ComputedValues_BlockifiedDisplay(
+    style: &ComputedValues,
+    is_root_element : bool,
+) -> u16 {
+    let display = style.get_box().clone_display();
+    let blockified_display = display.equivalent_block_display(is_root_element);
+    blockified_display.to_u16()
 }
 
 #[no_mangle]
@@ -4856,7 +4923,7 @@ pub extern "C" fn Servo_DeclarationBlock_SetKeywordValue(
     use style::properties::PropertyDeclaration;
     use style::values::generics::box_::{VerticalAlign, VerticalAlignKeyword};
     use style::values::generics::font::FontStyle;
-    use style::values::specified::{BorderStyle, Clear, Display, Float, TextAlign};
+    use style::values::specified::{BorderStyle, Clear, Display, Float, TextAlign, table::CaptionSide};
 
     fn get_from_computed<T>(value: u32) -> T
     where
@@ -4897,7 +4964,7 @@ pub extern "C" fn Servo_DeclarationBlock_SetKeywordValue(
         MathStyle => longhands::math_style::SpecifiedValue::from_gecko_keyword(value),
         MozMathVariant => longhands::_moz_math_variant::SpecifiedValue::from_gecko_keyword(value),
         WhiteSpace => longhands::white_space::SpecifiedValue::from_gecko_keyword(value),
-        CaptionSide => longhands::caption_side::SpecifiedValue::from_gecko_keyword(value),
+        CaptionSide => get_from_computed::<CaptionSide>(value),
         BorderTopStyle => get_from_computed::<BorderStyle>(value),
         BorderRightStyle => get_from_computed::<BorderStyle>(value),
         BorderBottomStyle => get_from_computed::<BorderStyle>(value),
@@ -5090,6 +5157,31 @@ pub extern "C" fn Servo_DeclarationBlock_SetLengthValue(
         Ry => LengthPercentageOrAuto::LengthPercentage(NonNegative(LengthPercentage::Length(nocalc))),
         FontSize => FontSize::Length(LengthPercentage::Length(nocalc)),
         MozScriptMinSize => MozScriptMinSize(nocalc),
+    };
+    write_locked_arc(declarations, |decls: &mut PropertyDeclarationBlock| {
+        decls.push(prop, Importance::Normal);
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_DeclarationBlock_SetPathValue(
+    declarations: &RawServoDeclarationBlock,
+    property: nsCSSPropertyID,
+    path: &nsTArray<f32>,
+) {
+    use style::properties::PropertyDeclaration;
+    use style::values::specified::DProperty;
+
+    // 1. Decode the path data from SVG.
+    let path = match specified::SVGPathData::decode_from_f32_array(path) {
+        Ok(p) => p,
+        Err(()) => return,
+    };
+
+    // 2. Set decoded path into style.
+    let long = get_longhand_from_id!(property);
+    let prop = match_wrap_declared! { long,
+        D => if path.0.is_empty() { DProperty::None } else { DProperty::Path(path) },
     };
     write_locked_arc(declarations, |decls: &mut PropertyDeclarationBlock| {
         decls.push(prop, Importance::Normal);
@@ -6677,13 +6769,12 @@ pub extern "C" fn Servo_ParseTransformIntoMatrix(
 pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
     value: &nsACString,
     data: *mut URLExtraData,
-    family: &mut structs::RefPtr<structs::SharedFontList>,
+    family: &mut FontFamilyList,
     style: &mut ComputedFontStyleDescriptor,
     stretch: &mut f32,
     weight: &mut f32,
 ) -> bool {
     use style::properties::shorthands::font;
-    use style::values::computed::font::FontFamilyList;
     use style::values::computed::font::FontWeight as ComputedFontWeight;
     use style::values::generics::font::FontStyle as GenericFontStyle;
     use style::values::specified::font::{
@@ -6711,8 +6802,7 @@ pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
 
     // The system font is not acceptable, so we return false.
     match font.font_family {
-        FontFamily::Values(FontFamilyList::SharedFontList(list)) => family.set_move(list),
-        FontFamily::Values(list) => family.set_move(list.shared_font_list().clone()),
+        FontFamily::Values(list) => *family = list,
         FontFamily::System(_) => return false,
     }
 
@@ -6732,7 +6822,7 @@ pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
 
     *stretch = match font.font_stretch {
         FontStretch::Keyword(ref k) => k.compute().0,
-        FontStretch::Stretch(ref p) => p.get(),
+        FontStretch::Stretch(ref p) => p.0.get(),
         FontStretch::System(_) => return false,
     };
 
@@ -6811,7 +6901,7 @@ pub unsafe extern "C" fn Servo_InvalidateStyleForDocStateChanges(
         .map(|(data, _origin)| data)
         .chain(non_document_styles.iter().map(|author_styles| {
             let styles: &_ = AuthorStyles::<GeckoStyleSheet>::from_ffi(author_styles);
-            &styles.data
+            &*styles.data
         }));
 
     let root = GeckoElement(root);
@@ -7001,4 +7091,32 @@ pub unsafe extern "C" fn Servo_CursorKind_Parse(
         },
         Err(..) => false,
     }
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_FontFamily_Generic(generic: GenericFontFamily) -> &'static FontFamily {
+    FontFamily::generic(generic)
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_FontFamily_ForSystemFont(name: &nsACString, out: &mut FontFamily) {
+    *out = FontFamily::for_system_font(&name.to_utf8());
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_FontFamilyList_Normalize(list: &mut FontFamilyList) {
+    list.normalize()
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_FontFamilyList_WithNames(names: &nsTArray<computed::font::SingleFontFamily>, out: &mut FontFamilyList) {
+    *out = FontFamilyList {
+        list: style_traits::arc_slice::ArcSlice::from_iter(names.iter().cloned()),
+        fallback: GenericFontFamily::None,
+    };
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_GenericFontFamily_Parse(input: &nsACString) -> GenericFontFamily {
+    GenericFontFamily::from_ident(&*input.to_utf8()).unwrap_or(GenericFontFamily::None)
 }

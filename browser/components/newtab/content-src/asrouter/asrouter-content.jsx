@@ -135,7 +135,10 @@ export class ASRouterUISurface extends React.PureComponent {
   }
 
   onBlockSelected(options) {
-    return this.onBlockById(this.state.message.id, options);
+    return this.onBlockById(this.state.message.id, {
+      ...options,
+      campaign: this.state.message.campaign,
+    });
   }
 
   onBlockById(id, options) {
@@ -150,8 +153,13 @@ export class ASRouterUISurface extends React.PureComponent {
     this.clearMessage(this.state.message.id);
   }
 
-  clearMessage(id) {
-    if (id === this.state.message.id) {
+  // Blocking a snippet by id blocks the entire campaign
+  // so when clearing we use the two values interchangeably
+  clearMessage(idOrCampaign) {
+    if (
+      idOrCampaign === this.state.message.id ||
+      idOrCampaign === this.state.message.campaign
+    ) {
       this.setState({ message: {} });
     }
   }
@@ -208,13 +216,23 @@ export class ASRouterUISurface extends React.PureComponent {
     ASRouterUtils.removeListener(this.onMessageFromParent);
   }
 
-  componentDidUpdate(prevProps) {
+  componentDidUpdate(prevProps, prevState) {
     if (
       prevProps.adminContent &&
       JSON.stringify(prevProps.adminContent) !==
         JSON.stringify(this.props.adminContent)
     ) {
       this.updateContent();
+    }
+    if (prevState.message.id !== this.state.message.id) {
+      const main = global.window.document.querySelector("main");
+      if (main) {
+        if (this.state.message.id) {
+          main.classList.add("has-snippet");
+        } else {
+          main.classList.remove("has-snippet");
+        }
+      }
     }
   }
 
@@ -256,7 +274,7 @@ export class ASRouterUISurface extends React.PureComponent {
       return null;
     }
     const SnippetComponent = SnippetsTemplates[message.template];
-    const { content } = this.state.message;
+    const { content } = message;
 
     return (
       <ImpressionsWrapper

@@ -21,13 +21,13 @@
     }                                                         \
   } while (false)
 
+namespace mozilla::gmp {
+
 static nsTArray<uint8_t> ToArray(const uint8_t* aData, uint32_t aDataSize) {
   nsTArray<uint8_t> data;
   data.AppendElements(aData, aDataSize);
   return data;
 }
-
-namespace mozilla::gmp {
 
 GMPRecordImpl::GMPRecordImpl(GMPStorageChild* aOwner, const nsCString& aName,
                              GMPRecordClient* aClient)
@@ -84,7 +84,7 @@ GMPErr GMPStorageChild::CreateRecord(const nsCString& aRecordName,
   }
 
   RefPtr<GMPRecordImpl> record(new GMPRecordImpl(this, aRecordName, aClient));
-  mRecords.Put(aRecordName, RefPtr{record});  // Addrefs
+  mRecords.InsertOrUpdate(aRecordName, RefPtr{record});  // Addrefs
 
   // The GMPRecord holds a self reference until the GMP calls Close() on
   // it. This means the object is always valid (even if neutered) while

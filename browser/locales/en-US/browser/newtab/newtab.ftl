@@ -7,9 +7,11 @@
 newtab-page-title = New Tab
 newtab-settings-button =
     .title = Customize your New Tab page
-newtab-personalize-button-label = Personalize
+newtab-personalize-icon-label =
     .title = Personalize new tab
     .aria-label = Personalize new tab
+newtab-personalize-dialog-label =
+    .aria-label = Personalize
 
 ## Search box component.
 
@@ -18,13 +20,26 @@ newtab-search-box-search-button =
     .title = Search
     .aria-label = Search
 
-newtab-search-box-search-the-web-text = Search the Web
+# Variables
+#  $engine (String): the name of the user's default search engine
+newtab-search-box-handoff-text = Search with { $engine } or enter address
+newtab-search-box-handoff-text-no-engine = Search or enter address
+# Variables
+#  $engine (String): the name of the user's default search engine
+newtab-search-box-handoff-input =
+    .placeholder = Search with { $engine } or enter address
+    .title = Search with { $engine } or enter address
+    .aria-label = Search with { $engine } or enter address
+newtab-search-box-handoff-input-no-engine =
+    .placeholder = Search or enter address
+    .title = Search or enter address
+    .aria-label = Search or enter address
+
 newtab-search-box-search-the-web-input =
     .placeholder = Search the Web
     .title = Search the Web
     .aria-label = Search the Web
 
-newtab-search-box-text = Search the web
 newtab-search-box-input =
     .placeholder = Search the web
     .aria-label = Search the web
@@ -201,7 +216,6 @@ newtab-empty-section-highlights = Start browsing, and we’ll show some of the g
 #  $provider (String): Name of the content provider for this section, e.g "Pocket".
 newtab-empty-section-topstories = You’ve caught up. Check back later for more top stories from { $provider }. Can’t wait? Select a popular topic to find more great stories from around the web.
 
-
 ## Empty Section (Content Discovery Experience). These show when there are no more stories or when some stories fail to load.
 
 newtab-discovery-empty-section-topstories-header = You are caught up!
@@ -242,11 +256,4 @@ newtab-custom-pocket-sponsored = Sponsored stories
 newtab-custom-recent-title = Recent activity
 newtab-custom-recent-subtitle = A selection of recent sites and content
 newtab-custom-close-button = Close
-
-# For the "Snippets" feature traditionally on about:home.
-# Alternative translation options: "Small Note" or something that
-# expresses the idea of "a small message, shortened from something else,
-# and non-essential but also not entirely trivial and useless.
-newtab-custom-snippets-title = Snippets
-newtab-custom-snippets-subtitle = Tips and news from { -vendor-short-name } and { -brand-product-name }
 newtab-custom-settings = Manage more settings

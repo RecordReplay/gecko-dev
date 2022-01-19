@@ -29,6 +29,7 @@
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_apz.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/TextEventDispatcher.h"
@@ -57,7 +58,6 @@
 #include "mozilla/layers/PLayerTransactionChild.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/webrender/WebRenderTypes.h"
-#include "npapi.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
@@ -66,7 +66,6 @@
 #include "nsIAppWindow.h"
 #include "nsIBaseWindow.h"
 #include "nsIContent.h"
-#include "nsIKeyEventInPluginCallback.h"
 #include "nsIScreenManager.h"
 #include "nsISimpleEnumerator.h"
 #include "nsIWidgetListener.h"
@@ -122,7 +121,7 @@ int32_t nsIWidget::sPointerIdCounter = 0;
 // Some statics from nsIWidget.h
 /*static*/
 uint64_t AutoObserverNotifier::sObserverId = 0;
-/*static*/ nsDataHashtable<nsUint64HashKey, nsCOMPtr<nsIObserver>>
+/*static*/ nsTHashMap<uint64_t, nsCOMPtr<nsIObserver>>
     AutoObserverNotifier::sSavedObservers;
 
 // The maximum amount of time to let the EnableDragDrop runnable wait in the
@@ -157,7 +156,6 @@ nsBaseWidget::nsBaseWidget()
       mPreviouslyAttachedWidgetListener(nullptr),
       mLayerManager(nullptr),
       mCompositorVsyncDispatcher(nullptr),
-      mCursor(eCursor_standard),
       mBorderStyle(eBorderStyle_none),
       mBounds(0, 0, 0, 0),
       mOriginalBounds(nullptr),
@@ -257,10 +255,85 @@ void WidgetShutdownObserver::Unregister() {
   }
 }
 
+#define INTL_APP_LOCALES_CHANGED "intl:app-locales-changed"
+#define L10N_PSEUDO_PREF "intl.l10n.pseudo"
+
+static const char* kObservedPrefs[] = {L10N_PSEUDO_PREF, nullptr};
+
+NS_IMPL_ISUPPORTS(LocalesChangedObserver, nsIObserver)
+
+LocalesChangedObserver::LocalesChangedObserver(nsBaseWidget* aWidget)
+    : mWidget(aWidget), mRegistered(false) {
+  Register();
+}
+
+LocalesChangedObserver::~LocalesChangedObserver() {
+  // No need to call Unregister(), we can't be destroyed until nsBaseWidget
+  // gets torn down. The observer service and nsBaseWidget have a ref on us
+  // so nsBaseWidget has to call Unregister and then clear its ref.
+}
+
+NS_IMETHODIMP
+LocalesChangedObserver::Observe(nsISupports* aSubject, const char* aTopic,
+                                const char16_t* aData) {
+  if (!mWidget) {
+    return NS_OK;
+  }
+  if (!strcmp(aTopic, INTL_APP_LOCALES_CHANGED)) {
+    RefPtr<nsBaseWidget> widget(mWidget);
+    widget->LocalesChanged();
+  } else {
+    MOZ_ASSERT(!strcmp("nsPref:changed", aTopic));
+    nsDependentString pref(aData);
+    if (pref.EqualsLiteral(L10N_PSEUDO_PREF)) {
+      RefPtr<nsBaseWidget> widget(mWidget);
+      widget->LocalesChanged();
+    }
+  }
+  return NS_OK;
+}
+
+void LocalesChangedObserver::Register() {
+  if (mRegistered) {
+    return;
+  }
+
+  DebugOnly<nsresult> rv =
+      Preferences::AddStrongObservers(this, kObservedPrefs);
+  MOZ_ASSERT(NS_SUCCEEDED(rv), "Adding observers failed.");
+
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (obs) {
+    obs->AddObserver(this, INTL_APP_LOCALES_CHANGED, true);
+  }
+
+  // Locale might be update before registering
+  RefPtr<nsBaseWidget> widget(mWidget);
+  widget->LocalesChanged();
+
+  mRegistered = true;
+}
+
+void LocalesChangedObserver::Unregister() {
+  if (!mRegistered) {
+    return;
+  }
+
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (obs) {
+    obs->RemoveObserver(this, INTL_APP_LOCALES_CHANGED);
+  }
+  Preferences::RemoveObservers(this, kObservedPrefs);
+
+  mWidget = nullptr;
+  mRegistered = false;
+}
+
 void nsBaseWidget::Shutdown() {
   NotifyLiveResizeStopped();
   RevokeTransactionIdAllocator();
   DestroyCompositor();
+  FreeLocalesChangedObserver();
   FreeShutdownObserver();
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
   if (sPluginWidgetList) {
@@ -347,6 +420,13 @@ void nsBaseWidget::FreeShutdownObserver() {
   mShutdownObserver = nullptr;
 }
 
+void nsBaseWidget::FreeLocalesChangedObserver() {
+  if (mLocalesChangedObserver) {
+    mLocalesChangedObserver->Unregister();
+  }
+  mLocalesChangedObserver = nullptr;
+}
+
 //-------------------------------------------------------------------------
 //
 // nsBaseWidget destructor
@@ -362,6 +442,7 @@ nsBaseWidget::~nsBaseWidget() {
     }
   }
 
+  FreeLocalesChangedObserver();
   FreeShutdownObserver();
   RevokeTransactionIdAllocator();
   DestroyLayerManager();
@@ -525,6 +606,16 @@ CSSToLayoutDeviceScale nsIWidget::GetDefaultScale() {
   return CSSToLayoutDeviceScale(devPixelsPerCSSPixel);
 }
 
+nsIntSize nsIWidget::CustomCursorSize(const Cursor& aCursor) {
+  MOZ_ASSERT(aCursor.IsCustom());
+  int32_t width = 0;
+  int32_t height = 0;
+  aCursor.mContainer->GetWidth(&width);
+  aCursor.mContainer->GetHeight(&height);
+  aCursor.mResolution.ApplyTo(width, height);
+  return {width, height};
+}
+
 //-------------------------------------------------------------------------
 //
 // Add a child to the list of children
@@ -656,11 +747,7 @@ void nsBaseWidget::MoveToWorkspace(const nsAString& workspaceID) {
 //
 //-------------------------------------------------------------------------
 
-void nsBaseWidget::SetCursor(nsCursor aCursor, imgIContainer*, uint32_t,
-                             uint32_t) {
-  // We don't support the cursor image.
-  mCursor = aCursor;
-}
+void nsBaseWidget::SetCursor(const Cursor& aCursor) { mCursor = aCursor; }
 
 //-------------------------------------------------------------------------
 //
@@ -899,8 +986,7 @@ void nsBaseWidget::ConfigureAPZCTreeManager() {
   // When APZ is enabled, we can actually enable raw touch events because we
   // have code that can deal with them properly. If APZ is not enabled, this
   // function doesn't get called.
-  if (StaticPrefs::dom_w3c_touch_events_enabled() ||
-      StaticPrefs::dom_w3c_pointer_events_enabled()) {
+  if (StaticPrefs::dom_w3c_touch_events_enabled()) {
     RegisterTouchWindow();
   }
 }
@@ -953,7 +1039,7 @@ nsEventStatus nsBaseWidget::ProcessUntransformedAPZEvent(
   ScrollableLayerGuid targetGuid = aApzResult.mTargetGuid;
   uint64_t inputBlockId = aApzResult.mInputBlockId;
   InputAPZContext context(aApzResult.mTargetGuid, inputBlockId,
-                          aApzResult.mStatus);
+                          aApzResult.GetStatus());
 
   // Make a copy of the original event for the APZCCallbackHelper helpers that
   // we call later, because the event passed to DispatchEvent can get mutated in
@@ -974,7 +1060,7 @@ nsEventStatus nsBaseWidget::ProcessUntransformedAPZEvent(
     // hit-test result therefore needs to use the parent process layers id.
     LayersId rootLayersId = mCompositorSession->RootLayerTreeId();
 
-    UniquePtr<DisplayportSetListener> postLayerization;
+    RefPtr<DisplayportSetListener> postLayerization;
     if (WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent()) {
       nsTArray<TouchBehaviorFlags> allowedTouchBehaviors;
       if (touchEvent->mMessage == eTouchStart) {
@@ -989,7 +1075,7 @@ nsEventStatus nsBaseWidget::ProcessUntransformedAPZEvent(
             inputBlockId);
       }
       mAPZEventState->ProcessTouchEvent(*touchEvent, targetGuid, inputBlockId,
-                                        aApzResult.mStatus, status,
+                                        aApzResult.GetStatus(), status,
                                         std::move(allowedTouchBehaviors));
     } else if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
       MOZ_ASSERT(wheelEvent->mFlags.mHandledByAPZ);
@@ -1007,8 +1093,8 @@ nsEventStatus nsBaseWidget::ProcessUntransformedAPZEvent(
           inputBlockId);
       mAPZEventState->ProcessMouseEvent(*mouseEvent, inputBlockId);
     }
-    if (postLayerization && postLayerization->Register()) {
-      Unused << postLayerization.release();
+    if (postLayerization) {
+      postLayerization->Register();
     }
   }
 
@@ -1051,7 +1137,7 @@ class DispatchInputOnControllerThread : public Runnable {
 
   NS_IMETHOD Run() override {
     APZEventResult result = mAPZC->InputBridge()->ReceiveInputEvent(mInput);
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       return NS_OK;
     }
     RefPtr<Runnable> r = new DispatchEventOnMainThread<InputType, EventType>(
@@ -1067,20 +1153,24 @@ class DispatchInputOnControllerThread : public Runnable {
   nsBaseWidget* mWidget;
 };
 
-void nsBaseWidget::DispatchTouchInput(MultiTouchInput& aInput) {
+void nsBaseWidget::DispatchTouchInput(MultiTouchInput& aInput,
+                                      uint16_t aInputSource) {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aInputSource ==
+                 mozilla::dom::MouseEvent_Binding::MOZ_SOURCE_TOUCH ||
+             aInputSource == mozilla::dom::MouseEvent_Binding::MOZ_SOURCE_PEN);
   if (mAPZC) {
     MOZ_ASSERT(APZThreadUtils::IsControllerThread());
 
     APZEventResult result = mAPZC->InputBridge()->ReceiveInputEvent(aInput);
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       return;
     }
 
-    WidgetTouchEvent event = aInput.ToWidgetTouchEvent(this);
+    WidgetTouchEvent event = aInput.ToWidgetEvent(this, aInputSource);
     ProcessUntransformedAPZEvent(&event, result);
   } else {
-    WidgetTouchEvent event = aInput.ToWidgetTouchEvent(this);
+    WidgetTouchEvent event = aInput.ToWidgetEvent(this, aInputSource);
 
     nsEventStatus status;
     DispatchEvent(&event, status);
@@ -1093,7 +1183,7 @@ void nsBaseWidget::DispatchPanGestureInput(PanGestureInput& aInput) {
     MOZ_ASSERT(APZThreadUtils::IsControllerThread());
 
     APZEventResult result = mAPZC->InputBridge()->ReceiveInputEvent(aInput);
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       return;
     }
 
@@ -1112,7 +1202,7 @@ void nsBaseWidget::DispatchPinchGestureInput(PinchGestureInput& aInput) {
     MOZ_ASSERT(APZThreadUtils::IsControllerThread());
     APZEventResult result = mAPZC->InputBridge()->ReceiveInputEvent(aInput);
 
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       return;
     }
     WidgetWheelEvent event = aInput.ToWidgetEvent(this);
@@ -1124,15 +1214,19 @@ void nsBaseWidget::DispatchPinchGestureInput(PinchGestureInput& aInput) {
   }
 }
 
-nsEventStatus nsBaseWidget::DispatchInputEvent(WidgetInputEvent* aEvent) {
+nsIWidget::ContentAndAPZEventStatus nsBaseWidget::DispatchInputEvent(
+    WidgetInputEvent* aEvent) {
+  nsIWidget::ContentAndAPZEventStatus status;
   MOZ_ASSERT(NS_IsMainThread());
   if (mAPZC) {
     if (APZThreadUtils::IsControllerThread()) {
       APZEventResult result = mAPZC->InputBridge()->ReceiveInputEvent(*aEvent);
-      if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
-        return result.mStatus;
+      status.mApzStatus = result.GetStatus();
+      if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
+        return status;
       }
-      return ProcessUntransformedAPZEvent(aEvent, result);
+      status.mContentStatus = ProcessUntransformedAPZEvent(aEvent, result);
+      return status;
     }
     if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
       RefPtr<Runnable> r =
@@ -1140,21 +1234,31 @@ nsEventStatus nsBaseWidget::DispatchInputEvent(WidgetInputEvent* aEvent) {
                                               WidgetWheelEvent>(*wheelEvent,
                                                                 mAPZC, this);
       APZThreadUtils::RunOnControllerThread(std::move(r));
-      return nsEventStatus_eConsumeDoDefault;
+      status.mContentStatus = nsEventStatus_eConsumeDoDefault;
+      return status;
     }
     if (WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent()) {
       RefPtr<Runnable> r =
           new DispatchInputOnControllerThread<MouseInput, WidgetMouseEvent>(
               *mouseEvent, mAPZC, this);
       APZThreadUtils::RunOnControllerThread(std::move(r));
-      return nsEventStatus_eConsumeDoDefault;
+      status.mContentStatus = nsEventStatus_eConsumeDoDefault;
+      return status;
+    }
+    if (WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent()) {
+      RefPtr<Runnable> r =
+          new DispatchInputOnControllerThread<MultiTouchInput,
+                                              WidgetTouchEvent>(*touchEvent,
+                                                                mAPZC, this);
+      APZThreadUtils::RunOnControllerThread(std::move(r));
+      status.mContentStatus = nsEventStatus_eConsumeDoDefault;
+      return status;
     }
     // Allow dispatching keyboard events on Gecko thread.
     MOZ_ASSERT(aEvent->AsKeyboardEvent());
   }
 
-  nsEventStatus status;
-  DispatchEvent(aEvent, status);
+  DispatchEvent(aEvent, status.mContentStatus);
   return status;
 }
 
@@ -1213,20 +1317,44 @@ already_AddRefed<LayerManager> nsBaseWidget::CreateCompositorSession(
     // EnsureGPUReady(). It could update gfxVars and gfxConfigs.
     gpu->EnsureGPUReady();
 
-    // If widget type does not supports acceleration, we use ClientLayerManager
-    // even when gfxVars::UseWebRender() is true. WebRender could coexist only
-    // with BasicCompositor.
-    bool enableWR =
-        gfx::gfxVars::UseWebRender() && WidgetTypeSupportsAcceleration();
+    // If widget type does not supports acceleration, we may be allowed to use
+    // software WebRender instead. If not, then we use ClientLayerManager even
+    // when gfxVars::UseWebRender() is true. WebRender could coexist only with
+    // BasicCompositor.
+    bool supportsAcceleration = WidgetTypeSupportsAcceleration();
+    bool enableWR;
+    bool enableSWWR;
+    if (supportsAcceleration ||
+        StaticPrefs::gfx_webrender_unaccelerated_widget_force()) {
+      enableWR = gfx::gfxVars::UseWebRender();
+      enableSWWR = gfx::gfxVars::UseSoftwareWebRender();
+    } else if (gfxPlatform::DoesFissionForceWebRender() ||
+               StaticPrefs::
+                   gfx_webrender_software_unaccelerated_widget_allow()) {
+      enableWR = enableSWWR = gfx::gfxVars::UseWebRender();
+    } else {
+      enableWR = enableSWWR = false;
+    }
     bool enableAPZ = UseAPZ();
-    CompositorOptions options(enableAPZ, enableWR);
+    CompositorOptions options(enableAPZ, enableWR, enableSWWR);
 
-    // Bug 1588484 - Advanced Layers is currently disabled for fission windows,
-    // since it doesn't properly support nested RefLayers.
-    bool enableAL =
-        gfx::gfxConfig::IsEnabled(gfx::Feature::ADVANCED_LAYERS) &&
-        (!mFissionWindow || StaticPrefs::layers_advanced_fission_enabled());
-    options.SetUseAdvancedLayers(enableAL);
+#ifdef XP_WIN
+    if (supportsAcceleration) {
+      options.SetAllowSoftwareWebRenderD3D11(
+          gfx::gfxVars::AllowSoftwareWebRenderD3D11());
+    }
+#elif defined(MOZ_WIDGET_ANDROID)
+    MOZ_ASSERT(supportsAcceleration);
+    options.SetAllowSoftwareWebRenderOGL(
+        StaticPrefs::gfx_webrender_software_opengl_AtStartup());
+#elif defined(MOZ_WIDGET_GTK)
+    if (supportsAcceleration) {
+      options.SetAllowSoftwareWebRenderOGL(
+          StaticPrefs::gfx_webrender_software_opengl_AtStartup());
+    }
+#endif
+
+    options.SetUseWebGPU(StaticPrefs::dom_webgpu_enabled());
 
 #ifdef MOZ_WIDGET_ANDROID
     if (!GetNativeData(NS_JAVA_SURFACE)) {
@@ -1793,15 +1921,16 @@ void nsBaseWidget::ZoomToRect(const uint32_t& aPresShellId,
   }
   LayersId layerId = mCompositorSession->RootLayerTreeId();
   APZThreadUtils::RunOnControllerThread(
-      NewRunnableMethod<ScrollableLayerGuid, CSSRect, uint32_t>(
+      NewRunnableMethod<ScrollableLayerGuid, ZoomTarget, uint32_t>(
           "layers::IAPZCTreeManager::ZoomToRect", mAPZC,
           &IAPZCTreeManager::ZoomToRect,
-          ScrollableLayerGuid(layerId, aPresShellId, aViewId), aRect, aFlags));
+          ScrollableLayerGuid(layerId, aPresShellId, aViewId),
+          ZoomTarget{aRect, Nothing()}, aFlags));
 }
 
 #ifdef ACCESSIBILITY
 
-a11y::Accessible* nsBaseWidget::GetRootAccessible() {
+a11y::LocalAccessible* nsBaseWidget::GetRootAccessible() {
   NS_ENSURE_TRUE(mWidgetListener, nullptr);
 
   PresShell* presShell = mWidgetListener->GetPresShell();
@@ -1812,7 +1941,7 @@ a11y::Accessible* nsBaseWidget::GetRootAccessible() {
   nsPresContext* presContext = presShell->GetPresContext();
   NS_ENSURE_TRUE(presContext->GetContainerWeak(), nullptr);
 
-  // Accessible creation might be not safe so use IsSafeToRunScript to
+  // LocalAccessible creation might be not safe so use IsSafeToRunScript to
   // make sure it's not created at unsafe times.
   nsAccessibilityService* accService = GetOrCreateAccService();
   if (accService) {
@@ -2072,7 +2201,7 @@ void nsBaseWidget::RegisterPluginWindowForRemoteUpdates() {
     return;
   }
   MOZ_ASSERT(sPluginWidgetList);
-  sPluginWidgetList->Put(id, RefPtr{this});
+  sPluginWidgetList->InsertOrUpdate(id, RefPtr{this});
 #endif
 }
 
@@ -2132,9 +2261,9 @@ void nsIWidget::UpdateRegisteredPluginWindowVisibility(
   // Our visible list is associated with a compositor which is associated with
   // a specific top level window. We use the parent widget during iteration
   // to skip the plugin widgets owned by other top level windows.
-  for (auto iter = sPluginWidgetList->Iter(); !iter.Done(); iter.Next()) {
-    const void* windowId = iter.Key();
-    nsIWidget* widget = iter.UserData();
+  for (const auto& entry : *sPluginWidgetList) {
+    const void* windowId = entry.GetKey();
+    nsIWidget* widget = entry.GetWeak();
 
     MOZ_ASSERT(windowId);
     MOZ_ASSERT(widget);
@@ -2157,9 +2286,9 @@ void nsIWidget::CaptureRegisteredPlugins(uintptr_t aOwnerWidget) {
   // Our visible list is associated with a compositor which is associated with
   // a specific top level window. We use the parent widget during iteration
   // to skip the plugin widgets owned by other top level windows.
-  for (auto iter = sPluginWidgetList->Iter(); !iter.Done(); iter.Next()) {
-    DebugOnly<const void*> windowId = iter.Key();
-    nsIWidget* widget = iter.UserData();
+  for (const auto& entry : *sPluginWidgetList) {
+    DebugOnly<const void*> windowId = entry.GetKey();
+    nsIWidget* widget = entry.GetWeak();
 
     MOZ_ASSERT(windowId);
     MOZ_ASSERT(widget);
@@ -2218,12 +2347,6 @@ void nsBaseWidget::DefaultFillScrollCapture(DrawTarget* aSnapshotDrawTarget) {
 const IMENotificationRequests& nsIWidget::IMENotificationRequestsRef() {
   TextEventDispatcher* dispatcher = GetTextEventDispatcher();
   return dispatcher->IMENotificationRequestsRef();
-}
-
-nsresult nsIWidget::OnWindowedPluginKeyEvent(
-    const NativeEventData& aKeyEventData,
-    nsIKeyEventInPluginCallback* aCallback) {
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 void nsIWidget::PostHandleKeyEvent(mozilla::WidgetKeyboardEvent* aEvent) {}

@@ -27,14 +27,12 @@ class FreeBSDBootstrapper(BaseBootstrapper):
 
         self.browser_packages = [
             "dbus-glib",
-            "gtk2",
             "gtk3",
             "libXt",
             "mesa-dri",  # depends on llvm*
             "nasm",
             "pulseaudio",
             "v4l_compat",
-            "yasm",
         ]
 
         if not which("as"):

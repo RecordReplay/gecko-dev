@@ -36,7 +36,7 @@
 #include "js/CharacterEncoding.h"
 #include "js/experimental/JitInfo.h"  // JSJitInfo
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
-#include "js/friend/StackLimits.h"    // js::CheckRecursionLimit
+#include "js/friend/StackLimits.h"    // js::AutoCheckRecursionLimit
 #include "js/friend/WindowProxy.h"    // js::IsWindowProxy
 #include "util/CheckedArithmetic.h"
 #include "util/StringBuffer.h"
@@ -201,17 +201,7 @@ static inline bool GetPropertyOperation(JSContext* cx, InterpreterFrame* fp,
                                         MutableHandleValue vp) {
   RootedPropertyName name(cx, script->getName(pc));
 
-  if (name == cx->names().length) {
-    if (IsOptimizedArguments(fp, lval)) {
-      vp.setInt32(fp->numActualArgs());
-      return true;
-    }
-
-    if (GetLengthProperty(lval, vp)) {
-      return true;
-    }
-  } else if (name == cx->names().callee && IsOptimizedArguments(fp, lval)) {
-    vp.setObject(fp->callee());
+  if (name == cx->names().length && GetLengthProperty(lval, vp)) {
     return true;
   }
 
@@ -250,7 +240,7 @@ bool js::GetImportOperation(JSContext* cx, HandleObject envChain,
                             MutableHandleValue vp) {
   RootedObject env(cx), pobj(cx);
   RootedPropertyName name(cx, script->getName(pc));
-  Rooted<PropertyResult> prop(cx);
+  PropertyResult prop;
 
   MOZ_ALWAYS_TRUE(LookupName(cx, name, envChain, &env, &pobj, &prop));
   MOZ_ASSERT(env && env->is<ModuleEnvironmentObject>());
@@ -271,71 +261,6 @@ static bool SetPropertyOperation(JSContext* cx, JSOp op, HandleValue lval,
   ObjectOpResult result;
   return SetProperty(cx, obj, id, rval, lval, result) &&
          result.checkStrictModeError(cx, obj, id, op == JSOp::StrictSetProp);
-}
-
-JSFunction* js::MakeDefaultConstructor(JSContext* cx, HandleScript script,
-                                       jsbytecode* pc, HandleObject proto) {
-  JSOp op = JSOp(*pc);
-  bool derived = op == JSOp::DerivedConstructor;
-  MOZ_ASSERT(derived == !!proto);
-
-  // Get class name and source offsets from bytecode.
-  GCThingIndex atomIndex;
-  uint32_t classStartOffset = 0, classEndOffset = 0;
-  GetClassConstructorOperands(pc, &atomIndex, &classStartOffset,
-                              &classEndOffset);
-  RootedAtom className(cx, script->getAtom(atomIndex));
-
-  // The empty atom is used as a sentinel to indicate no name is assigned. This
-  // happens when the name is computed by a dynamic SetFunctionName.
-  if (className == cx->names().empty) {
-    className = nullptr;
-  }
-
-  // Locate the self-hosted script that we will use as a template.
-  RootedPropertyName selfHostedName(
-      cx, derived ? cx->names().DefaultDerivedClassConstructor
-                  : cx->names().DefaultBaseClassConstructor);
-  RootedFunction sourceFun(
-      cx, cx->runtime()->getUnclonedSelfHostedFunction(selfHostedName.get()));
-  MOZ_ASSERT(sourceFun);
-  RootedScript sourceScript(cx, sourceFun->nonLazyScript());
-
-  // Create the new class constructor function.
-  RootedFunction ctor(
-      cx, NewScriptedFunction(cx, sourceFun->nargs(),
-                              FunctionFlags::INTERPRETED_CLASS_CTOR, className,
-                              proto, gc::AllocKind::FUNCTION, TenuredObject));
-  if (!ctor) {
-    return nullptr;
-  }
-
-  // Override the source span needs for toString. Calling toString on a class
-  // constructor should return the class declaration, not the source for the
-  // (self-hosted) constructor function.
-  unsigned column;
-  unsigned line = PCToLineNumber(script, pc, &column);
-  SourceExtent classExtent = SourceExtent::makeClassExtent(
-      classStartOffset, classEndOffset, line, column);
-
-  // Clone bytecode from template function.
-  MOZ_ASSERT(sourceFun->enclosingScope()->is<GlobalScope>());
-  RootedScope enclosingScope(cx, &cx->global()->emptyGlobalScope());
-  Rooted<ScriptSourceObject*> sourceObject(cx, script->sourceObject());
-  if (!CloneScriptIntoFunction(cx, enclosingScope, ctor, sourceScript,
-                               sourceObject, &classExtent)) {
-    return nullptr;
-  }
-  RootedScript ctorScript(cx, ctor->nonLazyScript());
-
-  // Even though the script was cloned from the self-hosted template, we cannot
-  // delazify back to a SelfHostedLazyScript. The script is no longer marked as
-  // SelfHosted either.
-  ctorScript->clearAllowRelazify();
-
-  DebugAPI::onNewScript(cx, ctorScript);
-
-  return ctor;
 }
 
 static JSObject* SuperFunOperation(JSObject* callee) {
@@ -422,7 +347,8 @@ InterpreterFrame* RunState::pushInterpreterFrame(JSContext* cx) {
 #  pragma optimize("g", off)
 #endif
 bool js::RunScript(JSContext* cx, RunState& state) {
-  if (!CheckRecursionLimit(cx)) {
+  AutoCheckRecursionLimit recursion(cx);
+  if (!recursion.check(cx)) {
     return false;
   }
 
@@ -454,9 +380,6 @@ bool js::RunScript(JSContext* cx, RunState& state) {
       mozilla::TimeDuration delta = ReallyNow() - startTime;
       cx->realm()->timers.executionTime += delta;
       cx->setIsMeasuringExecutionTime(false);
-
-      // JS_TELEMETRY_RUN_TIME_US reporting was done here, but is temporarily
-      // disabled due to the crash in 1670348.
     }
   });
 
@@ -484,7 +407,8 @@ MOZ_ALWAYS_INLINE bool CallJSNative(JSContext* cx, Native native,
   TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
   AutoTraceLog traceLog(logger, TraceLogger_Call);
 
-  if (!CheckRecursionLimit(cx)) {
+  AutoCheckRecursionLimit recursion(cx);
+  if (!recursion.check(cx)) {
     return false;
   }
 
@@ -576,13 +500,7 @@ bool js::InternalCallOrConstruct(JSContext* cx, const CallArgs& args,
 
   /* Invoke native functions. */
   RootedFunction fun(cx, &args.callee().as<JSFunction>());
-  if (construct != CONSTRUCT && fun->isClassConstructor()) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
-    return false;
-  }
-
-  if (fun->isNative()) {
+  if (fun->isNativeFun()) {
     MOZ_ASSERT_IF(construct, !fun->isConstructor());
     JSNative native = fun->native();
     if (!construct && args.ignoresReturnValue() && fun->hasJitInfo()) {
@@ -616,6 +534,13 @@ bool js::InternalCallOrConstruct(JSContext* cx, const CallArgs& args,
     return false;
   }
 
+  // Calling class constructors throws an error from the callee's realm.
+  if (construct != CONSTRUCT && fun->isClassConstructor()) {
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                              JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
+    return false;
+  }
+
   bool ok = RunScript(cx, state);
 
   MOZ_ASSERT_IF(ok && construct, args.rval().isObject());
@@ -633,7 +558,7 @@ static bool InternalCall(JSContext* cx, const AnyInvokeArgs& args,
     // |this| already.  But don't do that if fval is a DOM function.
     HandleValue fval = args.calleev();
     if (!fval.isObject() || !fval.toObject().is<JSFunction>() ||
-        !fval.toObject().as<JSFunction>().isNative() ||
+        !fval.toObject().as<JSFunction>().isNativeFun() ||
         !fval.toObject().as<JSFunction>().hasJitInfo() ||
         fval.toObject()
             .as<JSFunction>()
@@ -687,7 +612,7 @@ static bool InternalConstruct(JSContext* cx, const AnyConstructArgs& args) {
   if (callee.is<JSFunction>()) {
     RootedFunction fun(cx, &callee.as<JSFunction>());
 
-    if (fun->isNative()) {
+    if (fun->isNativeFun()) {
       return CallJSNativeConstructor(cx, fun->native(), args);
     }
 
@@ -779,7 +704,8 @@ bool js::CallGetter(JSContext* cx, HandleValue thisv, HandleValue getter,
                     MutableHandleValue rval) {
   // Invoke could result in another try to get or set the same id again, see
   // bug 355497.
-  if (!CheckRecursionLimit(cx)) {
+  AutoCheckRecursionLimit recursion(cx);
+  if (!recursion.check(cx)) {
     return false;
   }
 
@@ -790,7 +716,8 @@ bool js::CallGetter(JSContext* cx, HandleValue thisv, HandleValue getter,
 
 bool js::CallSetter(JSContext* cx, HandleValue thisv, HandleValue setter,
                     HandleValue v) {
-  if (!CheckRecursionLimit(cx)) {
+  AutoCheckRecursionLimit recursion(cx);
+  if (!recursion.check(cx)) {
     return false;
   }
 
@@ -1030,7 +957,8 @@ static void PopEnvironment(JSContext* cx, EnvironmentIter& ei) {
         DebugEnvironments::onPopLexical(cx, ei);
       }
       if (ei.scope().hasEnvironment()) {
-        ei.initialFrame().popOffEnvironmentChain<LexicalEnvironmentObject>();
+        ei.initialFrame()
+            .popOffEnvironmentChain<ScopedLexicalEnvironmentObject>();
       }
       break;
     case ScopeKind::With:
@@ -1370,8 +1298,8 @@ again:
 static_assert(JSOpLength_SetName == JSOpLength_SetProp);
 
 /* See TRY_BRANCH_AFTER_COND. */
-static_assert(JSOpLength_IfNe == JSOpLength_IfEq);
-static_assert(uint8_t(JSOp::IfNe) == uint8_t(JSOp::IfEq) + 1);
+static_assert(JSOpLength_JumpIfTrue == JSOpLength_JumpIfFalse);
+static_assert(uint8_t(JSOp::JumpIfTrue) == uint8_t(JSOp::JumpIfFalse) + 1);
 
 /*
  * Compute the implicit |this| value used by a call expression with an
@@ -1849,24 +1777,6 @@ static MOZ_ALWAYS_INLINE bool GreaterThanOrEqualOperation(
 static MOZ_ALWAYS_INLINE bool SetObjectElementOperation(
     JSContext* cx, HandleObject obj, HandleId id, HandleValue value,
     HandleValue receiver, bool strict) {
-  // receiver != obj happens only at super[expr], where we expect to find the
-  // property. People probably aren't building hashtables with |super|
-  // anyway.
-
-  // Set the HadElementsAccess flag on the object if needed. This flag is
-  // used to do more eager dictionary-mode conversion for objects that are
-  // used as hashmaps. Set this flag only for objects with many properties,
-  // to avoid unnecessary Shape changes.
-  if (obj->isNative() && JSID_IS_ATOM(id) &&
-      !obj->as<NativeObject>().inDictionaryMode() &&
-      !obj->as<NativeObject>().hadElementsAccess() &&
-      obj->as<NativeObject>().slotSpan() >
-          PropertyTree::MAX_HEIGHT_WITH_ELEMENTS_ACCESS / 3) {
-    if (!NativeObject::setHadElementsAccess(cx, obj.as<NativeObject>())) {
-      return false;
-    }
-  }
-
   ObjectOpResult result;
   return SetProperty(cx, obj, id, value, receiver, result) &&
          result.checkStrictModeError(cx, obj, id, strict);
@@ -1931,8 +1841,8 @@ class ReservedRooted : public RootedBase<T, ReservedRooted<T>> {
   DECLARE_POINTER_ASSIGN_OPS(ReservedRooted, T)
 };
 
-void js::ReportInNotObjectError(JSContext* cx, HandleValue lref, int lindex,
-                                HandleValue rref, int rindex) {
+void js::ReportInNotObjectError(JSContext* cx, HandleValue lref,
+                                HandleValue rref) {
   auto uniqueCharsFromString = [](JSContext* cx,
                                   HandleValue ref) -> UniqueChars {
     static const size_t MaxStringLength = 16;
@@ -2097,6 +2007,24 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
   JS_BEGIN_MACRO                     \
     js::gc::MaybeVerifyBarriers(cx); \
   JS_END_MACRO
+
+// Verify that an uninitialized lexical is followed by a correct check op.
+#ifdef DEBUG
+#  define ASSERT_UNINITIALIZED_ALIASED_LEXICAL(val)                        \
+    JS_BEGIN_MACRO                                                         \
+      if (IsUninitializedLexical(val)) {                                   \
+        JSOp next = JSOp(*GetNextPc(REGS.pc));                             \
+        MOZ_ASSERT(next == JSOp::CheckThis || next == JSOp::CheckReturn || \
+                   next == JSOp::CheckThisReinit ||                        \
+                   next == JSOp::CheckAliasedLexical);                     \
+      }                                                                    \
+    JS_END_MACRO
+#else
+#  define ASSERT_UNINITIALIZED_ALIASED_LEXICAL(val) \
+    JS_BEGIN_MACRO                                  \
+    /* nothing */                                   \
+    JS_END_MACRO
+#endif
 
   gc::MaybeVerifyBarriers(cx, true);
 
@@ -2388,23 +2316,23 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     }
     CASE(Goto) { BRANCH(GET_JUMP_OFFSET(REGS.pc)); }
 
-    CASE(IfEq) {
+    CASE(JumpIfFalse) {
       bool cond = ToBoolean(REGS.stackHandleAt(-1));
       REGS.sp--;
       if (!cond) {
         BRANCH(GET_JUMP_OFFSET(REGS.pc));
       }
     }
-    END_CASE(IfEq)
+    END_CASE(JumpIfFalse)
 
-    CASE(IfNe) {
+    CASE(JumpIfTrue) {
       bool cond = ToBoolean(REGS.stackHandleAt(-1));
       REGS.sp--;
       if (cond) {
         BRANCH(GET_JUMP_OFFSET(REGS.pc));
       }
     }
-    END_CASE(IfNe)
+    END_CASE(JumpIfTrue)
 
     CASE(Or) {
       bool cond = ToBoolean(REGS.stackHandleAt(-1));
@@ -2436,25 +2364,26 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     if (!ToPropertyKey(cx, REGS.stackHandleAt(n), &(id))) goto error; \
   JS_END_MACRO
 
-#define TRY_BRANCH_AFTER_COND(cond, spdec)                                \
-  JS_BEGIN_MACRO                                                          \
-    MOZ_ASSERT(GetBytecodeLength(REGS.pc) == 1);                          \
-    unsigned diff_ = (unsigned)GET_UINT8(REGS.pc) - (unsigned)JSOp::IfEq; \
-    if (diff_ <= 1) {                                                     \
-      REGS.sp -= (spdec);                                                 \
-      if ((cond) == (diff_ != 0)) {                                       \
-        ++REGS.pc;                                                        \
-        BRANCH(GET_JUMP_OFFSET(REGS.pc));                                 \
-      }                                                                   \
-      ADVANCE_AND_DISPATCH(1 + JSOpLength_IfEq);                          \
-    }                                                                     \
+#define TRY_BRANCH_AFTER_COND(cond, spdec)                          \
+  JS_BEGIN_MACRO                                                    \
+    MOZ_ASSERT(GetBytecodeLength(REGS.pc) == 1);                    \
+    unsigned diff_ =                                                \
+        (unsigned)GET_UINT8(REGS.pc) - (unsigned)JSOp::JumpIfFalse; \
+    if (diff_ <= 1) {                                               \
+      REGS.sp -= (spdec);                                           \
+      if ((cond) == (diff_ != 0)) {                                 \
+        ++REGS.pc;                                                  \
+        BRANCH(GET_JUMP_OFFSET(REGS.pc));                           \
+      }                                                             \
+      ADVANCE_AND_DISPATCH(1 + JSOpLength_JumpIfFalse);             \
+    }                                                               \
   JS_END_MACRO
 
     CASE(In) {
       HandleValue rref = REGS.stackHandleAt(-1);
       if (!rref.isObject()) {
         HandleValue lref = REGS.stackHandleAt(-2);
-        ReportInNotObjectError(cx, lref, -2, rref, -1);
+        ReportInNotObjectError(cx, lref, rref);
         goto error;
       }
       bool found;
@@ -3114,14 +3043,8 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
       HandleValue rval = REGS.stackHandleAt(-1);
       MutableHandleValue res = REGS.stackHandleAt(-2);
 
-      bool done =
-          MaybeGetElemOptimizedArguments(cx, REGS.fp(), lval, rval, res);
-
-      if (!done) {
-        if (!GetElementOperationWithStackIndex(cx, lval, lvalIndex, rval,
-                                               res)) {
-          goto error;
-        }
+      if (!GetElementOperationWithStackIndex(cx, lval, lvalIndex, rval, res)) {
+        goto error;
       }
 
       REGS.sp--;
@@ -3252,18 +3175,13 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     }
     END_CASE(SpreadCall)
 
-    CASE(FunApply) {
-      CallArgs args = CallArgsFromSp(GET_ARGC(REGS.pc), REGS.sp);
-      GuardFunApplyArgumentsOptimization(cx, REGS.fp(), args);
-      /* FALL THROUGH */
-    }
-
     CASE(New)
     CASE(Call)
     CASE(CallIgnoresRv)
     CASE(CallIter)
     CASE(SuperCall)
-    CASE(FunCall) {
+    CASE(FunCall)
+    CASE(FunApply) {
       static_assert(JSOpLength_Call == JSOpLength_New,
                     "call and new must be the same size");
       static_assert(JSOpLength_Call == JSOpLength_CallIgnoresRv,
@@ -3587,18 +3505,12 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     }
 
     CASE(Arguments) {
-      if (!script->ensureHasAnalyzedArgsUsage(cx)) {
+      MOZ_ASSERT(script->needsArgsObj());
+      ArgumentsObject* obj = ArgumentsObject::createExpected(cx, REGS.fp());
+      if (!obj) {
         goto error;
       }
-      if (script->needsArgsObj()) {
-        ArgumentsObject* obj = ArgumentsObject::createExpected(cx, REGS.fp());
-        if (!obj) {
-          goto error;
-        }
-        PUSH_COPY(ObjectValue(*obj));
-      } else {
-        PUSH_COPY(MagicValue(JS_OPTIMIZED_ARGUMENTS));
-      }
+      PUSH_COPY(ObjectValue(*obj));
     }
     END_CASE(Arguments)
 
@@ -3616,14 +3528,21 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
       EnvironmentCoordinate ec = EnvironmentCoordinate(REGS.pc);
       ReservedRooted<Value> val(
           &rootValue0, REGS.fp()->aliasedEnvironment(ec).aliasedBinding(ec));
-#ifdef DEBUG
-      if (IsUninitializedLexical(val)) {
-        JSOp next = JSOp(*GetNextPc(REGS.pc));
-        MOZ_ASSERT(next == JSOp::CheckThis || next == JSOp::CheckReturn ||
-                   next == JSOp::CheckThisReinit ||
-                   next == JSOp::CheckAliasedLexical);
-      }
-#endif
+
+      ASSERT_UNINITIALIZED_ALIASED_LEXICAL(val);
+
+      PUSH_COPY(val);
+    }
+    END_CASE(GetAliasedVar)
+
+    CASE(GetAliasedDebugVar) {
+      EnvironmentCoordinate ec = EnvironmentCoordinate(REGS.pc);
+      ReservedRooted<Value> val(
+          &rootValue0,
+          REGS.fp()->aliasedEnvironmentMaybeDebug(ec).aliasedBinding(ec));
+
+      ASSERT_UNINITIALIZED_ALIASED_LEXICAL(val);
+
       PUSH_COPY(val);
     }
     END_CASE(GetAliasedVar)
@@ -3675,7 +3594,7 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     END_CASE(InitAliasedLexical)
 
     CASE(InitGLexical) {
-      LexicalEnvironmentObject* lexicalEnv;
+      ExtensibleLexicalEnvironmentObject* lexicalEnv;
       if (script->hasNonSyntacticScope()) {
         lexicalEnv = &REGS.fp()->extensibleLexicalEnvironment();
       } else {
@@ -4108,11 +4027,13 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
 
     CASE(PopLexicalEnv) {
 #ifdef DEBUG
-      // Pop block from scope chain.
       Scope* scope = script->lookupScope(REGS.pc);
       MOZ_ASSERT(scope);
-      MOZ_ASSERT(scope->is<LexicalScope>());
-      MOZ_ASSERT(scope->as<LexicalScope>().hasEnvironment());
+      MOZ_ASSERT(scope->is<LexicalScope>() || scope->is<ClassBodyScope>());
+      MOZ_ASSERT_IF(scope->is<LexicalScope>(),
+                    scope->as<LexicalScope>().hasEnvironment());
+      MOZ_ASSERT_IF(scope->is<ClassBodyScope>(),
+                    scope->as<ClassBodyScope>().hasEnvironment());
 #endif
 
       if (MOZ_UNLIKELY(cx->realm()->isDebuggee())) {
@@ -4125,11 +4046,15 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     END_CASE(PopLexicalEnv)
 
     CASE(DebugLeaveLexicalEnv) {
-      MOZ_ASSERT(script->lookupScope(REGS.pc));
-      MOZ_ASSERT(script->lookupScope(REGS.pc)->is<LexicalScope>());
-      MOZ_ASSERT(
-          !script->lookupScope(REGS.pc)->as<LexicalScope>().hasEnvironment());
-
+#ifdef DEBUG
+      Scope* scope = script->lookupScope(REGS.pc);
+      MOZ_ASSERT(scope);
+      MOZ_ASSERT(scope->is<LexicalScope>() || scope->is<ClassBodyScope>());
+      MOZ_ASSERT_IF(scope->is<LexicalScope>(),
+                    !scope->as<LexicalScope>().hasEnvironment());
+      MOZ_ASSERT_IF(scope->is<ClassBodyScope>(),
+                    !scope->as<ClassBodyScope>().hasEnvironment());
+#endif
       // FIXME: This opcode should not be necessary.  The debugger shouldn't
       // need help from bytecode to do its job.  See bug 927782.
 
@@ -4160,6 +4085,16 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
       }
     }
     END_CASE(RecreateLexicalEnv)
+
+    CASE(PushClassBodyEnv) {
+      ReservedRooted<Scope*> scope(&rootScope0, script->getScope(REGS.pc));
+
+      if (!REGS.fp()->pushClassBodyEnvironment(cx,
+                                               scope.as<ClassBodyScope>())) {
+        goto error;
+      }
+    }
+    END_CASE(PushClassBodyEnv)
 
     CASE(PushVarEnv) {
       ReservedRooted<Scope*> scope(&rootScope0, script->getScope(REGS.pc));
@@ -4418,30 +4353,6 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
     }
     END_CASE(SuperFun)
 
-    CASE(DerivedConstructor) {
-      MOZ_ASSERT(REGS.sp[-1].isObject());
-      ReservedRooted<JSObject*> proto(&rootObject0, &REGS.sp[-1].toObject());
-
-      JSFunction* constructor =
-          MakeDefaultConstructor(cx, script, REGS.pc, proto);
-      if (!constructor) {
-        goto error;
-      }
-
-      REGS.sp[-1].setObject(*constructor);
-    }
-    END_CASE(DerivedConstructor)
-
-    CASE(ClassConstructor) {
-      JSFunction* constructor =
-          MakeDefaultConstructor(cx, script, REGS.pc, nullptr);
-      if (!constructor) {
-        goto error;
-      }
-      PUSH_OBJECT(*constructor);
-    }
-    END_CASE(ClassConstructor)
-
     CASE(CheckObjCoercible) {
       ReservedRooted<Value> checkVal(&rootValue0, REGS.sp[-1]);
       if (checkVal.isNullOrUndefined()) {
@@ -4666,7 +4577,7 @@ JSObject* js::Lambda(JSContext* cx, HandleFunction fun, HandleObject parent) {
   MOZ_ASSERT(!fun->isArrow());
 
   JSFunction* clone;
-  if (fun->isNative()) {
+  if (fun->isNativeFun()) {
     MOZ_ASSERT(IsAsmJSModule(fun));
     clone = CloneAsmJSModuleFunction(cx, fun);
   } else {
@@ -4918,7 +4829,7 @@ bool js::AtomicIsLockFree(JSContext* cx, HandleValue in, int* out) {
 bool js::DeleteNameOperation(JSContext* cx, HandlePropertyName name,
                              HandleObject scopeObj, MutableHandleValue res) {
   RootedObject scope(cx), pobj(cx);
-  Rooted<PropertyResult> prop(cx);
+  PropertyResult prop;
   if (!LookupName(cx, name, scopeObj, &scope, &pobj, &prop)) {
     return false;
   }
@@ -4991,14 +4902,12 @@ static bool InitGetterSetterOperation(JSContext* cx, jsbytecode* pc,
 
   if (op == JSOp::InitPropGetter || op == JSOp::InitElemGetter ||
       op == JSOp::InitHiddenPropGetter || op == JSOp::InitHiddenElemGetter) {
-    attrs |= JSPROP_GETTER;
     return DefineAccessorProperty(cx, obj, id, val, nullptr, attrs);
   }
 
   MOZ_ASSERT(op == JSOp::InitPropSetter || op == JSOp::InitElemSetter ||
              op == JSOp::InitHiddenPropSetter ||
              op == JSOp::InitHiddenElemSetter);
-  attrs |= JSPROP_SETTER;
   return DefineAccessorProperty(cx, obj, id, nullptr, val, attrs);
 }
 
@@ -5053,15 +4962,9 @@ bool js::SpreadCallOperation(JSContext* cx, HandleScript script, jsbytecode* pc,
                                constructing ? CONSTRUCT : NO_CONSTRUCT);
   }
 
-#ifdef DEBUG
   // The object must be an array with dense elements and no holes. Baseline's
   // optimized spread call stubs rely on this.
-  MOZ_ASSERT(!aobj->isIndexed());
-  MOZ_ASSERT(aobj->getDenseInitializedLength() == aobj->length());
-  for (size_t i = 0; i < aobj->length(); i++) {
-    MOZ_ASSERT(!aobj->getDenseElement(i).isMagic(JS_ELEMENTS_HOLE));
-  }
-#endif
+  MOZ_ASSERT(IsPackedArray(aobj));
 
   if (constructing) {
     if (!StackCheckIsConstructorCalleeNewTarget(cx, callee, newTarget)) {
@@ -5160,6 +5063,24 @@ JSObject* js::NewObjectOperationWithTemplate(JSContext* cx,
   return CopyTemplateObject(cx, templateObject.as<PlainObject>(), newKind);
 }
 
+JSObject* js::NewPlainObjectBaselineFallback(JSContext* cx, HandleShape shape,
+                                             gc::AllocKind allocKind,
+                                             gc::AllocSite* site) {
+  MOZ_ASSERT(shape->getObjectClass() == &PlainObject::class_);
+  gc::InitialHeap initialHeap = site->initialHeap();
+  auto r = NativeObject::create(cx, allocKind, initialHeap, shape, site);
+  return cx->resultToPtr(r);
+}
+
+JSObject* js::NewPlainObjectOptimizedFallback(JSContext* cx, HandleShape shape,
+                                              gc::AllocKind allocKind,
+                                              gc::InitialHeap initialHeap) {
+  MOZ_ASSERT(shape->getObjectClass() == &PlainObject::class_);
+  gc::AllocSite* site = cx->zone()->optimizedAllocSite();
+  auto r = NativeObject::create(cx, allocKind, initialHeap, shape, site);
+  return cx->resultToPtr(r);
+}
+
 JSObject* js::CreateThisWithTemplate(JSContext* cx,
                                      HandleObject templateObject) {
   mozilla::Maybe<AutoRealm> ar;
@@ -5176,6 +5097,35 @@ ArrayObject* js::NewArrayOperation(
     JSContext* cx, uint32_t length,
     NewObjectKind newKind /* = GenericObject */) {
   return NewDenseFullyAllocatedArray(cx, length, nullptr, newKind);
+}
+
+ArrayObject* js::NewArrayObjectBaselineFallback(JSContext* cx, uint32_t length,
+                                                gc::AllocKind allocKind,
+                                                gc::AllocSite* site) {
+  NewObjectKind newKind =
+      site->initialHeap() == gc::TenuredHeap ? TenuredObject : GenericObject;
+  ArrayObject* array =
+      NewDenseFullyAllocatedArray(cx, length, nullptr, newKind, site);
+  // It's important that we allocate an object with the alloc kind we were
+  // expecting so that a new arena gets allocated if the current arena for that
+  // kind is full.
+  MOZ_ASSERT_IF(array && array->isTenured(),
+                array->asTenured().getAllocKind() == allocKind);
+  return array;
+}
+
+ArrayObject* js::NewArrayObjectOptimizedFallback(JSContext* cx, uint32_t length,
+                                                 gc::AllocKind allocKind,
+                                                 NewObjectKind newKind) {
+  gc::AllocSite* site = cx->zone()->optimizedAllocSite();
+  ArrayObject* array =
+      NewDenseFullyAllocatedArray(cx, length, nullptr, newKind, site);
+  // It's important that we allocate an object with the alloc kind we were
+  // expecting so that a new arena gets allocated if the current arena for that
+  // kind is full.
+  MOZ_ASSERT_IF(array && array->isTenured(),
+                array->asTenured().getAllocKind() == allocKind);
+  return array;
 }
 
 void js::ReportRuntimeLexicalError(JSContext* cx, unsigned errorNumber,
@@ -5284,4 +5234,26 @@ bool js::SetPropertySuper(JSContext* cx, HandleObject obj, HandleValue receiver,
   }
 
   return result.checkStrictModeError(cx, obj, id, strict);
+}
+
+bool js::LoadAliasedDebugVar(JSContext* cx, JSObject* env, jsbytecode* pc,
+                             MutableHandleValue result) {
+  EnvironmentCoordinate ec(pc);
+
+  for (unsigned i = ec.hops(); i; i--) {
+    if (env->is<EnvironmentObject>()) {
+      env = &env->as<EnvironmentObject>().enclosingEnvironment();
+    } else {
+      MOZ_ASSERT(env->is<DebugEnvironmentProxy>());
+      env = &env->as<DebugEnvironmentProxy>().enclosingEnvironment();
+    }
+  }
+
+  EnvironmentObject& finalEnv =
+      env->is<EnvironmentObject>()
+          ? env->as<EnvironmentObject>()
+          : env->as<DebugEnvironmentProxy>().environment();
+
+  result.set(finalEnv.aliasedBinding(ec));
+  return true;
 }

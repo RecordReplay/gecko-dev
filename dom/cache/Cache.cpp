@@ -129,30 +129,28 @@ class Cache::FetchHandler final : public PromiseNativeHandler {
     const auto failOnErr = [this](const auto) { Fail(); };
 
     bool isArray;
-    CACHE_TRY(OkIf(JS::IsArrayObject(aCx, aValue, &isArray)), QM_VOID,
-              failOnErr);
-    CACHE_TRY(OkIf(isArray), QM_VOID, failOnErr);
+    QM_TRY(OkIf(JS::IsArrayObject(aCx, aValue, &isArray)), QM_VOID, failOnErr);
+    QM_TRY(OkIf(isArray), QM_VOID, failOnErr);
 
     JS::Rooted<JSObject*> obj(aCx, &aValue.toObject());
 
     uint32_t length;
-    CACHE_TRY(OkIf(JS::GetArrayLength(aCx, obj, &length)), QM_VOID, failOnErr);
+    QM_TRY(OkIf(JS::GetArrayLength(aCx, obj, &length)), QM_VOID, failOnErr);
 
     for (uint32_t i = 0; i < length; ++i) {
       JS::Rooted<JS::Value> value(aCx);
 
-      CACHE_TRY(OkIf(JS_GetElement(aCx, obj, i, &value)), QM_VOID, failOnErr);
+      QM_TRY(OkIf(JS_GetElement(aCx, obj, i, &value)), QM_VOID, failOnErr);
 
-      CACHE_TRY(OkIf(value.isObject()), QM_VOID, failOnErr);
+      QM_TRY(OkIf(value.isObject()), QM_VOID, failOnErr);
 
       JS::Rooted<JSObject*> responseObj(aCx, &value.toObject());
 
       RefPtr<Response> response;
-      CACHE_TRY((UNWRAP_OBJECT(Response, responseObj, response)), QM_VOID,
-                failOnErr);
+      QM_TRY((UNWRAP_OBJECT(Response, responseObj, response)), QM_VOID,
+             failOnErr);
 
-      CACHE_TRY(OkIf(response->Type() != ResponseType::Error), QM_VOID,
-                failOnErr);
+      QM_TRY(OkIf(response->Type() != ResponseType::Error), QM_VOID, failOnErr);
 
       // Do not allow the convenience methods .add()/.addAll() to store failed
       // or invalid responses.  A consequence of this is that these methods
@@ -309,8 +307,9 @@ already_AddRefed<Promise> Cache::Add(JSContext* aContext,
   MOZ_DIAGNOSTIC_ASSERT(!global.Failed());
 
   nsTArray<SafeRefPtr<Request>> requestList(1);
+  RootedDictionary<RequestInit> requestInit(aContext);
   SafeRefPtr<Request> request =
-      Request::Constructor(global, aRequest, RequestInit(), aRv);
+      Request::Constructor(global, aRequest, requestInit, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
@@ -353,8 +352,9 @@ already_AddRefed<Promise> Cache::AddAll(
           aRequestList[i].GetAsUSVString());
     }
 
+    RootedDictionary<RequestInit> requestInit(aContext);
     SafeRefPtr<Request> request =
-        Request::Constructor(global, requestOrString, RequestInit(), aRv);
+        Request::Constructor(global, requestOrString, requestInit, aRv);
     if (NS_WARN_IF(aRv.Failed())) {
       return nullptr;
     }
@@ -542,8 +542,9 @@ already_AddRefed<Promise> Cache::AddAll(
   for (uint32_t i = 0; i < aRequestList.Length(); ++i) {
     RequestOrUSVString requestOrString;
     requestOrString.SetAsRequest() = aRequestList[i].unsafeGetRawPtr();
+    RootedDictionary<RequestInit> requestInit(aGlobal.Context());
     RefPtr<Promise> fetch =
-        FetchRequest(mGlobal, requestOrString, RequestInit(), aCallerType, aRv);
+        FetchRequest(mGlobal, requestOrString, requestInit, aCallerType, aRv);
     if (NS_WARN_IF(aRv.Failed())) {
       return nullptr;
     }

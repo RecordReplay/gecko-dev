@@ -24,6 +24,7 @@
 #include "nsCOMPtr.h"                // for already_AddRefed
 #include "nsRegion.h"                // for nsIntRegion
 #include "nsTArrayForwardDeclare.h"  // for nsTArray
+#include "nsTHashMap.h"
 #include "nsIWidget.h"
 #include <vector>
 
@@ -264,14 +265,6 @@ class ShadowLayerForwarder final : public LayersIPCActor,
    */
   void SetShadowManager(PLayerTransactionChild* aShadowManager);
 
-  /**
-   * Layout calls here to cache current plugin widget configuration
-   * data. We ship this across with the rest of the layer updates when
-   * we update. Chrome handles applying these changes.
-   */
-  void StorePluginWidgetConfigurations(
-      const nsTArray<nsIWidget::Configuration>& aConfigurations);
-
   void StopReceiveAsyncParentMessge();
 
   void ClearCachedResources();
@@ -420,10 +413,9 @@ class ShadowLayerForwarder final : public LayersIPCActor,
   DiagnosticTypes mDiagnosticTypes;
   bool mIsFirstPaint;
   FocusTarget mFocusTarget;
-  nsTArray<PluginWindowData> mPluginWindowData;
   UniquePtr<ActiveResourceTracker> mActiveResourceTracker;
   uint64_t mNextLayerHandle;
-  nsDataHashtable<nsUint64HashKey, CompositableClient*> mCompositables;
+  nsTHashMap<nsUint64HashKey, CompositableClient*> mCompositables;
   PaintTiming mPaintTiming;
   /**
    * ShadowLayerForwarder might dispatch tasks to main while puppet widget and

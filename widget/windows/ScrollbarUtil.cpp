@@ -5,9 +5,23 @@
 
 #include "ScrollbarUtil.h"
 
+#include "mozilla/Maybe.h"
 #include "mozilla/RelativeLuminanceUtils.h"
 #include "mozilla/StaticPrefs_widget.h"
+#include "nsLayoutUtils.h"
 #include "nsNativeTheme.h"
+#include "nsNativeBasicTheme.h"
+
+using mozilla::ComputedStyle;
+using mozilla::EventStates;
+using mozilla::Maybe;
+using mozilla::Nothing;
+using mozilla::RelativeLuminanceUtils;
+using mozilla::Some;
+using mozilla::StyleAppearance;
+using mozilla::StyleScrollbarWidth;
+
+namespace StaticPrefs = mozilla::StaticPrefs;
 
 /*static*/
 bool ScrollbarUtil::IsScrollbarWidthThin(ComputedStyle* aStyle) {
@@ -40,104 +54,6 @@ ComputedStyle* ScrollbarUtil::GetCustomScrollbarStyle(nsIFrame* aFrame,
 }
 
 /*static*/
-nscolor ScrollbarUtil::GetScrollbarButtonColor(nscolor aTrackColor,
-                                               EventStates aStates) {
-  // See numbers in GetScrollbarArrowColor.
-  // This function is written based on ratios between values listed there.
-
-  bool isActive = aStates.HasState(NS_EVENT_STATE_ACTIVE);
-  bool isHover = aStates.HasState(NS_EVENT_STATE_HOVER);
-  if (!isActive && !isHover) {
-    return aTrackColor;
-  }
-  float luminance = RelativeLuminanceUtils::Compute(aTrackColor);
-  if (isActive) {
-    if (luminance >= 0.18f) {
-      luminance *= 0.134f;
-    } else {
-      luminance /= 0.134f;
-      luminance = std::min(luminance, 1.0f);
-    }
-  } else {
-    if (luminance >= 0.18f) {
-      luminance *= 0.805f;
-    } else {
-      luminance /= 0.805f;
-    }
-  }
-  return RelativeLuminanceUtils::Adjust(aTrackColor, luminance);
-}
-
-/*static*/
-nscolor ScrollbarUtil::GetScrollbarArrowColor(nscolor aButtonColor) {
-  // In Windows 10 scrollbar, there are several gray colors used:
-  //
-  // State  | Background (lum) | Arrow   | Contrast
-  // -------+------------------+---------+---------
-  // Normal | Gray 240 (87.1%) | Gray 96 |     5.5
-  // Hover  | Gray 218 (70.1%) | Black   |    15.0
-  // Active | Gray 96  (11.7%) | White   |     6.3
-  //
-  // Contrast value is computed based on the definition in
-  // https://www.w3.org/TR/WCAG20/#contrast-ratiodef
-  //
-  // This function is written based on these values.
-
-  float luminance = RelativeLuminanceUtils::Compute(aButtonColor);
-  // Color with luminance larger than 0.72 has contrast ratio over 4.6
-  // to color with luminance of gray 96, so this value is chosen for
-  // this range. It is the luminance of gray 221.
-  if (luminance >= 0.72) {
-    // ComputeRelativeLuminanceFromComponents(96). That function cannot
-    // be constexpr because of std::pow.
-    const float GRAY96_LUMINANCE = 0.117f;
-    return RelativeLuminanceUtils::Adjust(aButtonColor, GRAY96_LUMINANCE);
-  }
-  // The contrast ratio of a color to black equals that to white when its
-  // luminance is around 0.18, with a contrast ratio ~4.6 to both sides,
-  // thus the value below. It's the lumanince of gray 118.
-  if (luminance >= 0.18) {
-    return NS_RGBA(0, 0, 0, NS_GET_A(aButtonColor));
-  }
-  return NS_RGBA(255, 255, 255, NS_GET_A(aButtonColor));
-}
-
-/*static*/
-nscolor ScrollbarUtil::AdjustScrollbarFaceColor(nscolor aFaceColor,
-                                                EventStates aStates) {
-  // In Windows 10, scrollbar thumb has the following colors:
-  //
-  // State  | Color    | Luminance
-  // -------+----------+----------
-  // Normal | Gray 205 |     61.0%
-  // Hover  | Gray 166 |     38.1%
-  // Active | Gray 96  |     11.7%
-  //
-  // This function is written based on the ratios between the values.
-
-  bool isActive = aStates.HasState(NS_EVENT_STATE_ACTIVE);
-  bool isHover = aStates.HasState(NS_EVENT_STATE_HOVER);
-  if (!isActive && !isHover) {
-    return aFaceColor;
-  }
-  float luminance = RelativeLuminanceUtils::Compute(aFaceColor);
-  if (isActive) {
-    if (luminance >= 0.18f) {
-      luminance *= 0.192f;
-    } else {
-      luminance /= 0.192f;
-    }
-  } else {
-    if (luminance >= 0.18f) {
-      luminance *= 0.625f;
-    } else {
-      luminance /= 0.625f;
-    }
-  }
-  return RelativeLuminanceUtils::Adjust(aFaceColor, luminance);
-}
-
-/*static*/
 nscolor ScrollbarUtil::GetScrollbarTrackColor(nsIFrame* aFrame) {
   bool darkScrollbar = false;
   ComputedStyle* style = GetCustomScrollbarStyle(aFrame, &darkScrollbar);
@@ -158,19 +74,19 @@ nscolor ScrollbarUtil::GetScrollbarThumbColor(nsIFrame* aFrame,
                                               EventStates aEventStates) {
   bool darkScrollbar = false;
   ComputedStyle* style = GetCustomScrollbarStyle(aFrame, &darkScrollbar);
+  nscolor color =
+      darkScrollbar ? NS_RGBA(249, 249, 250, 102) : NS_RGB(205, 205, 205);
   if (style) {
     const nsStyleUI* ui = style->StyleUI();
     auto* customColors = ui->mScrollbarColor.IsAuto()
                              ? nullptr
                              : &ui->mScrollbarColor.AsColors();
     if (customColors) {
-      nscolor faceColor = customColors->thumb.CalcColor(*style);
-      return AdjustScrollbarFaceColor(faceColor, aEventStates);
+      color = customColors->thumb.CalcColor(*style);
     }
   }
-  nscolor faceColor =
-      darkScrollbar ? NS_RGBA(249, 249, 250, 102) : NS_RGB(205, 205, 205);
-  return AdjustScrollbarFaceColor(faceColor, aEventStates);
+  return nsNativeBasicTheme::AdjustUnthemedScrollbarThumbColor(color,
+                                                               aEventStates);
 }
 
 /*static*/

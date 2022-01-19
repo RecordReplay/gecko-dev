@@ -233,9 +233,11 @@ this.tabs = class extends ExtensionAPI {
             function sanitize(tab, changeInfo) {
               const result = {};
               let nonempty = false;
-              const hasTabs = tab.hasTabPermission;
               for (const prop in changeInfo) {
-                if (hasTabs || !restricted.includes(prop)) {
+                // In practice, changeInfo contains at most one property from
+                // restricted. Therefore it is not necessary to cache the value
+                // of tab.hasTabPermission outside the loop.
+                if (!restricted.includes(prop) || tab.hasTabPermission) {
                   nonempty = true;
                   result[prop] = changeInfo[prop];
                 }
@@ -329,6 +331,15 @@ this.tabs = class extends ExtensionAPI {
             }
           }
 
+          if (cookieStoreId) {
+            cookieStoreId = getUserContextIdForCookieStoreId(
+              extension,
+              cookieStoreId,
+              false // TODO bug 1372178: support creation of private browsing tabs
+            );
+          }
+          cookieStoreId = cookieStoreId ? cookieStoreId.toString() : undefined;
+
           const nativeTab = await GeckoViewTabBridge.createNewTab({
             extensionId: context.extension.id,
             createProperties: {
@@ -352,14 +363,23 @@ this.tabs = class extends ExtensionAPI {
             tabListener.initializingTabs.add(nativeTab);
           } else {
             url = "about:blank";
+          }
+
+          let { principal } = context;
+          if (url.startsWith("about:")) {
+            // Make sure things like about:blank and other about: URIs never
+            // inherit, and instead always get a NullPrincipal.
             flags |= Ci.nsIWebNavigation.LOAD_FLAGS_DISALLOW_INHERIT_PRINCIPAL;
+            // Falling back to content here as about: requires it, however is safe.
+            principal = Services.scriptSecurityManager.getLoadContextContentPrincipal(
+              Services.io.newURI(url),
+              browser.loadContext
+            );
           }
 
           browser.loadURI(url, {
             flags,
-            // GeckoView doesn't support about:newtab so we don't need to worry
-            // about using the system principal here.
-            triggeringPrincipal: context.principal,
+            triggeringPrincipal: principal,
           });
 
           if (active) {

@@ -8,9 +8,7 @@
 #define vm_DateTime_h
 
 #include "mozilla/Assertions.h"
-#include "mozilla/Attributes.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/Unused.h"
 
 #include <stdint.h>
 
@@ -217,7 +215,7 @@ class DateTimeInfo {
 
   static void resyncICUDefaultTimeZone() {
     auto guard = acquireLockWithValidTimeZone();
-    mozilla::Unused << guard;
+    (void)guard;
   }
 
   struct RangeCache {

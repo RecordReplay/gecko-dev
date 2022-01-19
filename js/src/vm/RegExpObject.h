@@ -9,7 +9,6 @@
 #ifndef vm_RegExpObject_h
 #define vm_RegExpObject_h
 
-#include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
 
 #include "builtin/SelfHostingDefines.h"
@@ -93,11 +92,11 @@ class RegExpObject : public NativeObject {
   static unsigned lastIndexSlot() { return LAST_INDEX_SLOT; }
 
   static bool isInitialShape(RegExpObject* rx) {
-    Shape* shape = rx->lastProperty();
-    if (shape->isEmptyShape() || !shape->isDataProperty()) {
+    ShapePropertyIter<NoGC> iter(rx->shape());
+    if (iter.done() || !iter->isDataProperty()) {
       return false;
     }
-    if (shape->maybeSlot() != LAST_INDEX_SLOT) {
+    if (iter->slot() != LAST_INDEX_SLOT) {
       return false;
     }
     return true;
@@ -133,6 +132,7 @@ class RegExpObject : public NativeObject {
     setFixedSlot(FLAGS_SLOT, Int32Value(flags.value()));
   }
 
+  bool hasIndices() const { return getFlags().hasIndices(); }
   bool global() const { return getFlags().global(); }
   bool ignoreCase() const { return getFlags().ignoreCase(); }
   bool multiline() const { return getFlags().multiline(); }
@@ -166,9 +166,9 @@ class RegExpObject : public NativeObject {
                             JSContext* cx);
 
 #ifdef DEBUG
-  static MOZ_MUST_USE bool dumpBytecode(JSContext* cx,
-                                        Handle<RegExpObject*> regexp,
-                                        HandleLinearString input);
+  [[nodiscard]] static bool dumpBytecode(JSContext* cx,
+                                         Handle<RegExpObject*> regexp,
+                                         HandleLinearString input);
 #endif
 
  private:

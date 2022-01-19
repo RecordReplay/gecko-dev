@@ -49,10 +49,8 @@ class GentooBootstrapper(LinuxBootstrapper, BaseBootstrapper):
                 "--noreplace",
                 "--quiet",
                 "--newuse",
-                "dev-lang/yasm",
                 "dev-libs/dbus-glib",
                 "media-sound/pulseaudio",
-                "x11-libs/gtk+:2",
                 "x11-libs/gtk+:3",
                 "x11-libs/libXt",
             ]

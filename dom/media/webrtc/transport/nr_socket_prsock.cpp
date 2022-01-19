@@ -241,7 +241,7 @@ class SingletonThreadHolder final {
 static StaticRefPtr<SingletonThreadHolder> sThread;
 
 static void ClearSingletonOnShutdown() {
-  ClearOnShutdown(&sThread, ShutdownPhase::ShutdownLoaders);
+  ClearOnShutdown(&sThread, ShutdownPhase::XPCOMShutdownLoaders);
 }
 #endif
 
@@ -335,7 +335,7 @@ void NrSocketBase::fire_callback(int how) {
 }
 
 // NrSocket implementation
-NS_IMPL_ISUPPORTS0(NrSocket)
+NS_IMPL_QUERY_INTERFACE0(NrSocket)
 
 // The nsASocket callbacks
 void NrSocket::OnSocketReady(PRFileDesc* fd, int16_t outflags) {
@@ -379,7 +379,7 @@ int NrSocket::cancel(int how) {
 }
 
 // Helper functions for addresses
-static int nr_transport_addr_to_praddr(nr_transport_addr* addr,
+static int nr_transport_addr_to_praddr(const nr_transport_addr* addr,
                                        PRNetAddr* naddr) {
   int _status;
 
@@ -444,7 +444,7 @@ abort:
   return (_status);
 }
 
-static int nr_transport_addr_to_netaddr(nr_transport_addr* addr,
+static int nr_transport_addr_to_netaddr(const nr_transport_addr* addr,
                                         net::NetAddr* naddr) {
   int r, _status;
   PRNetAddr praddr;
@@ -530,7 +530,7 @@ abort:
  * nr_transport_addr_get_addrstring_and_port
  * convert nr_transport_addr to IP address string and port number
  */
-int nr_transport_addr_get_addrstring_and_port(nr_transport_addr* addr,
+int nr_transport_addr_get_addrstring_and_port(const nr_transport_addr* addr,
                                               nsACString* host, int32_t* port) {
   int r, _status;
   char addr_string[64];
@@ -628,8 +628,9 @@ int NrSocket::create(nr_transport_addr* addr) {
 #endif
       break;
     case IPPROTO_TCP:
-      // TODO: Add TLS layer with nsISocketProviderService?
-      if (my_addr_.tls_host[0] != '\0') ABORT(R_INTERNAL);
+      // TODO: Rewrite this to use WebrtcTcpSocket.
+      // Also use the same logic for TLS.
+      if (my_addr_.fqdn[0] != '\0') ABORT(R_INTERNAL);
 
       if (!(fd_ = PR_OpenTCPSocket(naddr.raw.family))) {
         r_log(LOG_GENERIC, LOG_CRIT,
@@ -780,7 +781,7 @@ static int ShouldDrop(size_t len) {
 
 // This should be called on the STS thread.
 int NrSocket::sendto(const void* msg, size_t len, int flags,
-                     nr_transport_addr* to) {
+                     const nr_transport_addr* to) {
   ASSERT_ON_THREAD(ststhread_);
   int r, _status;
   PRNetAddr naddr;
@@ -847,7 +848,7 @@ void NrSocket::close() {
   cancel(NR_ASYNC_WAIT_WRITE);
 }
 
-int NrSocket::connect(nr_transport_addr* addr) {
+int NrSocket::connect(const nr_transport_addr* addr) {
   ASSERT_ON_THREAD(ststhread_);
   int r, _status;
   PRNetAddr naddr;
@@ -1086,16 +1087,15 @@ NrUdpSocketIpc::NrUdpSocketIpc()
       err_(false),
       state_(NR_INIT) {}
 
-NrUdpSocketIpc::~NrUdpSocketIpc() {
+NrUdpSocketIpc::~NrUdpSocketIpc() = default;
+
+void NrUdpSocketIpc::Destroy() {
 #if defined(MOZILLA_INTERNAL_API)
-  // close(), but transfer the socket_child_ reference to die as well
   // destroy_i also dispatches back to STS to call ReleaseUse, to avoid shutting
   // down the IO thread before close() runs.
-  RUN_ON_THREAD(
-      io_thread_,
-      mozilla::WrapRunnableNM(&NrUdpSocketIpc::destroy_i,
-                              socket_child_.forget().take(), sts_thread_),
-      NS_DISPATCH_NORMAL);
+  // We use a NonOwning runnable because our refcount has already gone to 0.
+  io_thread_->Dispatch(
+      NewNonOwningRunnableMethod(__func__, this, &NrUdpSocketIpc::destroy_i));
 #endif
 }
 
@@ -1300,7 +1300,7 @@ abort:
 }
 
 int NrUdpSocketIpc::sendto(const void* msg, size_t len, int flags,
-                           nr_transport_addr* to) {
+                           const nr_transport_addr* to) {
   ASSERT_ON_THREAD(sts_thread_);
 
   ReentrantMonitorAutoEnter mon(monitor_);
@@ -1403,14 +1403,10 @@ int NrUdpSocketIpc::getaddr(nr_transport_addr* addrp) {
 
   ReentrantMonitorAutoEnter mon(monitor_);
 
-  if (state_ != NR_CONNECTED) {
-    return R_INTERNAL;
-  }
-
   return nr_transport_addr_copy(addrp, &my_addr_);
 }
 
-int NrUdpSocketIpc::connect(nr_transport_addr* addr) {
+int NrUdpSocketIpc::connect(const nr_transport_addr* addr) {
   int r, _status;
   int32_t port;
   nsCString host;
@@ -1563,17 +1559,10 @@ void NrUdpSocketIpc::close_i() {
 
 static void ReleaseIOThread_s() { sThread->ReleaseUse(); }
 
-// close(), but transfer the socket_child_ reference to die as well
-// static
-void NrUdpSocketIpc::destroy_i(dom::UDPSocketChild* aChild,
-                               const nsCOMPtr<nsIEventTarget>& aStsThread) {
-  RefPtr<dom::UDPSocketChild> socket_child_ref =
-      already_AddRefed<dom::UDPSocketChild>(aChild);
-  if (socket_child_ref) {
-    socket_child_ref->Close();
-  }
+void NrUdpSocketIpc::destroy_i() {
+  close_i();
 
-  RUN_ON_THREAD(aStsThread, WrapRunnableNM(&ReleaseIOThread_s),
+  RUN_ON_THREAD(sts_thread_, WrapRunnableNM(&ReleaseIOThread_s),
                 NS_DISPATCH_NORMAL);
 }
 #endif
@@ -1603,14 +1592,14 @@ using namespace mozilla;
 // Bridge to the nr_socket interface
 static int nr_socket_local_destroy(void** objp);
 static int nr_socket_local_sendto(void* obj, const void* msg, size_t len,
-                                  int flags, nr_transport_addr* to);
+                                  int flags, const nr_transport_addr* to);
 static int nr_socket_local_recvfrom(void* obj, void* restrict buf,
                                     size_t maxlen, size_t* len, int flags,
                                     nr_transport_addr* from);
 static int nr_socket_local_getfd(void* obj, NR_SOCKET* fd);
 static int nr_socket_local_getaddr(void* obj, nr_transport_addr* addrp);
 static int nr_socket_local_close(void* obj);
-static int nr_socket_local_connect(void* sock, nr_transport_addr* addr);
+static int nr_socket_local_connect(void* obj, const nr_transport_addr* addr);
 static int nr_socket_local_write(void* obj, const void* msg, size_t len,
                                  size_t* written);
 static int nr_socket_local_read(void* obj, void* restrict buf, size_t maxlen,
@@ -1709,7 +1698,7 @@ static int nr_socket_local_destroy(void** objp) {
 }
 
 static int nr_socket_local_sendto(void* obj, const void* msg, size_t len,
-                                  int flags, nr_transport_addr* addr) {
+                                  int flags, const nr_transport_addr* addr) {
   NrSocketBase* sock = static_cast<NrSocketBase*>(obj);
 
   return sock->sendto(msg, len, flags, addr);
@@ -1759,7 +1748,7 @@ static int nr_socket_local_read(void* obj, void* restrict buf, size_t maxlen,
   return sock->read(buf, maxlen, len);
 }
 
-static int nr_socket_local_connect(void* obj, nr_transport_addr* addr) {
+static int nr_socket_local_connect(void* obj, const nr_transport_addr* addr) {
   NrSocketBase* sock = static_cast<NrSocketBase*>(obj);
 
   return sock->connect(addr);

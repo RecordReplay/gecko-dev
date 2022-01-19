@@ -308,7 +308,7 @@ ssl3_SelectAppProtocol(const sslSocket *ss, TLSExtensionData *xtnData,
     if (rv != SECSuccess) {
         ssl3_ExtSendAlert(ss, alert_fatal, decode_error);
         PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
-        return rv;
+        return SECFailure;
     }
 
     PORT_Assert(ss->nextProtoCallback);
@@ -921,7 +921,7 @@ ssl_ParseSessionTicket(sslSocket *ss, const SECItem *decryptedTicket,
 #ifndef UNSAFE_FUZZER_MODE
     PORT_Assert(temp < ssl_auth_size);
 #else
-    temp %= (8 * sizeof(SSLAuthType));
+    temp %= (8 * sizeof(SSLAuthType)) - 1;
 #endif
 
     parsedTicket->authType = (SSLAuthType)temp;

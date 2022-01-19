@@ -158,7 +158,7 @@ struct MOZ_STACK_CLASS BidiParagraphData {
   nsAutoString mBuffer;
   AutoTArray<char16_t, 16> mEmbeddingStack;
   AutoTArray<FrameInfo, 16> mLogicalFrames;
-  nsDataHashtable<nsPtrHashKey<const nsIContent>, int32_t> mContentToFrameIndex;
+  nsTHashMap<nsPtrHashKey<const nsIContent>, int32_t> mContentToFrameIndex;
   // Cached presentation context for the frames we're processing.
   nsPresContext* mPresContext;
   bool mIsVisual;
@@ -383,7 +383,7 @@ struct MOZ_STACK_CLASS BidiParagraphData {
   void AppendFrame(nsIFrame* aFrame, FastLineIterator& aLineIter,
                    nsIContent* aContent = nullptr) {
     if (aContent) {
-      mContentToFrameIndex.Put(aContent, FrameCount());
+      mContentToFrameIndex.InsertOrUpdate(aContent, FrameCount());
     }
 
     // We don't actually need to advance aLineIter to aFrame, since all we use
@@ -414,9 +414,7 @@ struct MOZ_STACK_CLASS BidiParagraphData {
   }
 
   int32_t GetLastFrameForContent(nsIContent* aContent) {
-    int32_t index = 0;
-    mContentToFrameIndex.Get(aContent, &index);
-    return index;
+    return mContentToFrameIndex.Get(aContent);
   }
 
   int32_t FrameCount() { return mLogicalFrames.Length(); }
@@ -968,8 +966,7 @@ nsresult nsBidiPresUtils::ResolveParagraph(BidiParagraphData* aBpd) {
           break;
         }
         contentTextLength = content->TextLength();
-        int32_t start, end;
-        frame->GetOffsets(start, end);
+        auto [start, end] = frame->GetOffsets();
         NS_ASSERTION(!(contentTextLength < end - start),
                      "Frame offsets don't fit in content");
         fragmentLength = std::min(contentTextLength, end - start);
@@ -1248,8 +1245,7 @@ void nsBidiPresUtils::TraverseFrames(nsIFrame* aCurrentFrame,
             do {
               next = nullptr;
 
-              int32_t start, end;
-              frame->GetOffsets(start, end);
+              auto [start, end] = frame->GetOffsets();
               int32_t endLine = text.FindChar('\n', start);
               if (endLine == -1) {
                 /*
@@ -1281,7 +1277,7 @@ void nsBidiPresUtils::TraverseFrames(nsIFrame* aCurrentFrame,
                 aBpd->AdvanceAndAppendFrame(&frame, aBpd->mCurrentTraverseLine,
                                             &nextSibling);
                 NS_ASSERTION(frame, "Premature end of continuation chain");
-                frame->GetOffsets(start, end);
+                std::tie(start, end) = frame->GetOffsets();
                 aBpd->AppendString(
                     Substring(text, start, std::min(end, endLine) - start));
               }
@@ -1337,7 +1333,8 @@ void nsBidiPresUtils::TraverseFrames(nsIFrame* aCurrentFrame,
 
               if (!nextSibling && !createdContinuation) {
                 break;
-              } else if (next) {
+              }
+              if (next) {
                 frame = next;
                 aBpd->AppendFrame(frame, aBpd->mCurrentTraverseLine);
                 // Mark the line after the newline as dirty.

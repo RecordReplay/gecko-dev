@@ -978,13 +978,6 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
         items.map(item => this.scoreItem(item, personalizedByType))
       )
     )
-      // Remove spocs that are scored too low.
-      .filter(s => {
-        if (s.score >= s.min_score) {
-          return true;
-        }
-        return false;
-      })
       // Sort by highest scores.
       .sort(this.sortItem);
 
@@ -993,7 +986,6 @@ this.DiscoveryStreamFeed = class DiscoveryStreamFeed {
 
   async scoreItem(item, personalizedByType) {
     item.score = item.item_score;
-    item.min_score = item.min_score || 0;
     if (item.score !== 0 && !item.score) {
       item.score = 1;
     }
@@ -1847,8 +1839,7 @@ getHardcodedLayout = isBasicLayout => ({
               id: "newtab-pocket-learn-more",
             },
             link_url: "https://getpocket.com/firefox/new_tab_learn_more",
-            icon:
-              "chrome://activity-stream/content/data/content/assets/glyph-pocket-16.svg",
+            icon: "chrome://global/skin/icons/pocket.svg",
           },
           properties: {},
           styles: {
@@ -1927,6 +1918,13 @@ getHardcodedLayout = isBasicLayout => ({
                 url: "https://getpocket.com/explore?utm_source=pocket-newtab",
               },
             ],
+            privacyNoticeURL: {
+              url:
+                "https://www.mozilla.org/privacy/firefox/#suggest-relevant-content",
+              title: {
+                id: "newtab-section-menu-privacy-notice",
+              },
+            },
           },
           header: {
             title: {

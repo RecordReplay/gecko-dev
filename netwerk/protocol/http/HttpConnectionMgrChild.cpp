@@ -49,9 +49,9 @@ HttpConnectionMgrChild::RecvDoShiftReloadConnectionCleanupWithConnInfo(
 }
 
 mozilla::ipc::IPCResult
-HttpConnectionMgrChild::RecvUpdateCurrentTopLevelOuterContentWindowId(
-    const uint64_t& aWindowId) {
-  mConnMgr->UpdateCurrentTopLevelOuterContentWindowId(aWindowId);
+HttpConnectionMgrChild::RecvUpdateCurrentTopBrowsingContextId(
+    const uint64_t& aId) {
+  mConnMgr->UpdateCurrentTopBrowsingContextId(aId);
   return IPC_OK();
 }
 
@@ -159,7 +159,7 @@ SpeculativeConnectionOverrider::GetAllow1918(bool* aAllow) {
 }  // anonymous namespace
 
 mozilla::ipc::IPCResult HttpConnectionMgrChild::RecvSpeculativeConnect(
-    HttpConnectionInfoCloneArgs aConnInfo,
+    const HttpConnectionInfoCloneArgs& aConnInfo,
     Maybe<SpeculativeConnectionOverriderArgs> aOverriderArgs, uint32_t aCaps,
     Maybe<PAltSvcTransactionChild*> aTrans, const bool& aFetchHTTPSRR) {
   RefPtr<nsHttpConnectionInfo> cinfo =

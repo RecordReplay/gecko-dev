@@ -1,7 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-ChromeUtils.import("resource://gre/modules/Promise.jsm", this);
 const { PermissionTestUtils } = ChromeUtils.import(
   "resource://testing-common/PermissionTestUtils.jsm"
 );
@@ -93,54 +92,6 @@ function promiseLoadSubDialog(aURL) {
       }
     );
   });
-}
-
-/**
- * Waits a specified number of miliseconds for a specified event to be
- * fired on a specified element.
- *
- * Usage:
- *    let receivedEvent = waitForEvent(element, "eventName");
- *    // Do some processing here that will cause the event to be fired
- *    // ...
- *    // Now yield until the Promise is fulfilled
- *    yield receivedEvent;
- *    if (receivedEvent && !(receivedEvent instanceof Error)) {
- *      receivedEvent.msg == "eventName";
- *      // ...
- *    }
- *
- * @param aSubject the element that should receive the event
- * @param aEventName the event to wait for
- * @param aTimeoutMs the number of miliseconds to wait before giving up
- * @returns a Promise that resolves to the received event, or to an Error
- */
-function waitForEvent(aSubject, aEventName, aTimeoutMs, aTarget) {
-  let eventDeferred = Promise.defer();
-  let timeoutMs = aTimeoutMs || kDefaultWait;
-  let stack = new Error().stack;
-  let timerID = setTimeout(function wfe_canceller() {
-    aSubject.removeEventListener(aEventName, listener);
-    eventDeferred.reject(new Error(aEventName + " event timeout at " + stack));
-  }, timeoutMs);
-
-  var listener = function(aEvent) {
-    if (aTarget && aTarget !== aEvent.target) {
-      return;
-    }
-
-    // stop the timeout clock and resume
-    clearTimeout(timerID);
-    eventDeferred.resolve(aEvent);
-  };
-
-  function cleanup(aEventOrError) {
-    // unhook listener in case of success or failure
-    aSubject.removeEventListener(aEventName, listener);
-    return aEventOrError;
-  }
-  aSubject.addEventListener(aEventName, listener);
-  return eventDeferred.promise.then(cleanup, cleanup);
 }
 
 async function openPreferencesViaOpenPreferencesAPI(aPane, aOptions) {
@@ -247,7 +198,7 @@ class DefinitionServer {
       id: "test-feature",
       // These l10n IDs are just random so we have some text to display
       title: "experimental-features-media-avif",
-      description: "pane-experimental-description",
+      description: "pane-experimental-description2",
       restartRequired: false,
       type: "boolean",
       preference: "test.feature",
@@ -261,4 +212,60 @@ class DefinitionServer {
     this.definitions[definition.id] = definition;
     return definition;
   }
+}
+
+/**
+ * Creates observer that waits for and then compares all perm-changes with the observances in order.
+ * @param {Array} observances permission changes to observe (order is important)
+ * @returns {Promise} Promise object that resolves once all permission changes have been observed
+ */
+function createObserveAllPromise(observances) {
+  // Create new promise that resolves once all items
+  // in observances array have been observed.
+  return new Promise(resolve => {
+    let permObserver = {
+      observe(aSubject, aTopic, aData) {
+        if (aTopic != "perm-changed") {
+          return;
+        }
+
+        if (!observances.length) {
+          // See bug 1063410
+          return;
+        }
+
+        let permission = aSubject.QueryInterface(Ci.nsIPermission);
+        let expected = observances.shift();
+
+        info(
+          `observed perm-changed for ${permission.principal.origin} (remaining ${observances.length})`
+        );
+
+        is(aData, expected.data, "type of message should be the same");
+        for (let prop of ["type", "capability", "expireType"]) {
+          if (expected[prop]) {
+            is(
+              permission[prop],
+              expected[prop],
+              `property: "${prop}" should be equal (${permission.principal.origin})`
+            );
+          }
+        }
+
+        if (expected.origin) {
+          is(
+            permission.principal.origin,
+            expected.origin,
+            `property: "origin" should be equal (${permission.principal.origin})`
+          );
+        }
+
+        if (!observances.length) {
+          Services.obs.removeObserver(permObserver, "perm-changed");
+          executeSoon(resolve);
+        }
+      },
+    };
+    Services.obs.addObserver(permObserver, "perm-changed");
+  });
 }

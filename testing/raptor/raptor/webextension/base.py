@@ -35,7 +35,6 @@ class WebExtension(Perftest):
         self.cpu_profiler = None
 
         super(WebExtension, self).__init__(*args, **kwargs)
-        self.using_condprof = self.config.get("using_condprof", True)
 
         # set up the results handler
         self.results_handler = RaptorResultsHandler(**self.config)
@@ -143,22 +142,6 @@ class WebExtension(Perftest):
 
         if self.playback is not None:
             self.playback.stop()
-
-            confidence_values = self.playback.confidence()
-            if confidence_values:
-                mozproxy_replay = {
-                    u"summarize-values": False,
-                    u"suite-suffix-type": False,
-                    u"type": u"mozproxy",
-                    u"test": test["name"],
-                    u"unit": u"a.u.",
-                    u"values": confidence_values,
-                    u"shouldAlert": False,  # Bug 1655841 temporary disable confidence metrics
-                }
-                self.control_server.submit_supporting_data(mozproxy_replay)
-            else:
-                LOG.info("Mozproxy replay confidence data not available!")
-
             self.playback = None
 
         self.remove_raptor_webext()
@@ -212,7 +195,7 @@ class WebExtension(Perftest):
             return
 
         LOG.info("removing webext %s" % self.raptor_webext)
-        if self.config["app"] in ["firefox", "geckoview", "fennec", "refbrow", "fenix"]:
+        if self.config["app"] in ["firefox", "geckoview", "refbrow", "fenix"]:
             self.profile.addons.remove_addon(self.webext_id)
 
         # for chrome the addon is just a list (appended to cmd line)

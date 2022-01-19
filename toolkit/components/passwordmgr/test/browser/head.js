@@ -1,13 +1,23 @@
 const DIRECTORY_PATH = "/browser/toolkit/components/passwordmgr/test/browser/";
 
-ChromeUtils.import("resource://gre/modules/LoginHelper.jsm", this);
+const { LoginHelper } = ChromeUtils.import(
+  "resource://gre/modules/LoginHelper.jsm"
+);
 const { LoginManagerParent } = ChromeUtils.import(
   "resource://gre/modules/LoginManagerParent.jsm"
 );
-ChromeUtils.import("resource://testing-common/LoginTestUtils.jsm", this);
-ChromeUtils.import("resource://testing-common/ContentTaskUtils.jsm", this);
-ChromeUtils.import("resource://testing-common/TelemetryTestUtils.jsm", this);
-ChromeUtils.import("resource://testing-common/PromptTestUtils.jsm", this);
+const { LoginTestUtils } = ChromeUtils.import(
+  "resource://testing-common/LoginTestUtils.jsm"
+);
+const { ContentTaskUtils } = ChromeUtils.import(
+  "resource://testing-common/ContentTaskUtils.jsm"
+);
+const { TelemetryTestUtils } = ChromeUtils.import(
+  "resource://testing-common/TelemetryTestUtils.jsm"
+);
+const { PromptTestUtils } = ChromeUtils.import(
+  "resource://testing-common/PromptTestUtils.jsm"
+);
 
 add_task(async function common_initialize() {
   await SpecialPowers.pushPrefEnv({
@@ -18,6 +28,12 @@ add_task(async function common_initialize() {
       ["toolkit.telemetry.ipcBatchTimeout", 0],
     ],
   });
+  if (LoginHelper.relatedRealmsEnabled) {
+    await LoginTestUtils.remoteSettings.setupWebsitesWithSharedCredentials();
+    registerCleanupFunction(async function() {
+      await LoginTestUtils.remoteSettings.cleanWebsitesWithSharedCredentials();
+    });
+  }
 });
 
 registerCleanupFunction(
@@ -113,8 +129,7 @@ async function submitFormAndGetResults(
 ) {
   async function contentSubmitForm([contentFormAction, contentSelectorValues]) {
     const { WrapPrivileged } = ChromeUtils.import(
-      "resource://specialpowers/WrapPrivileged.jsm",
-      this
+      "resource://specialpowers/WrapPrivileged.jsm"
     );
     let doc = content.document;
     let form = doc.querySelector("form");
@@ -141,11 +156,15 @@ async function submitFormAndGetResults(
     }
     form.submit();
   }
+
+  let loadPromise = BrowserTestUtils.browserLoaded(browser);
   await SpecialPowers.spawn(
     browser,
     [[formAction, selectorValues]],
     contentSubmitForm
   );
+  await loadPromise;
+
   let result = await getFormSubmitResponseResult(
     browser,
     formAction,
@@ -184,8 +203,13 @@ async function getFormSubmitResponseResult(
       }, `Wait for form submission load (${resultURL})`);
       let username = content.document.querySelector(usernameSelector)
         .textContent;
-      let password = content.document.querySelector(passwordSelector)
-        .textContent;
+      // Bug 1686071: Since generated passwords can have special characters in them,
+      // we need to unescape the characters. These special characters are automatically escaped
+      // when we submit a form in `submitFormAndGetResults`.
+      // Otherwise certain tests will intermittently fail when these special characters are present in the passwords.
+      let password = unescape(
+        content.document.querySelector(passwordSelector).textContent
+      );
       return {
         username,
         password,
@@ -222,7 +246,7 @@ function testSubmittingLoginForm(
       );
       ok(true, "form submission loaded");
       if (aTaskFn) {
-        await aTaskFn(fieldValues);
+        await aTaskFn(fieldValues, browser);
       }
       return fieldValues;
     }
@@ -416,8 +440,7 @@ async function cleanupPasswordNotifications(
 async function clearMessageCache(browser) {
   await SpecialPowers.spawn(browser, [], async () => {
     const { LoginManagerChild } = ChromeUtils.import(
-      "resource://gre/modules/LoginManagerChild.jsm",
-      this
+      "resource://gre/modules/LoginManagerChild.jsm"
     );
     let docState = LoginManagerChild.forWindow(content).stateForDocument(
       content.document
@@ -652,6 +675,7 @@ async function fillGeneratedPasswordFromOpenACPopup(
   let popup = browser.ownerDocument.getElementById("PopupAutoComplete");
   let item;
 
+  await new Promise(requestAnimationFrame);
   await TestUtils.waitForCondition(() => {
     item = popup.querySelector(`[originaltype="generatedPassword"]`);
     return item && !EventUtils.isHidden(item);
@@ -694,7 +718,8 @@ async function openPasswordContextMenu(
   browser,
   input,
   assertCallback = null,
-  browsingContext = null
+  browsingContext = null,
+  openFillMenu = null
 ) {
   const doc = browser.ownerDocument;
   const CONTEXT_MENU = doc.getElementById("contentAreaContextMenu");
@@ -736,13 +761,15 @@ async function openPasswordContextMenu(
     }
   }
 
-  // Synthesize a mouse click over the fill login menu header.
-  let popupShownPromise = BrowserTestUtils.waitForCondition(
-    () => POPUP_HEADER.open && BrowserTestUtils.is_visible(LOGIN_POPUP),
-    "Waiting for header to be open and submenu to be visible"
-  );
-  EventUtils.synthesizeMouseAtCenter(POPUP_HEADER, {}, browser.ownerGlobal);
-  await popupShownPromise;
+  if (openFillMenu) {
+    // Open the fill login menu.
+    let popupShownPromise = BrowserTestUtils.waitForEvent(
+      LOGIN_POPUP,
+      "popupshown"
+    );
+    POPUP_HEADER.openMenu(true);
+    await popupShownPromise;
+  }
 }
 
 /**
@@ -781,7 +808,7 @@ async function doFillGeneratedPasswordContextMenuItem(browser, passwordInput) {
     "fill-login-generated-password"
   );
   let generatedPasswordSeparator = document.getElementById(
-    "fill-login-and-generated-password-separator"
+    "passwordmgr-items-separator"
   );
 
   ok(
@@ -801,7 +828,8 @@ async function doFillGeneratedPasswordContextMenuItem(browser, passwordInput) {
     SimpleTest.executeSoon(resolve);
   });
 
-  EventUtils.synthesizeMouseAtCenter(generatedPasswordItem, {});
+  let contextMenu = document.getElementById("contentAreaContextMenu");
+  contextMenu.activateItem(generatedPasswordItem);
 
   await promiseShown;
   await fillGeneratedPasswordFromOpenACPopup(browser, passwordInput);

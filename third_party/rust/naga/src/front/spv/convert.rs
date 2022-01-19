@@ -2,7 +2,7 @@ use super::error::Error;
 use num_traits::cast::FromPrimitive;
 use std::convert::TryInto;
 
-pub fn map_binary_operator(word: spirv::Op) -> Result<crate::BinaryOperator, Error> {
+pub(super) fn map_binary_operator(word: spirv::Op) -> Result<crate::BinaryOperator, Error> {
     use crate::BinaryOperator;
     use spirv::Op;
 
@@ -14,8 +14,12 @@ pub fn map_binary_operator(word: spirv::Op) -> Result<crate::BinaryOperator, Err
         Op::UDiv | Op::SDiv | Op::FDiv => Ok(BinaryOperator::Divide),
         Op::UMod | Op::SMod | Op::FMod => Ok(BinaryOperator::Modulo),
         // Relational and Logical Instructions
-        Op::IEqual | Op::FOrdEqual | Op::FUnordEqual => Ok(BinaryOperator::Equal),
-        Op::INotEqual | Op::FOrdNotEqual | Op::FUnordNotEqual => Ok(BinaryOperator::NotEqual),
+        Op::IEqual | Op::FOrdEqual | Op::FUnordEqual | Op::LogicalEqual => {
+            Ok(BinaryOperator::Equal)
+        }
+        Op::INotEqual | Op::FOrdNotEqual | Op::FUnordNotEqual | Op::LogicalNotEqual => {
+            Ok(BinaryOperator::NotEqual)
+        }
         Op::ULessThan | Op::SLessThan | Op::FOrdLessThan | Op::FUnordLessThan => {
             Ok(BinaryOperator::Less)
         }
@@ -30,11 +34,26 @@ pub fn map_binary_operator(word: spirv::Op) -> Result<crate::BinaryOperator, Err
         | Op::SGreaterThanEqual
         | Op::FOrdGreaterThanEqual
         | Op::FUnordGreaterThanEqual => Ok(BinaryOperator::GreaterEqual),
-        _ => Err(Error::UnknownInstruction(word as u16)),
+        _ => Err(Error::UnknownBinaryOperator(word)),
     }
 }
 
-pub fn map_vector_size(word: spirv::Word) -> Result<crate::VectorSize, Error> {
+pub(super) fn map_relational_fun(word: spirv::Op) -> Result<crate::RelationalFunction, Error> {
+    use crate::RelationalFunction as Rf;
+    use spirv::Op;
+
+    match word {
+        Op::All => Ok(Rf::All),
+        Op::Any => Ok(Rf::Any),
+        Op::IsNan => Ok(Rf::IsNan),
+        Op::IsInf => Ok(Rf::IsInf),
+        Op::IsFinite => Ok(Rf::IsFinite),
+        Op::IsNormal => Ok(Rf::IsNormal),
+        _ => Err(Error::UnknownRelationalFunction(word)),
+    }
+}
+
+pub(super) fn map_vector_size(word: spirv::Word) -> Result<crate::VectorSize, Error> {
     match word {
         2 => Ok(crate::VectorSize::Bi),
         3 => Ok(crate::VectorSize::Tri),
@@ -43,7 +62,7 @@ pub fn map_vector_size(word: spirv::Word) -> Result<crate::VectorSize, Error> {
     }
 }
 
-pub fn map_image_dim(word: spirv::Word) -> Result<crate::ImageDimension, Error> {
+pub(super) fn map_image_dim(word: spirv::Word) -> Result<crate::ImageDimension, Error> {
     use spirv::Dim as D;
     match D::from_u32(word) {
         Some(D::Dim1D) => Ok(crate::ImageDimension::D1),
@@ -54,7 +73,7 @@ pub fn map_image_dim(word: spirv::Word) -> Result<crate::ImageDimension, Error> 
     }
 }
 
-pub fn map_image_format(word: spirv::Word) -> Result<crate::StorageFormat, Error> {
+pub(super) fn map_image_format(word: spirv::Word) -> Result<crate::StorageFormat, Error> {
     match spirv::ImageFormat::from_u32(word) {
         Some(spirv::ImageFormat::R8) => Ok(crate::StorageFormat::R8Unorm),
         Some(spirv::ImageFormat::R8Snorm) => Ok(crate::StorageFormat::R8Snorm),
@@ -92,32 +111,53 @@ pub fn map_image_format(word: spirv::Word) -> Result<crate::StorageFormat, Error
     }
 }
 
-pub fn map_width(word: spirv::Word) -> Result<crate::Bytes, Error> {
+pub(super) fn map_width(word: spirv::Word) -> Result<crate::Bytes, Error> {
     (word >> 3) // bits to bytes
         .try_into()
         .map_err(|_| Error::InvalidTypeWidth(word))
 }
 
-pub fn map_builtin(word: spirv::Word) -> Result<crate::BuiltIn, Error> {
+pub(super) fn map_builtin(word: spirv::Word) -> Result<crate::BuiltIn, Error> {
     use spirv::BuiltIn as Bi;
     Ok(match spirv::BuiltIn::from_u32(word) {
+        Some(Bi::Position) | Some(Bi::FragCoord) => crate::BuiltIn::Position,
+        // vertex
         Some(Bi::BaseInstance) => crate::BuiltIn::BaseInstance,
         Some(Bi::BaseVertex) => crate::BuiltIn::BaseVertex,
         Some(Bi::ClipDistance) => crate::BuiltIn::ClipDistance,
+        Some(Bi::CullDistance) => crate::BuiltIn::CullDistance,
         Some(Bi::InstanceIndex) => crate::BuiltIn::InstanceIndex,
-        Some(Bi::Position) => crate::BuiltIn::Position,
+        Some(Bi::PointSize) => crate::BuiltIn::PointSize,
         Some(Bi::VertexIndex) => crate::BuiltIn::VertexIndex,
         // fragment
-        Some(Bi::PointSize) => crate::BuiltIn::PointSize,
-        Some(Bi::FragCoord) => crate::BuiltIn::FragCoord,
+        Some(Bi::FragDepth) => crate::BuiltIn::FragDepth,
         Some(Bi::FrontFacing) => crate::BuiltIn::FrontFacing,
         Some(Bi::SampleId) => crate::BuiltIn::SampleIndex,
-        Some(Bi::FragDepth) => crate::BuiltIn::FragDepth,
+        Some(Bi::SampleMask) => crate::BuiltIn::SampleMask,
         // compute
         Some(Bi::GlobalInvocationId) => crate::BuiltIn::GlobalInvocationId,
         Some(Bi::LocalInvocationId) => crate::BuiltIn::LocalInvocationId,
         Some(Bi::LocalInvocationIndex) => crate::BuiltIn::LocalInvocationIndex,
         Some(Bi::WorkgroupId) => crate::BuiltIn::WorkGroupId,
+        Some(Bi::WorkgroupSize) => crate::BuiltIn::WorkGroupSize,
         _ => return Err(Error::UnsupportedBuiltIn(word)),
+    })
+}
+
+pub(super) fn map_storage_class(word: spirv::Word) -> Result<super::ExtendedClass, Error> {
+    use super::ExtendedClass as Ec;
+    use spirv::StorageClass as Sc;
+    Ok(match Sc::from_u32(word) {
+        Some(Sc::Function) => Ec::Global(crate::StorageClass::Function),
+        Some(Sc::Input) => Ec::Input,
+        Some(Sc::Output) => Ec::Output,
+        Some(Sc::Private) => Ec::Global(crate::StorageClass::Private),
+        Some(Sc::UniformConstant) => Ec::Global(crate::StorageClass::Handle),
+        Some(Sc::StorageBuffer) => Ec::Global(crate::StorageClass::Storage),
+        // we expect the `Storage` case to be filtered out before calling this function.
+        Some(Sc::Uniform) => Ec::Global(crate::StorageClass::Uniform),
+        Some(Sc::Workgroup) => Ec::Global(crate::StorageClass::WorkGroup),
+        Some(Sc::PushConstant) => Ec::Global(crate::StorageClass::PushConstant),
+        _ => return Err(Error::UnsupportedStorageClass(word)),
     })
 }

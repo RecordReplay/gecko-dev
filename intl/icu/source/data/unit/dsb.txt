@@ -1,7 +1,7 @@
 ﻿// © 2016 and later: Unicode, Inc. and others.
-// License & terms of use: http://www.unicode.org/copyright.html#License
+// License & terms of use: http://www.unicode.org/copyright.html
+// Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 dsb{
-    Version{"37"}
     durationUnits{
         hm{"h:mm"}
         hms{"h:mm:ss"}
@@ -1723,11 +1723,11 @@ dsb{
                 two{"{0} t"}
             }
             microgram{
-                dnam{"µg"}
-                few{"{0} µg"}
-                one{"{0} µg"}
-                other{"{0} µg"}
-                two{"{0} µg"}
+                dnam{"μg"}
+                few{"{0} μg"}
+                one{"{0} μg"}
+                other{"{0} μg"}
+                two{"{0} μg"}
             }
             milligram{
                 dnam{"mg"}

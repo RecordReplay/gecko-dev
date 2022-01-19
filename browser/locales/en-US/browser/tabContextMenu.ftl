@@ -2,6 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+tab-context-new-tab =
+    .label = New Tab
+    .accesskey = w
 reload-tab =
     .label = Reload Tab
     .accesskey = R
@@ -14,8 +17,15 @@ duplicate-tab =
 duplicate-tabs =
     .label = Duplicate Tabs
     .accesskey = D
+# The following string is displayed on a menuitem that will close the tabs from the start of the tabstrip to the currently targeted tab (excluding the currently targeted and any other selected tabs).
+# In left-to-right languages this should use "Left" and in right-to-left languages this should use "Right".
+close-tabs-to-the-start =
+    .label = Close Tabs to Left
+    .accesskey = l
+# The following string is displayed on a menuitem that will close the tabs from the end of the tabstrip to the currently targeted tab (excluding the currently targeted and any other selected tabs).
+# In left-to-right languages this should use "Right" and in right-to-left languages this should use "Left".
 close-tabs-to-the-end =
-    .label = Close Tabs to the Right
+    .label = Close Tabs to Right
     .accesskey = i
 close-other-tabs =
     .label = Close Other Tabs
@@ -41,8 +51,8 @@ bookmark-selected-tabs =
 bookmark-tab =
     .label = Bookmark Tab
     .accesskey = B
-reopen-in-container =
-    .label = Reopen in Container
+tab-context-open-in-new-container-tab =
+    .label = Open in New Container Tab
     .accesskey = e
 move-to-start =
     .label = Move to Start
@@ -56,16 +66,22 @@ move-to-new-window =
 tab-context-close-multiple-tabs =
     .label = Close Multiple Tabs
     .accesskey = M
+tab-context-share-url =
+    .label = Share
+    .accesskey = h
+tab-context-share-more =
+    .label = More…
 
 ## Variables:
 ##  $tabCount (Number): the number of tabs that are affected by the action.
-tab-context-undo-close-tabs =
+
+tab-context-reopen-closed-tabs =
     .label =
         { $tabCount ->
-            [1] Undo Close Tab
-           *[other] Undo Close Tabs
+            [1] Reopen Closed Tab
+           *[other] Reopen Closed Tabs
         }
-    .accesskey = U
+    .accesskey = o
 tab-context-close-tabs =
     .label =
         { $tabCount ->

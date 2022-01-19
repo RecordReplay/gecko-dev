@@ -153,7 +153,7 @@ TextPropertyEditor.prototype = {
     this.element._textPropertyEditor = this;
 
     this.container = createChild(this.element, "div", {
-      class: "ruleview-propertycontainer inline-tooltip-container",
+      class: "ruleview-propertycontainer",
     });
 
     // The enable checkbox will disable or enable the rule.
@@ -975,12 +975,12 @@ TextPropertyEditor.prototype = {
       this.expander.removeAttribute("open");
       this.computed.removeAttribute("filter-open");
       this.computed.removeAttribute("user-open");
-      this.shorthandOverridden.removeAttribute("hidden");
+      this.shorthandOverridden.hidden = false;
       this._populateShorthandOverridden();
     } else {
       this.expander.setAttribute("open", "true");
       this.computed.setAttribute("user-open", "");
-      this.shorthandOverridden.setAttribute("hidden", "true");
+      this.shorthandOverridden.hidden = true;
       this._populateComputed();
     }
 

@@ -57,17 +57,8 @@ var gBookmarksObserver = {
   },
 
   // nsINavBookmarkObserver
-  onBeginUpdateBatch() {
-    return this.validate("onBeginUpdateBatch", arguments);
-  },
-  onEndUpdateBatch() {
-    return this.validate("onEndUpdateBatch", arguments);
-  },
   onItemChanged() {
     return this.validate("onItemChanged", arguments);
-  },
-  onItemMoved() {
-    return this.validate("onItemMoved", arguments);
   },
 
   // nsISupports
@@ -109,17 +100,8 @@ var gBookmarkSkipObserver = {
   },
 
   // nsINavBookmarkObserver
-  onBeginUpdateBatch() {
-    return this.validate("onBeginUpdateBatch", arguments);
-  },
-  onEndUpdateBatch() {
-    return this.validate("onEndUpdateBatch", arguments);
-  },
   onItemChanged() {
     return this.validate("onItemChanged", arguments);
-  },
-  onItemMoved() {
-    return this.validate("onItemMoved", arguments);
   },
 
   // nsISupports
@@ -139,11 +121,11 @@ add_task(async function setup() {
     gBookmarkSkipObserver
   );
   PlacesUtils.observers.addListener(
-    ["bookmark-added", "bookmark-removed"],
+    ["bookmark-added", "bookmark-removed", "bookmark-moved"],
     gBookmarksObserver.handlePlacesEvents
   );
   PlacesUtils.observers.addListener(
-    ["bookmark-added", "bookmark-removed"],
+    ["bookmark-added", "bookmark-removed", "bookmark-moved"],
     gBookmarkSkipObserver.handlePlacesEvents
   );
 });
@@ -504,25 +486,20 @@ add_task(async function onItemChanged_tags_bookmark() {
   await promise;
 });
 
-add_task(async function onItemMoved_bookmark() {
+add_task(async function bookmarkItemMoved_bookmark() {
   let bm = await PlacesUtils.bookmarks.fetch({
     parentGuid: PlacesUtils.bookmarks.unfiledGuid,
     index: 0,
   });
   let promise = Promise.all([
-    gBookmarkSkipObserver.setup(["onItemMoved", "onItemMoved"]),
+    gBookmarkSkipObserver.setup(["bookmark-moved", "bookmark-moved"]),
     gBookmarksObserver.setup([
       {
-        name: "onItemMoved",
+        eventType: "bookmark-moved",
         args: [
-          { name: "itemId", check: v => typeof v == "number" && v > 0 },
-          { name: "oldParentId", check: v => v === gUnfiledFolderId },
+          { name: "id", check: v => typeof v == "number" && v > 0 },
           { name: "oldIndex", check: v => v === 0 },
-          {
-            name: "newParentId",
-            check: v => v === PlacesUtils.toolbarFolderId,
-          },
-          { name: "newIndex", check: v => v === 0 },
+          { name: "index", check: v => v === 0 },
           {
             name: "itemType",
             check: v => v === PlacesUtils.bookmarks.TYPE_BOOKMARK,
@@ -536,7 +513,7 @@ add_task(async function onItemMoved_bookmark() {
             check: v => typeof v == "string" && PlacesUtils.isValidGuid(v),
           },
           {
-            name: "newParentGuid",
+            name: "parentGuid",
             check: v => typeof v == "string" && PlacesUtils.isValidGuid(v),
           },
           {
@@ -548,16 +525,11 @@ add_task(async function onItemMoved_bookmark() {
         ],
       },
       {
-        name: "onItemMoved",
+        eventType: "bookmark-moved",
         args: [
-          { name: "itemId", check: v => typeof v == "number" && v > 0 },
-          {
-            name: "oldParentId",
-            check: v => v === PlacesUtils.toolbarFolderId,
-          },
+          { name: "id", check: v => typeof v == "number" && v > 0 },
           { name: "oldIndex", check: v => v === 0 },
-          { name: "newParentId", check: v => v === gUnfiledFolderId },
-          { name: "newIndex", check: v => v === 0 },
+          { name: "index", check: v => v === 0 },
           {
             name: "itemType",
             check: v => v === PlacesUtils.bookmarks.TYPE_BOOKMARK,
@@ -571,7 +543,7 @@ add_task(async function onItemMoved_bookmark() {
             check: v => typeof v == "string" && PlacesUtils.isValidGuid(v),
           },
           {
-            name: "newParentGuid",
+            name: "parentGuid",
             check: v => typeof v == "string" && PlacesUtils.isValidGuid(v),
           },
           {

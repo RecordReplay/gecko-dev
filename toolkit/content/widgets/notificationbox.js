@@ -28,20 +28,20 @@
 
     get stack() {
       if (!this._stack) {
-        let stack = document.createXULElement("legacy-stack");
+        let stack = document.createXULElement("vbox");
         stack._notificationBox = this;
         stack.className = "notificationbox-stack";
-        stack.appendChild(document.createXULElement("spacer"));
         stack.addEventListener("transitionend", event => {
           if (
-            event.target.localName == "notification" &&
+            (event.target.localName == "notification" ||
+              event.target.localName == "notification-message") &&
             event.propertyName == "margin-top"
           ) {
             this._finishAnimation();
           }
         });
-        this._insertElementFn(stack);
         this._stack = stack;
+        this._insertElementFn(stack);
       }
       return this._stack;
     }
@@ -58,11 +58,11 @@
       }
 
       var closedNotification = this._closedNotification;
-      var notifications = this.stack.getElementsByTagName("notification");
-      return Array.prototype.filter.call(
-        notifications,
-        n => n != closedNotification
-      );
+      var notifications = [
+        ...this.stack.getElementsByTagName("notification"),
+        ...this.stack.getElementsByTagName("notification-message"),
+      ];
+      return notifications.filter(n => n != closedNotification);
     }
 
     getNotificationWithValue(aValue) {
@@ -107,6 +107,13 @@
      *             2. This button object definition.
      *             3. The <button> element.
      *             4. The "command" event.
+     *            If the callback returns false, the notification is closed.
+     *          link:
+     *             A url to open when the button is clicked. The button is
+     *             rendered like a link. The callback is called as well.
+     *          supportPage:
+     *            Used for a support page link. If no other properties are specified,
+     *            defaults to a link with a 'Learn more' label.
      *          popup:
      *            If specified, the button will open the popup element with this
      *            ID, anchored to the button. This is alternative to "callback".
@@ -136,29 +143,37 @@
       aNotificationIs
     ) {
       if (
-        aPriority < this.PRIORITY_INFO_LOW ||
+        aPriority < this.PRIORITY_SYSTEM ||
         aPriority > this.PRIORITY_CRITICAL_HIGH
       ) {
         throw new Error("Invalid notification priority " + aPriority);
       }
 
-      // check for where the notification should be inserted according to
-      // priority. If two are equal, the existing one appears on top.
-      var notifications = this.allNotifications;
-      var insertPos = null;
-      for (var n = notifications.length - 1; n >= 0; n--) {
-        if (notifications[n].priority < aPriority) {
-          break;
-        }
-        insertPos = notifications[n];
-      }
+      MozXULElement.insertFTLIfNeeded("toolkit/global/notification.ftl");
 
       // Create the Custom Element and connect it to the document immediately.
-      var newitem = document.createXULElement(
-        "notification",
-        aNotificationIs ? { is: aNotificationIs } : {}
-      );
-      this.stack.insertBefore(newitem, insertPos);
+      var newitem;
+      if (!aNotificationIs) {
+        if (!customElements.get("notification-message")) {
+          // There's some weird timing stuff when this element is created at
+          // script load time, we don't need it until now anyway so be lazy.
+          createNotificationMessageElement();
+        }
+        newitem = document.createElement("notification-message");
+        newitem.setAttribute("message-bar-type", "infobar");
+      } else {
+        newitem = document.createXULElement(
+          "notification",
+          aNotificationIs ? { is: aNotificationIs } : {}
+        );
+      }
+
+      // Append or prepend notification, based on stack preference.
+      if (this.stack.hasAttribute("prepend-notifications")) {
+        this.stack.prepend(newitem);
+      } else {
+        this.stack.append(newitem);
+      }
 
       // Custom notification classes may not have the messageText property.
       if (newitem.messageText) {
@@ -175,40 +190,17 @@
         }
       }
       newitem.setAttribute("value", aValue);
-      if (aImage) {
-        newitem.messageImage.setAttribute("src", aImage);
-      }
+
       newitem.eventCallback = aEventCallback;
 
       if (aButtons) {
-        for (var b = 0; b < aButtons.length; b++) {
-          var button = aButtons[b];
-          var buttonElem = document.createXULElement(
-            "button",
-            button.is ? { is: button.is } : {}
-          );
-
-          if (button["l10n-id"]) {
-            buttonElem.setAttribute("data-l10n-id", button["l10n-id"]);
-          } else {
-            buttonElem.setAttribute("label", button.label);
-            if (typeof button.accessKey == "string") {
-              buttonElem.setAttribute("accesskey", button.accessKey);
-            }
-          }
-
-          buttonElem.classList.add("notification-button");
-          if (button.primary) {
-            buttonElem.classList.add("primary");
-          }
-
-          newitem.messageDetails.appendChild(buttonElem);
-          buttonElem.buttonInfo = button;
-        }
+        newitem.setButtons(aButtons);
       }
 
       newitem.priority = aPriority;
-      if (aPriority >= this.PRIORITY_CRITICAL_LOW) {
+      if (aPriority == this.PRIORITY_SYSTEM) {
+        newitem.setAttribute("type", "system");
+      } else if (aPriority >= this.PRIORITY_CRITICAL_LOW) {
         newitem.setAttribute("type", "critical");
       } else if (aPriority <= this.PRIORITY_INFO_HIGH) {
         newitem.setAttribute("type", "info");
@@ -216,14 +208,13 @@
         newitem.setAttribute("type", "warning");
       }
 
-      if (!insertPos) {
-        newitem.style.display = "block";
-        newitem.style.position = "fixed";
-        newitem.style.top = "100%";
-        newitem.style.marginTop = "-15px";
-        newitem.style.opacity = "0";
-        this._showNotification(newitem, true);
-      }
+      // Animate the notification.
+      newitem.style.display = "block";
+      newitem.style.position = "fixed";
+      newitem.style.top = "100%";
+      newitem.style.marginTop = "-15px";
+      newitem.style.opacity = "0";
+      this._showNotification(newitem, true);
 
       // Fire event for accessibility APIs
       var event = document.createEvent("Events");
@@ -237,18 +228,15 @@
       if (!aItem.parentNode) {
         return;
       }
-      if (aItem == this.currentNotification) {
-        this.removeCurrentNotification(aSkipAnimation);
-      } else if (aItem != this._closedNotification) {
-        this._removeNotificationElement(aItem);
-      }
+      this.currentNotification = aItem;
+      this.removeCurrentNotification(aSkipAnimation);
     }
 
     _removeNotificationElement(aChild) {
       if (aChild.eventCallback) {
         aChild.eventCallback("removed");
       }
-      this.stack.removeChild(aChild);
+      aChild.remove();
 
       // make sure focus doesn't get lost (workaround for bug 570835)
       if (!Services.focus.getFocusedElementForWindow(window, false, {})) {
@@ -302,9 +290,12 @@
     _showNotification(aNotification, aSlideIn, aSkipAnimation) {
       this._finishAnimation();
 
-      var height = aNotification.getBoundingClientRect().height;
+      let { marginTop, marginBottom } = getComputedStyle(aNotification);
+      let baseHeight = aNotification.getBoundingClientRect().height;
+      var height =
+        baseHeight + parseInt(marginTop, 10) + parseInt(marginBottom, 10);
       var skipAnimation =
-        aSkipAnimation || height == 0 || !this._allowAnimation;
+        aSkipAnimation || baseHeight == 0 || !this._allowAnimation;
       aNotification.classList.toggle("animated", !skipAnimation);
 
       if (aSlideIn) {
@@ -350,6 +341,7 @@
 
   // These are defined on the instance prototype for backwards compatibility.
   Object.assign(MozElements.NotificationBox.prototype, {
+    PRIORITY_SYSTEM: 0,
     PRIORITY_INFO_LOW: 1,
     PRIORITY_INFO_MEDIUM: 2,
     PRIORITY_INFO_HIGH: 3,
@@ -396,6 +388,8 @@
         ["messageImage", ".messageImage"],
         ["messageText", ".messageText"],
         ["spacer", "spacer"],
+        ["buttonContainer", ".messageDetails"],
+        ["closeButton", ".messageCloseButton"],
       ]) {
         this[propertyName] = this.querySelector(selector);
       }
@@ -404,6 +398,58 @@
     disconnectedCallback() {
       if (this.eventCallback) {
         this.eventCallback("disconnected");
+      }
+    }
+
+    setButtons(aButtons) {
+      for (let button of aButtons) {
+        let buttonElem;
+
+        let link = button.link;
+        let localeId = button["l10n-id"];
+        if (!link && button.supportPage) {
+          link =
+            Services.urlFormatter.formatURLPref("app.support.baseURL") +
+            button.supportPage;
+          if (!button.label && !localeId) {
+            localeId = "notification-learnmore-default-label";
+          }
+        }
+
+        if (link) {
+          buttonElem = document.createXULElement("label", {
+            is: "text-link",
+          });
+          buttonElem.setAttribute("href", link);
+          buttonElem.classList.add("notification-link");
+          buttonElem.onclick = (...args) => this._doButtonCommand(...args);
+        } else {
+          buttonElem = document.createXULElement(
+            "button",
+            button.is ? { is: button.is } : {}
+          );
+          buttonElem.classList.add("notification-button");
+
+          if (button.primary) {
+            buttonElem.classList.add("primary");
+          }
+        }
+
+        if (localeId) {
+          buttonElem.setAttribute("data-l10n-id", localeId);
+        } else {
+          buttonElem.setAttribute(link ? "value" : "label", button.label);
+          if (typeof button.accessKey == "string") {
+            buttonElem.setAttribute("accesskey", button.accessKey);
+          }
+        }
+
+        if (link) {
+          this.messageText.appendChild(buttonElem);
+        } else {
+          this.messageDetails.appendChild(buttonElem);
+        }
+        buttonElem.buttonInfo = button;
       }
     }
 
@@ -471,4 +517,167 @@
   };
 
   customElements.define("notification", MozElements.Notification);
+
+  function createNotificationMessageElement() {
+    // Get a reference to MessageBarElement from a created element so the import
+    // gets handled automatically if needed.
+    class NotificationMessage extends document.createElement("message-bar")
+      .constructor {
+      constructor() {
+        super();
+        this.persistence = 0;
+        this.priority = 0;
+        this.timeout = 0;
+      }
+
+      connectedCallback() {
+        this.toggleAttribute("dismissable", true);
+        this.closeButton.classList.add("notification-close");
+
+        this.container = this.shadowRoot.querySelector(".container");
+        this.container.classList.add("infobar");
+        this.setAlertRole();
+
+        let messageContent = this.shadowRoot.querySelector(".content");
+        messageContent.classList.add("notification-content");
+
+        // Remove the <slot>, API surface is `set label()` and `setButtons()`.
+        messageContent.textContent = "";
+
+        // A 'label' allows screen readers to detect the text of the alert.
+        this.messageText = document.createElement("label");
+        this.messageText.classList.add("notification-message");
+        this.buttonContainer = document.createElement("span");
+        this.buttonContainer.classList.add("notification-button-container");
+
+        this.messageImage = this.shadowRoot.querySelector(".icon");
+
+        messageContent.append(this.messageText, this.buttonContainer);
+        this.shadowRoot.addEventListener("click", this);
+        this.shadowRoot.addEventListener("command", this);
+      }
+
+      disconnectedCallback() {
+        if (this.eventCallback) {
+          this.eventCallback("disconnected");
+        }
+      }
+
+      get control() {
+        return this.closest(".notificationbox-stack")._notificationBox;
+      }
+
+      close() {
+        if (!this.parentNode) {
+          return;
+        }
+        this.control.removeNotification(this);
+      }
+
+      setAlertRole() {
+        // Wait a little for this to render before setting the role for more
+        // consistent alerts to screen readers.
+        this.container.removeAttribute("role");
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            this.container.setAttribute("role", "alert");
+          });
+        });
+      }
+
+      handleEvent(e) {
+        if (e.type == "click" && e.target.localName != "label") {
+          return;
+        }
+
+        if ("buttonInfo" in e.target) {
+          let { buttonInfo } = e.target;
+          let { callback, popup } = buttonInfo;
+          if (popup) {
+            document
+              .getElementById(popup)
+              .openPopup(
+                e.originalTarget,
+                "after_start",
+                0,
+                0,
+                false,
+                false,
+                e
+              );
+            e.stopPropagation();
+          } else if (callback) {
+            if (!callback(this, buttonInfo, e.target, e)) {
+              this.close();
+            }
+            e.stopPropagation();
+          }
+        }
+      }
+
+      set label(value) {
+        this.messageText.textContent = value;
+        this.setAlertRole();
+      }
+
+      setButtons(buttons) {
+        this._buttons = buttons;
+        for (let button of buttons) {
+          let link = button.link;
+          let localeId = button["l10n-id"];
+          if (!link && button.supportPage) {
+            link =
+              Services.urlFormatter.formatURLPref("app.support.baseURL") +
+              button.supportPage;
+            if (!button.label && !localeId) {
+              localeId = "notification-learnmore-default-label";
+            }
+          }
+
+          let buttonElem;
+          if (link) {
+            buttonElem = document.createXULElement("label", {
+              is: "text-link",
+            });
+            buttonElem.setAttribute("href", link);
+            buttonElem.classList.add("notification-link");
+          } else {
+            buttonElem = document.createXULElement(
+              "button",
+              button.is ? { is: button.is } : {}
+            );
+            buttonElem.classList.add("notification-button", "small");
+
+            if (button.primary) {
+              buttonElem.classList.add("primary");
+            }
+          }
+
+          if (localeId) {
+            document.l10n.setAttributes(buttonElem, localeId);
+          } else {
+            buttonElem.setAttribute(link ? "value" : "label", button.label);
+            if (typeof button.accessKey == "string") {
+              buttonElem.setAttribute("accesskey", button.accessKey);
+            }
+          }
+
+          if (link) {
+            this.messageText.append(new Text(" "), buttonElem);
+          } else {
+            this.buttonContainer.appendChild(buttonElem);
+          }
+          buttonElem.buttonInfo = button;
+        }
+      }
+
+      dismiss() {
+        if (this.eventCallback) {
+          this.eventCallback("dismissed");
+        }
+        super.dismiss();
+      }
+    }
+    customElements.define("notification-message", NotificationMessage);
+  }
 }

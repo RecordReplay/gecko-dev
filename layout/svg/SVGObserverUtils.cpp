@@ -27,6 +27,7 @@
 #include "nsInterfaceHashtable.h"
 #include "nsIReflowCallback.h"
 #include "nsISupportsImpl.h"
+#include "nsLayoutUtils.h"
 #include "nsNetUtil.h"
 #include "nsTHashtable.h"
 #include "nsURIHashKey.h"
@@ -482,17 +483,23 @@ void SVGTextPathObserver::OnRenderingChange() {
   MOZ_ASSERT(frame->GetContent()->IsSVGElement(nsGkAtoms::textPath),
              "expected frame for a <textPath> element");
 
-  // Repaint asynchronously text in case the path frame is being torn down
-  frame->PresContext()->RestyleManager()->PostRestyleEvent(
-      frame->GetContent()->AsElement(), RestyleHint{0},
-      nsChangeHint_RepaintFrame);
-
-  nsIFrame* text =
-      nsLayoutUtils::GetClosestFrameOfType(frame, LayoutFrameType::SVGText);
+  auto* text = static_cast<SVGTextFrame*>(
+      nsLayoutUtils::GetClosestFrameOfType(frame, LayoutFrameType::SVGText));
   MOZ_ASSERT(text, "expected to find an ancestor SVGTextFrame");
   if (text) {
-    // This also does async work.
-    static_cast<SVGTextFrame*>(text)->NotifyGlyphMetricsChange();
+    text->AddStateBits(NS_STATE_SVG_TEXT_CORRESPONDENCE_DIRTY |
+                       NS_STATE_SVG_POSITIONING_DIRTY);
+
+    if (SVGUtils::AnyOuterSVGIsCallingReflowSVG(text)) {
+      text->AddStateBits(NS_FRAME_IS_DIRTY | NS_FRAME_HAS_DIRTY_CHILDREN);
+      if (text->HasAnyStateBits(NS_FRAME_IS_NONDISPLAY)) {
+        text->ReflowSVGNonDisplayText();
+      } else {
+        text->ReflowSVG();
+      }
+    } else {
+      text->ScheduleReflowSVG();
+    }
   }
 }
 
@@ -923,7 +930,7 @@ void SVGMaskObserverList::ResolveImage(uint32_t aIndex) {
   image.ResolveImage(*doc, nullptr);
   if (imgRequestProxy* req = image.GetImageRequest()) {
     // FIXME(emilio): What disassociates this request?
-    doc->StyleImageLoader()->AssociateRequestToFrame(req, mFrame, 0);
+    doc->StyleImageLoader()->AssociateRequestToFrame(req, mFrame);
   }
 }
 
@@ -1011,13 +1018,11 @@ class SVGRenderingObserverSet {
     MOZ_COUNT_DTOR(SVGRenderingObserverSet);
   }
 
-  void Add(SVGRenderingObserver* aObserver) { mObservers.PutEntry(aObserver); }
-  void Remove(SVGRenderingObserver* aObserver) {
-    mObservers.RemoveEntry(aObserver);
-  }
+  void Add(SVGRenderingObserver* aObserver) { mObservers.Insert(aObserver); }
+  void Remove(SVGRenderingObserver* aObserver) { mObservers.Remove(aObserver); }
 #ifdef DEBUG
   bool Contains(SVGRenderingObserver* aObserver) {
-    return (mObservers.GetEntry(aObserver) != nullptr);
+    return mObservers.Contains(aObserver);
   }
 #endif
   bool IsEmpty() { return mObservers.IsEmpty(); }
@@ -1041,7 +1046,7 @@ class SVGRenderingObserverSet {
   void RemoveAll();
 
  private:
-  nsTHashtable<nsPtrHashKey<SVGRenderingObserver>> mObservers;
+  nsTHashSet<SVGRenderingObserver*> mObservers;
 };
 
 void SVGRenderingObserverSet::InvalidateAll() {
@@ -1049,15 +1054,10 @@ void SVGRenderingObserverSet::InvalidateAll() {
     return;
   }
 
-  AutoTArray<SVGRenderingObserver*, 10> observers;
+  const auto observers = std::move(mObservers);
 
-  for (auto it = mObservers.Iter(); !it.Done(); it.Next()) {
-    observers.AppendElement(it.Get()->GetKey());
-  }
-  mObservers.Clear();
-
-  for (uint32_t i = 0; i < observers.Length(); ++i) {
-    observers[i]->OnNonDOMMutationRenderingChange();
+  for (const auto& observer : observers) {
+    observer->OnNonDOMMutationRenderingChange();
   }
 }
 
@@ -1068,11 +1068,12 @@ void SVGRenderingObserverSet::InvalidateAllForReflow() {
 
   AutoTArray<SVGRenderingObserver*, 10> observers;
 
-  for (auto it = mObservers.Iter(); !it.Done(); it.Next()) {
-    SVGRenderingObserver* obs = it.Get()->GetKey();
+  for (auto it = mObservers.cbegin(), end = mObservers.cend(); it != end;
+       ++it) {
+    SVGRenderingObserver* obs = *it;
     if (obs->ObservesReflow()) {
       observers.AppendElement(obs);
-      it.Remove();
+      mObservers.Remove(it);
     }
   }
 
@@ -1082,17 +1083,12 @@ void SVGRenderingObserverSet::InvalidateAllForReflow() {
 }
 
 void SVGRenderingObserverSet::RemoveAll() {
-  AutoTArray<SVGRenderingObserver*, 10> observers;
-
-  for (auto it = mObservers.Iter(); !it.Done(); it.Next()) {
-    observers.AppendElement(it.Get()->GetKey());
-  }
-  mObservers.Clear();
+  const auto observers = std::move(mObservers);
 
   // Our list is now cleared.  We need to notify the observers we've removed,
   // so they can update their state & remove themselves as mutation-observers.
-  for (uint32_t i = 0; i < observers.Length(); ++i) {
-    observers[i]->NotifyEvictedFromRenderingObserverSet();
+  for (const auto& observer : observers) {
+    observer->NotifyEvictedFromRenderingObserverSet();
   }
 }
 
@@ -1499,13 +1495,17 @@ Element* SVGObserverUtils::GetAndObserveBackgroundImage(nsIFrame* aFrame,
   RefPtr<URLAndReferrerInfo> url =
       new URLAndReferrerInfo(targetURI, referrerInfo);
 
-  SVGMozElementObserver* observer =
-      static_cast<SVGMozElementObserver*>(hashtable->GetWeak(url));
-  if (!observer) {
-    observer = new SVGMozElementObserver(url, aFrame, /* aWatchImage */ true);
-    hashtable->Put(url, observer);
-  }
-  return observer->GetAndObserveReferencedElement();
+  return static_cast<SVGMozElementObserver*>(
+             hashtable
+                 ->LookupOrInsertWith(
+                     url,
+                     [&] {
+                       return MakeRefPtr<SVGMozElementObserver>(
+                           url, aFrame,
+                           /* aWatchImage */ true);
+                     })
+                 .get())
+      ->GetAndObserveReferencedElement();
 }
 
 Element* SVGObserverUtils::GetAndObserveBackgroundClip(nsIFrame* aFrame) {
@@ -1604,9 +1604,6 @@ void SVGObserverUtils::AddRenderingObserver(Element* aElement,
   SVGRenderingObserverSet* observers = GetObserverSet(aElement);
   if (!observers) {
     observers = new SVGRenderingObserverSet();
-    if (!observers) {
-      return;
-    }
     aElement->SetProperty(nsGkAtoms::renderingobserverset, observers,
                           nsINode::DeleteProperty<SVGRenderingObserverSet>);
   }

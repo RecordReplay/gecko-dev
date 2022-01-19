@@ -68,7 +68,6 @@ def run_reftest_android(context, args):
     args.xrePath = context.hostutils
     args.httpdPath = context.module_dir
     args.ignoreWindowSize = True
-    args.printDeviceInfo = False
 
     config = context.mozharness_config
     if config:
@@ -116,7 +115,7 @@ class ReftestCommands(MachCommandBase):
         description="Run the reftest harness.",
         parser=setup_argument_parser,
     )
-    def reftest(self, **kwargs):
+    def reftest(self, command_context, **kwargs):
         self._mach_context.activate_mozharness_venv()
         kwargs["suite"] = "reftest"
         return run_reftest(self._mach_context, **kwargs)

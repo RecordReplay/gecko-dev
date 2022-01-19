@@ -8,7 +8,9 @@
 #define mozilla_glean_GleanEvent_h
 
 #include "nsIGleanMetrics.h"
+#include "mozilla/glean/bindings/EventGIFFTMap.h"
 #include "mozilla/glean/fog_ffi_generated.h"
+#include "mozilla/ResultVariant.h"
 #include "mozilla/Tuple.h"
 #include "nsString.h"
 #include "nsTArray.h"
@@ -47,18 +49,37 @@ class EventMetric {
    *                If the wrong keys are used or values are too large
    *                an error is report and no event is recorded.
    */
-  void Record(const Span<const Tuple<T, nsCString>>& aExtras = {}) const {
-    static_assert(sizeof(T) <= sizeof(int32_t),
-                  "Extra keys need to fit into 32 bits");
-
-    nsTArray<int32_t> extraKeys;
-    nsTArray<nsCString> extraValues;
-    for (auto& entry : aExtras) {
-      extraKeys.AppendElement(static_cast<int32_t>(mozilla::Get<0>(entry)));
-      extraValues.AppendElement(mozilla::Get<1>(entry));
+  void Record(const Maybe<T>& aExtras = Nothing()) const {
+    auto id = EventIdForMetric(mId);
+    if (id) {
+      // NB. In case `aExtras` is filled we call `ToFfiExtra`, causing
+      // twice the required allocation. We could be smarter and reuse the data.
+      // But this is GIFFT-only allocation, so wait to be told it's a problem.
+      Maybe<CopyableTArray<Telemetry::EventExtraEntry>> telExtras;
+      if (aExtras) {
+        CopyableTArray<Telemetry::EventExtraEntry> extras;
+        auto serializedExtras = aExtras->ToFfiExtra();
+        auto keys = std::move(Get<0>(serializedExtras));
+        auto values = std::move(Get<1>(serializedExtras));
+        for (size_t i = 0; i < keys.Length(); i++) {
+          auto extraString = ExtraStringForKey(keys[i]);
+          extras.EmplaceBack(
+              Telemetry::EventExtraEntry{extraString, values[i]});
+        }
+        telExtras = Some(extras);
+      }
+      Telemetry::RecordEvent(id.extract(), Nothing(), telExtras);
     }
-
-    fog_event_record(mId, &extraKeys, &extraValues);
+#ifndef MOZ_GLEAN_ANDROID
+    if (aExtras) {
+      auto extra = aExtras->ToFfiExtra();
+      fog_event_record(mId, &mozilla::Get<0>(extra), &mozilla::Get<1>(extra));
+    } else {
+      nsTArray<uint32_t> keys;
+      nsTArray<nsCString> vals;
+      fog_event_record(mId, &keys, &vals);
+    }
+#endif
   }
 
   /**
@@ -78,22 +99,63 @@ class EventMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<nsTArray<RecordedEvent>> TestGetValue(
+  Result<Maybe<nsTArray<RecordedEvent>>, nsCString> TestGetValue(
       const nsACString& aPingName = nsCString()) const {
-    if (!fog_event_test_has_value(mId, &aPingName)) {
-      return Nothing();
+#ifdef MOZ_GLEAN_ANDROID
+    Unused << mId;
+    return Maybe<nsTArray<RecordedEvent>>();
+#else
+    nsCString err;
+    if (fog_event_test_get_error(mId, &aPingName, &err)) {
+      return Err(err);
     }
 
-    // TODO(bug 1678567): Implement this.
-    nsTArray<RecordedEvent> empty;
-    return Some(std::move(empty));
+    if (!fog_event_test_has_value(mId, &aPingName)) {
+      return Maybe<nsTArray<RecordedEvent>>();
+    }
+
+    nsTArray<FfiRecordedEvent> events;
+    fog_event_test_get_value(mId, &aPingName, &events);
+
+    nsTArray<RecordedEvent> result;
+    for (auto event : events) {
+      auto ev = result.AppendElement();
+      ev->mTimestamp = event.timestamp;
+      ev->mCategory.Append(event.category);
+      ev->mName.Assign(event.name);
+
+      // SAFETY:
+      // `event.extra` is a valid pointer to an array of length `2 *
+      // event.extra_len`.
+      ev->mExtra.SetCapacity(event.extra_len);
+      for (unsigned int i = 0; i < event.extra_len; i++) {
+        // keys & values are interleaved.
+        auto key = event.extra[2 * i];
+        auto value = event.extra[2 * i + 1];
+        ev->mExtra.AppendElement(MakeTuple(key, value));
+      }
+      // Event extras are now copied, we can free the array.
+      fog_event_free_event_extra(event.extra, event.extra_len);
+    }
+    return Some(std::move(result));
+#endif
   }
 
  private:
+  static const nsCString ExtraStringForKey(uint32_t aKey);
+
   const uint32_t mId;
 };
 
 }  // namespace impl
+
+struct NoExtraKeys {
+  Tuple<nsTArray<uint32_t>, nsTArray<nsCString>> ToFfiExtra() const {
+    nsTArray<uint32_t> extraKeys;
+    nsTArray<nsCString> extraValues;
+    return MakeTuple(std::move(extraKeys), std::move(extraValues));
+  }
+};
 
 class GleanEvent final : public nsIGleanEvent {
  public:
@@ -105,7 +167,7 @@ class GleanEvent final : public nsIGleanEvent {
  private:
   virtual ~GleanEvent() = default;
 
-  const impl::EventMetric<uint32_t> mEvent;
+  const impl::EventMetric<NoExtraKeys> mEvent;
 };
 
 }  // namespace mozilla::glean

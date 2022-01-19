@@ -15,7 +15,7 @@ namespace widget {
 NS_IMPL_ISUPPORTS(AndroidAlerts, nsIAlertsService)
 
 StaticAutoPtr<AndroidAlerts::ListenerMap> AndroidAlerts::sListenerMap;
-nsDataHashtable<nsStringHashKey, java::WebNotification::GlobalRef>
+nsTHashMap<nsStringHashKey, java::WebNotification::GlobalRef>
     AndroidAlerts::mNotificationsMap;
 
 NS_IMETHODIMP
@@ -87,21 +87,30 @@ AndroidAlerts::ShowPersistentNotification(const nsAString& aPersistentData,
     NS_ENSURE_SUCCESS(rv, NS_OK);
   }
 
+  bool silent;
+  rv = aAlert->GetSilent(&silent);
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+
+  nsTArray<uint32_t> vibrate;
+  rv = aAlert->GetVibrate(vibrate);
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+
   if (aPersistentData.IsEmpty() && aAlertListener) {
     if (!sListenerMap) {
       sListenerMap = new ListenerMap();
     }
     // This will remove any observers already registered for this name.
-    sListenerMap->Put(name, aAlertListener);
+    sListenerMap->InsertOrUpdate(name, aAlertListener);
   }
 
   java::WebNotification::LocalRef notification = notification->New(
-      title, name, cookie, text, imageUrl, dir, lang, requireInteraction, spec);
+      title, name, cookie, text, imageUrl, dir, lang, requireInteraction, spec,
+      silent, jni::IntArray::From(vibrate));
   java::GeckoRuntime::LocalRef runtime = java::GeckoRuntime::GetInstance();
   if (runtime != NULL) {
     runtime->NotifyOnShow(notification);
   }
-  mNotificationsMap.Put(name, notification);
+  mNotificationsMap.InsertOrUpdate(name, notification);
 
   return NS_OK;
 }

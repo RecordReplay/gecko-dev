@@ -36,7 +36,8 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
                    public nsSupportsWeakReference {
  public:
   // The timer based history tracker is used to evict bfcache on expiration.
-  class HistoryTracker final : public nsExpirationTracker<nsSHEntryShared, 3> {
+  class HistoryTracker final
+      : public nsExpirationTracker<mozilla::dom::SHEntrySharedParentState, 3> {
    public:
     explicit HistoryTracker(nsSHistory* aSHistory, uint32_t aTimeout,
                             nsIEventTarget* aEventTarget)
@@ -47,7 +48,8 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
     }
 
    protected:
-    virtual void NotifyExpired(nsSHEntryShared* aObj) override {
+    virtual void NotifyExpired(
+        mozilla::dom::SHEntrySharedParentState* aObj) override {
       RemoveObject(aObj);
       mSHistory->EvictExpiredContentViewerForEntry(aObj);
     }
@@ -154,6 +156,7 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
   };
 
   static void LoadURIs(nsTArray<LoadEntryResult>& aLoadResults);
+  static void LoadURIOrBFCache(LoadEntryResult& aLoadEntry);
 
   // If this doesn't return an error then either aLoadResult is set to nothing,
   // in which case the caller should ignore the load, or it returns a valid
@@ -162,7 +165,7 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
                   nsTArray<LoadEntryResult>& aLoadResults);
   nsresult ReloadCurrentEntry(nsTArray<LoadEntryResult>& aLoadResults);
   nsresult GotoIndex(int32_t aIndex, nsTArray<LoadEntryResult>& aLoadResults,
-                     bool aSameEpoch = false);
+                     bool aSameEpoch = false, bool aUserActivation = false);
 
   void WindowIndices(int32_t aIndex, int32_t* aOutStartIndex,
                      int32_t* aOutEndIndex);
@@ -175,7 +178,11 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
   void SetHasOngoingUpdate(bool aVal) { mHasOngoingUpdate = aVal; }
 
   void SetBrowsingContext(mozilla::dom::BrowsingContext* aRootBC) {
+    if (mRootBC == aRootBC) {
+      return;
+    }
     mRootBC = aRootBC;
+    UpdateRootBrowsingContextState();
   }
 
   int32_t GetIndexForReplace() {
@@ -214,19 +221,21 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
   bool LoadDifferingEntries(nsISHEntry* aPrevEntry, nsISHEntry* aNextEntry,
                             mozilla::dom::BrowsingContext* aParent,
                             long aLoadType,
-                            nsTArray<LoadEntryResult>& aLoadResults);
+                            nsTArray<LoadEntryResult>& aLoadResults,
+                            bool aUserActivation);
   void InitiateLoad(nsISHEntry* aFrameEntry,
                     mozilla::dom::BrowsingContext* aFrameBC, long aLoadType,
-                    nsTArray<LoadEntryResult>& aLoadResult);
+                    nsTArray<LoadEntryResult>& aLoadResult,
+                    bool aUserActivation);
 
   nsresult LoadEntry(int32_t aIndex, long aLoadType, uint32_t aHistCmd,
                      nsTArray<LoadEntryResult>& aLoadResults,
-                     bool aSameEpoch = false);
+                     bool aSameEpoch = false, bool aUserActivation = false);
 
   // Find the history entry for a given bfcache entry. It only looks up between
   // the range where alive viewers may exist (i.e nsSHistory::VIEWER_WINDOW).
-  nsresult FindEntryForBFCache(nsIBFCacheEntry* aBFEntry, nsISHEntry** aResult,
-                               int32_t* aResultIndex);
+  nsresult FindEntryForBFCache(mozilla::dom::SHEntrySharedParentState* aEntry,
+                               nsISHEntry** aResult, int32_t* aResultIndex);
 
   // Evict content viewers in this window which don't lie in the "safe" range
   // around aIndex.
@@ -241,7 +250,8 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
 
   nsresult LoadNextPossibleEntry(int32_t aNewIndex, long aLoadType,
                                  uint32_t aHistCmd,
-                                 nsTArray<LoadEntryResult>& aLoadResults);
+                                 nsTArray<LoadEntryResult>& aLoadResults,
+                                 bool aUserActivation);
 
   // aIndex is the index of the entry which may be removed.
   // If aKeepNext is true, aIndex is compared to aIndex + 1,
@@ -261,9 +271,11 @@ class nsSHistory : public mozilla::LinkedListElement<nsSHistory>,
                                             nsISHEntry* aOldEntry,
                                             nsISHEntry* aNewEntry);
 
+  void UpdateEntryLength(nsISHEntry* aOldEntry, nsISHEntry* aNewEntry,
+                         bool aMove);
+
  protected:
   bool mHasOngoingUpdate;
-  bool mIsRemote;
   nsTArray<nsCOMPtr<nsISHEntry>> mEntries;  // entries are never null
  private:
   // Track all bfcache entries and evict on expiration.

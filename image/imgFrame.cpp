@@ -17,7 +17,6 @@
 
 #include "gfxUtils.h"
 
-#include "GeckoProfiler.h"
 #include "MainThreadUtils.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/gfx/gfxVars.h"
@@ -27,6 +26,7 @@
 #include "mozilla/layers/SourceSurfaceVolatileData.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_image.h"
 #include "nsMargin.h"
@@ -933,8 +933,9 @@ void imgFrame::AddSizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
   MonitorAutoLock lock(mMonitor);
 
   AddSizeOfCbData metadata;
-
+  metadata.mSurface = mOptSurface ? mOptSurface.get() : mRawSurface.get();
   metadata.mFinished = mFinished;
+
   if (mLockedSurface) {
     // The locked surface should only be present if we have mRawSurface. Hence
     // we only need to get its allocation size to avoid double counting.

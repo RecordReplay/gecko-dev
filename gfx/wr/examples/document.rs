@@ -62,20 +62,18 @@ impl App {
 
         for (pipeline_id, color, offset) in init_data {
             let size = DeviceIntSize::new(250, 250);
-            let bounds = DeviceIntRect::new(offset, size);
+            let bounds = DeviceIntRect::from_origin_and_size(offset, size);
 
             let document_id = api.add_document(size);
             let mut txn = Transaction::new();
-            txn.set_document_view(bounds, device_pixel_ratio);
             txn.set_root_pipeline(pipeline_id);
             api.send_transaction(document_id, txn);
 
             self.documents.push(Document {
                 id: document_id,
                 pipeline_id,
-                content_rect: LayoutRect::new(
-                    LayoutPoint::origin(),
-                    bounds.size.to_f32() / Scale::new(device_pixel_ratio),
+                content_rect: LayoutRect::from_size(
+                    bounds.size().to_f32() / Scale::new(device_pixel_ratio),
                 ),
                 color,
             });
@@ -104,13 +102,10 @@ impl Example for App {
             let mut builder = DisplayListBuilder::new(
                 doc.pipeline_id,
             );
-            let local_rect = LayoutRect::new(
-                LayoutPoint::zero(),
-                doc.content_rect.size,
-            );
+            let local_rect = LayoutRect::from_size(doc.content_rect.size());
 
             builder.push_simple_stacking_context(
-                doc.content_rect.origin,
+                doc.content_rect.min,
                 space_and_clip.spatial_id,
                 PrimitiveFlags::IS_BACKFACE_VISIBLE,
             );
@@ -125,7 +120,7 @@ impl Example for App {
             txn.set_display_list(
                 Epoch(0),
                 None,
-                doc.content_rect.size,
+                doc.content_rect.size(),
                 builder.finalize(),
                 true,
             );

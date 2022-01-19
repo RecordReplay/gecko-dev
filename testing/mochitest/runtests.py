@@ -17,7 +17,6 @@ from argparse import Namespace
 from collections import defaultdict
 from contextlib import closing
 from distutils import spawn
-import copy
 import ctypes
 import glob
 import json
@@ -53,12 +52,13 @@ from manifestparser.filters import (
     pathprefix,
     subsuite,
     tags,
+    failures,
 )
 from mozgeckoprofiler import symbolicate_profile_json, view_gecko_profile
 
 try:
     from marionette_driver.addons import Addons
-    from marionette_harness import Marionette
+    from marionette_driver.marionette import Marionette
 except ImportError as e:  # noqa
     # Defer ImportError until attempt to use Marionette
     def reraise(*args, **kwargs):
@@ -75,7 +75,6 @@ from mochitest_options import (
 from mozprofile import Profile
 from mozprofile.cli import parse_preferences, parse_key_value, KeyValueParseError
 from mozprofile.permissions import ServerLocations
-from mozlog.formatters import TbplFormatter
 from mozlog import commandline, get_proxy_logger
 from mozrunner.utils import get_stack_fixer_function, test_environment
 from mozscreenshot import dump_screen
@@ -123,40 +122,6 @@ MOZ_LOG = ""
 # output processing
 
 
-class MochitestFormatter(TbplFormatter):
-
-    """
-    The purpose of this class is to maintain compatibility with legacy users.
-    Mozharness' summary parser expects the count prefix, and others expect python
-    logging to contain a line prefix picked up by TBPL (bug 1043420).
-    Those directly logging "TEST-UNEXPECTED" require no prefix to log output
-    in order to turn a build orange (bug 1044206).
-
-    Once updates are propagated to Mozharness, this class may be removed.
-    """
-
-    log_num = 0
-
-    def __init__(self):
-        super(MochitestFormatter, self).__init__()
-
-    def __call__(self, data):
-        output = super(MochitestFormatter, self).__call__(data)
-        if not output:
-            return None
-        log_level = data.get("level", "info").upper()
-
-        if "js_source" in data or log_level == "ERROR":
-            data.pop("js_source", None)
-            output = "%d %s %s" % (MochitestFormatter.log_num, log_level, output)
-            MochitestFormatter.log_num += 1
-
-        return output
-
-
-# output processing
-
-
 class MessageLogger(object):
 
     """File-like object for logging messages (structured logs)"""
@@ -178,11 +143,12 @@ class MessageLogger(object):
             "buffering_off",
         ]
     )
+    # Regexes that will be replaced with an empty string if found in a test
+    # name. We do this to normalize test names which may contain URLs and test
+    # package prefixes.
     TEST_PATH_PREFIXES = [
-        "/tests/",
-        "chrome://mochitests/content/a11y/",
-        "chrome://mochitests/content/browser/",
-        "chrome://mochitests/content/chrome/",
+        r"^/tests/",
+        r"^\w+://[\w\.]+(:\d+)?(/\w+)?/(tests?|a11y|chrome|browser)/",
     ]
 
     def __init__(self, logger, buffering=True, structured=True):
@@ -224,9 +190,10 @@ class MessageLogger(object):
         """Normalize a logged test path to match the relative path from the sourcedir."""
         if message.get("test") is not None:
             test = message["test"]
-            for prefix in MessageLogger.TEST_PATH_PREFIXES:
-                if test.startswith(prefix):
-                    message["test"] = test[len(prefix) :]
+            for pattern in MessageLogger.TEST_PATH_PREFIXES:
+                test = re.sub(pattern, "", test)
+                if test != message["test"]:
+                    message["test"] = test
                     break
 
     def _fix_message_format(self, message):
@@ -450,14 +417,14 @@ if mozinfo.isWin:
             # actually Firefox.
             namesize = 1024
             pName = ctypes.create_string_buffer(namesize)
-            namelen = ctypes.windll.kernel32.GetProcessImageFileNameA(
+            namelen = ctypes.windll.psapi.GetProcessImageFileNameA(
                 pHandle, pName, namesize
             )
             if namelen == 0:
                 # Still an active process, so conservatively assume it's Firefox.
                 return True
 
-            return pName.value.endswith(("firefox.exe", "plugin-container.exe"))
+            return pName.value.endswith((b"firefox.exe", b"plugin-container.exe"))
         finally:
             ctypes.windll.kernel32.CloseHandle(pHandle)
 
@@ -601,21 +568,16 @@ class MochitestServer(object):
     def stop(self):
         try:
             with closing(urlopen(self.shutdownURL)) as c:
-                c.read()
-
-            # TODO: need ProcessHandler.poll()
-            # https://bugzilla.mozilla.org/show_bug.cgi?id=912285
-            #      rtncode = self._process.poll()
-            rtncode = self._process.proc.poll()
-            if rtncode is None:
-                # TODO: need ProcessHandler.terminate() and/or .send_signal()
-                # https://bugzilla.mozilla.org/show_bug.cgi?id=912285
-                # self._process.terminate()
-                self._process.proc.terminate()
+                self._log.info(six.ensure_text(c.read()))
         except Exception:
             self._log.info("Failed to stop web server on %s" % self.shutdownURL)
             traceback.print_exc()
-            self._process.kill()
+        finally:
+            if self._process is not None:
+                # Kill the server immediately to avoid logging intermittent
+                # shutdown crashes, sometimes observed on Windows 10.
+                self._process.kill()
+                self._log.info("Web server killed.")
 
 
 class WebSocketServer(object):
@@ -657,14 +619,21 @@ class WebSocketServer(object):
         ]
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(sys.path)
-        # start the process
-        self._process = mozprocess.ProcessHandler(cmd, cwd=SCRIPT_DIR, env=env)
+        # Start the process. Ignore stderr so that exceptions from the server
+        # are not treated as failures when parsing the test log.
+        self._process = mozprocess.ProcessHandler(
+            cmd,
+            cwd=SCRIPT_DIR,
+            env=env,
+            processStderrLine=lambda _: None,
+        )
         self._process.run()
         pid = self._process.pid
         self._log.info("runtests.py | Websocket server pid: %d" % pid)
 
     def stop(self):
-        self._process.kill()
+        if self._process is not None:
+            self._process.kill()
 
 
 class SSLTunnel:
@@ -802,7 +771,7 @@ def checkAndConfigureV4l2loopback(device):
 
     VIDIOC_QUERYCAP = 0x80685600
 
-    fd = libc.open(device, O_RDWR)
+    fd = libc.open(six.ensure_binary(device), O_RDWR)
     if fd < 0:
         return False, ""
 
@@ -810,7 +779,7 @@ def checkAndConfigureV4l2loopback(device):
     if libc.ioctl(fd, VIDIOC_QUERYCAP, ctypes.byref(vcap)) != 0:
         return False, ""
 
-    if vcap.driver != "v4l2 loopback":
+    if six.ensure_text(vcap.driver) != "v4l2 loopback":
         return False, ""
 
     class v4l2_control(ctypes.Structure):
@@ -832,7 +801,7 @@ def checkAndConfigureV4l2loopback(device):
     libc.ioctl(fd, VIDIOC_S_CTRL, ctypes.byref(control))
     libc.close(fd)
 
-    return True, vcap.card
+    return True, six.ensure_text(vcap.card)
 
 
 def findTestMediaDevices(log):
@@ -989,10 +958,6 @@ class MochitestDesktop(object):
         if logger_options.get("log"):
             self.log = logger_options["log"]
         else:
-            commandline.log_formatters["tbpl"] = (
-                MochitestFormatter,
-                "Mochitest specific tbpl formatter",
-            )
             self.log = commandline.setup_logging(
                 "mochitest", logger_options, {"tbpl": sys.stdout}
             )
@@ -1588,7 +1553,10 @@ toolbar#nav-bar {
                     # Given the mochitest flavor, load the runtimes information
                     # for only that flavor due to manifest runtime format change in Bug 1637463.
                     with open(runtime_file, "r") as f:
-                        runtimes = json.load(f).get(options.suite_name, {})
+                        if "suite_name" in options:
+                            runtimes = json.load(f).get(options.suite_name, {})
+                        else:
+                            runtimes = {}
 
                     filters.append(
                         chunk_by_runtime(
@@ -1600,8 +1568,17 @@ toolbar#nav-bar {
                         chunk_by_slice(options.thisChunk, options.totalChunks)
                     )
 
+            noDefaultFilters = False
+            if options.runFailures:
+                filters.append(failures(options.runFailures))
+                noDefaultFilters = True
+
             tests = manifest.active_tests(
-                exists=False, disabled=disabled, filters=filters, **info
+                exists=False,
+                disabled=disabled,
+                filters=filters,
+                noDefaultFilters=noDefaultFilters,
+                **info
             )
 
             if len(tests) == 0:
@@ -1760,6 +1737,10 @@ toolbar#nav-bar {
             d["jscovDirPrefix"] = options.jscov_dir_prefix
         if not options.keep_open:
             d["closeWhenDone"] = "1"
+
+        d["runFailures"] = False
+        if options.runFailures:
+            d["runFailures"] = True
         content = json.dumps(d)
 
         with open(os.path.join(options.profilePath, "testConfig.js"), "w") as config:
@@ -2130,6 +2111,10 @@ toolbar#nav-bar {
             # Enable tracing output for detailed failures in case of
             # failing connection attempts, and hangs (bug 1397201)
             "marionette.log.level": "Trace",
+            # Disable async font fallback, because the unpredictable
+            # extra reflow it can trigger (potentially affecting a later
+            # test) results in spurious intermittent failures.
+            "gfx.font_rendering.fallback.async": False,
         }
 
         # Ideally we should set this in a manifest, but a11y tests do not run by manifest.
@@ -2354,6 +2339,8 @@ toolbar#nav-bar {
         bisectChunk=None,
         marionette_args=None,
         e10s=True,
+        runFailures=False,
+        crashAsPass=False,
     ):
         """
         Run the app, log the duration it took to execute, return the status code.
@@ -2563,10 +2550,28 @@ toolbar#nav-bar {
             # record post-test information
             if status:
                 self.message_logger.dump_buffered()
-                self.log.error(
-                    "TEST-UNEXPECTED-FAIL | %s | application terminated with exit code %s"
-                    % (self.lastTestSeen, status)
-                )
+                msg = "application terminated with exit code %s" % status
+                # self.message_logger.is_test_running indicates we need to send a test_end
+                if crashAsPass and self.message_logger.is_test_running:
+                    # this works for browser-chrome, mochitest-plain has status=0
+                    message = {
+                        "action": "test_end",
+                        "status": "CRASH",
+                        "expected": "CRASH",
+                        "thread": None,
+                        "pid": None,
+                        "source": "mochitest",
+                        "time": int(time.time()) * 1000,
+                        "test": self.lastTestSeen,
+                        "message": msg,
+                    }
+                    # need to send a test_end in order to have mozharness process messages properly
+                    # this requires a custom message vs log.error/log.warning/etc.
+                    self.message_logger.process_message(message)
+                else:
+                    self.log.error(
+                        "TEST-UNEXPECTED-FAIL | %s | %s" % (self.lastTestSeen, msg)
+                    )
             else:
                 self.lastTestSeen = "Main app process exited normally"
 
@@ -2581,14 +2586,40 @@ toolbar#nav-bar {
             )
 
             # check for crashes
+            quiet = False
+            if crashAsPass:
+                quiet = True
+
             minidump_path = os.path.join(self.profile.profile, "minidumps")
             crash_count = mozcrash.log_crashes(
-                self.log, minidump_path, symbolsPath, test=self.lastTestSeen
+                self.log,
+                minidump_path,
+                symbolsPath,
+                test=self.lastTestSeen,
+                quiet=quiet,
             )
 
-            if crash_count or zombieProcesses:
+            if crashAsPass:
+                # self.message_logger.is_test_running indicates we need a test_end message
+                if crash_count > 0 and self.message_logger.is_test_running:
+                    # this works for browser-chrome, mochitest-plain has status=0
+                    message = {
+                        "action": "test_end",
+                        "status": "CRASH",
+                        "expected": "CRASH",
+                        "thread": None,
+                        "pid": None,
+                        "source": "mochitest",
+                        "time": int(time.time()) * 1000,
+                        "test": self.lastTestSeen,
+                        "message": "application terminated with exit code 0",
+                    }
+                    # need to send a test_end in order to have mozharness process messages properly
+                    # this requires a custom message vs log.error/log.warning/etc.
+                    self.message_logger.process_message(message)
+                status = 0
+            elif crash_count or zombieProcesses:
                 status = 1
-
         finally:
             # cleanup
             if os.path.exists(processLog):
@@ -2687,23 +2718,22 @@ toolbar#nav-bar {
         VERIFY_REPEAT_SINGLE_BROWSER = 5
 
         def step1():
-            stepOptions = copy.deepcopy(options)
-            stepOptions.repeat = VERIFY_REPEAT
-            stepOptions.keep_open = False
-            stepOptions.runUntilFailure = True
-            stepOptions.profilePath = None
-            result = self.runTests(stepOptions)
+            options.repeat = VERIFY_REPEAT
+            options.keep_open = False
+            options.runUntilFailure = True
+            options.profilePath = None
+            result = self.runTests(options)
             result = result or (-2 if self.countfail > 0 else 0)
             self.message_logger.finish()
             return result
 
         def step2():
-            stepOptions = copy.deepcopy(options)
-            stepOptions.repeat = 0
-            stepOptions.keep_open = False
+            options.repeat = 0
+            options.keep_open = False
+            options.runUntilFailure = False
             for i in range(VERIFY_REPEAT_SINGLE_BROWSER):
-                stepOptions.profilePath = None
-                result = self.runTests(stepOptions)
+                options.profilePath = None
+                result = self.runTests(options)
                 result = result or (-2 if self.countfail > 0 else 0)
                 self.message_logger.finish()
                 if result != 0:
@@ -2711,37 +2741,39 @@ toolbar#nav-bar {
             return result
 
         def step3():
-            stepOptions = copy.deepcopy(options)
-            stepOptions.repeat = VERIFY_REPEAT
-            stepOptions.keep_open = False
-            stepOptions.environment.append("MOZ_CHAOSMODE=0xfb")
-            stepOptions.profilePath = None
-            result = self.runTests(stepOptions)
+            options.repeat = VERIFY_REPEAT
+            options.keep_open = False
+            options.runUntilFailure = True
+            options.environment.append("MOZ_CHAOSMODE=0xfb")
+            options.profilePath = None
+            result = self.runTests(options)
+            options.environment.remove("MOZ_CHAOSMODE=0xfb")
             result = result or (-2 if self.countfail > 0 else 0)
             self.message_logger.finish()
             return result
 
         def step4():
-            stepOptions = copy.deepcopy(options)
-            stepOptions.repeat = 0
-            stepOptions.keep_open = False
-            stepOptions.environment.append("MOZ_CHAOSMODE=0xfb")
+            options.repeat = 0
+            options.keep_open = False
+            options.runUntilFailure = False
+            options.environment.append("MOZ_CHAOSMODE=0xfb")
             for i in range(VERIFY_REPEAT_SINGLE_BROWSER):
-                stepOptions.profilePath = None
-                result = self.runTests(stepOptions)
+                options.profilePath = None
+                result = self.runTests(options)
                 result = result or (-2 if self.countfail > 0 else 0)
                 self.message_logger.finish()
                 if result != 0:
                     break
+            options.environment.remove("MOZ_CHAOSMODE=0xfb")
             return result
 
         def fission_step(fission_pref):
-            stepOptions = copy.deepcopy(options)
-            stepOptions.extraPrefs.append(fission_pref)
-            stepOptions.keep_open = False
-            stepOptions.runUntilFailure = True
-            stepOptions.profilePath = None
-            result = self.runTests(stepOptions)
+            if fission_pref not in options.extraPrefs:
+                options.extraPrefs.append(fission_pref)
+            options.keep_open = False
+            options.runUntilFailure = True
+            options.profilePath = None
+            result = self.runTests(options)
             result = result or (-2 if self.countfail > 0 else 0)
             self.message_logger.finish()
             return result
@@ -2836,9 +2868,7 @@ toolbar#nav-bar {
                 #
                 # Currently for automation, the pref defaults to true (but can be
                 # overridden with --setpref).
-                "serviceworker_e10s": self.extraPrefs.get(
-                    "dom.serviceWorkers.parent_intercept", True
-                ),
+                "serviceworker_e10s": True,
                 "sessionHistoryInParent": self.extraPrefs.get(
                     "fission.sessionHistoryInParent", False
                 )
@@ -2849,6 +2879,7 @@ toolbar#nav-bar {
                 "socketprocess_networking": self.extraPrefs.get(
                     "network.http.network_access_on_socket_process.enabled", False
                 ),
+                "swgl": self.extraPrefs.get("gfx.webrender.software", False),
                 "verify": options.verify,
                 "verify_fission": options.verify_fission,
                 "webrender": options.enable_webrender,
@@ -2882,7 +2913,9 @@ toolbar#nav-bar {
 
         # Until we have all green, this does not run on a11y (for perf reasons)
         if not options.runByManifest:
-            return self.runMochitests(options, [t["path"] for t in tests])
+            result = self.runMochitests(options, [t["path"] for t in tests])
+            self.handleShutdownProfile(options)
+            return result
 
         # code for --run-by-manifest
         manifests = set(t["manifest"] for t in tests)
@@ -2931,6 +2964,14 @@ toolbar#nav-bar {
 
         e10s_mode = "e10s" if options.e10s else "non-e10s"
 
+        # for failure mode: where browser window has crashed and we have no reported results
+        if (
+            self.countpass == self.countfail == self.counttodo == 0
+            and options.crashAsPass
+        ):
+            self.countpass = 1
+            self.result = 0
+
         # printing total number of tests
         if options.flavor == "browser":
             print("TEST-INFO | checking window state")
@@ -2948,8 +2989,19 @@ toolbar#nav-bar {
             print("4 INFO Mode:    %s" % e10s_mode)
             print("5 INFO SimpleTest FINISHED")
 
+        self.handleShutdownProfile(options)
+
+        if not result:
+            if self.countfail or not (self.countpass or self.counttodo):
+                # at least one test failed, or
+                # no tests passed, and no tests failed (possibly a crash)
+                result = 1
+
+        return result
+
+    def handleShutdownProfile(self, options):
         # If shutdown profiling was enabled, then the user will want to access the
-        # performance profile. The following code with display helpful log messages
+        # performance profile. The following code will display helpful log messages
         # and automatically open the profile if it is requested.
         if self.browserEnv and "MOZ_PROFILER_SHUTDOWN" in self.browserEnv:
             profile_path = self.browserEnv["MOZ_PROFILER_SHUTDOWN"]
@@ -2976,14 +3028,6 @@ toolbar#nav-bar {
             # Clean up the temporary file if it exists.
             if self.profiler_tempdir:
                 shutil.rmtree(self.profiler_tempdir)
-
-        if not result:
-            if self.countfail or not (self.countpass or self.counttodo):
-                # at least one test failed, or
-                # no tests passed, and no tests failed (possibly a crash)
-                result = 1
-
-        return result
 
     def doTests(self, options, testsToFilter=None):
         # A call to initializeLooping method is required in case of --run-by-dir or --bisect-chunk
@@ -3098,6 +3142,7 @@ toolbar#nav-bar {
                     mozinfo.info["debug"]
                     and options.flavor == "browser"
                     and options.subsuite != "thunderbird"
+                    and not options.crashAsPass
                 )
 
             self.start_script_kwargs["flavor"] = self.normflavor(options.flavor)
@@ -3126,6 +3171,12 @@ toolbar#nav-bar {
                 self.buildURLOptions(options, self.browserEnv)
                 if self.urlOpts:
                     testURL += "?" + "&".join(self.urlOpts)
+
+                if options.runFailures:
+                    testURL += "&runFailures=true"
+
+                if options.timeoutAsPass:
+                    testURL += "&timeoutAsPass=true"
 
                 self.log.info("runtests.py | Running with scheme: {}".format(scheme))
                 self.log.info(
@@ -3170,6 +3221,8 @@ toolbar#nav-bar {
                     bisectChunk=options.bisectChunk,
                     marionette_args=marionette_args,
                     e10s=options.e10s,
+                    runFailures=options.runFailures,
+                    crashAsPass=options.crashAsPass,
                 )
                 status = ret or status
         except KeyboardInterrupt:
@@ -3189,6 +3242,10 @@ toolbar#nav-bar {
 
         ignoreMissingLeaks = options.ignoreMissingLeaks
         leakThresholds = options.leakThresholds
+
+        if options.crashAsPass:
+            ignoreMissingLeaks.append("tab")
+            ignoreMissingLeaks.append("socket")
 
         # Stop leak detection if m-bc code coverage is enabled
         # by maxing out the leak threshold for all processes.
@@ -3516,9 +3573,6 @@ def run_test_harness(parser, options):
     runner = MochitestDesktop(
         options.flavor, logger_options, options.stagedAddons, quiet=options.quiet
     )
-
-    if hasattr(options, "log"):
-        delattr(options, "log")
 
     options.runByManifest = False
     if options.flavor in ("plain", "browser", "chrome"):

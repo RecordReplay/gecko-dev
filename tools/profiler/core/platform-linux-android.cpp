@@ -77,9 +77,11 @@ using namespace mozilla;
 int profiler_current_process_id() { return getpid(); }
 
 int profiler_current_thread_id() {
-#if defined(GP_OS_linux) || defined(GP_OS_android)
-  // glibc doesn't provide a wrapper for gettid().
+#if defined(GP_OS_linux)
+  // glibc doesn't provide a wrapper for gettid() until 2.30
   return static_cast<int>(static_cast<pid_t>(syscall(SYS_gettid)));
+#elif defined(GP_OS_android)
+  return gettid();
 #elif defined(GP_OS_freebsd)
   long id;
   (void)thr_self(&id);
@@ -357,6 +359,13 @@ static RunningTimes GetThreadRunningTimesDiff(
   return diff;
 }
 
+static void ClearThreadRunningTimes(PSLockRef aLock,
+                                    const RegisteredThread& aRegisteredThread) {
+  PlatformData* const platformData = aRegisteredThread.GetPlatformData();
+  MOZ_RELEASE_ASSERT(platformData);
+  platformData->PreviousThreadRunningTimesRef().Clear();
+}
+
 template <typename Func>
 void Sampler::SuspendAndSampleAndResumeThread(
     PSLockRef aLock, const RegisteredThread& aRegisteredThread,
@@ -459,14 +468,16 @@ static void* ThreadEntry(void* aArg) {
 }
 
 SamplerThread::SamplerThread(PSLockRef aLock, uint32_t aActivityGeneration,
-                             double aIntervalMilliseconds)
+                             double aIntervalMilliseconds,
+                             bool aStackWalkEnabled,
+                             bool aNoTimerResolutionChange)
     : mSampler(aLock),
       mActivityGeneration(aActivityGeneration),
       mIntervalMicroseconds(
           std::max(1, int(floor(aIntervalMilliseconds * 1000 + 0.5)))) {
 #if defined(USE_LUL_STACKWALK)
   lul::LUL* lul = CorePS::Lul(aLock);
-  if (!lul) {
+  if (!lul && aStackWalkEnabled) {
     CorePS::SetLul(aLock, MakeUnique<lul::LUL>(logging_sink_for_LUL));
     // Read all the unwind info currently available.
     lul = CorePS::Lul(aLock);

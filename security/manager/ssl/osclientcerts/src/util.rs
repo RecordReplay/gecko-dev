@@ -19,13 +19,28 @@ macro_rules! unsafe_packed_field_access {
     }};
 }
 
+// The following ENCODED_OID_BYTES_* consist of the encoded bytes of an ASN.1
+// OBJECT IDENTIFIER specifying the indicated OID (in other words, the full
+// tag, length, and value).
 #[cfg(target_os = "macos")]
-pub const OID_BYTES_SECP256R1: &[u8] =
+pub const ENCODED_OID_BYTES_SECP256R1: &[u8] =
     &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 #[cfg(target_os = "macos")]
-pub const OID_BYTES_SECP384R1: &[u8] = &[0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22];
+pub const ENCODED_OID_BYTES_SECP384R1: &[u8] = &[0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22];
 #[cfg(target_os = "macos")]
-pub const OID_BYTES_SECP521R1: &[u8] = &[0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x23];
+pub const ENCODED_OID_BYTES_SECP521R1: &[u8] = &[0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x23];
+
+// The following OID_BYTES_* consist of the contents of the bytes of an ASN.1
+// OBJECT IDENTIFIER specifying the indicated OID (in other words, just the
+// value, and not the tag or length).
+#[cfg(target_os = "macos")]
+pub const OID_BYTES_SHA_256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+#[cfg(target_os = "macos")]
+pub const OID_BYTES_SHA_384: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
+#[cfg(target_os = "macos")]
+pub const OID_BYTES_SHA_512: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
+#[cfg(target_os = "macos")]
+pub const OID_BYTES_SHA_1: &[u8] = &[0x2b, 0x0e, 0x03, 0x02, 0x1a];
 
 // This is a helper function to take a value and lay it out in memory how
 // PKCS#11 is expecting it.
@@ -57,8 +72,8 @@ pub fn read_rsa_modulus(public_key: &[u8]) -> Result<Vec<u8>, ()> {
     Ok(modulus_value.to_vec())
 }
 
-/// Given a slice of DER bytes representing a DigestInfo, extracts the bytes of the digest.
-///
+/// Given a slice of DER bytes representing a DigestInfo, extracts the bytes of
+/// the OID of the hash algorithm and the digest.
 /// DigestInfo ::= SEQUENCE {
 ///   digestAlgorithm DigestAlgorithmIdentifier,
 ///   digest Digest }
@@ -70,16 +85,21 @@ pub fn read_rsa_modulus(public_key: &[u8]) -> Result<Vec<u8>, ()> {
 ///      parameters              ANY DEFINED BY algorithm OPTIONAL  }
 ///
 /// Digest ::= OCTET STRING
-#[cfg(target_os = "windows")]
-pub fn read_digest<'a>(digest_info: &'a [u8]) -> Result<&'a [u8], ()> {
+pub fn read_digest_info<'a>(digest_info: &'a [u8]) -> Result<(&'a [u8], &'a [u8]), ()> {
     let mut sequence = Sequence::new(digest_info)?;
-    let _ = sequence.read_sequence()?;
+    let mut algorithm = sequence.read_sequence()?;
+    let oid = algorithm.read_oid()?;
+    algorithm.read_null()?;
+    if !algorithm.at_end() {
+        error!("read_digest: extra input");
+        return Err(());
+    }
     let digest = sequence.read_octet_string()?;
     if !sequence.at_end() {
         error!("read_digest: extra input");
         return Err(());
     }
-    Ok(digest)
+    Ok((oid, digest))
 }
 
 /// Given a slice of DER bytes representing an ECDSA signature, extracts the bytes of `r` and `s`
@@ -99,7 +119,8 @@ pub fn read_ec_sig_point<'a>(signature: &'a [u8]) -> Result<(&'a [u8], &'a [u8])
 }
 
 /// Given a slice of DER bytes representing an X.509 certificate, extracts the encoded serial
-/// number. Does not verify that the remainder of the certificate is in any way well-formed.
+/// number, issuer, and subject. Does not verify that the remainder of the certificate is in any
+/// way well-formed.
 ///   Certificate  ::=  SEQUENCE  {
 ///           tbsCertificate       TBSCertificate,
 ///           signatureAlgorithm   AlgorithmIdentifier,
@@ -108,15 +129,36 @@ pub fn read_ec_sig_point<'a>(signature: &'a [u8]) -> Result<(&'a [u8], &'a [u8])
 ///   TBSCertificate  ::=  SEQUENCE  {
 ///           version         [0]  EXPLICIT Version DEFAULT v1,
 ///           serialNumber         CertificateSerialNumber,
+///           signature            AlgorithmIdentifier,
+///           issuer               Name,
+///           validity             Validity,
+///           subject              Name,
 ///           ...
 ///
 ///   CertificateSerialNumber  ::=  INTEGER
-pub fn read_encoded_serial_number(certificate: &[u8]) -> Result<Vec<u8>, ()> {
+///
+///   Name ::= CHOICE { -- only one possibility for now --
+///     rdnSequence  RDNSequence }
+///
+///   RDNSequence ::= SEQUENCE OF RelativeDistinguishedName
+///
+///   Validity ::= SEQUENCE {
+///        notBefore      Time,
+///        notAfter       Time  }
+pub fn read_encoded_certificate_identifiers(
+    certificate: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), ()> {
     let mut certificate_sequence = Sequence::new(certificate)?;
     let mut tbs_certificate_sequence = certificate_sequence.read_sequence()?;
     let _version = tbs_certificate_sequence.read_tagged_value(0)?;
     let serial_number = tbs_certificate_sequence.read_encoded_sequence_component(INTEGER)?;
-    Ok(serial_number)
+    let _signature = tbs_certificate_sequence.read_sequence()?;
+    let issuer =
+        tbs_certificate_sequence.read_encoded_sequence_component(SEQUENCE | CONSTRUCTED)?;
+    let _validity = tbs_certificate_sequence.read_sequence()?;
+    let subject =
+        tbs_certificate_sequence.read_encoded_sequence_component(SEQUENCE | CONSTRUCTED)?;
+    Ok((serial_number, issuer, subject))
 }
 
 /// Helper macro for reading some bytes from a slice while checking the slice is long enough.
@@ -134,8 +176,11 @@ macro_rules! try_read_bytes {
 /// ASN.1 tag identifying an integer.
 const INTEGER: u8 = 0x02;
 /// ASN.1 tag identifying an octet string.
-#[cfg(target_os = "windows")]
 const OCTET_STRING: u8 = 0x04;
+/// ASN.1 tag identifying a null value.
+const NULL: u8 = 0x05;
+/// ASN.1 tag identifying an object identifier (OID).
+const OBJECT_IDENTIFIER: u8 = 0x06;
 /// ASN.1 tag identifying a sequence.
 const SEQUENCE: u8 = 0x10;
 /// ASN.1 tag modifier identifying an item as constructed.
@@ -179,10 +224,23 @@ impl<'a> Sequence<'a> {
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn read_octet_string(&mut self) -> Result<&'a [u8], ()> {
         let (_, _, bytes) = self.contents.read_tlv(OCTET_STRING)?;
         Ok(bytes)
+    }
+
+    fn read_oid(&mut self) -> Result<&'a [u8], ()> {
+        let (_, _, bytes) = self.contents.read_tlv(OBJECT_IDENTIFIER)?;
+        Ok(bytes)
+    }
+
+    fn read_null(&mut self) -> Result<(), ()> {
+        let (_, _, bytes) = self.contents.read_tlv(NULL)?;
+        if bytes.len() == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 
     fn read_sequence(&mut self) -> Result<Sequence<'a>, ()> {
@@ -398,7 +456,7 @@ mod tests {
         assert!(read_rsa_modulus(&empty).is_err());
         #[cfg(target_os = "macos")]
         assert!(read_ec_sig_point(&empty).is_err());
-        assert!(read_encoded_serial_number(&empty).is_err());
+        assert!(read_encoded_certificate_identifiers(&empty).is_err());
     }
 
     #[test]
@@ -407,7 +465,7 @@ mod tests {
         assert!(read_rsa_modulus(&empty).is_err());
         #[cfg(target_os = "macos")]
         assert!(read_ec_sig_point(&empty).is_err());
-        assert!(read_encoded_serial_number(&empty).is_err());
+        assert!(read_encoded_certificate_identifiers(&empty).is_err());
     }
 
     #[test]
@@ -420,16 +478,30 @@ mod tests {
     }
 
     #[test]
-    fn test_read_serial_number() {
+    fn test_read_certificate_identifiers() {
         let certificate = include_bytes!("../test/certificate.bin");
-        let result = read_encoded_serial_number(certificate);
+        let result = read_encoded_certificate_identifiers(certificate);
         assert!(result.is_ok());
-        let serial_number = result.unwrap();
+        let (serial_number, issuer, subject) = result.unwrap();
         assert_eq!(
             serial_number,
             &[
                 0x02, 0x14, 0x3f, 0xed, 0x7b, 0x43, 0x47, 0x8a, 0x53, 0x42, 0x5b, 0x0d, 0x50, 0xe1,
                 0x37, 0x88, 0x2a, 0x20, 0x3f, 0x31, 0x17, 0x20
+            ]
+        );
+        assert_eq!(
+            issuer,
+            &[
+                0x30, 0x12, 0x31, 0x10, 0x30, 0x0e, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x07, 0x54,
+                0x65, 0x73, 0x74, 0x20, 0x43, 0x41
+            ]
+        );
+        assert_eq!(
+            subject,
+            &[
+                0x30, 0x1a, 0x31, 0x18, 0x30, 0x16, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x0f, 0x54,
+                0x65, 0x73, 0x74, 0x20, 0x45, 0x6e, 0x64, 0x2d, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79
             ]
         );
     }

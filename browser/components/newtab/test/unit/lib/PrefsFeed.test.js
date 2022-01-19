@@ -83,15 +83,8 @@ describe("PrefsFeed", () => {
     assert.isTrue(data.isPrivateBrowsingEnabled);
   });
   it("should dispatch PREFS_INITIAL_VALUES with a .featureConfig", () => {
-    sandbox.stub(global.ExperimentAPI, "getExperiment").returns({
-      active: true,
-      branch: {
-        slug: "foo",
-        feature: {
-          featureId: "newtab",
-          value: { prefsButtonIcon: "icon-foo" },
-        },
-      },
+    sandbox.stub(global.NimbusFeatures.newtab, "getValue").returns({
+      prefsButtonIcon: "icon-foo",
     });
     feed.onAction({ type: at.INIT });
     assert.equal(
@@ -101,25 +94,15 @@ describe("PrefsFeed", () => {
     const [{ data }] = feed.store.dispatch.firstCall.args;
     assert.deepEqual(data.featureConfig, { prefsButtonIcon: "icon-foo" });
   });
-  it("should dispatch PREFS_INITIAL_VALUES with a default feature config if no experiment is returned", () => {
-    sandbox.stub(global.ExperimentAPI, "getExperiment").returns(null);
+  it("should dispatch PREFS_INITIAL_VALUES with an empty object if no experiment is returned", () => {
+    sandbox.stub(global.NimbusFeatures.newtab, "getValue").returns(null);
     feed.onAction({ type: at.INIT });
     assert.equal(
       feed.store.dispatch.firstCall.args[0].type,
       at.PREFS_INITIAL_VALUES
     );
     const [{ data }] = feed.store.dispatch.firstCall.args;
-    assert.deepEqual(data.featureConfig, { prefsButtonIcon: "icon-settings" });
-  });
-  it("should dispatch PREFS_INITIAL_VALUES with a default feature config ExperimentAPI throws", () => {
-    sandbox.stub(global.ExperimentAPI, "getExperiment").throws();
-    feed.onAction({ type: at.INIT });
-    assert.equal(
-      feed.store.dispatch.firstCall.args[0].type,
-      at.PREFS_INITIAL_VALUES
-    );
-    const [{ data }] = feed.store.dispatch.firstCall.args;
-    assert.deepEqual(data.featureConfig, { prefsButtonIcon: "icon-settings" });
+    assert.deepEqual(data.featureConfig, {});
   });
   it("should add one branch observer on init", () => {
     feed.onAction({ type: at.INIT });
@@ -170,32 +153,21 @@ describe("PrefsFeed", () => {
       })
     );
   });
-  it("should send 2 PREF_CHANGED actions when onExperimentUpdated is called", () => {
-    const experimentData = {
-      active: true,
-      slug: "foo",
-      branch: {
-        slug: "boo",
-        feature: {
-          featureId: "newtab",
-          value: { prefsButtonIcon: "icon-boo" },
+  it("should send a PREF_CHANGED actions when onExperimentUpdated is called", () => {
+    sandbox.stub(global.NimbusFeatures.newtab, "getValue").returns({
+      prefsButtonIcon: "icon-new",
+    });
+    feed.onExperimentUpdated();
+    assert.calledWith(
+      feed.store.dispatch,
+      ac.BroadcastToContent({
+        type: at.PREF_CHANGED,
+        data: {
+          name: "featureConfig",
+          value: {
+            prefsButtonIcon: "icon-new",
+          },
         },
-      },
-    };
-    feed.onExperimentUpdated({}, experimentData);
-    assert.calledTwice(feed.store.dispatch);
-    assert.calledWith(
-      feed.store.dispatch,
-      ac.BroadcastToContent({
-        type: at.PREF_CHANGED,
-        data: { name: "experimentData", value: experimentData },
-      })
-    );
-    assert.calledWith(
-      feed.store.dispatch,
-      ac.BroadcastToContent({
-        type: at.PREF_CHANGED,
-        data: { name: "featureConfig", value: { prefsButtonIcon: "icon-boo" } },
       })
     );
   });
@@ -237,11 +209,7 @@ describe("PrefsFeed", () => {
   });
   describe("#observe", () => {
     it("should call dispatch from observe", () => {
-      feed.observe(
-        undefined,
-        global.Region.REGION_TOPIC,
-        global.Region.REGION_UPDATED
-      );
+      feed.observe(undefined, global.Region.REGION_TOPIC);
       assert.calledOnce(feed.store.dispatch);
     });
   });

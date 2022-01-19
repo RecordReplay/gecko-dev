@@ -42,7 +42,6 @@
 #include "nsStringFlags.h"
 #include "nsStringFwd.h"
 #include "nsTArray.h"
-#include "nsTHashtable.h"
 #include "nsTStringRepr.h"
 #include "nscore.h"
 
@@ -199,15 +198,15 @@ nsresult LSSnapshot::Init(const nsAString& aKey,
     const LSValue& value = itemInfo.value();
 
     if (loadState != LoadState::AllOrderedItems && !value.IsVoid()) {
-      mLoadedItems.PutEntry(itemInfo.key());
+      mLoadedItems.Insert(itemInfo.key());
     }
 
-    mValues.Put(itemInfo.key(), value.AsString());
+    mValues.InsertOrUpdate(itemInfo.key(), value.AsString());
   }
 
   if (loadState == LoadState::Partial) {
     if (aInitInfo.addKeyToUnknownItems()) {
-      mUnknownItems.PutEntry(aKey);
+      mUnknownItems.Insert(aKey);
     }
     mInitLength = aInitInfo.totalLength();
     mLength = mInitLength;
@@ -319,9 +318,7 @@ nsresult LSSnapshot::GetKeys(nsTArray<nsString>& aKeys) {
     return rv;
   }
 
-  for (auto iter = mValues.ConstIter(); !iter.Done(); iter.Next()) {
-    aKeys.AppendElement(iter.Key());
-  }
+  AppendToArray(aKeys, mValues.Keys());
 
   return NS_OK;
 }
@@ -352,7 +349,7 @@ nsresult LSSnapshot::SetItem(const nsAString& aKey, const nsAString& aValue,
       if (oldValue.IsVoid()) {
         mValues.Remove(aKey);
       } else {
-        mValues.Put(aKey, oldValue);
+        mValues.InsertOrUpdate(aKey, oldValue);
       }
     });
 
@@ -441,7 +438,7 @@ nsresult LSSnapshot::RemoveItem(const nsAString& aKey,
 
     auto autoRevertValue = MakeScopeExit([&] {
       MOZ_ASSERT(!oldValue.IsVoid());
-      mValues.Put(aKey, oldValue);
+      mValues.InsertOrUpdate(aKey, oldValue);
     });
 
     // Anything that can fail must be done early before we start modifying the
@@ -630,7 +627,7 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
     case LoadState::Partial: {
       if (mValues.Get(aKey, &result)) {
         MOZ_ASSERT(!result.IsVoid());
-      } else if (mLoadedItems.GetEntry(aKey) || mUnknownItems.GetEntry(aKey)) {
+      } else if (mLoadedItems.Contains(aKey) || mUnknownItems.Contains(aKey)) {
         result.SetIsVoid(true);
       } else {
         LSValue value;
@@ -643,10 +640,10 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
         result = value.AsString();
 
         if (result.IsVoid()) {
-          mUnknownItems.PutEntry(aKey);
+          mUnknownItems.Insert(aKey);
         } else {
-          mLoadedItems.PutEntry(aKey);
-          mValues.Put(aKey, result);
+          mLoadedItems.Insert(aKey);
+          mValues.InsertOrUpdate(aKey, result);
 
           // mLoadedItems.Count()==mInitLength is checked below.
         }
@@ -654,8 +651,8 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
         for (uint32_t i = 0; i < itemInfos.Length(); i++) {
           const LSItemInfo& itemInfo = itemInfos[i];
 
-          mLoadedItems.PutEntry(itemInfo.key());
-          mValues.Put(itemInfo.key(), itemInfo.value().AsString());
+          mLoadedItems.Insert(itemInfo.key());
+          mValues.InsertOrUpdate(itemInfo.key(), itemInfo.value().AsString());
         }
 
         if (mLoadedItems.Count() == mInitLength) {
@@ -669,7 +666,7 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
       if (aValue.WasPassed()) {
         const nsString& value = aValue.Value();
         if (!value.IsVoid()) {
-          mValues.Put(aKey, value);
+          mValues.InsertOrUpdate(aKey, value);
         } else if (!result.IsVoid()) {
           mValues.Remove(aKey);
         }
@@ -692,16 +689,16 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
 
           MOZ_ASSERT(!result.IsVoid());
 
-          mLoadedItems.PutEntry(aKey);
-          mValues.Put(aKey, result);
+          mLoadedItems.Insert(aKey);
+          mValues.InsertOrUpdate(aKey, result);
 
           // mLoadedItems.Count()==mInitLength is checked below.
 
           for (uint32_t i = 0; i < itemInfos.Length(); i++) {
             const LSItemInfo& itemInfo = itemInfos[i];
 
-            mLoadedItems.PutEntry(itemInfo.key());
-            mValues.Put(itemInfo.key(), itemInfo.value().AsString());
+            mLoadedItems.Insert(itemInfo.key());
+            mValues.InsertOrUpdate(itemInfo.key(), itemInfo.value().AsString());
           }
 
           if (mLoadedItems.Count() == mInitLength) {
@@ -717,7 +714,7 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
       if (aValue.WasPassed()) {
         const nsString& value = aValue.Value();
         if (!value.IsVoid()) {
-          mValues.Put(aKey, value);
+          mValues.InsertOrUpdate(aKey, value);
         } else if (!result.IsVoid()) {
           mValues.Remove(aKey);
         }
@@ -731,14 +728,14 @@ nsresult LSSnapshot::GetItemInternal(const nsAString& aKey,
       if (aValue.WasPassed()) {
         const nsString& value = aValue.Value();
         if (!value.IsVoid()) {
-          auto entry = mValues.LookupForAdd(aKey);
-          if (entry) {
-            result = entry.Data();
-            entry.Data() = value;
-          } else {
-            result.SetIsVoid(true);
-            entry.OrInsert([value]() { return value; });
-          }
+          mValues.WithEntryHandle(aKey, [&](auto&& entry) {
+            if (entry) {
+              result = std::exchange(entry.Data(), value);
+            } else {
+              result.SetIsVoid(true);
+              entry.Insert(value);
+            }
+          });
         } else {
           if (auto entry = mValues.Lookup(aKey)) {
             result = entry.Data();
@@ -784,10 +781,10 @@ nsresult LSSnapshot::EnsureAllKeys() {
     return NS_ERROR_FAILURE;
   }
 
-  nsDataHashtable<nsStringHashKey, nsString> newValues;
+  nsTHashMap<nsStringHashKey, nsString> newValues;
 
   for (auto key : keys) {
-    newValues.Put(key, VoidString());
+    newValues.InsertOrUpdate(key, VoidString());
   }
 
   if (mHasOtherProcessObservers) {
@@ -801,8 +798,9 @@ nsresult LSSnapshot::EnsureAllKeys() {
 
         switch (writeAndNotifyInfo.type()) {
           case LSWriteAndNotifyInfo::TLSSetItemAndNotifyInfo: {
-            newValues.Put(writeAndNotifyInfo.get_LSSetItemAndNotifyInfo().key(),
-                          VoidString());
+            newValues.InsertOrUpdate(
+                writeAndNotifyInfo.get_LSSetItemAndNotifyInfo().key(),
+                VoidString());
             break;
           }
           case LSWriteAndNotifyInfo::TLSRemoveItemAndNotifyInfo: {
@@ -834,7 +832,8 @@ nsresult LSSnapshot::EnsureAllKeys() {
 
         switch (writeInfo.type()) {
           case LSWriteInfo::TLSSetItemInfo: {
-            newValues.Put(writeInfo.get_LSSetItemInfo().key(), VoidString());
+            newValues.InsertOrUpdate(writeInfo.get_LSSetItemInfo().key(),
+                                     VoidString());
             break;
           }
           case LSWriteInfo::TLSRemoveItemInfo: {

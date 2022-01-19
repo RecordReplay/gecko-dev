@@ -9,7 +9,6 @@
 
 #include "mozilla/Maybe.h"
 #include "nsIGleanMetrics.h"
-#include "mozilla/glean/fog_ffi_generated.h"
 #include "nsString.h"
 #include "nsTArray.h"
 
@@ -28,9 +27,7 @@ class StringListMetric {
    *
    * @param aValue The string to add.
    */
-  void Add(const nsACString& aValue) const {
-    fog_string_list_add(mId, &aValue);
-  }
+  void Add(const nsACString& aValue) const;
 
   /*
    * Set to a specific list of strings.
@@ -42,9 +39,7 @@ class StringListMetric {
    *
    * @param aValue The list of strings to set the metric to.
    */
-  void Set(const nsTArray<nsCString>& aValue) const {
-    fog_string_list_set(mId, &aValue);
-  }
+  void Set(const nsTArray<nsCString>& aValue) const;
 
   /**
    * **Test-only API**
@@ -63,15 +58,8 @@ class StringListMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<nsTArray<nsCString>> TestGetValue(
-      const nsACString& aPingName = nsCString()) const {
-    if (!fog_string_list_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    nsTArray<nsCString> ret;
-    fog_string_list_test_get_value(mId, &aPingName, &ret);
-    return Some(std::move(ret));
-  }
+  Result<Maybe<nsTArray<nsCString>>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;

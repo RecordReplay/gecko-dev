@@ -1,12 +1,10 @@
-use ash::version::DeviceV1_0;
-use ash::vk;
-use smallvec::SmallVec;
-use std::sync::Arc;
-
-use crate::command::CommandBuffer;
-use crate::conv;
-use crate::{Backend, RawDevice};
+use crate::{command::CommandBuffer, conv, Backend, RawDevice};
 use hal::{command, pool};
+
+use ash::{version::DeviceV1_0, vk};
+use inplace_it::inplace_or_alloc_from_iter;
+
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct RawCommandPool {
@@ -49,12 +47,15 @@ impl pool::CommandPool<Backend> for RawCommandPool {
         );
     }
 
-    unsafe fn free<I>(&mut self, cbufs: I)
+    unsafe fn free<I>(&mut self, command_buffers: I)
     where
-        I: IntoIterator<Item = CommandBuffer>,
+        I: Iterator<Item = CommandBuffer>,
     {
-        let buffers: SmallVec<[vk::CommandBuffer; 16]> =
-            cbufs.into_iter().map(|buffer| buffer.raw).collect();
-        self.device.raw.free_command_buffers(self.raw, &buffers);
+        let cbufs_iter = command_buffers.map(|buffer| buffer.raw);
+        inplace_or_alloc_from_iter(cbufs_iter, |cbufs| {
+            if !cbufs.is_empty() {
+                self.device.raw.free_command_buffers(self.raw, cbufs);
+            }
+        })
     }
 }

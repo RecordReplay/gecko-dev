@@ -13,8 +13,10 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonTestUtils: "resource://testing-common/AddonTestUtils.jsm",
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   BrowserTestUtils: "resource://testing-common/BrowserTestUtils.jsm",
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
+  ExperimentAPI: "resource://nimbus/ExperimentAPI.jsm",
+  ExperimentFakes: "resource://testing-common/NimbusTestUtils.jsm",
   FormHistoryTestUtils: "resource://testing-common/FormHistoryTestUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
@@ -26,6 +28,25 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
+
+XPCOMUtils.defineLazyServiceGetter(
+  this,
+  "uuidGenerator",
+  "@mozilla.org/uuid-generator;1",
+  "nsIUUIDGenerator"
+);
+
+// This must be kept in sync with FeatureManifest.js. UrlbarPrefs.get() will
+// throw an "unknown pref" error if a test enrolls in a mock experiment and hits
+// a code path that accesses a Nimbus feature variable not defined here.
+const DEFAULT_EXPERIMENT_FEATURE_VARIABLES = {
+  firefoxSuggestLabelsEnabled: false,
+  quickSuggestEnabled: false,
+  quickSuggestNonSponsoredIndex: -1,
+  quickSuggestShouldShowOnboardingDialog: true,
+  quickSuggestShowOnboardingDialogAfterNRestarts: 2,
+  quickSuggestSponsoredIndex: -1,
+};
 
 var UrlbarTestUtils = {
   /**
@@ -56,6 +77,7 @@ var UrlbarTestUtils = {
       this.Assert = scope.Assert;
       this.EventUtils = scope.EventUtils;
     }
+    // If you add other properties to `this`, null them in uninit().
   },
 
   /**
@@ -65,6 +87,8 @@ var UrlbarTestUtils = {
    */
   uninit() {
     this._testScope = null;
+    this.Assert = null;
+    this.EventUtils = null;
   },
 
   /**
@@ -113,7 +137,7 @@ var UrlbarTestUtils = {
     window.gURLBar.inputField.focus();
     // Using the value setter in some cases may trim and fetch unexpected
     // results, then pick an alternate path.
-    if (UrlbarPrefs.get("trimURLs") && value != BrowserUtils.trimURL(value)) {
+    if (UrlbarPrefs.get("trimURLs") && value != BrowserUIUtils.trimURL(value)) {
       window.gURLBar.inputField.value = value;
       fireInputEvent = true;
     } else {
@@ -193,6 +217,7 @@ var UrlbarTestUtils = {
     details.image = element.getElementsByClassName("urlbarView-favicon")[0].src;
     details.title = result.title;
     details.tags = "tags" in result.payload ? result.payload.tags : [];
+    details.isSponsored = result.payload.isSponsored;
     let actions = element.getElementsByClassName("urlbarView-action");
     let urls = element.getElementsByClassName("urlbarView-url");
     let typeIcon = element.querySelector(".urlbarView-type-icon");
@@ -337,9 +362,7 @@ var UrlbarTestUtils = {
     if (win.gURLBar.view.isOpen) {
       return;
     }
-    if (this._testScope) {
-      this._testScope.info("Awaiting for the urlbar panel to open");
-    }
+    this._testScope?.info("Awaiting for the urlbar panel to open");
     await new Promise(resolve => {
       win.gURLBar.controller.addQueryListener({
         onViewOpen() {
@@ -348,6 +371,7 @@ var UrlbarTestUtils = {
         },
       });
     });
+    this._testScope?.info("Urlbar panel opened");
   },
 
   /**
@@ -366,9 +390,7 @@ var UrlbarTestUtils = {
     if (!win.gURLBar.view.isOpen) {
       return;
     }
-    if (this._testScope) {
-      this._testScope.info("Awaiting for the urlbar panel to close");
-    }
+    this._testScope?.info("Awaiting for the urlbar panel to close");
     await new Promise(resolve => {
       win.gURLBar.controller.addQueryListener({
         onViewClose() {
@@ -377,6 +399,40 @@ var UrlbarTestUtils = {
         },
       });
     });
+    this._testScope?.info("Urlbar panel closed");
+  },
+
+  /**
+   * Open the input field context menu and run a task on it.
+   * @param {nsIWindow} win the current window
+   * @param {function} task a task function to run, gets the contextmenu popup
+   *        as argument.
+   */
+  async withContextMenu(win, task) {
+    let textBox = win.gURLBar.querySelector("moz-input-box");
+    let cxmenu = textBox.menupopup;
+    let openPromise = BrowserTestUtils.waitForEvent(cxmenu, "popupshown");
+    this.EventUtils.synthesizeMouseAtCenter(
+      win.gURLBar.inputField,
+      {
+        type: "contextmenu",
+        button: 2,
+      },
+      win
+    );
+    await openPromise;
+    // On Mac sometimes the menuitems are not ready.
+    await new Promise(win.requestAnimationFrame);
+    try {
+      await task(cxmenu);
+    } finally {
+      // Close the context menu if the task didn't pick anything.
+      if (cxmenu.state == "open" || cxmenu.state == "showing") {
+        let closePromise = BrowserTestUtils.waitForEvent(cxmenu, "popuphidden");
+        cxmenu.hidePopup();
+        await closePromise;
+      }
+    }
   },
 
   /**
@@ -431,6 +487,15 @@ var UrlbarTestUtils = {
       expectedSearchMode.isPreview = false;
     }
 
+    let isGeneralPurposeEngine = false;
+    if (expectedSearchMode.engineName) {
+      let engine = Services.search.getEngineByName(
+        expectedSearchMode.engineName
+      );
+      isGeneralPurposeEngine = engine.isGeneralPurposeEngine;
+      expectedSearchMode.isGeneralPurposeEngine = isGeneralPurposeEngine;
+    }
+
     // expectedSearchMode may come from UrlbarUtils.LOCAL_SEARCH_MODES.  The
     // objects in that array include useful metadata like icon URIs and pref
     // names that are not usually included in actual search mode objects.  For
@@ -439,11 +504,9 @@ var UrlbarTestUtils = {
     let ignoreProperties = ["icon", "pref", "restrict"];
     for (let prop of ignoreProperties) {
       if (prop in expectedSearchMode && !(prop in window.gURLBar.searchMode)) {
-        if (this._testScope) {
-          this._testScope.info(
-            `Ignoring unimportant property '${prop}' in expected search mode`
-          );
-        }
+        this._testScope?.info(
+          `Ignoring unimportant property '${prop}' in expected search mode`
+        );
         delete expectedSearchMode[prop];
       }
     }
@@ -489,7 +552,7 @@ var UrlbarTestUtils = {
     let expectedPlaceholderL10n;
     if (expectedSearchMode.engineName) {
       expectedPlaceholderL10n = {
-        id: UrlbarUtils.WEB_ENGINE_NAMES.has(expectedSearchMode.engineName)
+        id: isGeneralPurposeEngine
           ? "urlbar-placeholder-search-mode-web-2"
           : "urlbar-placeholder-search-mode-other-engine",
         args: { name: expectedSearchMode.engineName },
@@ -553,6 +616,8 @@ var UrlbarTestUtils = {
    * @note Can only be used if UrlbarTestUtils has been initialized with init().
    */
   async enterSearchMode(window, searchMode = null) {
+    this._testScope?.info(`Enter Search Mode ${JSON.stringify(searchMode)}`);
+
     // Ensure any pending query is complete.
     await this.promiseSearchComplete(window);
 
@@ -571,7 +636,8 @@ var UrlbarTestUtils = {
     let buttons = oneOffs.getSelectableButtons(true);
     if (!searchMode) {
       searchMode = { engineName: buttons[0].engine.name };
-      if (UrlbarUtils.WEB_ENGINE_NAMES.has(searchMode.engineName)) {
+      let engine = Services.search.getEngineByName(searchMode.engineName);
+      if (engine.isGeneralPurposeEngine) {
         searchMode.source = UrlbarUtils.RESULT_SOURCE.SEARCH;
       }
     }
@@ -742,6 +808,47 @@ var UrlbarTestUtils = {
       }
     }
   },
+
+  /**
+   * Calls a callback while enrolled in a mock Nimbus experiment. The experiment
+   * is automatically unenrolled and cleaned up after the callback returns.
+   *
+   * @param {function} callback
+   * @param {object} options
+   *   See enrollExperiment().
+   */
+  async withExperiment({ callback, ...options }) {
+    let doExperimentCleanup = await this.enrollExperiment(options);
+    await callback();
+    await doExperimentCleanup();
+  },
+
+  /**
+   * Enrolls in a mock Nimbus experiment.
+   *
+   * @param {object} [valueOverrides]
+   *   Individual feature variables to override. By default, feature variables
+   *   take their values from DEFAULT_EXPERIMENT_FEATURE_VARIABLES. Overridden
+   *   by `recipe`.
+   * @param {object} [recipe]
+   *   If given, this recipe is used as is.
+   * @param {string} [name]
+   *   The name of the experiment.
+   * @returns {function}
+   *   The experiment cleanup function (async).
+   */
+  async enrollExperiment({ valueOverrides = {} }) {
+    await ExperimentAPI.ready();
+    let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
+      enabled: true,
+      featureId: "urlbar",
+      value: Object.assign(
+        DEFAULT_EXPERIMENT_FEATURE_VARIABLES,
+        valueOverrides
+      ),
+    });
+    return doExperimentCleanup;
+  },
 };
 
 UrlbarTestUtils.formHistory = {
@@ -857,7 +964,7 @@ class TestProvider extends UrlbarProvider {
    */
   constructor({
     results,
-    name = Math.floor(Math.random() * 100000),
+    name = "TestProvider" + uuidGenerator.generateUUID(),
     type = UrlbarUtils.PROVIDER_TYPE.PROFILE,
     priority = 0,
     addTimeout = 0,
@@ -874,7 +981,7 @@ class TestProvider extends UrlbarProvider {
     this._onSelection = onSelection;
   }
   get name() {
-    return "TestProvider" + this._name;
+    return this._name;
   }
   get type() {
     return this._type;

@@ -88,6 +88,13 @@ void AudioSinkWrapper::SetVolume(double aVolume) {
   }
 }
 
+void AudioSinkWrapper::SetStreamName(const nsAString& aStreamName) {
+  AssertOwnerThread();
+  if (mAudioSink) {
+    mAudioSink->SetStreamName(aStreamName);
+  }
+}
+
 void AudioSinkWrapper::SetPlaybackRate(double aPlaybackRate) {
   AssertOwnerThread();
   if (!mAudioEnded) {
@@ -164,7 +171,7 @@ nsresult AudioSinkWrapper::Start(const TimeUnit& aStartTime,
     return NS_OK;
   }
 
-  mAudioSink.reset(mCreator->Create());
+  mAudioSink.reset(mCreator->Create(aStartTime));
   Result<already_AddRefed<MediaSink::EndedPromise>, nsresult> rv =
       mAudioSink->Start(mParams);
   if (rv.isErr()) {

@@ -30,8 +30,13 @@ and ticking the box.
 
 If you have followed the steps in :ref:`Building Firefox for
 Windows <Building Firefox On Windows>`
-and have a local debug build, you can **execute ``./mach run --debug``**
-from the same command line. It would open Visual Studio with Firefox's
+and have a local debug build, you can **execute this command from same command line.**
+
+.. code::
+
+   ./mach run --debug
+
+It would open Visual Studio with Firefox's
 run options configured. You can **click "Start" button** to run Firefox
 then, already attached in the debugger.
 
@@ -261,7 +266,7 @@ It is possible to change the interrupt code in memory (which causes you
 to break into debugger) to be a NOP (no operation).
 
 You do this by running the program in the debugger until you hit an
-assertion. You should see some assembly code. One assemly code
+assertion. You should see some assembly code. One assembly code
 instruction reads "int 3". Check the memory address for that line. Now
 open memory view. Type/copy/drag the memory address of "int 3" into the
 memory view to get it to update on that part of the memory. Change the
@@ -363,8 +368,8 @@ Debugging minidumps
 
 See :ref:`debugging a minidump <Debugging A Minidump>`.
 
-Debugging tinderbox builds
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Debugging treeherder builds
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 See `Running Windows Debug Builds <https://developer.mozilla.org/en-US/docs/Archive/Mozilla/Running_Windows_Debug_Builds>`__
 

@@ -68,12 +68,13 @@ body {
   grid-template-columns: 1fr auto;
   margin-block: 0;
   align-items: center;
+  font-weight: normal;
 }
 
 .category[badge-count]::after {
   display: inline-block;
   min-width: 20px;
-  background-color: var(--blue-50);
+  background-color: var(--in-content-accent-color);
   color: #fff;
   font-weight: bold;
   /* Use a large border-radius to get semi-circles on the sides. */
@@ -98,7 +99,7 @@ body {
   background-image: url("chrome://mozapps/skin/extensions/category-themes.svg");
 }
 .category[name="plugin"] {
-  background-image: url("chrome://global/skin/plugins/plugin.svg");
+  background-image: url("chrome://mozapps/skin/extensions/category-plugins.svg");
 }
 .category[name="dictionary"] {
   background-image: url("chrome://mozapps/skin/extensions/category-dictionaries.svg");
@@ -108,10 +109,6 @@ body {
 }
 .category[name="recent-updates"] {
   background-image: url("chrome://mozapps/skin/extensions/category-recent.svg");
-}
-
-.header-name {
-  user-select: initial;
 }
 
 .sticky-container {
@@ -312,6 +309,12 @@ addon-card[expanded] .update-postponed-bar + .addon-card-message {
   text-decoration: none;
 }
 
+.addon-name-link:-moz-focusring {
+  /* Since the parent is overflow:hidden to ellipsize the regular outline is hidden. */
+  outline-offset: -1px;
+  outline-width: 1px;
+}
+
 .addon-badge {
   display: inline-block;
   margin-inline-end: 8px;
@@ -326,7 +329,7 @@ addon-card[expanded] .update-postponed-bar + .addon-card-message {
 }
 
 .addon-badge-private-browsing-allowed {
-  background-image: url("chrome://browser/skin/private-browsing.svg");
+  background-image: url("chrome://browser/skin/indicator-private-browsing.svg");
 }
 
 .addon-badge-recommended {
@@ -356,6 +359,8 @@ addon-card[expanded] .update-postponed-bar + .addon-card-message {
   min-height: auto;
   height: 24px;
   margin: 0;
+  padding: 0 8px;
+  font-weight: normal;
 }
 
 .addon-description {
@@ -436,19 +441,12 @@ recommended-addon-card .addon-description:not(:empty) {
   margin-inline-end: 0;
 }
 
-.disco-cta-button[action="install-addon"]::before {
-  content: "+";
-  padding-inline-end: 4px;
-}
-
 .discopane-notice {
   margin: 24px 0;
 }
 
 .discopane-notice-content {
-  align-items: center;
-  display: flex;
-  width: 100%;
+  padding-block: 6px;
 }
 
 .discopane-notice-content > span {
@@ -489,7 +487,7 @@ addon-details {
   display: flex;
   padding: var(--card-padding);
   border: 1px solid var(--in-content-box-border-color);
-  border-radius: var(--panel-border-radius);
+  border-radius: 4px;
   margin-bottom: var(--card-padding);
   flex-direction: column;
 }
@@ -518,7 +516,7 @@ addon-details {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-top: 1px solid var(--in-content-box-border-color);
+  border-top: 1px solid var(--in-content-border-color);
   margin: 0 calc(var(--card-padding) * -1);
   padding: var(--card-padding);
   color: var(--in-content-text-color);
@@ -540,8 +538,17 @@ addon-details {
   margin: 0;
 }
 
+.addon-detail-actions,
 .addon-detail-rating {
   display: flex;
+}
+
+.addon-detail-actions {
+  gap: 20px;
+}
+
+.addon-detail-actions > label {
+  flex-wrap: wrap;
 }
 
 .addon-detail-rating > a {
@@ -572,7 +579,7 @@ addon-details {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--blue-50);
+  background: var(--in-content-accent-color);;
 }
 
 panel-item {
@@ -679,8 +686,8 @@ li.permission-info > label {
   margin-top: 8px;
   /* Pull the buttons flush with the side of the card */
   margin-inline: calc(var(--card-padding) * -1);
-  border-bottom: 1px solid var(--in-content-box-border-color);
-  border-top: 1px solid var(--in-content-box-border-color);
+  border-bottom: 1px solid var(--in-content-border-color);
+  border-top: 1px solid var(--in-content-border-color);
   font-size: 0;
   line-height: 0;
 }
@@ -695,26 +702,28 @@ button.tab-button {
   line-height: 20px;
   margin: 0;
   padding: 4px 16px;
-  color: var(--in-content-text-color);
 }
 
 button.tab-button:hover {
-  background-color: var(--in-content-button-background);
   border-top-color: var(--in-content-box-border-color);
 }
 
-button.tab-button:hover:active {
-  background-color: var(--in-content-button-background-hover);
+button.tab-button[selected],
+button.tab-button[selected]:hover {
+  border-top-color: currentColor;
+  color: var(--in-content-accent-color);
 }
 
-button.tab-button[selected] {
-  border-top-color: var(--in-content-border-highlight);
-  color: var(--in-content-category-text-selected) !important;
+@media (prefers-contrast) {
+  button.tab-button[selected],
+  button.tab-button[selected]:hover {
+    color: var(--in-content-primary-button-text-color);
+    background-color: var(--in-content-primary-button-background);
+  }
 }
 
 button.tab-button:-moz-focusring {
   outline-offset: -2px;
-  -moz-outline-radius: 0;
 }
 
 .tab-group[last-input-type="mouse"] > button.tab-button:-moz-focusring {
@@ -723,7 +732,11 @@ button.tab-button:-moz-focusring {
 }
 
 panel-list {
-  font-size: 13px;
+  font: menu;
+}
+
+section:not(:empty) ~ #empty-addons-message {
+  display: none;
 }
 
 @media (max-width: 830px) {
@@ -735,5 +748,7 @@ panel-list {
     border-radius: 50%;
     min-width: auto;
     padding: 0;
+    /* move the badged dot into the top-end (right in ltr, left in rtl) corner. */
+    margin-top: -20px;
   }
 }

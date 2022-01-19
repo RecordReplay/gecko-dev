@@ -25,6 +25,7 @@ class GfxInfo::GLStrings {
   nsCString mVendor;
   nsCString mRenderer;
   nsCString mVersion;
+  nsTArray<nsCString> mExtensions;
   bool mReady;
 
  public:
@@ -56,6 +57,11 @@ class GfxInfo::GLStrings {
   // This spoofed value wins, even if the environment variable
   // MOZ_GFX_SPOOF_GL_VERSION was set.
   void SpoofVersion(const nsCString& s) { mVersion = s; }
+
+  const nsTArray<nsCString>& Extensions() {
+    EnsureInitialized();
+    return mExtensions;
+  }
 
   void EnsureInitialized() {
     if (mReady) {
@@ -101,6 +107,16 @@ class GfxInfo::GLStrings {
         mVersion.Assign(spoofedVersion);
       } else {
         mVersion.Assign((const char*)gl->fGetString(LOCAL_GL_VERSION));
+      }
+    }
+
+    if (mExtensions.IsEmpty()) {
+      nsCString rawExtensions;
+      rawExtensions.Assign((const char*)gl->fGetString(LOCAL_GL_EXTENSIONS));
+      rawExtensions.Trim(" ");
+
+      for (auto extension : rawExtensions.Split(' ')) {
+        mExtensions.AppendElement(extension);
       }
     }
 
@@ -155,6 +171,9 @@ NS_IMETHODIMP
 GfxInfo::GetDesktopEnvironment(nsAString& aDesktopEnvironment) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
+
+NS_IMETHODIMP
+GfxInfo::GetTestType(nsAString& aTestType) { return NS_ERROR_NOT_IMPLEMENTED; }
 
 void GfxInfo::EnsureInitialized() {
   if (mInitialized) return;
@@ -402,7 +421,7 @@ nsresult GfxInfo::GetFeatureStatusImpl(
   NS_ENSURE_ARG_POINTER(aStatus);
   aSuggestedDriverVersion.SetIsVoid(true);
   *aStatus = nsIGfxInfo::FEATURE_STATUS_UNKNOWN;
-  OperatingSystem os = mOS;
+  OperatingSystem os = OperatingSystem::Android;
   if (aOS) *aOS = os;
 
   if (sShutdownOccurred) {
@@ -576,39 +595,12 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     }
 
     if (aFeature == FEATURE_WEBRENDER) {
-      bool isUnblocked = false;
-      const nsCString& gpu = mGLStrings->Renderer();
-      NS_LossyConvertUTF16toASCII model(mModel);
-
-#ifdef NIGHTLY_BUILD
-      // On Nightly enable Webrender on all Adreno 5xx GPUs
-      isUnblocked |= gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0;
-
-      // On Nightly enable Webrender on all Mali-Txxx GPUs
-      isUnblocked |= gpu.Find("Mali-T", /*ignoreCase*/ true) >= 0;
-#endif
-      // Enable Webrender on all Adreno 5xx GPUs, excluding 505 and 506.
-      isUnblocked |=
-          gpu.Find("Adreno (TM) 5", /*ignoreCase*/ true) >= 0 &&
-          gpu.Find("Adreno (TM) 505", /*ignoreCase*/ true) == kNotFound &&
-          gpu.Find("Adreno (TM) 506", /*ignoreCase*/ true) == kNotFound;
-
-      // Enable Webrender on all Adreno 6xx devices
-      isUnblocked |= gpu.Find("Adreno (TM) 6", /*ignoreCase*/ true) >= 0;
-
-      // Enable Webrender on all Mali-Gxx GPUs...
-      isUnblocked |= gpu.Find("Mali-G", /*ignoreCase*/ true) >= 0 &&
-                     // Excluding G72 and G76 on Android 11, due to
-                     // bugs 1688705 and 1688017.
-                     !(mSDKVersion == 30 &&
-                       (gpu.Find("Mali-G72", /*ignoreCase*/ true) >= 0 ||
-                        gpu.Find("Mali-G76", /*ignoreCase*/ true) >= 0)) &&
-                     // And excluding G31 due to bug 1689947.
-                     gpu.Find("Mali-G31", /*ignoreCase*/ true) == kNotFound;
-
-      if (!isUnblocked) {
+      const bool isMali4xx =
+          mGLStrings->Renderer().Find("Mali-4", /*ignoreCase*/ true) >= 0;
+      if (isMali4xx) {
+        // Mali 4xx does not support GLES 3.
         *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
-        aFailureId = "FEATURE_FAILURE_WEBRENDER_BLOCKED_DEVICE";
+        aFailureId = "FEATURE_FAILURE_NO_GLES_3";
       } else {
         *aStatus = nsIGfxInfo::FEATURE_ALLOW_QUALIFIED;
       }
@@ -630,6 +622,57 @@ nsresult GfxInfo::GetFeatureStatusImpl(
       }
       return NS_OK;
     }
+
+    if (aFeature == FEATURE_WEBRENDER_SHADER_CACHE) {
+      // Program binaries are known to be buggy on Adreno 3xx. While we haven't
+      // encountered any correctness or stability issues with them, loading them
+      // fails more often than not, so is a waste of time. Better to just not
+      // even attempt to cache them. See bug 1615574.
+      const bool isAdreno3xx = mGLStrings->Renderer().Find(
+                                   "Adreno (TM) 3", /*ignoreCase*/ true) >= 0;
+      if (isAdreno3xx) {
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_ADRENO_3XX";
+      } else {
+        *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
+      }
+    }
+
+    if (aFeature == FEATURE_WEBRENDER_OPTIMIZED_SHADERS) {
+      // Optimized shaders result in completely broken rendering on some Mali-T
+      // devices. We have seen this on T6xx, T7xx, and T8xx on android versions
+      // up to 5.1, and on T6xx on versions up to android 7.1. As a precaution
+      // disable for all Mali-T regardless of version. See bug 1689064 and bug
+      // 1707283 for details.
+      const bool isMaliT =
+          mGLStrings->Renderer().Find("Mali-T", /*ignoreCase*/ true) >= 0;
+      if (isMaliT) {
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_BUG_1689064";
+      } else {
+        *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
+      }
+      return NS_OK;
+    }
+
+    if (aFeature == FEATURE_WEBRENDER_SOFTWARE) {
+      *aStatus = nsIGfxInfo::FEATURE_ALLOW_ALWAYS;
+      return NS_OK;
+    }
+  }
+
+  if (aFeature == FEATURE_GL_SWIZZLE) {
+    // Swizzling appears to be buggy on PowerVR Rogue devices with webrender.
+    // See bug 1704783.
+    const bool isPowerVRRogue =
+        mGLStrings->Renderer().Find("PowerVR Rogue", /*ignoreCase*/ true) >= 0;
+    if (isPowerVRRogue) {
+      *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+      aFailureId = "FEATURE_FAILURE_POWERVR_ROGUE";
+    } else {
+      *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
+    }
+    return NS_OK;
   }
 
   return GfxInfoBase::GetFeatureStatusImpl(

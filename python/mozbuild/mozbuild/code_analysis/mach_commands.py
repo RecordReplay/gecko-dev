@@ -22,12 +22,7 @@ import yaml
 import six
 from six.moves import input
 
-from mach.decorators import (
-    CommandArgument,
-    CommandProvider,
-    Command,
-    SubCommand,
-)
+from mach.decorators import CommandArgument, CommandProvider, Command, SubCommand
 
 from mach.main import Mach
 
@@ -84,7 +79,7 @@ class StaticAnalysisSubCommand(SubCommand):
         args = [
             CommandArgument(
                 "--verbose", "-v", action="store_true", help="Print verbose output."
-            ),
+            )
         ]
         for arg in args:
             after = arg(after)
@@ -108,10 +103,7 @@ class StaticAnalysisMonitor(object):
                 continue
             item["name"] = item["name"].replace("*", ".*")
 
-        from mozbuild.compilation.warnings import (
-            WarningsCollector,
-            WarningsDatabase,
-        )
+        from mozbuild.compilation.warnings import WarningsCollector, WarningsDatabase
 
         self._warnings_database = WarningsDatabase()
 
@@ -203,7 +195,7 @@ class StaticAnalysis(MachCommandBase):
         category="testing",
         description="Run C++ static analysis checks",
     )
-    def static_analysis(self):
+    def static_analysis(self, command_context):
         # If no arguments are provided, just print a help message.
         """Detailed documentation:
         https://firefox-source-docs.mozilla.org/code-quality/static-analysis.html
@@ -289,6 +281,7 @@ class StaticAnalysis(MachCommandBase):
     )
     def check(
         self,
+        command_context,
         source=None,
         jobs=2,
         strip=1,
@@ -453,6 +446,7 @@ class StaticAnalysis(MachCommandBase):
     )
     def check_coverity(
         self,
+        command_context,
         source=[],
         output=None,
         coverity_output_path=None,
@@ -595,6 +589,37 @@ class StaticAnalysis(MachCommandBase):
                 return 1
 
             return 0
+
+        # TEMP Fix for Case# 00847671
+        cmd = [
+            self.cov_configure,
+            "--delete-compiler-config",
+            "template-clangcc-config-0",
+            "coverity_config.xml",
+        ]
+        if self.run_cov_command(cmd):
+            return 1
+
+        cmd = [
+            self.cov_configure,
+            "--delete-compiler-config",
+            "template-clangcxx-config-0",
+            "coverity_config.xml",
+        ]
+        if self.run_cov_command(cmd):
+            return 1
+
+        cmd = [
+            self.cov_configure,
+            "--clang",
+            "--xml-option",
+            "append_arg:--ppp_translator",
+            "--xml-option",
+            "append_arg:replace/\{([a-zA-Z]+::None\(\))\}/=$1",
+        ]
+        if self.run_cov_command(cmd):
+            return 1
+        # End for Case# 00847671
 
         rc = self._build_compile_db(verbose=verbose)
         rc = rc or self._build_export(jobs=2, verbose=verbose)
@@ -1018,6 +1043,7 @@ class StaticAnalysis(MachCommandBase):
     @CommandArgument("--output", default=None, help="Write infer json output in a file")
     def check_java(
         self,
+        command_context,
         source=["mobile"],
         jobs=2,
         strip=1,
@@ -1393,7 +1419,12 @@ class StaticAnalysis(MachCommandBase):
         help="Checkers that are going to be auto-tested.",
     )
     def autotest(
-        self, verbose=False, dump_results=False, intree_tool=False, checker_names=[]
+        self,
+        command_context,
+        verbose=False,
+        dump_results=False,
+        intree_tool=False,
+        checker_names=[],
     ):
         # If 'dump_results' is True than we just want to generate the issues files for each
         # checker in particulat and thus 'force_download' becomes 'False' since we want to
@@ -1952,6 +1983,7 @@ class StaticAnalysis(MachCommandBase):
     )
     def install(
         self,
+        command_context,
         source=None,
         skip_cache=False,
         force=False,
@@ -1973,7 +2005,7 @@ class StaticAnalysis(MachCommandBase):
         "clear-cache",
         "Delete local helpers and reset static analysis helper tool cache",
     )
-    def clear_cache(self, verbose=False):
+    def clear_cache(self, command_context, verbose=False):
         self._set_log_level(verbose)
         rc = self._get_clang_tools(
             force=True, download_if_needed=True, skip_cache=True, verbose=verbose
@@ -1990,14 +2022,14 @@ class StaticAnalysis(MachCommandBase):
             if rc != 0:
                 return rc
 
-        return self._artifact_manager.artifact_clear_cache()
+        return self._artifact_manager.artifact_clear_cache(command_context)
 
     @StaticAnalysisSubCommand(
         "static-analysis",
         "print-checks",
         "Print a list of the static analysis checks performed by default",
     )
-    def print_checks(self, verbose=False):
+    def print_checks(self, command_context, verbose=False):
         self._set_log_level(verbose)
         rc = self._get_clang_tools(verbose=verbose)
 
@@ -2022,7 +2054,7 @@ class StaticAnalysis(MachCommandBase):
         if rc != 0:
             return rc
 
-        checkers, _ = self._get_infer_config()
+        checkers, _, _ = self._get_infer_config()
         print("Infer checks:")
         for checker in checkers:
             print(" " * 4 + checker)
@@ -2049,7 +2081,7 @@ class StaticAnalysis(MachCommandBase):
         "When reading from stdin, Prettier assumes this "
         "filename to decide which style and parser to use.",
     )
-    def prettier_format(self, path, assume_filename):
+    def prettier_format(self, command_context, path, assume_filename):
         # With assume_filename we want to have stdout clean since the result of the
         # format will be redirected to stdout.
 
@@ -2084,7 +2116,7 @@ class StaticAnalysis(MachCommandBase):
     @CommandArgument(
         "source", nargs="*", help="Source files to be compiled checked (regex on path)."
     )
-    def check_syntax(self, source, verbose=False):
+    def check_syntax(self, command_context, source, verbose=False):
         self._set_log_level(verbose)
         self.log_manager.enable_unstructured()
 
@@ -2245,6 +2277,7 @@ class StaticAnalysis(MachCommandBase):
     )
     def clang_format(
         self,
+        command_context,
         assume_filename,
         path,
         commit,
@@ -2461,7 +2494,7 @@ class StaticAnalysis(MachCommandBase):
                     return (1, None, None)
                 os.environ["AUTOCLOBBER"] = "1"
 
-            rc = builder.configure()
+            rc = builder.configure(self)
             if rc != 0:
                 return (rc, config, ran_configure)
             ran_configure = True
@@ -2499,7 +2532,9 @@ class StaticAnalysis(MachCommandBase):
                 "created yet, creating it now..."
             )
             builder = Build(self._mach_context, None)
-            rc = builder.build_backend(["StaticAnalysis"], verbose=verbose)
+            rc = builder.build_backend(
+                self._mach_context, ["StaticAnalysis"], verbose=verbose
+            )
             if rc != 0:
                 return rc
             assert os.path.exists(self._compile_db)
@@ -2639,6 +2674,7 @@ class StaticAnalysis(MachCommandBase):
         currentWorkingDir = os.getcwd()
         os.chdir(self._clang_tools_path)
         rc = self._artifact_manager.artifact_toolchain(
+            self,
             verbose=verbose,
             skip_cache=skip_cache,
             from_build=[job],
@@ -2760,6 +2796,7 @@ class StaticAnalysis(MachCommandBase):
         currentWorkingDir = os.getcwd()
         os.chdir(infer_path)
         rc = self._artifact_manager.artifact_toolchain(
+            self,
             verbose=verbose,
             skip_cache=skip_cache,
             from_build=[job],

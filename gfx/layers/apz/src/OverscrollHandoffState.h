@@ -75,6 +75,14 @@ class OverscrollHandoffChain {
   // |aStart| onwards, if any.
   void SnapBackOverscrolledApzc(const AsyncPanZoomController* aStart) const;
 
+  // Similar to above SnapbackOverscrolledApzc but for pan gestures with
+  // momentum events, this function doesn't end up calling each APZC's
+  // ScrollSnap.
+  // |aVelocity| is the initial velocity of |aStart|.
+  void SnapBackOverscrolledApzcForMomentum(
+      const AsyncPanZoomController* aStart,
+      const ParentLayerPoint& aVelocity) const;
+
   // Determine whether the given APZC, or any APZC further in the chain,
   // has room to be panned.
   bool CanBePanned(const AsyncPanZoomController* aApzc) const;
@@ -90,6 +98,9 @@ class OverscrollHandoffChain {
   // Determine whether any APZC along this handoff chain has been flung fast.
   bool HasFastFlungApzc() const;
 
+  // Determine whether any APZC along this handoff chain is autoscroll.
+  bool HasAutoscrollApzc() const;
+
   // Find the first APZC in this handoff chain that can be scrolled by |aInput|.
   // Since overscroll-behavior can restrict handoff in some directions,
   // |aOutAllowedScrollDirections| is populated with the scroll directions
@@ -98,11 +109,13 @@ class OverscrollHandoffChain {
       const InputData& aInput,
       ScrollDirections* aOutAllowedScrollDirections) const;
 
-  // Return true if all non-root APZCs in this handoff chain starting from
-  // |aApzc| are not able to scroll downwards (i.e. there is no room to scroll
-  // downwards in each APZC respectively) and there is any contents covered by
-  // the dynamic toolbar.
-  bool ScrollingDownWillMoveDynamicToolbar(
+  // Return a pair of true and the root content APZC if all non-root APZCs in
+  // this handoff chain starting from |aApzc| are not able to scroll downwards
+  // (i.e. there is no room to scroll downwards in each APZC respectively) and
+  // there is any contents covered by the dynamic toolbar, otherwise return a
+  // pair of false and nullptr.
+  std::tuple<bool, const AsyncPanZoomController*>
+  ScrollingDownWillMoveDynamicToolbar(
       const AsyncPanZoomController* aApzc) const;
 
  private:
@@ -142,6 +155,11 @@ struct OverscrollHandoffState {
   const ScreenPoint mPanDistance;
 
   ScrollSource mScrollSource;
+
+  // The total amount of actual movement that this scroll caused, including
+  // scrolling and changes to overscroll. This starts at zero and is accumulated
+  // over the course of the handoff.
+  ScreenPoint mTotalMovement;
 };
 
 /*

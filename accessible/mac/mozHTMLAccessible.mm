@@ -7,7 +7,7 @@
 
 #import "mozHTMLAccessible.h"
 
-#import "Accessible-inl.h"
+#import "LocalAccessible-inl.h"
 #import "HyperTextAccessible.h"
 
 #import "nsCocoaUtils.h"
@@ -18,12 +18,12 @@ using namespace mozilla::a11y;
 
 - (NSString*)moxTitle {
   nsAutoString title;
-  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
     mozilla::ErrorResult rv;
     // XXX use the flattening API when there are available
     // see bug 768298
     acc->GetContent()->GetTextContent(title, rv);
-  } else if (ProxyAccessible* proxy = mGeckoAccessible.AsProxy()) {
+  } else if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
     proxy->Title(title);
   }
 
@@ -32,9 +32,9 @@ using namespace mozilla::a11y;
 
 - (id)moxValue {
   GroupPos groupPos;
-  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
     groupPos = acc->GroupPosition();
-  } else if (ProxyAccessible* proxy = mGeckoAccessible.AsProxy()) {
+  } else if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
     groupPos = proxy->GroupPosition();
   }
 
@@ -51,9 +51,9 @@ using namespace mozilla::a11y;
 
 - (NSURL*)moxURL {
   nsAutoString value;
-  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
     acc->Value(value);
-  } else if (ProxyAccessible* proxy = mGeckoAccessible.AsProxy()) {
+  } else if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
     proxy->Value(value);
   }
 
@@ -76,6 +76,10 @@ using namespace mozilla::a11y;
   }
 
   return [super moxRole];
+}
+
+- (NSArray*)moxLinkedUIElements {
+  return [self getRelationsByType:RelationType::LINKS_TO];
 }
 
 @end

@@ -154,6 +154,13 @@ TEST_F(ImageDecoderMetadata, ICO) { CheckMetadata(GreenICOTestCase()); }
 TEST_F(ImageDecoderMetadata, Icon) { CheckMetadata(GreenIconTestCase()); }
 TEST_F(ImageDecoderMetadata, WebP) { CheckMetadata(GreenWebPTestCase()); }
 
+#ifdef MOZ_JXL
+TEST_F(ImageDecoderMetadata, JXL) { CheckMetadata(GreenJXLTestCase()); }
+TEST_F(ImageDecoderMetadata, TransparentJXL) {
+  CheckMetadata(TransparentJXLTestCase());
+}
+#endif
+
 TEST_F(ImageDecoderMetadata, AnimatedGIF) {
   CheckMetadata(GreenFirstFrameAnimatedGIFTestCase());
 }

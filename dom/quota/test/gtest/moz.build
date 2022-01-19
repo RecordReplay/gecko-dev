@@ -7,8 +7,12 @@
 UNIFIED_SOURCES = [
     "TestCheckedUnsafePtr.cpp",
     "TestEncryptedStream.cpp",
+    "TestFlatten.cpp",
+    "TestPersistenceType.cpp",
+    "TestQMResult.cpp",
     "TestQuotaCommon.cpp",
     "TestQuotaManager.cpp",
+    "TestScopedLogExtraInfo.cpp",
     "TestUsageInfo.cpp",
 ]
 

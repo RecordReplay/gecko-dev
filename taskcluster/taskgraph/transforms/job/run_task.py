@@ -33,9 +33,11 @@ run_task_schema = Schema(
             description="Path to run command in. If a checkout is present, the path "
             "to the checkout will be interpolated with the key `checkout`",
         ): text_type,
-        # The sparse checkout profile to use. Value is the filename relative to the
-        # directory where sparse profiles are defined (build/sparse-profiles/).
+        # The sparse checkout profile to use. Value is the filename relative to
+        # "sparse-profile-prefix" which defaults to "build/sparse-profiles/".
         Required("sparse-profile"): Any(text_type, None),
+        # The relative path to the sparse profile.
+        Optional("sparse-profile-prefix"): text_type,
         # if true, perform a checkout of a comm-central based branch inside the
         # gecko checkout
         Required("comm-checkout"): bool,
@@ -68,9 +70,11 @@ def common_setup(config, job, taskdesc, command):
         )
 
     if run["sparse-profile"]:
-        command.append(
-            "--gecko-sparse-profile=build/sparse-profiles/%s" % run["sparse-profile"]
+        sparse_profile_prefix = run.pop(
+            "sparse-profile-prefix", "build/sparse-profiles"
         )
+        sparse_profile_path = path.join(sparse_profile_prefix, run["sparse-profile"])
+        command.append("--gecko-sparse-profile={}".format(sparse_profile_path))
 
     taskdesc["worker"].setdefault("env", {})["MOZ_SCM_LEVEL"] = config.params["level"]
 
@@ -208,9 +212,14 @@ def generic_worker_run_task(config, job, taskdesc):
             )
         )
 
-    if isinstance(run_command, text_type):
+    # dict is for the case of `{'task-reference': text_type}`.
+    if isinstance(run_command, (text_type, dict)):
         if is_win:
-            run_command = '"{}"'.format(run_command)
+            if isinstance(run_command, dict):
+                for k in run_command.keys():
+                    run_command[k] = '"{}"'.format(run_command[k])
+            else:
+                run_command = '"{}"'.format(run_command)
         run_command = ["bash", "-cx", run_command]
 
     if run["comm-checkout"]:
@@ -230,7 +239,22 @@ def generic_worker_run_task(config, job, taskdesc):
     command.extend(run_command)
 
     if is_win:
-        worker["command"] = [" ".join(command)]
+        taskref = False
+        for c in command:
+            if isinstance(c, dict):
+                taskref = True
+
+        if taskref:
+            cmd = []
+            for c in command:
+                if isinstance(c, dict):
+                    for v in c.values():
+                        cmd.append(v)
+                else:
+                    cmd.append(c)
+            worker["command"] = [{"artifact-reference": " ".join(cmd)}]
+        else:
+            worker["command"] = [" ".join(command)]
     else:
         worker["command"] = [
             ["chmod", "+x", "run-task"],

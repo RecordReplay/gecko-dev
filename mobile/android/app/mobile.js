@@ -102,6 +102,9 @@ pref("network.predictor.preserve", 50); // percentage of predictor data to keep 
 // Use JS mDNS as a fallback
 pref("network.mdns.use_js_fallback", false);
 
+// CookieBehavior setting for the private browsing.
+pref("network.cookie.cookieBehavior.pbmode", 4);
+
 /* How many times should have passed before the remote tabs list is refreshed */
 pref("browser.display.remotetabs.timeout", 10);
 
@@ -136,7 +139,6 @@ pref("browser.helperApps.deleteTempFileOnExit", false);
 
 /* password manager */
 pref("signon.rememberSignons", true);
-pref("signon.autofillForms.http", true);
 pref("signon.expireMasterPassword", false);
 pref("signon.debug", false);
 
@@ -158,6 +160,9 @@ pref("xpinstall.whitelist.add", "https://addons.mozilla.org");
 
 pref("extensions.langpacks.signatures.required", true);
 pref("xpinstall.signatures.required", true);
+
+// Use blocklist v2 until blocklist v3 is enabled on Android - bug 1639050
+pref("extensions.blocklist.useMLBF", false);
 
 // Disable add-ons that are not installed by the user in all scopes by default (See the SCOPE
 // constants in AddonManager.jsm for values to use here, and Bug 1405528 for a rationale).
@@ -217,10 +222,6 @@ pref("accessibility.typeaheadfind.linksonly", false);
 pref("accessibility.typeaheadfind.casesensitive", 0);
 pref("accessibility.browsewithcaret_shortcut.enabled", false);
 pref("findbar.matchdiacritics", 0);
-
-// Whether the character encoding menu is under the main Firefox button. This
-// preference is a string so that localizers can alter it.
-pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.properties");
 
 // SSL error page behaviour
 pref("browser.ssl_override_behavior", 2);
@@ -393,9 +394,6 @@ pref("apz.second_tap_tolerance", "0.3");
 pref("apz.touch_move_tolerance", "0.03");
 pref("apz.touch_start_tolerance", "0.06");
 
-// Enable the Visual Viewport API
-pref("dom.visualviewport.enabled", true);
-
 pref("layers.progressive-paint", true);
 pref("layers.low-precision-buffer", true);
 // We want to limit layers for two reasons:
@@ -469,8 +467,6 @@ pref("devtools.console.stdout.chrome", true);
 // controls if we want camera support
 pref("device.camera.enabled", true);
 pref("media.realtime_decoder.enabled", true);
-
-pref("javascript.options.showInConsole", true);
 
 pref("full-screen-api.enabled", true);
 
@@ -653,8 +649,7 @@ pref("media.navigator.permission.device", true);
 pref("extensions.systemAddon.update.url", "https://aus5.mozilla.org/update/3/SystemAddons/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
 pref("extensions.systemAddon.update.enabled", true);
 
-// E10s stuff. We don't support 'file' or 'priveleged' process types.
-pref("browser.tabs.remote.separateFileUriProcess", false);
+// E10s stuff. We don't support 'privileged' process types.
 pref("browser.tabs.remote.separatePrivilegedContentProcess", false);
 pref("browser.tabs.remote.enforceRemoteTypeRestrictions", false);
 

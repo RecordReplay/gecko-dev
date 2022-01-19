@@ -12,12 +12,13 @@
 #include "mozilla/EnumSet.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/TextControlElement.h"
-#include "mozilla/TextEditor.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/dom/HTMLInputElementBinding.h"
 #include "mozilla/dom/Nullable.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsITextControlFrame.h"
+#include "nsITimer.h"
 
 class nsTextControlFrame;
 class nsISelectionController;
@@ -28,6 +29,7 @@ namespace mozilla {
 
 class AutoTextControlHandlingState;
 class ErrorResult;
+class TextEditor;
 class TextInputListener;
 class TextInputSelectionController;
 
@@ -35,6 +37,57 @@ namespace dom {
 class Element;
 class HTMLInputElement;
 }  // namespace dom
+
+/**
+ * PasswordMaskData stores making information and necessary timer for
+ * `TextEditor` instances.
+ */
+struct PasswordMaskData final {
+  // Timer to mask unmasked characters automatically.  Used only when it's
+  // a password field.
+  nsCOMPtr<nsITimer> mTimer;
+
+  // Unmasked character range.  Used only when it's a password field.
+  // If mUnmaskedLength is 0, it means there is no unmasked characters.
+  uint32_t mUnmaskedStart = UINT32_MAX;
+  uint32_t mUnmaskedLength = 0;
+
+  // Set to true if all characters are masked or waiting notification from
+  // `mTimer`.  Otherwise, i.e., part of or all of password is unmasked
+  // without setting `mTimer`, set to false.
+  bool mIsMaskingPassword = true;
+
+  // Set to true if a manager of the instance wants to disable echoing
+  // password temporarily.
+  bool mEchoingPasswordPrevented = false;
+
+  MOZ_ALWAYS_INLINE bool IsAllMasked() const {
+    return mUnmaskedStart == UINT32_MAX && mUnmaskedLength == 0;
+  }
+  MOZ_ALWAYS_INLINE uint32_t UnmaskedEnd() const {
+    return mUnmaskedStart + mUnmaskedLength;
+  }
+  MOZ_ALWAYS_INLINE void MaskAll() {
+    mUnmaskedStart = UINT32_MAX;
+    mUnmaskedLength = 0;
+  }
+  MOZ_ALWAYS_INLINE void Reset() {
+    MaskAll();
+    mIsMaskingPassword = true;
+  }
+  enum class ReleaseTimer { No, Yes };
+  MOZ_ALWAYS_INLINE void CancelTimer(ReleaseTimer aReleaseTimer) {
+    if (mTimer) {
+      mTimer->Cancel();
+      if (aReleaseTimer == ReleaseTimer::Yes) {
+        mTimer = nullptr;
+      }
+    }
+    if (mIsMaskingPassword) {
+      MaskAll();
+    }
+  }
+};
 
 /**
  * TextControlState is a class which is responsible for managing the state of
@@ -173,7 +226,7 @@ class TextControlState final : public SupportsWeakPtr {
    * OnEditActionHandled() is called when mTextEditor handles something
    * and immediately before dispatching "input" event.
    */
-  MOZ_CAN_RUN_SCRIPT MOZ_MUST_USE nsresult OnEditActionHandled();
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult OnEditActionHandled();
 
   enum class ValueSetterOption {
     // The call is for setting value to initial one, computed one, etc.
@@ -183,8 +236,12 @@ class TextControlState final : public SupportsWeakPtr {
     // The value is changed by changing value attribute of the element or
     // something like setRangeText().
     ByContentAPI,
-    // Whether the value change should be notified to the frame/contet nor not.
-    UpdateOverlayTextVisibilityAndInvalidateFrame,
+    // The value is changed by setRangeText(). Intended to prevent silent
+    // selection range change.
+    BySetRangeTextAPI,
+    // Whether SetValueChanged should be called as a result of this value
+    // change.
+    SetValueChanged,
     // Whether to move the cursor to end of the value (in the case when we have
     // cached selection offsets), in the case when the value has changed.  If
     // this is not set and MoveCursorToBeginSetSelectionDirectionForward
@@ -217,10 +274,10 @@ class TextControlState final : public SupportsWeakPtr {
    *                    for the performance.
    * @param aOptions    See ValueSetterOption.
    */
-  MOZ_CAN_RUN_SCRIPT MOZ_MUST_USE bool SetValue(
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT bool SetValue(
       const nsAString& aValue, const nsAString* aOldValue,
       const ValueSetterOptions& aOptions);
-  MOZ_CAN_RUN_SCRIPT MOZ_MUST_USE bool SetValue(
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT bool SetValue(
       const nsAString& aValue, const ValueSetterOptions& aOptions) {
     return SetValue(aValue, nullptr, aOptions);
   }
@@ -266,15 +323,9 @@ class TextControlState final : public SupportsWeakPtr {
   }
   int32_t GetRows() { return mTextCtrlElement->GetRows(); }
 
-  void UpdateOverlayTextVisibility(bool aNotify);
-
-  // placeholder methods
-  bool GetPlaceholderVisibility() { return mPlaceholderVisibility; }
-
   // preview methods
   void SetPreviewText(const nsAString& aValue, bool aNotify);
   void GetPreviewText(nsAString& aValue);
-  bool GetPreviewVisibility() { return mPreviewVisibility; }
 
   struct SelectionProperties {
    public:
@@ -416,8 +467,6 @@ class TextControlState final : public SupportsWeakPtr {
 
   MOZ_CAN_RUN_SCRIPT void UnlinkInternal();
 
-  void ValueWasChanged();
-
   MOZ_CAN_RUN_SCRIPT void DestroyEditor();
   MOZ_CAN_RUN_SCRIPT void Clear();
 
@@ -466,6 +515,7 @@ class TextControlState final : public SupportsWeakPtr {
   RefPtr<TextEditor> mTextEditor;
   nsTextControlFrame* mBoundFrame;
   RefPtr<TextInputListener> mTextListener;
+  UniquePtr<PasswordMaskData> mPasswordMaskData;
   Maybe<nsString> mValue;
   SelectionProperties mSelectionProperties;
   bool mEverInited;  // Have we ever been initialized?
@@ -473,8 +523,6 @@ class TextControlState final : public SupportsWeakPtr {
   bool mValueTransferInProgress;  // Whether a value is being transferred to the
                                   // frame
   bool mSelectionCached;          // Whether mSelectionProperties is valid
-  bool mPlaceholderVisibility;
-  bool mPreviewVisibility;
 
   /**
    * For avoiding allocation cost of the instance, we should reuse instances

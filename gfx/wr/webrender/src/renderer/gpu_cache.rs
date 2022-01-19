@@ -91,8 +91,7 @@ pub struct GpuCacheTexture {
 }
 
 impl GpuCacheTexture {
-    /// Ensures that we have an appropriately-sized texture. Returns true if a
-    /// new texture was created.
+    /// Ensures that we have an appropriately-sized texture.
     fn ensure_texture(&mut self, device: &mut Device, height: i32) {
         // If we already have a texture that works, we're done.
         if self.texture.as_ref().map_or(false, |t| t.get_dimensions().height >= height) {
@@ -109,17 +108,20 @@ impl GpuCacheTexture {
         // Create the new texture.
         assert!(height >= 2, "Height is too small for ANGLE");
         let new_size = DeviceIntSize::new(super::MAX_VERTEX_TEXTURE_WIDTH as _, height);
-        // If glCopyImageSubData is supported, this texture doesn't need
-        // to be a render target. This prevents GL errors due to framebuffer
-        // incompleteness on devices that don't support RGBAF32 render targets.
-        // TODO(gw): We still need a proper solution for the subset of devices
-        //           that don't support glCopyImageSubData *OR* rendering to a
-        //           RGBAF32 render target. These devices will currently fail
-        //           to resize the GPU cache texture.
+        // GpuCacheBus::Scatter always requires the texture to be a render target. For
+        // GpuCacheBus::PixelBuffer, we only create the texture with a render target if
+        // RGBAF32 render targets are actually supported, and only if glCopyImageSubData
+        // is not. glCopyImageSubData does not require a render target to copy the texture
+        // data, and if neither RGBAF32 render targets nor glCopyImageSubData is supported,
+        // we simply re-upload the entire contents rather than copying upon resize.
         let supports_copy_image_sub_data = device.get_capabilities().supports_copy_image_sub_data;
-        let rt_info =  match self.bus {
-            GpuCacheBus::PixelBuffer { .. } if supports_copy_image_sub_data => None,
-            _ => Some(RenderTargetInfo { has_depth: false }),
+        let supports_color_buffer_float = device.get_capabilities().supports_color_buffer_float;
+        let rt_info = if matches!(self.bus, GpuCacheBus::PixelBuffer { .. })
+            && (supports_copy_image_sub_data || !supports_color_buffer_float)
+        {
+            None
+        } else {
+            Some(RenderTargetInfo { has_depth: false })
         };
         let mut texture = device.create_texture(
             api::ImageBufferKind::Texture2D,
@@ -128,12 +130,25 @@ impl GpuCacheTexture {
             new_size.height,
             TextureFilter::Nearest,
             rt_info,
-            1,
         );
 
         // Copy the contents of the previous texture, if applicable.
         if let Some(blit_source) = blit_source {
-            device.copy_entire_texture(&mut texture, &blit_source);
+            if !supports_copy_image_sub_data && !supports_color_buffer_float {
+                // Cannot copy texture, so must re-upload everything.
+                match self.bus {
+                    GpuCacheBus::PixelBuffer { ref mut rows } => {
+                        for row in rows {
+                            row.add_dirty(0, super::MAX_VERTEX_TEXTURE_WIDTH);
+                        }
+                    }
+                    GpuCacheBus::Scatter { .. } => {
+                        panic!("Texture must be copyable to use scatter GPU cache bus method");
+                    }
+                }
+            } else {
+                device.copy_entire_texture(&mut texture, &blit_source);
+            }
             device.delete_texture(blit_source);
         }
 
@@ -144,6 +159,10 @@ impl GpuCacheTexture {
         use super::desc::GPU_CACHE_UPDATE;
 
         let bus = if use_scatter {
+            assert!(
+                device.get_capabilities().supports_color_buffer_float,
+                "GpuCache scatter method requires EXT_color_buffer_float",
+            );
             let program = device.create_program_linked(
                 "gpu_cache_update",
                 &[],
@@ -323,12 +342,12 @@ impl GpuCacheTexture {
                     }
 
                     let blocks = row.dirty_blocks();
-                    let rect = DeviceIntRect::new(
+                    let rect = DeviceIntRect::from_origin_and_size(
                         DeviceIntPoint::new(row.min_dirty as i32, row_index as i32),
                         DeviceIntSize::new(blocks.len() as i32, 1),
                     );
 
-                    uploader.upload(device, texture, rect, 0, None, None, blocks.as_ptr(), blocks.len());
+                    uploader.upload(device, texture, rect, None, None, blocks.as_ptr(), blocks.len());
 
                     row.clear_dirty();
                 }
@@ -345,7 +364,6 @@ impl GpuCacheTexture {
                 device.bind_draw_target(
                     DrawTarget::from_texture(
                         texture,
-                        0,
                         false,
                     ),
                 );
@@ -494,7 +512,7 @@ impl super::Renderer {
         let size = device_size_as_framebuffer_size(texture.get_dimensions());
         let mut texels = vec![0; (size.width * size.height * 16) as usize];
         self.device.begin_frame();
-        self.device.bind_read_target(ReadTarget::from_texture(texture, 0));
+        self.device.bind_read_target(ReadTarget::from_texture(texture));
         self.device.read_pixels_into(
             size.into(),
             api::ImageFormat::RGBAF32,

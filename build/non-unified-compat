@@ -121,3 +121,5 @@ gfx/wr/
 gfx/ycbcr/
 hal/
 image/
+ipc/glue/
+netwerk/cache2/

@@ -76,9 +76,14 @@ async function test() {
 
   // Let the event regions and layerization propagate to the APZ
   await promiseAllPaintsDone();
-  await promiseApzRepaintsFlushed();
+  await promiseOnlyApzControllerFlushed();
 
-  await promiseNativeMouseMoveAndWaitForMoveEvent(box, 10, 10);
+  await promiseNativeMouseEventWithAPZAndWaitForEvent({
+    type: "mousemove",
+    target: box,
+    offsetX: 10,
+    offsetY: 10,
+  });
 
   // Take over control of the refresh driver and compositor
   var utils = SpecialPowers.DOMWindowUtils;

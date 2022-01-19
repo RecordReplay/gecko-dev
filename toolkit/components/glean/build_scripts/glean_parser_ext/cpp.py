@@ -11,13 +11,13 @@ Outputter to generate C++ code for metrics.
 import jinja2
 import json
 
-from util import generate_metric_ids, generate_ping_ids, is_implemented_metric_type
+from util import generate_metric_ids, generate_ping_ids
 from glean_parser import util
 
 
 def cpp_datatypes_filter(value):
     """
-    A Jinja2 filter that renders Rust literals.
+    A Jinja2 filter that renders C++ literals.
 
     Based on Python's JSONEncoder, but overrides:
       - lists to array literals {}
@@ -48,16 +48,37 @@ def type_name(obj):
     Returns the C++ type to use for a given metric object.
     """
 
+    if getattr(obj, "labeled", False):
+        class_name = util.Camelize(obj.type[8:])  # strips "labeled_" off the front.
+        return "Labeled<impl::{}Metric>".format(class_name)
     generate_enums = getattr(obj, "_generate_enums", [])  # Extra Keys? Reasons?
     if len(generate_enums):
         for name, suffix in generate_enums:
             if not len(getattr(obj, name)) and suffix == "Keys":
-                return util.Camelize(obj.type) + "Metric<uint32_t>"
+                return util.Camelize(obj.type) + "Metric<NoExtraKeys>"
             else:
+                # we always use the `extra` suffix,
+                # because we only expose the new event API
+                suffix = "Extra"
                 return "{}Metric<{}>".format(
                     util.Camelize(obj.type), util.Camelize(obj.name) + suffix
                 )
     return util.Camelize(obj.type) + "Metric"
+
+
+def extra_type_name(typ: str) -> str:
+    """
+    Returns the corresponding Rust type for event's extra key types.
+    """
+
+    if typ == "boolean":
+        return "bool"
+    elif typ == "string":
+        return "nsCString"
+    elif typ == "quantity":
+        return "uint32_t"
+    else:
+        return "UNSUPPORTED"
 
 
 def output_cpp(objs, output_fd, options={}):
@@ -101,9 +122,9 @@ def output_cpp(objs, output_fd, options={}):
             ("cpp", cpp_datatypes_filter),
             ("snake_case", util.snake_case),
             ("type_name", type_name),
+            ("extra_type_name", extra_type_name),
             ("metric_id", get_metric_id),
             ("ping_id", get_ping_id),
-            ("is_implemented_type", is_implemented_metric_type),
             ("Camelize", util.Camelize),
         ),
     )

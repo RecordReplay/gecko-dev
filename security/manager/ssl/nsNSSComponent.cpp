@@ -9,7 +9,6 @@
 #include "CryptoTask.h"
 #include "EnterpriseRoots.h"
 #include "ExtendedValidation.h"
-#include "GeckoProfiler.h"
 #include "NSSCertDBTrustDomain.h"
 #include "SSLTokensCache.h"
 #include "ScopedNSSTypes.h"
@@ -21,10 +20,14 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Casting.h"
+#include "mozilla/EndianUtils.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/PublicSSL.h"
 #include "mozilla/RecordReplay.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPtr.h"
@@ -1295,16 +1298,6 @@ void SetValidationOptionsCommon() {
   PublicSSLState()->SetSignedCertTimestampsEnabled(sctsEnabled);
   PrivateSSLState()->SetSignedCertTimestampsEnabled(sctsEnabled);
 
-  CertVerifier::PinningMode pinningMode =
-      static_cast<CertVerifier::PinningMode>(
-          Preferences::GetInt("security.cert_pinning.enforcement_level",
-                              CertVerifier::pinningDisabled));
-  if (pinningMode > CertVerifier::pinningEnforceTestMode) {
-    pinningMode = CertVerifier::pinningDisabled;
-  }
-  PublicSSLState()->SetPinningMode(pinningMode);
-  PrivateSSLState()->SetPinningMode(pinningMode);
-
   BRNameMatchingPolicy::Mode nameMatchingMode =
       static_cast<BRNameMatchingPolicy::Mode>(Preferences::GetInt(
           "security.pki.name_matching_mode",
@@ -1511,8 +1504,7 @@ void nsNSSComponent::setValidationOptions(
                                  softTimeout, hardTimeout, proofOfLock);
 
   mDefaultCertVerifier = new SharedCertVerifier(
-      odc, osc, softTimeout, hardTimeout, certShortLifetimeInDays,
-      PublicSSLState()->PinningMode(), sha1Mode,
+      odc, osc, softTimeout, hardTimeout, certShortLifetimeInDays, sha1Mode,
       PublicSSLState()->NameMatchingMode(), netscapeStepUpPolicy, ctMode,
       crliteMode, crliteCTMergeDelaySeconds, mEnterpriseCerts);
 }
@@ -1530,8 +1522,8 @@ void nsNSSComponent::UpdateCertVerifierWithEnterpriseRoots() {
       oldCertVerifier->mOCSPStrict ? CertVerifier::ocspStrict
                                    : CertVerifier::ocspRelaxed,
       oldCertVerifier->mOCSPTimeoutSoft, oldCertVerifier->mOCSPTimeoutHard,
-      oldCertVerifier->mCertShortLifetimeInDays, oldCertVerifier->mPinningMode,
-      oldCertVerifier->mSHA1Mode, oldCertVerifier->mNameMatchingMode,
+      oldCertVerifier->mCertShortLifetimeInDays, oldCertVerifier->mSHA1Mode,
+      oldCertVerifier->mNameMatchingMode,
       oldCertVerifier->mNetscapeStepUpPolicy, oldCertVerifier->mCTMode,
       oldCertVerifier->mCRLiteMode, oldCertVerifier->mCRLiteCTMergeDelaySeconds,
       mEnterpriseCerts);
@@ -2287,8 +2279,6 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                prefName.EqualsLiteral("security.ssl.enable_ocsp_must_staple") ||
                prefName.EqualsLiteral(
                    "security.pki.certificate_transparency.mode") ||
-               prefName.EqualsLiteral(
-                   "security.cert_pinning.enforcement_level") ||
                prefName.EqualsLiteral("security.pki.sha1_enforcement_level") ||
                prefName.EqualsLiteral("security.pki.name_matching_mode") ||
                prefName.EqualsLiteral("security.pki.netscape_step_up_policy") ||
@@ -2374,7 +2364,8 @@ nsresult nsNSSComponent::LogoutAuthenticatedPK11() {
   nsCOMPtr<nsICertOverrideService> icos =
       do_GetService("@mozilla.org/security/certoverride;1");
   if (icos) {
-    icos->ClearValidityOverride("all:temporary-certificates"_ns, 0);
+    icos->ClearValidityOverride("all:temporary-certificates"_ns, 0,
+                                OriginAttributes());
   }
 
   ClearSSLExternalAndInternalSessionCache();
@@ -2533,18 +2524,42 @@ already_AddRefed<SharedCertVerifier> GetDefaultCertVerifier() {
   return result.forget();
 }
 
+// Helper for FindClientCertificatesWithPrivateKeys. Copies all
+// CERTCertificates from `from` to `to`.
+static inline void CopyCertificatesTo(UniqueCERTCertList& from,
+                                      UniqueCERTCertList& to) {
+  MOZ_ASSERT(from);
+  MOZ_ASSERT(to);
+  for (CERTCertListNode* n = CERT_LIST_HEAD(from.get());
+       !CERT_LIST_END(n, from.get()); n = CERT_LIST_NEXT(n)) {
+    UniqueCERTCertificate cert(CERT_DupCertificate(n->cert));
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("      provisionally adding '%s'", n->cert->subjectName));
+    if (CERT_AddCertToListTail(to.get(), cert.get()) == SECSuccess) {
+      Unused << cert.release();
+    }
+  }
+}
+
 // Lists all private keys on all modules and returns a list of any corresponding
 // client certificates. Returns null if no such certificates can be found. Also
 // returns null if an error is encountered, because this is called as part of
 // the client auth data callback, and NSS ignores any errors returned by the
 // callback.
 UniqueCERTCertList FindClientCertificatesWithPrivateKeys() {
+  TimeStamp begin(TimeStamp::Now());
+  auto exitTelemetry = MakeScopeExit([&] {
+    Telemetry::AccumulateTimeDelta(Telemetry::CLIENT_CERTIFICATE_SCAN_TIME,
+                                   begin, TimeStamp::Now());
+  });
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
           ("FindClientCertificatesWithPrivateKeys"));
   UniqueCERTCertList certsWithPrivateKeys(CERT_NewCertList());
   if (!certsWithPrivateKeys) {
     return nullptr;
   }
+
+  UniquePK11SlotInfo internalSlot(PK11_GetInternalKeySlot());
 
   AutoSECMODListReadLock secmodLock;
   SECMODModuleList* list = SECMOD_GetDefaultModuleList();
@@ -2555,45 +2570,70 @@ UniqueCERTCertList FindClientCertificatesWithPrivateKeys() {
       PK11SlotInfo* slot = list->module->slots[i];
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
               ("    slot '%s'", PK11_GetSlotName(slot)));
-      if (!PK11_IsPresent(slot)) {
-        MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("    (not present)"));
-        continue;
-      }
-      // We may need to log in to be able to find private keys.
-      if (PK11_Authenticate(slot, true, nullptr) != SECSuccess) {
-        MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("    (couldn't authenticate)"));
-        continue;
-      }
-      UniqueSECKEYPrivateKeyList privateKeys(
-          PK11_ListPrivKeysInSlot(slot, nullptr, nullptr));
-      if (!privateKeys) {
-        MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("      (no private keys)"));
-        continue;
-      }
-      for (SECKEYPrivateKeyListNode* node = PRIVKEY_LIST_HEAD(privateKeys);
-           !PRIVKEY_LIST_END(node, privateKeys);
-           node = PRIVKEY_LIST_NEXT(node)) {
-        UniqueCERTCertList certs(PK11_GetCertsMatchingPrivateKey(node->key));
-        if (!certs) {
-          MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-                  ("      PK11_GetCertsMatchingPrivateKey encountered an error "
-                   "- returning"));
-          return nullptr;
-        }
-        if (CERT_LIST_EMPTY(certs)) {
-          MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("      (no certs for key)"));
+      // If this is the internal certificate/key slot, there may be many more
+      // certificates than private keys, so search by private keys.
+      if (internalSlot.get() == slot) {
+        MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+                ("    (looking at internal slot)"));
+        if (PK11_Authenticate(slot, true, nullptr) != SECSuccess) {
+          MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("    (couldn't authenticate)"));
           continue;
         }
-        for (CERTCertListNode* n = CERT_LIST_HEAD(certs);
-             !CERT_LIST_END(n, certs); n = CERT_LIST_NEXT(n)) {
-          UniqueCERTCertificate cert(CERT_DupCertificate(n->cert));
-          MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-                  ("      provisionally adding '%s'", n->cert->subjectName));
-          if (CERT_AddCertToListTail(certsWithPrivateKeys.get(), cert.get()) ==
-              SECSuccess) {
-            Unused << cert.release();
-          }
+        UniqueSECKEYPrivateKeyList privateKeys(
+            PK11_ListPrivKeysInSlot(slot, nullptr, nullptr));
+        if (!privateKeys) {
+          MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("      (no private keys)"));
+          continue;
         }
+        for (SECKEYPrivateKeyListNode* node = PRIVKEY_LIST_HEAD(privateKeys);
+             !PRIVKEY_LIST_END(node, privateKeys);
+             node = PRIVKEY_LIST_NEXT(node)) {
+          UniqueCERTCertList certs(PK11_GetCertsMatchingPrivateKey(node->key));
+          if (!certs) {
+            MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+                    ("      PK11_GetCertsMatchingPrivateKey encountered an "
+                     "error "));
+            continue;
+          }
+          if (CERT_LIST_EMPTY(certs)) {
+            MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("      (no certs for key)"));
+            continue;
+          }
+          CopyCertificatesTo(certs, certsWithPrivateKeys);
+        }
+      } else {
+        // ... otherwise, optimistically assume that searching by certificate
+        // won't take too much time. Since "friendly" slots expose certificates
+        // without needing to be authenticated to, this results in fewer PIN
+        // dialogs shown to the user.
+        MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+                ("    (looking at non-internal slot)"));
+
+        if (!PK11_IsPresent(slot)) {
+          MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("    (not present)"));
+          continue;
+        }
+        // If this isn't a "friendly" slot, authenticate to expose certificates.
+        if (!PK11_IsFriendly(slot) &&
+            PK11_Authenticate(slot, true, nullptr) != SECSuccess) {
+          MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("    (couldn't authenticate)"));
+          continue;
+        }
+        UniqueCERTCertList certsInSlot(PK11_ListCertsInSlot(slot));
+        if (!certsInSlot) {
+          MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+                  ("      (couldn't list certs in slot)"));
+          continue;
+        }
+        // When NSS decodes a certificate, if that certificate has a
+        // corresponding private key (or public key, if the slot it's on hasn't
+        // been logged into), it notes it as a "user cert".
+        if (CERT_FilterCertListForUserCerts(certsInSlot.get()) != SECSuccess) {
+          MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+                  ("      (couldn't filter certs)"));
+          continue;
+        }
+        CopyCertificatesTo(certsInSlot, certsWithPrivateKeys);
       }
     }
     list = list->next;
@@ -2696,18 +2736,28 @@ nsresult setPassword(PK11SlotInfo* slot, nsIInterfaceRequestor* ctx) {
   return NS_OK;
 }
 
-// NSS will call this during PKCS12 export to potentially switch the endianness
-// of the characters of `inBuf` to big (network) endian. Since we already did
-// that in nsPKCS12Blob::stringToBigEndianBytes, we just perform a memcpy here.
-extern "C" {
-PRBool pkcs12StringEndiannessConversion(PRBool, unsigned char* inBuf,
-                                        unsigned int inBufLen,
-                                        unsigned char* outBuf, unsigned int,
-                                        unsigned int* outBufLen, PRBool) {
-  *outBufLen = inBufLen;
-  memcpy(outBuf, inBuf, inBufLen);
-  return true;
-}
+static PRBool ConvertBetweenUCS2andASCII(PRBool toUnicode, unsigned char* inBuf,
+                                         unsigned int inBufLen,
+                                         unsigned char* outBuf,
+                                         unsigned int maxOutBufLen,
+                                         unsigned int* outBufLen,
+                                         PRBool swapBytes) {
+  std::unique_ptr<unsigned char[]> inBufDup(new unsigned char[inBufLen]);
+  if (!inBufDup) {
+    return PR_FALSE;
+  }
+  std::memcpy(inBufDup.get(), inBuf, inBufLen * sizeof(unsigned char));
+
+  // If converting Unicode to ASCII, swap bytes before conversion as neccessary.
+  if (!toUnicode && swapBytes) {
+    if (inBufLen % 2 != 0) {
+      return PR_FALSE;
+    }
+    mozilla::NativeEndian::swapFromLittleEndianInPlace(
+        reinterpret_cast<char16_t*>(inBufDup.get()), inBufLen / 2);
+  }
+  return PORT_UCS2_UTF8Conversion(toUnicode, inBufDup.get(), inBufLen, outBuf,
+                                  maxOutBufLen, outBufLen);
 }
 
 namespace mozilla {
@@ -2742,8 +2792,11 @@ nsresult InitializeCipherSuite() {
   SEC_PKCS12EnableCipher(PKCS12_RC2_CBC_128, 1);
   SEC_PKCS12EnableCipher(PKCS12_DES_56, 1);
   SEC_PKCS12EnableCipher(PKCS12_DES_EDE3_168, 1);
+  SEC_PKCS12EnableCipher(PKCS12_AES_CBC_128, 1);
+  SEC_PKCS12EnableCipher(PKCS12_AES_CBC_192, 1);
+  SEC_PKCS12EnableCipher(PKCS12_AES_CBC_256, 1);
   SEC_PKCS12SetPreferredCipher(PKCS12_DES_EDE3_168, 1);
-  PORT_SetUCS2_ASCIIConversionFunction(pkcs12StringEndiannessConversion);
+  PORT_SetUCS2_ASCIIConversionFunction(ConvertBetweenUCS2andASCII);
 
   // PSM enforces a minimum RSA key size of 1024 bits, which is overridable.
   // NSS has its own minimum, which is not overridable (the default is 1023

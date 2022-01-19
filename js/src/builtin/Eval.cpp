@@ -12,6 +12,7 @@
 #include "ds/LifoAlloc.h"
 #include "frontend/BytecodeCompilation.h"
 #include "gc/HashUtil.h"
+#include "js/CompilationAndEvaluation.h"
 #include "js/friend/ErrorMessages.h"   // js::GetErrorMessage, JSMSG_*
 #include "js/friend/JSMEnvironment.h"  // JS::NewJSMEnvironment, JS::ExecuteInJSMEnvironment, JS::GetJSMEnvironmentOfScriptedCaller, JS::IsJSMEnvironment
 #include "js/friend/WindowProxy.h"     // js::IsWindowProxy
@@ -215,10 +216,10 @@ enum EvalType { DIRECT_EVAL, INDIRECT_EVAL };
 //
 // Common code implementing direct and indirect eval.
 //
-// Evaluate call.argv[2], if it is a string, in the context of the given calling
+// Evaluate v, if it is a string, in the context of the given calling
 // frame, with the provided scope chain, with the semantics of either a direct
 // or indirect eval (see ES5 10.4.2).  If this is an indirect eval, env
-// must be a global object.
+// must be the global lexical environment.
 //
 // On success, store the completion value in call.rval and return true.
 static bool EvalKernel(JSContext* cx, HandleValue v, EvalType evalType,
@@ -248,8 +249,9 @@ static bool EvalKernel(JSContext* cx, HandleValue v, EvalType evalType,
   // Per ES5, indirect eval runs in the global scope. (eval is specified this
   // way so that the compiler can make assumptions about what bindings may or
   // may not exist in the current frame if it doesn't see 'eval'.)
-  MOZ_ASSERT_IF(evalType != DIRECT_EVAL,
-                cx->global() == &env->as<LexicalEnvironmentObject>().global());
+  MOZ_ASSERT_IF(
+      evalType != DIRECT_EVAL,
+      cx->global() == &env->as<GlobalLexicalEnvironmentObject>().global());
 
   RootedLinearString linearStr(cx, str->ensureLinear(cx));
   if (!linearStr) {
@@ -303,7 +305,9 @@ static bool EvalKernel(JSContext* cx, HandleValue v, EvalType evalType,
     options.setIsRunOnce(true)
         .setNoScriptRval(false)
         .setMutedErrors(mutedErrors)
-        .setScriptOrModule(maybeScript);
+        .setdeferDebugMetadata();
+
+    RootedScript introScript(cx);
 
     if (evalType == DIRECT_EVAL && IsStrictEvalPC(pc)) {
       options.setForceStrictMode();
@@ -311,8 +315,8 @@ static bool EvalKernel(JSContext* cx, HandleValue v, EvalType evalType,
 
     if (introducerFilename) {
       options.setFileAndLine(filename, 1);
-      options.setIntroductionInfo(introducerFilename, "eval", lineno,
-                                  maybeScript, pcOffset);
+      options.setIntroductionInfo(introducerFilename, "eval", lineno, pcOffset);
+      introScript = maybeScript;
     } else {
       options.setFileAndLine("eval", 1);
       options.setIntroductionType("eval");
@@ -335,9 +339,15 @@ static bool EvalKernel(JSContext* cx, HandleValue v, EvalType evalType,
       return false;
     }
 
-    JSScript* script =
-        frontend::CompileEvalScript(cx, options, srcBuf, enclosing, env);
+    RootedScript script(
+        cx, frontend::CompileEvalScript(cx, options, srcBuf, enclosing, env));
     if (!script) {
+      return false;
+    }
+
+    RootedValue undefValue(cx);
+    if (!JS::UpdateDebugMetadata(cx, script, options, undefValue, nullptr,
+                                 introScript, maybeScript)) {
       return false;
     }
 
@@ -384,17 +394,16 @@ bool js::IsAnyBuiltinEval(JSFunction* fun) {
   return fun->maybeNative() == IndirectEval;
 }
 
-static bool ExecuteInExtensibleLexicalEnvironment(JSContext* cx,
-                                                  HandleScript scriptArg,
-                                                  HandleObject env) {
+static bool ExecuteInExtensibleLexicalEnvironment(
+    JSContext* cx, HandleScript scriptArg,
+    Handle<ExtensibleLexicalEnvironmentObject*> env) {
   CHECK_THREAD(cx);
   cx->check(env);
-  MOZ_ASSERT(IsExtensibleLexicalEnvironment(env));
   MOZ_RELEASE_ASSERT(scriptArg->hasNonSyntacticScope());
 
   RootedScript script(cx, scriptArg);
   if (script->realm() != cx->realm()) {
-    script = CloneGlobalScript(cx, ScopeKind::NonSyntactic, script);
+    script = CloneGlobalScript(cx, script);
     if (!script) {
       return false;
     }
@@ -405,7 +414,7 @@ static bool ExecuteInExtensibleLexicalEnvironment(JSContext* cx,
                        NullFramePtr() /* evalInFrame */, &rval);
 }
 
-JS_FRIEND_API bool js::ExecuteInFrameScriptEnvironment(
+JS_PUBLIC_API bool js::ExecuteInFrameScriptEnvironment(
     JSContext* cx, HandleObject objArg, HandleScript scriptArg,
     MutableHandleObject envArg) {
   RootedObject varEnv(cx, NonSyntacticVariablesObject::create(cx));
@@ -429,27 +438,28 @@ JS_FRIEND_API bool js::ExecuteInFrameScriptEnvironment(
   // callers try to bind methods from the message manager in their scope chain
   // to |this|, and will fail if it is not bound to a message manager.
   ObjectRealm& realm = ObjectRealm::get(varEnv);
-  env =
-      realm.getOrCreateNonSyntacticLexicalEnvironment(cx, env, varEnv, objArg);
-  if (!env) {
+  Rooted<NonSyntacticLexicalEnvironmentObject*> lexicalEnv(
+      cx,
+      realm.getOrCreateNonSyntacticLexicalEnvironment(cx, env, varEnv, objArg));
+  if (!lexicalEnv) {
     return false;
   }
 
-  if (!ExecuteInExtensibleLexicalEnvironment(cx, scriptArg, env)) {
+  if (!ExecuteInExtensibleLexicalEnvironment(cx, scriptArg, lexicalEnv)) {
     return false;
   }
 
-  envArg.set(env);
+  envArg.set(lexicalEnv);
   return true;
 }
 
-JS_FRIEND_API JSObject* JS::NewJSMEnvironment(JSContext* cx) {
+JS_PUBLIC_API JSObject* JS::NewJSMEnvironment(JSContext* cx) {
   RootedObject varEnv(cx, NonSyntacticVariablesObject::create(cx));
   if (!varEnv) {
     return nullptr;
   }
 
-  // Force LexicalEnvironmentObject to be created.
+  // Force the NonSyntacticLexicalEnvironmentObject to be created.
   ObjectRealm& realm = ObjectRealm::get(varEnv);
   MOZ_ASSERT(!realm.getNonSyntacticLexicalEnvironment(varEnv));
   if (!realm.getOrCreateNonSyntacticLexicalEnvironment(cx, varEnv)) {
@@ -459,14 +469,14 @@ JS_FRIEND_API JSObject* JS::NewJSMEnvironment(JSContext* cx) {
   return varEnv;
 }
 
-JS_FRIEND_API bool JS::ExecuteInJSMEnvironment(JSContext* cx,
+JS_PUBLIC_API bool JS::ExecuteInJSMEnvironment(JSContext* cx,
                                                HandleScript scriptArg,
                                                HandleObject varEnv) {
   RootedObjectVector emptyChain(cx);
   return ExecuteInJSMEnvironment(cx, scriptArg, varEnv, emptyChain);
 }
 
-JS_FRIEND_API bool JS::ExecuteInJSMEnvironment(JSContext* cx,
+JS_PUBLIC_API bool JS::ExecuteInJSMEnvironment(JSContext* cx,
                                                HandleScript scriptArg,
                                                HandleObject varEnv,
                                                HandleObjectVector targetObj) {
@@ -475,34 +485,36 @@ JS_FRIEND_API bool JS::ExecuteInJSMEnvironment(JSContext* cx,
       ObjectRealm::get(varEnv).getNonSyntacticLexicalEnvironment(varEnv));
   MOZ_DIAGNOSTIC_ASSERT(scriptArg->noScriptRval());
 
-  RootedObject env(cx, JS_ExtensibleLexicalEnvironment(varEnv));
+  Rooted<ExtensibleLexicalEnvironmentObject*> env(
+      cx, ExtensibleLexicalEnvironmentObject::forVarEnvironment(varEnv));
 
   // If the Gecko subscript loader specifies target objects, we need to add
   // them to the environment. These are added after the NSVO environment.
   if (!targetObj.empty()) {
     // The environment chain will be as follows:
     //      GlobalObject / BackstagePass
-    //      LexicalEnvironmentObject[this=global]
+    //      GlobalLexicalEnvironmentObject[this=global]
     //      NonSyntacticVariablesObject (the JSMEnvironment)
-    //      LexicalEnvironmentObject[this=nsvo]
+    //      NonSyntacticLexicalEnvironmentObject[this=nsvo]
     //      WithEnvironmentObject[target=targetObj]
-    //      LexicalEnvironmentObject[this=targetObj] (*)
+    //      NonSyntacticLexicalEnvironmentObject[this=targetObj] (*)
     //
     //  (*) This environment intercepts JSOp::GlobalThis.
 
     // Wrap the target objects in WithEnvironments.
-    if (!js::CreateObjectsForEnvironmentChain(cx, targetObj, env, &env)) {
+    RootedObject envChain(cx);
+    if (!js::CreateObjectsForEnvironmentChain(cx, targetObj, env, &envChain)) {
       return false;
     }
 
     // See CreateNonSyntacticEnvironmentChain
-    if (!JSObject::setQualifiedVarObj(cx, env)) {
+    if (!JSObject::setQualifiedVarObj(cx, envChain)) {
       return false;
     }
 
-    // Create an extensible LexicalEnvironmentObject for target object
-    env = ObjectRealm::get(env).getOrCreateNonSyntacticLexicalEnvironment(cx,
-                                                                          env);
+    // Create an extensible lexical environment for the target object.
+    env = ObjectRealm::get(envChain).getOrCreateNonSyntacticLexicalEnvironment(
+        cx, envChain);
     if (!env) {
       return false;
     }
@@ -511,7 +523,7 @@ JS_FRIEND_API bool JS::ExecuteInJSMEnvironment(JSContext* cx,
   return ExecuteInExtensibleLexicalEnvironment(cx, scriptArg, env);
 }
 
-JS_FRIEND_API JSObject* JS::GetJSMEnvironmentOfScriptedCaller(JSContext* cx) {
+JS_PUBLIC_API JSObject* JS::GetJSMEnvironmentOfScriptedCaller(JSContext* cx) {
   FrameIter iter(cx);
   if (iter.done()) {
     return nullptr;
@@ -529,7 +541,7 @@ JS_FRIEND_API JSObject* JS::GetJSMEnvironmentOfScriptedCaller(JSContext* cx) {
   return env;
 }
 
-JS_FRIEND_API bool JS::IsJSMEnvironment(JSObject* obj) {
+JS_PUBLIC_API bool JS::IsJSMEnvironment(JSObject* obj) {
   // NOTE: This also returns true if the NonSyntacticVariablesObject was
   // created for reasons other than the JSM loader.
   return obj->is<NonSyntacticVariablesObject>();

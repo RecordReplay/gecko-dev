@@ -16,6 +16,7 @@
 #include "frontend/AbstractScopePtr.h"    // ScopeIndex
 #include "frontend/FunctionSyntaxKind.h"  // FunctionSyntaxKind
 #include "frontend/ParseNode.h"
+#include "frontend/ParserAtom.h"       // TaggedParserAtomIndex
 #include "frontend/ScriptIndex.h"      // ScriptIndex
 #include "js/WasmModule.h"             // JS::WasmModule
 #include "vm/FunctionFlags.h"          // js::FunctionFlags
@@ -28,7 +29,6 @@
 namespace js {
 namespace frontend {
 
-struct CompilationStencil;
 struct CompilationState;
 class ParseContext;
 class ScriptStencil;
@@ -114,21 +114,11 @@ class EvalSharedContext;
 class ModuleSharedContext;
 class SuspendableContext;
 
-#define FLAG_GETTER(enumName, enumEntry, lowerName, name) \
- public:                                                  \
-  bool lowerName() const { return hasFlag(enumName::enumEntry); }
-
-#define FLAG_SETTER(enumName, enumEntry, lowerName, name) \
- public:                                                  \
-  void set##name() { setFlag(enumName::enumEntry); }      \
-  void set##name(bool b) { setFlag(enumName::enumEntry, b); }
-
 #define IMMUTABLE_FLAG_GETTER_SETTER(lowerName, name) \
-  FLAG_GETTER(ImmutableFlags, name, lowerName, name)  \
-  FLAG_SETTER(ImmutableFlags, name, lowerName, name)
+  GENERIC_FLAG_GETTER_SETTER(ImmutableFlags, lowerName, name)
 
 #define IMMUTABLE_FLAG_GETTER(lowerName, name) \
-  FLAG_GETTER(ImmutableFlags, name, lowerName, name)
+  GENERIC_FLAG_GETTER(ImmutableFlags, lowerName, name)
 
 /*
  * The struct SharedContext is part of the current parser context (see
@@ -140,8 +130,6 @@ class SharedContext {
   JSContext* const cx_;
 
  protected:
-  CompilationStencil& stencil_;
-
   // See: BaseScript::immutableFlags_
   ImmutableScriptFlags immutableFlags_ = {};
 
@@ -170,14 +158,14 @@ class SharedContext {
   // True if "use strict"; appears in the body instead of being inherited.
   bool hasExplicitUseStrict_ : 1;
 
-  // Tracks if script-related fields are already copied to ScriptStencil.
+  // Tracks if script-related fields are already copied to ScriptStencilExtra.
   //
   // If this field is true, those fileds shouldn't be modified.
   //
   // For FunctionBox, some fields are allowed to be modified, but the
-  // modification should be synced with ScriptStencil by
+  // modification should be synced with ScriptStencilExtra by
   // FunctionBox::copyUpdated* methods.
-  bool isScriptFieldCopiedToStencil : 1;
+  bool isScriptExtraFieldCopiedToStencil : 1;
 
   // End of fields.
 
@@ -186,16 +174,21 @@ class SharedContext {
   // Alias enum into SharedContext
   using ImmutableFlags = ImmutableScriptFlagsEnum;
 
-  MOZ_MUST_USE bool hasFlag(ImmutableFlags flag) const {
+  [[nodiscard]] bool hasFlag(ImmutableFlags flag) const {
     return immutableFlags_.hasFlag(flag);
   }
   void setFlag(ImmutableFlags flag, bool b = true) {
-    MOZ_ASSERT(!isScriptFieldCopiedToStencil);
+    MOZ_ASSERT(!isScriptExtraFieldCopiedToStencil);
     immutableFlags_.setFlag(flag, b);
+  }
+  void clearFlag(ImmutableFlags flag) {
+    MOZ_ASSERT(!isScriptExtraFieldCopiedToStencil);
+    immutableFlags_.clearFlag(flag);
   }
 
  public:
-  SharedContext(JSContext* cx, Kind kind, CompilationStencil& stencil,
+  SharedContext(JSContext* cx, Kind kind,
+                const JS::ReadOnlyCompileOptions& options,
                 Directives directives, SourceExtent extent);
 
   IMMUTABLE_FLAG_GETTER_SETTER(isForEval, IsForEval)
@@ -230,8 +223,6 @@ class SharedContext {
   inline EvalSharedContext* asEvalContext();
 
   bool isTopLevelContext() const { return !isFunction(); }
-
-  CompilationStencil& stencil() const { return stencil_; }
 
   ThisBinding thisBinding() const { return thisBinding_; }
   bool hasFunctionThisBinding() const {
@@ -269,10 +260,6 @@ class SharedContext {
     return retVal;
   }
 
-  inline JSAtom* liftParserAtomToJSAtom(JSContext* cx,
-                                        const ParserAtom* atomId);
-
-  void copyScriptFields(ScriptStencil& script);
   void copyScriptExtraFields(ScriptStencilExtra& scriptExtra);
 };
 
@@ -283,8 +270,8 @@ class MOZ_STACK_CLASS GlobalSharedContext : public SharedContext {
   GlobalScope::ParserData* bindings;
 
   GlobalSharedContext(JSContext* cx, ScopeKind scopeKind,
-                      CompilationStencil& stencil, Directives directives,
-                      SourceExtent extent);
+                      const JS::ReadOnlyCompileOptions& options,
+                      Directives directives, SourceExtent extent);
 
   ScopeKind scopeKind() const { return scopeKind_; }
 };
@@ -298,8 +285,8 @@ class MOZ_STACK_CLASS EvalSharedContext : public SharedContext {
  public:
   EvalScope::ParserData* bindings;
 
-  EvalSharedContext(JSContext* cx, CompilationStencil& stencil,
-                    CompilationState& compilationState, SourceExtent extent);
+  EvalSharedContext(JSContext* cx, CompilationState& compilationState,
+                    SourceExtent extent);
 };
 
 inline EvalSharedContext* SharedContext::asEvalContext() {
@@ -311,7 +298,8 @@ enum class HasHeritage { No, Yes };
 
 class SuspendableContext : public SharedContext {
  public:
-  SuspendableContext(JSContext* cx, Kind kind, CompilationStencil& stencil,
+  SuspendableContext(JSContext* cx, Kind kind,
+                     const JS::ReadOnlyCompileOptions& options,
                      Directives directives, SourceExtent extent,
                      bool isGenerator, bool isAsync);
 
@@ -355,9 +343,9 @@ class FunctionBox : public SuspendableContext {
   // the kind of name.
   // This is copied to ScriptStencil.
   // Any update after the copy should be synced to the ScriptStencil.
-  const ParserAtom* atom_ = nullptr;
+  TaggedParserAtomIndex atom_;
 
-  // Index into BaseCompilationStencil::scriptData.
+  // Index into CompilationStencil::scriptData.
   ScriptIndex funcDataIndex_ = ScriptIndex(-1);
 
   // See: FunctionFlags
@@ -376,7 +364,7 @@ class FunctionBox : public SuspendableContext {
   // See: PrivateScriptData::memberInitializers_
   // This field is copied to ScriptStencil, and shouldn't be modified after the
   // copy.
-  mozilla::Maybe<MemberInitializers> memberInitializers_ = {};
+  MemberInitializers memberInitializers_ = MemberInitializers::Invalid();
 
  public:
   // Back pointer used by asm.js for error messages.
@@ -389,7 +377,7 @@ class FunctionBox : public SuspendableContext {
   // This is set by the BytecodeEmitter of the enclosing script when a reference
   // to this function is generated. This is also used to determine a hoisted
   // function already is referenced by the bytecode.
-  bool wasEmitted_ : 1;
+  bool wasEmittedByEnclosingScript_ : 1;
 
   // Need to emit a synthesized Annex B assignment
   bool isAnnexB : 1;
@@ -406,22 +394,32 @@ class FunctionBox : public SuspendableContext {
   // Arrow function with expression body like: `() => 1`.
   bool hasExprBody_ : 1;
 
+  // Used to issue an early error in static class blocks.
+  bool allowReturn_ : 1;
+
   // Tracks if function-related fields are already copied to ScriptStencil.
   // If this field is true, modification to those fields should be synced with
   // ScriptStencil by copyUpdated* methods.
   bool isFunctionFieldCopiedToStencil : 1;
 
+  // True if this is part of initial compilation.
+  // False if this is part of delazification.
+  bool isInitialCompilation : 1;
+
+  // True if this is standalone function
+  // (new Function() including generator/async, or event handler).
+  bool isStandalone : 1;
+
   // End of fields.
 
-  FunctionBox(JSContext* cx, SourceExtent extent, CompilationStencil& stencil,
+  FunctionBox(JSContext* cx, SourceExtent extent,
               CompilationState& compilationState, Directives directives,
               GeneratorKind generatorKind, FunctionAsyncKind asyncKind,
-              const ParserAtom* atom, FunctionFlags flags, ScriptIndex index);
+              bool isInitialCompilation, TaggedParserAtomIndex atom,
+              FunctionFlags flags, ScriptIndex index);
 
   ScriptStencil& functionStencil() const;
   ScriptStencilExtra& functionExtraStencil() const;
-
-  bool hasFunctionExtraStencil() const;
 
   LexicalScope::ParserData* namedLambdaBindings() {
     return namedLambdaBindings_;
@@ -444,26 +442,35 @@ class FunctionBox : public SuspendableContext {
     extraVarScopeBindings_ = bindings;
   }
 
-  void initFromLazyFunction(JSFunction* fun);
-
+  void initFromLazyFunction(JSFunction* fun, ScopeContext& scopeContext,
+                            FunctionFlags flags, FunctionSyntaxKind kind);
+  void initFromLazyFunctionToSkip(JSFunction* fun);
   void initStandalone(ScopeContext& scopeContext, FunctionFlags flags,
                       FunctionSyntaxKind kind);
 
+ private:
+  void initFromLazyFunctionShared(JSFunction* fun);
+  void initStandaloneOrLazy(ScopeContext& scopeContext, FunctionFlags flags,
+                            FunctionSyntaxKind kind);
+
+ public:
   void initWithEnclosingParseContext(ParseContext* enclosing,
                                      FunctionFlags flags,
                                      FunctionSyntaxKind kind);
 
   void setEnclosingScopeForInnerLazyFunction(ScopeIndex scopeIndex);
 
-  bool wasEmitted() const { return wasEmitted_; }
-  void setWasEmitted(bool wasEmitted) {
-    wasEmitted_ = wasEmitted;
+  bool wasEmittedByEnclosingScript() const {
+    return wasEmittedByEnclosingScript_;
+  }
+  void setWasEmittedByEnclosingScript(bool wasEmitted) {
+    wasEmittedByEnclosingScript_ = wasEmitted;
     if (isFunctionFieldCopiedToStencil) {
       copyUpdatedWasEmitted();
     }
   }
 
-  MOZ_MUST_USE bool setAsmJSModule(const JS::WasmModule* module);
+  [[nodiscard]] bool setAsmJSModule(const JS::WasmModule* module);
   bool isAsmJSModule() const { return flags_.isAsmJSNative(); }
 
   bool hasEnclosingScopeIndex() const { return enclosingScopeIndex_.isSome(); }
@@ -476,14 +483,14 @@ class FunctionBox : public SuspendableContext {
   // NeedsHomeObject: custom logic below.
   // IsDerivedClassConstructor: custom logic below.
   // IsFieldInitializer: custom logic below.
+  IMMUTABLE_FLAG_GETTER(useMemberInitializers, UseMemberInitializers)
   IMMUTABLE_FLAG_GETTER_SETTER(hasRest, HasRest)
   IMMUTABLE_FLAG_GETTER_SETTER(needsFunctionEnvironmentObjects,
                                NeedsFunctionEnvironmentObjects)
   IMMUTABLE_FLAG_GETTER_SETTER(functionHasExtraBodyVarScope,
                                FunctionHasExtraBodyVarScope)
   IMMUTABLE_FLAG_GETTER_SETTER(shouldDeclareArguments, ShouldDeclareArguments)
-  IMMUTABLE_FLAG_GETTER_SETTER(argumentsHasVarBinding, ArgumentsHasVarBinding)
-  // AlwaysNeedsArgsObj: custom logic below.
+  IMMUTABLE_FLAG_GETTER_SETTER(needsArgsObj, NeedsArgsObj)
   // HasMappedArgsObj: custom logic below.
 
   bool needsCallObjectRegardlessOfBindings() const {
@@ -525,9 +532,9 @@ class FunctionBox : public SuspendableContext {
     hasExprBody_ = true;
   }
 
-  bool isNamedLambda() const {
-    return flags_.isNamedLambda(explicitName() != nullptr);
-  }
+  bool allowReturn() const { return allowReturn_; }
+
+  bool isNamedLambda() const { return flags_.isNamedLambda(!!explicitName()); }
   bool isGetter() const { return flags_.isGetter(); }
   bool isSetter() const { return flags_.isSetter(); }
   bool isMethod() const { return flags_.isMethod(); }
@@ -540,32 +547,29 @@ class FunctionBox : public SuspendableContext {
   bool hasInferredName() const { return flags_.hasInferredName(); }
   bool hasGuessedAtom() const { return flags_.hasGuessedAtom(); }
 
-  const ParserAtom* displayAtom() const { return atom_; }
-  const ParserAtom* explicitName() const {
-    return (hasInferredName() || hasGuessedAtom()) ? nullptr : atom_;
+  TaggedParserAtomIndex displayAtom() const { return atom_; }
+  TaggedParserAtomIndex explicitName() const {
+    return (hasInferredName() || hasGuessedAtom())
+               ? TaggedParserAtomIndex::null()
+               : atom_;
   }
 
   // NOTE: We propagate to any existing functions for now. This handles both the
   // delazification case where functions already exist, and also handles
   // code-coverage which is not yet deferred.
-  void setInferredName(const ParserAtom* atom) {
+  void setInferredName(TaggedParserAtomIndex atom) {
     atom_ = atom;
     flags_.setInferredName();
     if (isFunctionFieldCopiedToStencil) {
       copyUpdatedAtomAndFlags();
     }
   }
-  void setGuessedAtom(const ParserAtom* atom) {
+  void setGuessedAtom(TaggedParserAtomIndex atom) {
     atom_ = atom;
     flags_.setGuessedAtom();
     if (isFunctionFieldCopiedToStencil) {
       copyUpdatedAtomAndFlags();
     }
-  }
-
-  void setAlwaysNeedsArgsObj() {
-    MOZ_ASSERT(argumentsHasVarBinding());
-    setFlag(ImmutableFlags::AlwaysNeedsArgsObj);
   }
 
   bool needsHomeObject() const {
@@ -584,12 +588,13 @@ class FunctionBox : public SuspendableContext {
     setFlag(ImmutableFlags::IsDerivedClassConstructor);
   }
 
-  bool isFieldInitializer() const {
-    return hasFlag(ImmutableFlags::IsFieldInitializer);
+  bool isSyntheticFunction() const {
+    return hasFlag(ImmutableFlags::IsSyntheticFunction);
   }
-  void setFieldInitializer() {
+  void setSyntheticFunction() {
+    // Field initializer or class consturctor.
     MOZ_ASSERT(flags_.isMethod());
-    setFlag(ImmutableFlags::IsFieldInitializer);
+    setFlag(ImmutableFlags::IsSyntheticFunction);
   }
 
   bool hasSimpleParameterList() const {
@@ -608,14 +613,14 @@ class FunctionBox : public SuspendableContext {
   bool useAsmOrInsideUseAsm() const { return useAsm; }
 
   void setStart(uint32_t offset, uint32_t line, uint32_t column) {
-    MOZ_ASSERT(!isScriptFieldCopiedToStencil);
+    MOZ_ASSERT(!isScriptExtraFieldCopiedToStencil);
     extent_.sourceStart = offset;
     extent_.lineno = line;
     extent_.column = column;
   }
 
   void setEnd(uint32_t end) {
-    MOZ_ASSERT(!isScriptFieldCopiedToStencil);
+    MOZ_ASSERT(!isScriptExtraFieldCopiedToStencil);
     // For all functions except class constructors, the buffer and
     // toString ending positions are the same. Class constructors override
     // the toString ending position with the end of the class definition.
@@ -625,14 +630,21 @@ class FunctionBox : public SuspendableContext {
 
   void setCtorToStringEnd(uint32_t end) {
     extent_.toStringEnd = end;
-    if (isScriptFieldCopiedToStencil) {
+    if (isScriptExtraFieldCopiedToStencil) {
       copyUpdatedExtent();
     }
   }
 
   void setCtorFunctionHasThisBinding() {
     immutableFlags_.setFlag(ImmutableFlags::FunctionHasThisBinding, true);
-    if (isScriptFieldCopiedToStencil) {
+    if (isScriptExtraFieldCopiedToStencil) {
+      copyUpdatedImmutableFlags();
+    }
+  }
+
+  void setIsInlinableLargeFunction() {
+    immutableFlags_.setFlag(ImmutableFlags::IsInlinableLargeFunction, true);
+    if (isScriptExtraFieldCopiedToStencil) {
       copyUpdatedImmutableFlags();
     }
   }
@@ -647,14 +659,15 @@ class FunctionBox : public SuspendableContext {
 
   size_t nargs() { return nargs_; }
 
-  bool hasMemberInitializers() const { return memberInitializers_.isSome(); }
   const MemberInitializers& memberInitializers() const {
-    return *memberInitializers_;
+    MOZ_ASSERT(useMemberInitializers());
+    return memberInitializers_;
   }
   void setMemberInitializers(MemberInitializers memberInitializers) {
-    MOZ_ASSERT(memberInitializers_.isNothing());
-    memberInitializers_ = mozilla::Some(memberInitializers);
-    if (isScriptFieldCopiedToStencil) {
+    immutableFlags_.setFlag(ImmutableFlags::UseMemberInitializers, true);
+    memberInitializers_ = memberInitializers;
+    if (isScriptExtraFieldCopiedToStencil) {
+      copyUpdatedImmutableFlags();
       copyUpdatedMemberInitializers();
     }
   }
@@ -662,12 +675,13 @@ class FunctionBox : public SuspendableContext {
   ScriptIndex index() { return funcDataIndex_; }
 
   void finishScriptFlags();
-  void copyScriptFields(ScriptStencil& script);
   void copyFunctionFields(ScriptStencil& script);
   void copyFunctionExtraFields(ScriptStencilExtra& scriptExtra);
 
   // * setCtorFunctionHasThisBinding can be called to a class constructor
   //   with a lazy function, while parsing enclosing class
+  // * setIsInlinableLargeFunction can be called by BCE to update flags of the
+  //   previous top-level function, but only in self-hosted mode.
   void copyUpdatedImmutableFlags();
 
   // * setCtorToStringEnd bcan be called to a class constructor with a lazy

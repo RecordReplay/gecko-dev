@@ -14,7 +14,6 @@ interface nsINetAddr;
 namespace mozilla {
 namespace net {
 union NetAddr;
-class TCPFastOpen;
 }
 }
 %}
@@ -22,7 +21,6 @@ native NetAddr(mozilla::net::NetAddr);
 [ptr] native NetAddrPtr(mozilla::net::NetAddr);
 native OriginAttributes(mozilla::OriginAttributes);
 [ref] native const_OriginAttributesRef(const mozilla::OriginAttributes);
-[ptr] native TCPFastOpenPtr(mozilla::net::TCPFastOpen);
 
 /**
  * nsISocketTransport
@@ -282,6 +280,13 @@ interface nsISocketTransport : nsITransport
     const unsigned long USE_IP_HINT_ADDRESS = (1 << 13);
 
     /**
+     * This is used for a temporary workaround for a web-compat issue. The flag is
+     * only set on CORS preflight request to allowed sending client certificates
+     * on a connection for an anonymous request.
+     */
+    const long ANONYMOUS_CONNECT_ALLOW_CLIENT_CERT = (1 << 14);
+
+    /**
      * An opaque flags for non-standard behavior of the TLS system.
      * It is unlikely this will need to be set outside of telemetry studies
      * relating to the TLS implementation.
@@ -314,10 +319,6 @@ interface nsISocketTransport : nsITransport
     void setKeepaliveVals(in long keepaliveIdleTime,
                           in long keepaliveRetryInterval);
 
-    [noscript] void setFastOpenCallback(in TCPFastOpenPtr aFastOpen);
-
-    readonly attribute nsresult firstRetryError;
-
     /**
      * If true, this socket transport has found out the prefered family
      * according it's connection flags could not be used to establish
@@ -346,4 +347,17 @@ interface nsISocketTransport : nsITransport
      * this socket will be closed when the last private window is closed.
      */
     [noscript] void setIsPrivate(in boolean isPrivate);
+
+    /**
+     * If DNS is performed externally, this flag informs the caller that it may
+     * retry connecting with a different DNS configuration (e.g. different IP
+     * family preference). The flag is set only if a network error is encounder,
+     * e.g. NS_ERROR_CONNECTION_REFUSED, NS_ERROR_RESET, etc.
+     */
+    readonly attribute boolean retryDnsIfPossible;
+
+    /**
+     * Return the current status of the socket.
+     */
+    [noscript] readonly attribute nsresult status;
 };

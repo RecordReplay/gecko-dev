@@ -83,10 +83,12 @@ GPUProcessManager::GPUProcessManager()
       mNextNamespace(0),
       mIdNamespace(0),
       mResourceId(0),
-      mNumProcessAttempts(0),
+      mUnstableProcessAttempts(0),
+      mTotalProcessAttempts(0),
       mDeviceResetCount(0),
       mProcess(nullptr),
       mProcessToken(0),
+      mProcessStable(true),
       mGPUChild(nullptr) {
   MOZ_COUNT_CTOR(GPUProcessManager);
 
@@ -171,7 +173,22 @@ void GPUProcessManager::LaunchGPUProcess() {
   // Start the Vsync I/O thread so can use it as soon as the process launches.
   EnsureVsyncIOThread();
 
-  mNumProcessAttempts++;
+  // If the process didn't live long enough, reset the stable flag so that we
+  // don't end up in a restart loop.
+  auto newTime = TimeStamp::Now();
+  if (mTotalProcessAttempts > 0) {
+    auto delta = (int32_t)(newTime - mProcessAttemptLastTime).ToMilliseconds();
+    if (delta < StaticPrefs::layers_gpu_process_stable_min_uptime_ms()) {
+      mProcessStable = false;
+    }
+  }
+  mProcessAttemptLastTime = newTime;
+
+  if (!mProcessStable) {
+    mUnstableProcessAttempts++;
+  }
+  mTotalProcessAttempts++;
+  mProcessStable = false;
 
   std::vector<std::string> extraArgs;
   nsCString parentBuildID(mozilla::PlatformBuildID());
@@ -192,14 +209,34 @@ bool GPUProcessManager::IsGPUProcessLaunching() {
 }
 
 void GPUProcessManager::DisableGPUProcess(const char* aMessage) {
+  MaybeDisableGPUProcess(aMessage, /* aAllowRestart */ false);
+}
+
+bool GPUProcessManager::MaybeDisableGPUProcess(const char* aMessage,
+                                               bool aAllowRestart) {
   if (!gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
-    return;
+    return true;
   }
 
-  gfxConfig::SetFailed(Feature::GPU_PROCESS, FeatureStatus::Failed, aMessage);
+  if (!aAllowRestart) {
+    gfxConfig::SetFailed(Feature::GPU_PROCESS, FeatureStatus::Failed, aMessage);
+  }
+
+  bool wantRestart = gfxPlatform::FallbackFromAcceleration(
+      FeatureStatus::Unavailable, "GPU Process is disabled",
+      "FEATURE_FAILURE_GPU_PROCESS_DISABLED"_ns);
+  if (aAllowRestart && wantRestart) {
+    // The fallback method can make use of the GPU process.
+    return false;
+  }
+
+  if (aAllowRestart) {
+    gfxConfig::SetFailed(Feature::GPU_PROCESS, FeatureStatus::Failed, aMessage);
+  }
+
   gfxCriticalNote << aMessage;
 
-  gfxPlatform::NotifyGPUProcessDisabled();
+  gfxPlatform::DisableGPUProcess();
 
   Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
                         uint32_t(FallbackType::DISABLED));
@@ -218,12 +255,7 @@ void GPUProcessManager::DisableGPUProcess(const char* aMessage) {
   // crash, then we need to tell the content processes again, because they
   // need to rebind to the UI process.
   HandleProcessLost();
-
-  // On Windows and Linux, always fallback to software.
-  // The assumption is that something in the graphics driver is crashing.
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-  FallbackToSoftware("GPU Process is disabled, fallback to software solution.");
-#endif
+  return true;
 }
 
 bool GPUProcessManager::EnsureGPUReady() {
@@ -397,8 +429,10 @@ void GPUProcessManager::OnProcessLaunchComplete(GPUProcessHost* aHost) {
 
   CrashReporter::AnnotateCrashReport(
       CrashReporter::Annotation::GPUProcessLaunchCount,
-      static_cast<int>(mNumProcessAttempts));
+      static_cast<int>(mTotalProcessAttempts));
 }
+
+void GPUProcessManager::OnProcessDeclaredStable() { mProcessStable = true; }
 
 static bool ShouldLimitDeviceResets(uint32_t count, int32_t deltaMilliseconds) {
   // We decide to limit by comparing the amount of resets that have happened
@@ -454,32 +488,45 @@ bool GPUProcessManager::DisableWebRenderConfig(wr::WebRenderError aError,
     return false;
   }
   // Disable WebRender
+  bool wantRestart;
   if (aError == wr::WebRenderError::INITIALIZE) {
-    gfxPlatform::DisableWebRender(gfx::FeatureStatus::Unavailable,
-                                  "WebRender initialization failed", aMsg);
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
+        gfx::FeatureStatus::Unavailable, "WebRender initialization failed",
+        aMsg);
   } else if (aError == wr::WebRenderError::MAKE_CURRENT) {
-    gfxPlatform::DisableWebRender(gfx::FeatureStatus::Unavailable,
-                                  "Failed to make render context current",
-                                  "FEATURE_FAILURE_WEBRENDER_MAKE_CURRENT"_ns);
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
+        gfx::FeatureStatus::Unavailable,
+        "Failed to make render context current",
+        "FEATURE_FAILURE_WEBRENDER_MAKE_CURRENT"_ns);
   } else if (aError == wr::WebRenderError::RENDER) {
-    gfxPlatform::DisableWebRender(gfx::FeatureStatus::Unavailable,
-                                  "Failed to render WebRender",
-                                  "FEATURE_FAILURE_WEBRENDER_RENDER"_ns);
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
+        gfx::FeatureStatus::Unavailable, "Failed to render WebRender",
+        "FEATURE_FAILURE_WEBRENDER_RENDER"_ns);
   } else if (aError == wr::WebRenderError::NEW_SURFACE) {
-    gfxPlatform::DisableWebRender(gfx::FeatureStatus::Unavailable,
-                                  "Failed to create new surface",
-                                  "FEATURE_FAILURE_WEBRENDER_NEW_SURFACE"_ns);
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
+        gfx::FeatureStatus::Unavailable, "Failed to create new surface",
+        "FEATURE_FAILURE_WEBRENDER_NEW_SURFACE"_ns);
+  } else if (aError == wr::WebRenderError::BEGIN_DRAW) {
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
+        gfx::FeatureStatus::Unavailable, "BeginDraw() failed",
+        "FEATURE_FAILURE_WEBRENDER_BEGIN_DRAW"_ns);
   } else if (aError == wr::WebRenderError::EXCESSIVE_RESETS) {
-    gfxPlatform::DisableWebRender(
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
         gfx::FeatureStatus::Unavailable, "Device resets exceeded threshold",
         "FEATURE_FAILURE_WEBRENDER_EXCESSIVE_RESETS"_ns);
   } else {
     MOZ_ASSERT_UNREACHABLE("Invalid value");
-    gfxPlatform::DisableWebRender(gfx::FeatureStatus::Unavailable,
-                                  "Unhandled failure reason",
-                                  "FEATURE_FAILURE_WEBRENDER_UNHANDLED"_ns);
+    wantRestart = gfxPlatform::FallbackFromAcceleration(
+        gfx::FeatureStatus::Unavailable, "Unhandled failure reason",
+        "FEATURE_FAILURE_WEBRENDER_UNHANDLED"_ns);
   }
   gfx::gfxVars::SetUseWebRenderDCompVideoOverlayWin(false);
+
+  // If we still have the GPU process, and we fallback to a new configuration
+  // that prefers to have the GPU process, reset the counter.
+  if (wantRestart && mProcess) {
+    mUnstableProcessAttempts = 1;
+  }
 
 #if defined(MOZ_WIDGET_ANDROID)
   // If aError is not wr::WebRenderError::INITIALIZE, nsWindow does not
@@ -488,14 +535,6 @@ bool GPUProcessManager::DisableWebRenderConfig(wr::WebRenderError aError,
   if (aError != wr::WebRenderError::INITIALIZE) {
     NotifyDisablingWebRender();
   }
-#elif defined(MOZ_WIDGET_GTK)
-  // Hardware compositing should be disabled by default if we aren't using
-  // WebRender. We had to check if it is enabled at all, because it may
-  // already have been forced disabled (e.g. safe mode, headless). It may
-  // still be forced on by the user, and if so, this should have no effect.
-  gfxConfig::SetFailed(Feature::HW_COMPOSITING, FeatureStatus::Blocked,
-                       "Acceleration blocked by platform",
-                       "FEATURE_FAILURE_LOST_WEBRENDER"_ns);
 #endif
 
   return true;
@@ -505,10 +544,11 @@ void GPUProcessManager::DisableWebRender(wr::WebRenderError aError,
                                          const nsCString& aMsg) {
   if (DisableWebRenderConfig(aError, aMsg)) {
     if (mProcess) {
-      OnRemoteProcessDeviceReset(mProcess);
+      RebuildRemoteSessions();
     } else {
-      OnInProcessDeviceReset(/* aTrackThreshold */ false);
+      RebuildInProcessSessions();
     }
+    NotifyListenersOnCompositeDeviceReset();
   }
 }
 
@@ -584,17 +624,6 @@ void GPUProcessManager::OnRemoteProcessDeviceReset(GPUProcessHost* aHost) {
   NotifyListenersOnCompositeDeviceReset();
 }
 
-void GPUProcessManager::FallbackToSoftware(const char* aMessage) {
-  gfxConfig::SetFailed(Feature::HW_COMPOSITING, FeatureStatus::Blocked,
-                       aMessage, "GPU_PROCESS_FALLBACK_TO_SOFTWARE"_ns);
-#ifdef XP_WIN
-  gfxConfig::SetFailed(Feature::D3D11_COMPOSITING, FeatureStatus::Blocked,
-                       aMessage, "GPU_PROCESS_FALLBACK_TO_SOFTWARE"_ns);
-  gfxConfig::SetFailed(Feature::DIRECT2D, FeatureStatus::Blocked, aMessage,
-                       "GPU_PROCESS_FALLBACK_TO_SOFTWARE"_ns);
-#endif
-}
-
 void GPUProcessManager::NotifyListenersOnCompositeDeviceReset() {
   for (const auto& listener : mListeners) {
     listener->OnCompositorDeviceReset();
@@ -611,13 +640,17 @@ void GPUProcessManager::OnProcessUnexpectedShutdown(GPUProcessHost* aHost) {
   CompositorManagerChild::OnGPUProcessLost(aHost->GetProcessToken());
   DestroyProcess();
 
-  if (mNumProcessAttempts >
+  if (mUnstableProcessAttempts >
       uint32_t(StaticPrefs::layers_gpu_process_max_restarts())) {
     char disableMessage[64];
     SprintfLiteral(disableMessage, "GPU process disabled after %d attempts",
-                   mNumProcessAttempts);
-    DisableGPUProcess(disableMessage);
-  } else if (mNumProcessAttempts >
+                   mTotalProcessAttempts);
+    if (!MaybeDisableGPUProcess(disableMessage, /* aAllowRestart */ true)) {
+      // Fallback wants the GPU process. Reset our counter.
+      mUnstableProcessAttempts = 0;
+      HandleProcessLost();
+    }
+  } else if (mUnstableProcessAttempts >
                  uint32_t(StaticPrefs::
                               layers_gpu_process_max_restarts_with_decoder()) &&
              mDecodeVideoOnGpuProcess) {

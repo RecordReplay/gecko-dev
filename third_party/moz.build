@@ -13,6 +13,12 @@ with Files('cups/**'):
 with Files('dav1d/**'):
     BUG_COMPONENT = ('Core', 'Audio/Video: Playback')
 
+with Files('highway/**'):
+    BUG_COMPONENT = ('Core', 'ImageLib')
+
+with Files('jpeg-xl/**'):
+    BUG_COMPONENT = ('Core', 'ImageLib')
+
 with Files('js/d3/**'):
     BUG_COMPONENT = ('Toolkit', 'General')
 
@@ -45,3 +51,7 @@ with Files("pipewire/**"):
 
 with Files('WinToast/**'):
     BUG_COMPONENT = ('Toolkit', 'General')
+
+with Files('libsrtp/**'):
+    BUG_COMPONENT = ('Core', 'WeebRTC: Network')
+

@@ -17,29 +17,25 @@
 
 uniform sampler2D sClipMask;
 
-vec2 clamp_rect(vec2 pt, RectWithSize rect) {
-    return clamp(pt, rect.p0, rect.p0 + rect.size);
-}
-
-#ifndef SWGL
-// TODO: convert back to RectWithEndPoint if driver issues are resolved, if ever.
+#ifndef SWGL_CLIP_MASK
+// TODO: convert back to RectWithEndpoint if driver issues are resolved, if ever.
 flat varying vec4 vClipMaskUvBounds;
-// XY and W are homogeneous coordinates, Z is the layer index
-varying vec4 vClipMaskUv;
+varying vec2 vClipMaskUv;
 #endif
 
 #ifdef WR_VERTEX_SHADER
 
-#define COLOR_MODE_FROM_PASS          0
-#define COLOR_MODE_ALPHA              1
-#define COLOR_MODE_SUBPX_CONST_COLOR  2
-#define COLOR_MODE_SUBPX_BG_PASS0     3
-#define COLOR_MODE_SUBPX_BG_PASS1     4
-#define COLOR_MODE_SUBPX_BG_PASS2     5
-#define COLOR_MODE_SUBPX_DUAL_SOURCE  6
-#define COLOR_MODE_BITMAP             7
-#define COLOR_MODE_COLOR_BITMAP       8
-#define COLOR_MODE_IMAGE              9
+#define COLOR_MODE_FROM_PASS            0
+#define COLOR_MODE_ALPHA                1
+#define COLOR_MODE_SUBPX_CONST_COLOR    2
+#define COLOR_MODE_SUBPX_BG_PASS0       3
+#define COLOR_MODE_SUBPX_BG_PASS1       4
+#define COLOR_MODE_SUBPX_BG_PASS2       5
+#define COLOR_MODE_SUBPX_DUAL_SOURCE    6
+#define COLOR_MODE_BITMAP_SHADOW        7
+#define COLOR_MODE_COLOR_BITMAP         8
+#define COLOR_MODE_IMAGE                9
+#define COLOR_MODE_MULTIPLY_DUAL_SOURCE 10
 
 uniform HIGHP_SAMPLER_FLOAT sampler2D sPrimitiveHeadersF;
 uniform HIGHP_SAMPLER_FLOAT isampler2D sPrimitiveHeadersI;
@@ -76,8 +72,8 @@ Instance decode_instance_attributes() {
 }
 
 struct PrimitiveHeader {
-    RectWithSize local_rect;
-    RectWithSize local_clip_rect;
+    RectWithEndpoint local_rect;
+    RectWithEndpoint local_clip_rect;
     float z;
     int specific_prim_address;
     int transform_id;
@@ -90,8 +86,8 @@ PrimitiveHeader fetch_prim_header(int index) {
     ivec2 uv_f = get_fetch_uv(index, VECS_PER_PRIM_HEADER_F);
     vec4 local_rect = TEXEL_FETCH(sPrimitiveHeadersF, uv_f, 0, ivec2(0, 0));
     vec4 local_clip_rect = TEXEL_FETCH(sPrimitiveHeadersF, uv_f, 0, ivec2(1, 0));
-    ph.local_rect = RectWithSize(local_rect.xy, local_rect.zw);
-    ph.local_clip_rect = RectWithSize(local_clip_rect.xy, local_clip_rect.zw);
+    ph.local_rect = RectWithEndpoint(local_rect.xy, local_rect.zw);
+    ph.local_clip_rect = RectWithEndpoint(local_clip_rect.xy, local_clip_rect.zw);
 
     ivec2 uv_i = get_fetch_uv(index, VECS_PER_PRIM_HEADER_I);
     ivec4 data0 = TEXEL_FETCH(sPrimitiveHeadersI, uv_i, 0, ivec2(0, 0));
@@ -110,12 +106,12 @@ struct VertexInfo {
 };
 
 VertexInfo write_vertex(vec2 local_pos,
-                        RectWithSize local_clip_rect,
+                        RectWithEndpoint local_clip_rect,
                         float z,
                         Transform transform,
                         PictureTask task) {
     // Clamp to the two local clip rects.
-    vec2 clamped_local_pos = clamp_rect(local_pos, local_clip_rect);
+    vec2 clamped_local_pos = rect_clamp(local_clip_rect, local_pos);
 
     // Transform the current vertex to world space.
     vec4 world_pos = transform.m * vec4(clamped_local_pos, 0.0, 1.0);
@@ -124,7 +120,7 @@ VertexInfo write_vertex(vec2 local_pos,
     vec2 device_pos = world_pos.xy * task.device_pixel_scale;
 
     // Apply offsets for the render task to get correct screen location.
-    vec2 final_offset = -task.content_origin + task.common_data.task_rect.p0;
+    vec2 final_offset = -task.content_origin + task.task_rect.p0;
 
     gl_Position = uTransform * vec4(device_pos + final_offset * world_pos.w, z * world_pos.w, world_pos.w);
 
@@ -155,23 +151,47 @@ vec2 intersect_lines(vec2 p0, vec2 p1, vec2 p2, vec2 p3) {
     return vec2(nx / d, ny / d);
 }
 
-VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
-                                  RectWithSize local_prim_rect,
-                                  RectWithSize local_clip_rect,
-                                  vec4 clip_edge_mask,
+VertexInfo write_transform_vertex(RectWithEndpoint local_segment_rect,
+                                  RectWithEndpoint local_prim_rect,
+                                  RectWithEndpoint local_clip_rect,
+                                  int edge_flags,
                                   float z,
                                   Transform transform,
                                   PictureTask task) {
     // Calculate a clip rect from local_rect + local clip
-    RectWithEndpoint clip_rect = to_rect_with_endpoint(local_clip_rect);
-    RectWithEndpoint segment_rect = to_rect_with_endpoint(local_segment_rect);
+    RectWithEndpoint clip_rect = local_clip_rect;
+    RectWithEndpoint segment_rect = local_segment_rect;
+
+#ifdef SWGL_ANTIALIAS
+    // Check if the bounds are smaller than the unmodified segment rect. If so,
+    // it is safe to enable AA on those edges.
+    bvec4 clipped = bvec4(greaterThan(clip_rect.p0, segment_rect.p0),
+                          lessThan(clip_rect.p1, segment_rect.p1));
+    swgl_antiAlias(edge_flags | (clipped.x ? 1 : 0) | (clipped.y ? 2 : 0) |
+                   (clipped.z ? 4 : 0) | (clipped.w ? 8 : 0));
+#endif
+
     segment_rect.p0 = clamp(segment_rect.p0, clip_rect.p0, clip_rect.p1);
     segment_rect.p1 = clamp(segment_rect.p1, clip_rect.p0, clip_rect.p1);
 
-    // Calculate a clip rect from local_rect + local clip
-    RectWithEndpoint prim_rect = to_rect_with_endpoint(local_prim_rect);
+#ifdef SWGL_ANTIALIAS
+    // Trim the segment geometry to the clipped bounds.
+    local_segment_rect = segment_rect;
+#else
+    RectWithEndpoint prim_rect = local_prim_rect;
     prim_rect.p0 = clamp(prim_rect.p0, clip_rect.p0, clip_rect.p1);
     prim_rect.p1 = clamp(prim_rect.p1, clip_rect.p0, clip_rect.p1);
+
+    // Select between the segment and prim edges based on edge mask.
+    // We must perform the bitwise-and for each component individually, as a
+    // vector bitwise-and followed by conversion to bvec4 causes shader
+    // compilation crashes on some Adreno devices. See bug 1715746.
+    bvec4 clip_edge_mask = bvec4(bool(edge_flags & 1), bool(edge_flags & 2), bool(edge_flags & 4), bool(edge_flags & 8));
+    init_transform_vs(mix(
+        vec4(prim_rect.p0, prim_rect.p1),
+        vec4(segment_rect.p0, segment_rect.p1),
+        clip_edge_mask
+    ));
 
     // As this is a transform shader, extrude by 2 (local space) pixels
     // in each direction. This gives enough space around the edge to
@@ -184,17 +204,18 @@ VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
 
     // Only extrude along edges where we are going to apply AA.
     float extrude_amount = 2.0;
-    vec4 extrude_distance = vec4(extrude_amount) * clip_edge_mask;
+    vec4 extrude_distance = mix(vec4(0.0), vec4(extrude_amount), clip_edge_mask);
     local_segment_rect.p0 -= extrude_distance.xy;
-    local_segment_rect.size += extrude_distance.xy + extrude_distance.zw;
+    local_segment_rect.p1 += extrude_distance.zw;
+#endif
 
     // Select the corner of the local rect that we are processing.
-    vec2 local_pos = local_segment_rect.p0 + local_segment_rect.size * aPosition.xy;
+    vec2 local_pos = mix(local_segment_rect.p0, local_segment_rect.p1, aPosition.xy);
 
     // Convert the world positions to device pixel space.
-    vec2 task_offset = task.common_data.task_rect.p0 - task.content_origin;
+    vec2 task_offset = task.task_rect.p0 - task.content_origin;
 
-    // Transform the current vertex to the world cpace.
+    // Transform the current vertex to world space.
     vec4 world_pos = transform.m * vec4(local_pos, 0.0, 1.0);
     vec4 final_pos = vec4(
         world_pos.xy * task.device_pixel_scale + task_offset * world_pos.w,
@@ -203,12 +224,6 @@ VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
     );
 
     gl_Position = uTransform * final_pos;
-
-    init_transform_vs(mix(
-        vec4(prim_rect.p0, prim_rect.p1),
-        vec4(segment_rect.p0, segment_rect.p1),
-        clip_edge_mask
-    ));
 
     VertexInfo vi = VertexInfo(
         local_pos,
@@ -219,28 +234,28 @@ VertexInfo write_transform_vertex(RectWithSize local_segment_rect,
 }
 
 void write_clip(vec4 world_pos, ClipArea area, PictureTask task) {
-#ifdef SWGL
+#ifdef SWGL_CLIP_MASK
     swgl_clipMask(
         sClipMask,
-        (task.common_data.task_rect.p0 - task.content_origin) - (area.common_data.task_rect.p0 - area.screen_origin),
-        area.common_data.task_rect.p0,
-        area.common_data.task_rect.size
+        (task.task_rect.p0 - task.content_origin) - (area.task_rect.p0 - area.screen_origin),
+        area.task_rect.p0,
+        rect_size(area.task_rect)
     );
 #else
     vec2 uv = world_pos.xy * area.device_pixel_scale +
-        world_pos.w * (area.common_data.task_rect.p0 - area.screen_origin);
+        world_pos.w * (area.task_rect.p0 - area.screen_origin);
     vClipMaskUvBounds = vec4(
-        area.common_data.task_rect.p0,
-        area.common_data.task_rect.p0 + area.common_data.task_rect.size
+        area.task_rect.p0,
+        area.task_rect.p1
     );
-    vClipMaskUv = vec4(uv, area.common_data.texture_layer_index, world_pos.w);
+    vClipMaskUv = uv;
 #endif
 }
 
 // Read the exta image data containing the homogeneous screen space coordinates
 // of the corners, interpolate between them, and return real screen space UV.
 vec2 get_image_quad_uv(int address, vec2 f) {
-    ImageResourceExtra extra_data = fetch_image_resource_extra(address);
+    ImageSourceExtra extra_data = fetch_image_source_extra(address);
     vec4 x = mix(extra_data.st_tl, extra_data.st_tr, f.x);
     vec4 y = mix(extra_data.st_bl, extra_data.st_br, f.x);
     vec4 z = mix(x, y, f.y);
@@ -258,7 +273,7 @@ struct Fragment {
 };
 
 float do_clip() {
-#ifdef SWGL
+#ifdef SWGL_CLIP_MASK
     // SWGL relies on builtin clip-mask support to do this more efficiently,
     // so no clipping is required here.
     return 1.0;
@@ -269,7 +284,7 @@ float do_clip() {
     }
     // anything outside of the mask is considered transparent
     //Note: we assume gl_FragCoord.w == interpolated(1 / vClipMaskUv.w)
-    vec2 mask_uv = vClipMaskUv.xy * gl_FragCoord.w;
+    vec2 mask_uv = vClipMaskUv * gl_FragCoord.w;
     bvec2 left = lessThanEqual(vClipMaskUvBounds.xy, mask_uv); // inclusive
     bvec2 right = greaterThan(vClipMaskUvBounds.zw, mask_uv); // non-inclusive
     // bail out if the pixel is outside the valid bounds

@@ -168,10 +168,11 @@ printSecurityInfo(PRFileDesc *fd)
                                         &suite, sizeof suite);
         if (result == SECSuccess) {
             FPRINTF(stderr,
-                    "tstclnt: SSL version %d.%d using %d-bit %s with %d-bit %s MAC\n",
+                    "tstclnt: SSL version %d.%d using %d-bit %s with %d-bit %s MAC%s\n",
                     channel.protocolVersion >> 8, channel.protocolVersion & 0xff,
                     suite.effectiveKeyBits, suite.symCipherName,
-                    suite.macBits, suite.macAlgorithmName);
+                    suite.macBits, suite.macAlgorithmName,
+                    channel.isFIPS ? " FIPS" : "");
             FPRINTF(stderr,
                     "tstclnt: Server Auth: %d-bit %s, Key Exchange: %d-bit %s\n"
                     "         Compression: %s, Extended Master Secret: %s\n"
@@ -332,6 +333,7 @@ PrintParameterUsage()
             "%-20s 0xAAAABBBBCCCCDDDD:mylabel. Otherwise, the default label of\n"
             "%-20s 'Client_identity' will be used.\n",
             "-z externalPsk", "", "", "");
+    fprintf(stderr, "%-20s Enable middlebox compatibility mode (TLS 1.3 only)\n", "-e");
 }
 
 static void
@@ -986,6 +988,7 @@ int enableSignedCertTimestamps = 0;
 int forceFallbackSCSV = 0;
 int enableExtendedMasterSecret = 0;
 PRBool requireDHNamedGroups = 0;
+PRBool middleboxCompatMode = 0;
 PRSocketOptionData opt;
 PRNetAddr addr;
 PRBool allowIPv4 = PR_TRUE;
@@ -1279,6 +1282,11 @@ printEchRetryConfigs(PRFileDesc *s)
             return SECFailure;
         }
 
+        // Remove the newline characters that NSSBase64_EncodeItem unhelpfully inserts.
+        char *newline = strstr(retriesBase64, "\r\n");
+        if (newline) {
+            memmove(newline, newline + 2, strlen(newline + 2) + 1);
+        }
         fprintf(stderr, "Received ECH retry_configs: \n%s\n", retriesBase64);
         PORT_Free(retriesBase64);
         SECITEM_FreeItem(&retries, PR_FALSE);
@@ -1483,6 +1491,16 @@ run()
         rv = SSL_UseAltServerHelloType(s, PR_TRUE);
         if (rv != SECSuccess) {
             SECU_PrintError(progName, "error enabling alternate ServerHello type");
+            error = 1;
+            goto done;
+        }
+    }
+
+    /* Middlebox compatibility mode (TLS 1.3 only) */
+    if (middleboxCompatMode) {
+        rv = SSL_OptionSet(s, SSL_ENABLE_TLS13_COMPAT_MODE, PR_TRUE);
+        if (rv != SECSuccess) {
+            SECU_PrintError(progName, "error enabling middlebox compatibility mode");
             error = 1;
             goto done;
         }
@@ -1820,7 +1838,7 @@ main(int argc, char **argv)
     }
 
     optstate = PL_CreateOptState(argc, argv,
-                                 "46A:BCDEFGHI:J:KL:M:N:OP:QR:STUV:W:X:YZa:bc:d:fgh:m:n:op:qr:st:uvw:x:z:");
+                                 "46A:BCDEFGHI:J:KL:M:N:OP:QR:STUV:W:X:YZa:bc:d:efgh:m:n:op:qr:st:uvw:x:z:");
     while ((optstatus = PL_GetNextOpt(optstate)) == PL_OPT_OK) {
         switch (optstate->option) {
             case '?':
@@ -1989,6 +2007,10 @@ main(int argc, char **argv)
 
             case 'd':
                 certDir = PORT_Strdup(optstate->value);
+                break;
+
+            case 'e':
+                middleboxCompatMode = PR_TRUE;
                 break;
 
             case 'f':

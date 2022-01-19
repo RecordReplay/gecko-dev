@@ -89,12 +89,8 @@ static nsresult SystemWantsDarkTheme(int32_t& darkThemeEnabled) {
   return rv;
 }
 
-nsLookAndFeel::nsLookAndFeel(const LookAndFeelCache* aCache)
+nsLookAndFeel::nsLookAndFeel()
     : nsXPLookAndFeel(),
-      mUseAccessibilityTheme(0),
-      mUseDefaultTheme(0),
-      mNativeThemeId(eWindowsTheme_Generic),
-      mCaretBlinkTime(-1),
       mHasColorMenuHoverText(false),
       mHasColorAccent(false),
       mHasColorAccentText(false),
@@ -103,9 +99,6 @@ nsLookAndFeel::nsLookAndFeel(const LookAndFeelCache* aCache)
       mInitialized(false) {
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::TOUCH_ENABLED_DEVICE,
                                  WinUtils::IsTouchDeviceSupportPresent());
-  if (aCache) {
-    DoSetCache(*aCache);
-  }
 }
 
 nsLookAndFeel::~nsLookAndFeel() {}
@@ -115,17 +108,11 @@ void nsLookAndFeel::NativeInit() { EnsureInit(); }
 /* virtual */
 void nsLookAndFeel::RefreshImpl() {
   nsXPLookAndFeel::RefreshImpl();
-
-  for (auto e = mSystemFontCache.begin(), end = mSystemFontCache.end();
-       e != end; ++e) {
-    e->mCacheValid = false;
-  }
-  mCaretBlinkTime = -1;
-
-  mInitialized = false;
+  mInitialized = false;  // Fetch system colors next time they're used.
 }
 
-nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
+nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
+                                       nscolor& aColor) {
   EnsureInit();
 
   nsresult res = NS_OK;
@@ -310,19 +297,19 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
     case ColorID::MozCellhighlight:
       idx = COLOR_3DFACE;
       break;
-    case ColorID::MozWinAccentcolor:
+    case ColorID::MozAccentColor:
       if (mHasColorAccent) {
         aColor = mColorAccent;
       } else {
         // Seems to be the default color (hardcoded because of bug 1065998)
-        aColor = NS_RGB(158, 158, 158);
+        aColor = NS_RGB(0, 120, 215);
       }
       return NS_OK;
-    case ColorID::MozWinAccentcolortext:
+    case ColorID::MozAccentColorForeground:
       if (mHasColorAccentText) {
         aColor = mColorAccentText;
       } else {
-        aColor = NS_RGB(0, 0, 0);
+        aColor = NS_RGB(255, 255, 255);
       }
       return NS_OK;
     case ColorID::MozWinMediatext:
@@ -380,12 +367,7 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       aResult = 3;
       break;
     case IntID::CaretBlinkTime:
-      // IntID::CaretBlinkTime is often called by updating editable text
-      // that has focus. So it should be cached to improve performance.
-      if (mCaretBlinkTime < 0) {
-        mCaretBlinkTime = static_cast<int32_t>(::GetCaretBlinkTime());
-      }
-      aResult = mCaretBlinkTime;
+      aResult = static_cast<int32_t>(::GetCaretBlinkTime());
       break;
     case IntID::CaretWidth:
       aResult = 1;
@@ -424,16 +406,7 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       // High contrast is a misnomer under Win32 -- any theme can be used with
       // it, e.g. normal contrast with large fonts, low contrast, etc. The high
       // contrast flag really means -- use this theme and don't override it.
-      if (XRE_IsContentProcess()) {
-        // If we're running in the content process, then the parent should
-        // have sent us the accessibility state when nsLookAndFeel
-        // initialized, and stashed it in the mUseAccessibilityTheme cache.
-        aResult = mUseAccessibilityTheme;
-      } else {
-        // Otherwise, we can ask the OS to see if we're using High Contrast
-        // mode.
-        aResult = nsUXThemeData::IsHighContrastOn();
-      }
+      aResult = nsUXThemeData::IsHighContrastOn();
       break;
     case IntID::ScrollArrowStyle:
       aResult = eScrollArrowStyle_Single;
@@ -459,24 +432,12 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::WindowsClassic:
       aResult = !nsUXThemeData::IsAppThemed();
       break;
-    case IntID::TouchEnabled:
-      aResult = WinUtils::IsTouchDeviceSupportPresent();
-      break;
     case IntID::WindowsDefaultTheme:
-      if (XRE_IsContentProcess()) {
-        aResult = mUseDefaultTheme;
-      } else {
-        aResult = nsUXThemeData::IsDefaultWindowTheme();
-      }
+      aResult = nsUXThemeData::IsDefaultWindowTheme();
       break;
     case IntID::WindowsThemeIdentifier:
-      if (XRE_IsContentProcess()) {
-        aResult = mNativeThemeId;
-      } else {
-        aResult = nsUXThemeData::GetNativeThemeId();
-      }
+      aResult = nsUXThemeData::GetNativeThemeId();
       break;
-
     case IntID::OperatingSystemVersionIdentifier: {
       aResult = int32_t(GetOperatingSystemVersion());
       break;
@@ -594,6 +555,12 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::SystemUsesDarkTheme:
       res = SystemWantsDarkTheme(aResult);
       break;
+    case IntID::SystemVerticalScrollbarWidth:
+      aResult = WinUtils::GetSystemMetricsForDpi(SM_CXVSCROLL, 96);
+      break;
+    case IntID::SystemHorizontalScrollbarHeight:
+      aResult = WinUtils::GetSystemMetricsForDpi(SM_CXHSCROLL, 96);
+      break;
     case IntID::PrefersReducedMotion: {
       BOOL enableAnimation = TRUE;
       ::SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enableAnimation,
@@ -602,14 +569,13 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       break;
     }
     case IntID::PrimaryPointerCapabilities: {
-      PointerCapabilities caps =
-          widget::WinUtils::GetPrimaryPointerCapabilities();
-      aResult = static_cast<int32_t>(caps);
+      aResult = static_cast<int32_t>(
+          widget::WinUtils::GetPrimaryPointerCapabilities());
       break;
     }
     case IntID::AllPointerCapabilities: {
-      PointerCapabilities caps = widget::WinUtils::GetAllPointerCapabilities();
-      aResult = static_cast<int32_t>(caps);
+      aResult =
+          static_cast<int32_t>(widget::WinUtils::GetAllPointerCapabilities());
       break;
     }
     default:
@@ -700,10 +666,6 @@ LookAndFeelFont nsLookAndFeel::GetLookAndFeelFontInternal(
 }
 
 LookAndFeelFont nsLookAndFeel::GetLookAndFeelFont(LookAndFeel::FontID anID) {
-  if (XRE_IsContentProcess()) {
-    return mFontCache[size_t(anID)];
-  }
-
   LookAndFeelFont result{};
 
   result.haveFont() = false;
@@ -727,7 +689,7 @@ LookAndFeelFont nsLookAndFeel::GetLookAndFeelFont(LookAndFeel::FontID anID) {
 
   switch (anID) {
     case LookAndFeel::FontID::Menu:
-    case LookAndFeel::FontID::PullDownMenu:
+    case LookAndFeel::FontID::MozPullDownMenu:
       result = GetLookAndFeelFontInternal(ncm.lfMenuFont, false);
       break;
     case LookAndFeel::FontID::Caption:
@@ -737,14 +699,12 @@ LookAndFeelFont nsLookAndFeel::GetLookAndFeelFont(LookAndFeel::FontID anID) {
       result = GetLookAndFeelFontInternal(ncm.lfSmCaptionFont, false);
       break;
     case LookAndFeel::FontID::StatusBar:
-    case LookAndFeel::FontID::Tooltips:
       result = GetLookAndFeelFontInternal(ncm.lfStatusFont, false);
       break;
-    case LookAndFeel::FontID::Widget:
-    case LookAndFeel::FontID::Dialog:
-    case LookAndFeel::FontID::Button:
-    case LookAndFeel::FontID::Field:
-    case LookAndFeel::FontID::List:
+    case LookAndFeel::FontID::MozDialog:
+    case LookAndFeel::FontID::MozButton:
+    case LookAndFeel::FontID::MozField:
+    case LookAndFeel::FontID::MozList:
       // XXX It's not clear to me whether this is exactly the right
       // set of LookAndFeel values to map to the dialog font; we may
       // want to add or remove cases here after reviewing the visual
@@ -759,118 +719,16 @@ LookAndFeelFont nsLookAndFeel::GetLookAndFeelFont(LookAndFeel::FontID anID) {
   return result;
 }
 
-bool nsLookAndFeel::GetSysFont(LookAndFeel::FontID anID, nsString& aFontName,
-                               gfxFontStyle& aFontStyle) {
-  LookAndFeelFont font = GetLookAndFeelFont(anID);
-
-  if (!font.haveFont()) {
-    return false;
-  }
-
-  aFontName = std::move(font.name());
-
-  aFontStyle.size = font.size();
-
-  // FIXME: What about oblique?
-  aFontStyle.style =
-      font.italic() ? FontSlantStyle::Italic() : FontSlantStyle::Normal();
-
-  aFontStyle.weight = FontWeight(font.weight());
-
-  // FIXME: Set aFontStyle->stretch correctly!
-  aFontStyle.stretch = FontStretch::Normal();
-
-  aFontStyle.systemFont = true;
-
-  return true;
-}
-
-bool nsLookAndFeel::NativeGetFont(FontID anID, nsString& aFontName,
+bool nsLookAndFeel::NativeGetFont(LookAndFeel::FontID anID, nsString& aFontName,
                                   gfxFontStyle& aFontStyle) {
-  CachedSystemFont& cacheSlot = mSystemFontCache[size_t(anID)];
-
-  bool status;
-  if (cacheSlot.mCacheValid) {
-    status = cacheSlot.mHaveFont;
-    if (status) {
-      aFontName = cacheSlot.mFontName;
-      aFontStyle = cacheSlot.mFontStyle;
-    }
-  } else {
-    status = GetSysFont(anID, aFontName, aFontStyle);
-
-    cacheSlot.mCacheValid = true;
-    cacheSlot.mHaveFont = status;
-    if (status) {
-      cacheSlot.mFontName = aFontName;
-      cacheSlot.mFontStyle = aFontStyle;
-    }
-  }
-  return status;
+  LookAndFeelFont font = GetLookAndFeelFont(anID);
+  return LookAndFeelFontToStyle(font, aFontName, aFontStyle);
 }
 
 /* virtual */
 char16_t nsLookAndFeel::GetPasswordCharacterImpl() {
 #define UNICODE_BLACK_CIRCLE_CHAR 0x25cf
   return UNICODE_BLACK_CIRCLE_CHAR;
-}
-
-LookAndFeelCache nsLookAndFeel::GetCacheImpl() {
-  MOZ_ASSERT(XRE_IsParentProcess());
-
-  LookAndFeelCache cache = nsXPLookAndFeel::GetCacheImpl();
-
-  LookAndFeelInt lafInt;
-  lafInt.id() = IntID::UseAccessibilityTheme;
-  lafInt.value() = GetInt(IntID::UseAccessibilityTheme);
-  cache.mInts().AppendElement(lafInt);
-
-  lafInt.id() = IntID::WindowsDefaultTheme;
-  lafInt.value() = GetInt(IntID::WindowsDefaultTheme);
-  cache.mInts().AppendElement(lafInt);
-
-  lafInt.id() = IntID::WindowsThemeIdentifier;
-  lafInt.value() = GetInt(IntID::WindowsThemeIdentifier);
-  cache.mInts().AppendElement(lafInt);
-
-  for (size_t i = size_t(LookAndFeel::FontID::MINIMUM);
-       i <= size_t(LookAndFeel::FontID::MAXIMUM); ++i) {
-    cache.mFonts().AppendElement(GetLookAndFeelFont(LookAndFeel::FontID(i)));
-  }
-
-  return cache;
-}
-
-void nsLookAndFeel::SetCacheImpl(const LookAndFeelCache& aCache) {
-  DoSetCache(aCache);
-}
-
-void nsLookAndFeel::DoSetCache(const LookAndFeelCache& aCache) {
-  MOZ_ASSERT(XRE_IsContentProcess());
-  MOZ_RELEASE_ASSERT(aCache.mFonts().Length() == mFontCache.length());
-
-  for (auto entry : aCache.mInts()) {
-    switch (entry.id()) {
-      case IntID::UseAccessibilityTheme:
-        mUseAccessibilityTheme = entry.value();
-        break;
-      case IntID::WindowsDefaultTheme:
-        mUseDefaultTheme = entry.value();
-        break;
-      case IntID::WindowsThemeIdentifier:
-        mNativeThemeId = entry.value();
-        break;
-      default:
-        MOZ_ASSERT_UNREACHABLE("Bogus Int ID in cache");
-        break;
-    }
-  }
-
-  size_t i = mFontCache.minIndex();
-  for (const auto& font : aCache.mFonts()) {
-    mFontCache[i] = font;
-    ++i;
-  }
 }
 
 /* static */

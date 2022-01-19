@@ -9,15 +9,20 @@
 
 // Interpolated UV coordinates to sample.
 varying vec2 v_uv;
-varying vec2 v_local_pos;
 
 // Normalized bounds of the source image in the texture, adjusted to avoid
 // sampling artifacts.
 flat varying vec4 v_uv_sample_bounds;
 
-// Layer index to sample.
+#if defined(PLATFORM_ANDROID) && !defined(SWGL)
+// Work around Adreno 3xx driver bug. See the v_perspective comment in
+// brush_image or bug 1630356 for details.
+flat varying vec2 v_perspective_vec;
+#define v_perspective v_perspective_vec.x
+#else
 // Flag to allow perspective interpolation of UV.
 flat varying float v_perspective;
+#endif
 
 flat varying float v_opacity;
 
@@ -25,8 +30,8 @@ flat varying float v_opacity;
 void brush_vs(
     VertexInfo vi,
     int prim_address,
-    RectWithSize local_rect,
-    RectWithSize segment_rect,
+    RectWithEndpoint local_rect,
+    RectWithEndpoint segment_rect,
     ivec4 prim_user_data,
     int specific_resource_address,
     mat4 transform,
@@ -34,12 +39,12 @@ void brush_vs(
     int brush_flags,
     vec4 unused
 ) {
-    ImageResource res = fetch_image_resource(prim_user_data.x);
+    ImageSource res = fetch_image_source(prim_user_data.x);
     vec2 uv0 = res.uv_rect.p0;
     vec2 uv1 = res.uv_rect.p1;
 
-    vec2 texture_size = vec2(textureSize(sColor0, 0).xy);
-    vec2 f = (vi.local_pos - local_rect.p0) / local_rect.size;
+    vec2 texture_size = vec2(TEX_SIZE(sColor0).xy);
+    vec2 f = (vi.local_pos - local_rect.p0) / rect_size(local_rect);
     f = get_image_quad_uv(prim_user_data.x, f);
     vec2 uv = mix(uv0, uv1, f);
     float perspective_interpolate = (brush_flags & BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) != 0 ? 1.0 : 0.0;
@@ -49,11 +54,7 @@ void brush_vs(
 
     v_uv_sample_bounds = vec4(uv0 + vec2(0.5), uv1 - vec2(0.5)) / texture_size.xyxy;
 
-    #ifdef WR_FEATURE_ANTIALIASING
-        v_local_pos = vi.local_pos;
-    #endif
-
-    v_opacity = float(prim_user_data.y) / 65536.0;
+    v_opacity = clamp(float(prim_user_data.y) / 65536.0, 0.0, 1.0);
 }
 #endif
 
@@ -69,44 +70,20 @@ Fragment brush_fs() {
 
     float alpha = v_opacity;
 
-    #ifdef WR_FEATURE_ANTIALIASING
-        alpha *= init_transform_fs(v_local_pos);
+    #ifdef WR_FEATURE_ALPHA_PASS
+        alpha *= antialias_brush();
     #endif
 
     // Pre-multiply the contribution of the opacity factor.
     return Fragment(alpha * color);
 }
 
-#if defined(SWGL) && !defined(WR_FEATURE_DUAL_SOURCE_BLENDING)
+#if defined(SWGL_DRAW_SPAN) && !defined(WR_FEATURE_DUAL_SOURCE_BLENDING)
 void swgl_drawSpanRGBA8() {
-    if (!swgl_isTextureRGBA8(sColor0)) {
-        return;
-    }
-
     float perspective_divisor = mix(swgl_forceScalar(gl_FragCoord.w), 1.0, v_perspective);
     vec2 uv = v_uv * perspective_divisor;
 
-    #ifndef WR_FEATURE_ANTIALIASING
-    if (swgl_allowTextureNearest(sColor0, uv)) {
-        swgl_commitTextureNearestColorRGBA8(sColor0, uv, v_uv_sample_bounds, v_opacity, 0);
-        return;
-    }
-    #endif
-
-    uv = swgl_linearQuantize(sColor0, uv);
-    vec2 min_uv = swgl_linearQuantize(sColor0, v_uv_sample_bounds.xy);
-    vec2 max_uv = swgl_linearQuantize(sColor0, v_uv_sample_bounds.zw);
-    vec2 step_uv = swgl_linearQuantizeStep(sColor0, swgl_interpStep(v_uv)) * perspective_divisor;
-
-    while (swgl_SpanLength > 0) {
-        float alpha = v_opacity;
-        #ifdef WR_FEATURE_ANTIALIASING
-            alpha *= init_transform_fs(v_local_pos);
-            v_local_pos += swgl_interpStep(v_local_pos);
-        #endif
-        swgl_commitTextureLinearColorRGBA8(sColor0, clamp(uv, min_uv, max_uv), alpha, 0);
-        uv += step_uv;
-    }
+    swgl_commitTextureLinearColorRGBA8(sColor0, uv, v_uv_sample_bounds, v_opacity);
 }
 #endif
 

@@ -16,12 +16,14 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_network.h"
 #include "mozilla/dom/StorageUtils.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "mozilla/net/MozURL.h"
 #include "mozilla/net/WebSocketFrame.h"
 #include "nsDebug.h"
 #include "nsError.h"
+#include "nsICookieService.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 #include "nsStringFlags.h"
@@ -41,6 +43,20 @@ LazyLogModule gLogger("LocalStorage");
 
 const char16_t* kLocalStorageType = u"localStorage";
 
+void MaybeEnableNextGenLocalStorage() {
+  if (StaticPrefs::dom_storage_next_gen_DoNotUseDirectly()) {
+    return;
+  }
+
+  if (!Preferences::GetBool("dom.storage.next_gen_auto_enabled_by_cause1")) {
+    if (StaticPrefs::network_cookie_lifetimePolicy() ==
+        nsICookieService::ACCEPT_SESSION) {
+      Preferences::SetBool("dom.storage.next_gen", true);
+      Preferences::SetBool("dom.storage.next_gen_auto_enabled_by_cause1", true);
+    }
+  }
+}
+
 bool NextGenLocalStorageEnabled() {
   if (XRE_IsParentProcess()) {
     StaticMutexAutoLock lock(gNextGenLocalStorageMutex);
@@ -56,14 +72,15 @@ bool NextGenLocalStorageEnabled() {
     return !!gNextGenLocalStorageEnabled;
   }
 
+  return CachedNextGenLocalStorageEnabled();
+}
+
+void RecvInitNextGenLocalStorageEnabled(const bool aEnabled) {
+  MOZ_ASSERT(!XRE_IsParentProcess());
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(gNextGenLocalStorageEnabled == -1);
 
-  if (gNextGenLocalStorageEnabled == -1) {
-    bool enabled = Preferences::GetBool("dom.storage.next_gen", false);
-    gNextGenLocalStorageEnabled = enabled ? 1 : 0;
-  }
-
-  return !!gNextGenLocalStorageEnabled;
+  gNextGenLocalStorageEnabled = aEnabled ? 1 : 0;
 }
 
 bool CachedNextGenLocalStorageEnabled() {
@@ -111,7 +128,7 @@ Result<std::pair<nsCString, nsCString>, nsresult> GenerateOriginKey2(
   attrs.CreateSuffix(originAttrSuffix);
 
   RefPtr<MozURL> specURL;
-  LS_TRY(MozURL::Init(getter_AddRefs(specURL), spec));
+  QM_TRY(MozURL::Init(getter_AddRefs(specURL), spec));
 
   nsCString host(specURL->Host());
   uint32_t length = host.Length();

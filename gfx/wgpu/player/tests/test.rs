@@ -93,7 +93,6 @@ impl Test<'_> {
                 label: None,
                 features: self.features | wgt::Features::MAPPABLE_PRIMARY_BUFFERS,
                 limits: wgt::Limits::default(),
-                shader_validation: true,
             },
             None,
             device
@@ -128,10 +127,10 @@ impl Test<'_> {
         for expect in self.expectations {
             println!("\t\t\tChecking {}", expect.name);
             let buffer = wgc::id::TypedId::zip(expect.buffer.index, expect.buffer.epoch, backend);
-            let ptr =
-                wgc::gfx_select!(device => global.buffer_get_mapped_range(buffer, expect.offset, None))
+            let (ptr, size) =
+                wgc::gfx_select!(device => global.buffer_get_mapped_range(buffer, expect.offset, Some(expect.data.len() as wgt::BufferAddress)))
                     .unwrap();
-            let contents = unsafe { slice::from_raw_parts(ptr, expect.data.len()) };
+            let contents = unsafe { slice::from_raw_parts(ptr, size as usize) };
             let expected_data = match expect.data {
                 ExpectedData::Raw(vec) => vec,
                 ExpectedData::File(name, size) => {
@@ -144,7 +143,12 @@ impl Test<'_> {
                 }
             };
 
-            assert_eq!(&expected_data[..], contents);
+            if &expected_data[..] != contents {
+                panic!(
+                    "Test expectation is not met!\nBuffer content was:\n{:?}\nbut expected:\n{:?}",
+                    contents, expected_data
+                );
+            }
         }
 
         wgc::gfx_select!(device => global.clear_backend(()));
@@ -213,5 +217,7 @@ impl Corpus {
 
 #[test]
 fn test_api() {
+    env_logger::init();
+
     Corpus::run_from(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/all.ron"))
 }

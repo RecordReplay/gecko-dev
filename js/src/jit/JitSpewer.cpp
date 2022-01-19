@@ -11,17 +11,12 @@
 #  include "mozilla/Atomics.h"
 #  include "mozilla/Sprintf.h"
 
-#  ifdef XP_WIN
-#    include <process.h>
-#    define getpid _getpid
-#  else
-#    include <unistd.h>
-#  endif
 #  include "jit/Ion.h"
 #  include "jit/MIR.h"
 #  include "jit/MIRGenerator.h"
 #  include "jit/MIRGraph.h"
 #  include "threading/LockGuard.h"
+#  include "util/GetPidProvider.h"  // getpid()
 #  include "util/Text.h"
 #  include "vm/HelperThreads.h"
 #  include "vm/MutexIDs.h"
@@ -628,6 +623,37 @@ void jit::EnableChannel(JitSpewChannel channel) {
 void jit::DisableChannel(JitSpewChannel channel) {
   MOZ_ASSERT(LoggingChecked);
   LoggingBits &= ~(uint64_t(1) << uint32_t(channel));
+}
+
+const char* js::jit::ValTypeToString(JSValueType type) {
+  switch (type) {
+    case JSVAL_TYPE_DOUBLE:
+      return "Double";
+    case JSVAL_TYPE_INT32:
+      return "Int32";
+    case JSVAL_TYPE_BOOLEAN:
+      return "Boolean";
+    case JSVAL_TYPE_UNDEFINED:
+      return "Undefined";
+    case JSVAL_TYPE_NULL:
+      return "Null";
+    case JSVAL_TYPE_MAGIC:
+      return "Magic";
+    case JSVAL_TYPE_STRING:
+      return "String";
+    case JSVAL_TYPE_SYMBOL:
+      return "Symbol";
+    case JSVAL_TYPE_PRIVATE_GCTHING:
+      return "PrivateGCThing";
+    case JSVAL_TYPE_BIGINT:
+      return "BigInt";
+    case JSVAL_TYPE_OBJECT:
+      return "Object";
+    case JSVAL_TYPE_UNKNOWN:
+      return "None";
+    default:
+      MOZ_CRASH("Unknown JSValueType");
+  }
 }
 
 #endif /* JS_JITSPEW */

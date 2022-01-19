@@ -90,6 +90,8 @@ class nsTextFragment final {
    */
   uint32_t GetLength() const { return mState.mLength; }
 
+#define NS_MAX_TEXT_FRAGMENT_LENGTH (static_cast<uint32_t>(0x1FFFFFFF))
+
   bool CanGrowBy(size_t n) const {
     return n < (1 << 29) && mState.mLength + n < (1 << 29);
   }
@@ -106,6 +108,9 @@ class nsTextFragment final {
              bool aForce2b);
 
   bool SetTo(const nsString& aString, bool aUpdateBidi, bool aForce2b) {
+    if (MOZ_UNLIKELY(aString.Length() > NS_MAX_TEXT_FRAGMENT_LENGTH)) {
+      return false;
+    }
     ReleaseText();
     if (aForce2b && !aUpdateBidi) {
       nsStringBuffer* buffer = nsStringBuffer::FromString(aString);
@@ -145,9 +150,8 @@ class nsTextFragment final {
    * Append the contents of this string fragment to aString
    * @return false if an out of memory condition is detected, true otherwise
    */
-  MOZ_MUST_USE
-  bool AppendTo(nsAString& aString,
-                const mozilla::fallible_t& aFallible) const {
+  [[nodiscard]] bool AppendTo(nsAString& aString,
+                              const mozilla::fallible_t& aFallible) const {
     if (mState.mIs2b) {
       if (aString.IsEmpty()) {
         m2b->ToString(mState.mLength, aString);
@@ -183,9 +187,9 @@ class nsTextFragment final {
    * @param aLength the length of the substring
    * @return false if an out of memory condition is detected, true otherwise
    */
-  MOZ_MUST_USE
-  bool AppendTo(nsAString& aString, int32_t aOffset, int32_t aLength,
-                const mozilla::fallible_t& aFallible) const {
+  [[nodiscard]] bool AppendTo(nsAString& aString, int32_t aOffset,
+                              int32_t aLength,
+                              const mozilla::fallible_t& aFallible) const {
     if (mState.mIs2b) {
       bool ok = aString.Append(Get2b() + aOffset, aLength, aFallible);
       if (!ok) {
@@ -284,15 +288,13 @@ class nsTextFragment final {
     uint32_t mLength : 29;
   };
 
-#define NS_MAX_TEXT_FRAGMENT_LENGTH (static_cast<uint32_t>(0x1FFFFFFF))
-
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   /**
    * Check whether the text in this fragment is the same as the text in the
    * other fragment.
    */
-  MOZ_MUST_USE bool TextEquals(const nsTextFragment& aOther) const;
+  [[nodiscard]] bool TextEquals(const nsTextFragment& aOther) const;
 
  private:
   void ReleaseText();

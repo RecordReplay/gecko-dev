@@ -16,7 +16,7 @@
 #include "nsTArray.h"
 #include "nsMaybeWeakPtr.h"
 #include "nsInterfaceHashtable.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/storage.h"
 #include "Helpers.h"
@@ -60,24 +60,6 @@ class nsTrimInt64HashKey : public PLDHashEntryHdr {
   const int64_t mValue;
 };
 
-// Declare methods for implementing nsINavBookmarkObserver
-// and nsINavHistoryObserver (some methods, such as BeginUpdateBatch overlap)
-#define NS_DECL_BOOKMARK_HISTORY_OBSERVER_BASE(...)                    \
-  NS_DECL_NSINAVBOOKMARKOBSERVER                                       \
-  NS_IMETHOD OnDeleteURI(nsIURI* aURI, const nsACString& aGUID,        \
-                         uint16_t aReason) __VA_ARGS__;                \
-  NS_IMETHOD OnDeleteVisits(nsIURI* aURI, bool aPartialRemoval,        \
-                            const nsACString& aGUID, uint16_t aReason, \
-                            uint32_t aTransitionType) __VA_ARGS__;
-
-// The internal version is used by query nodes.
-#define NS_DECL_BOOKMARK_HISTORY_OBSERVER_INTERNAL \
-  NS_DECL_BOOKMARK_HISTORY_OBSERVER_BASE()
-
-// The external version is used by results.
-#define NS_DECL_BOOKMARK_HISTORY_OBSERVER_EXTERNAL(...) \
-  NS_DECL_BOOKMARK_HISTORY_OBSERVER_BASE(__VA_ARGS__)
-
 // nsNavHistoryResult
 //
 //    nsNavHistory creates this object and fills in mChildren (by getting
@@ -95,7 +77,6 @@ class nsNavHistoryResult final
     : public nsSupportsWeakReference,
       public nsINavHistoryResult,
       public nsINavBookmarkObserver,
-      public nsINavHistoryObserver,
       public mozilla::places::INativePlacesEventCallback {
  public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_NAVHISTORYRESULT_IID)
@@ -104,16 +85,16 @@ class nsNavHistoryResult final
   NS_DECL_NSINAVHISTORYRESULT
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsNavHistoryResult,
                                            nsINavHistoryResult)
-  NS_DECL_BOOKMARK_HISTORY_OBSERVER_EXTERNAL(override)
+  NS_DECL_NSINAVBOOKMARKOBSERVER;
 
   void AddHistoryObserver(nsNavHistoryQueryResultNode* aNode);
   void AddBookmarkFolderObserver(nsNavHistoryFolderResultNode* aNode,
-                                 int64_t aFolder);
+                                 const nsACString& aFolderGUID);
   void AddAllBookmarksObserver(nsNavHistoryQueryResultNode* aNode);
   void AddMobilePrefsObserver(nsNavHistoryQueryResultNode* aNode);
   void RemoveHistoryObserver(nsNavHistoryQueryResultNode* aNode);
   void RemoveBookmarkFolderObserver(nsNavHistoryFolderResultNode* aNode,
-                                    int64_t aFolder);
+                                    const nsACString& aFolderGUID);
   void RemoveAllBookmarksObserver(nsNavHistoryQueryResultNode* aNode);
   void RemoveMobilePrefsObserver(nsNavHistoryQueryResultNode* aNode);
   void StopObserving();
@@ -156,10 +137,9 @@ class nsNavHistoryResult final
   QueryObserverList mMobilePrefObservers;
 
   typedef nsTArray<RefPtr<nsNavHistoryFolderResultNode> > FolderObserverList;
-  nsDataHashtable<nsTrimInt64HashKey, FolderObserverList*>
-      mBookmarkFolderObservers;
-  FolderObserverList* BookmarkFolderObserversForId(int64_t aFolderId,
-                                                   bool aCreate);
+  nsTHashMap<nsCStringHashKey, FolderObserverList*> mBookmarkFolderObservers;
+  FolderObserverList* BookmarkFolderObserversForGUID(const nsACString& aGUID,
+                                                     bool aCreate);
 
   typedef nsTArray<RefPtr<nsNavHistoryContainerResultNode> >
       ContainerObserverList;
@@ -168,8 +148,6 @@ class nsNavHistoryResult final
                                bool aExpand);
 
   void InvalidateTree();
-
-  bool mBatchInProgress;
 
   nsMaybeWeakPtrArray<nsINavHistoryResultObserver> mObservers;
   bool mSuppressNotifications;
@@ -194,10 +172,23 @@ class nsNavHistoryResult final
 
   void OnMobilePrefChanged();
 
+  bool IsBatching() const { return mBatchInProgress > 0; };
+
   static void OnMobilePrefChangedCallback(const char* prefName, void* self);
 
  protected:
   virtual ~nsNavHistoryResult();
+
+ private:
+  // Number of batch processes currently running. IsBatching() returns true if
+  // this value is greater than or equal to 1. Also, when this value changes to
+  // 1 from 0, batching() in nsINavHistoryResultObserver is called with
+  // parameter as true, when changes to 0, that means finishing all batch
+  // processes, batching() is called with false.
+  uint32_t mBatchInProgress;
+
+  // Stop all observers upon unlinking.
+  void StopObservingOnUnlink();
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsNavHistoryResult, NS_NAVHISTORYRESULT_IID)
@@ -687,7 +678,7 @@ class nsNavHistoryQueryResultNode final
 
   virtual nsresult OpenContainer() override;
 
-  NS_DECL_BOOKMARK_HISTORY_OBSERVER_INTERNAL
+  NS_DECL_NSINAVBOOKMARKOBSERVER;
 
   nsresult OnItemAdded(int64_t aItemId, int64_t aParentId, int32_t aIndex,
                        uint16_t aItemType, nsIURI* aURI, PRTime aDateAdded,
@@ -697,6 +688,11 @@ class nsNavHistoryQueryResultNode final
                          uint16_t aItemType, nsIURI* aURI,
                          const nsACString& aGUID, const nsACString& aParentGUID,
                          uint16_t aSource);
+  nsresult OnItemMoved(int64_t aFolder, int32_t aOldIndex, int32_t aNewIndex,
+                       uint16_t aItemType, const nsACString& aGUID,
+                       const nsACString& aOldParentGUID,
+                       const nsACString& aNewParentGUID, uint16_t aSource,
+                       const nsACString& aURI);
 
   // The internal version has an output aAdded parameter, it is incremented by
   // query nodes when the visited uri belongs to them. If no such query exists,
@@ -706,7 +702,16 @@ class nsNavHistoryQueryResultNode final
   nsresult OnTitleChanged(nsIURI* aURI, const nsAString& aPageTitle,
                           const nsACString& aGUID);
   nsresult OnClearHistory();
+  nsresult OnPageRemovedFromStore(nsIURI* aURI, const nsACString& aGUID,
+                                  uint16_t aReason);
+  nsresult OnPageRemovedVisits(nsIURI* aURI, bool aPartialRemoval,
+                               const nsACString& aGUID, uint16_t aReason,
+                               uint32_t aTransitionType);
+
   virtual void OnRemoving() override;
+
+  nsresult OnBeginUpdateBatch();
+  nsresult OnEndUpdateBatch();
 
  public:
   RefPtr<nsNavHistoryQuery> mQuery;
@@ -786,6 +791,11 @@ class nsNavHistoryFolderResultNode final
                          uint16_t aItemType, nsIURI* aURI,
                          const nsACString& aGUID, const nsACString& aParentGUID,
                          uint16_t aSource);
+  nsresult OnItemMoved(int64_t aFolder, int32_t aOldIndex, int32_t aNewIndex,
+                       uint16_t aItemType, const nsACString& aGUID,
+                       const nsACString& aOldParentGUID,
+                       const nsACString& aNewParentGUID, uint16_t aSource,
+                       const nsACString& aURI);
   nsresult OnItemVisited(nsIURI* aURI, int64_t aVisitId, PRTime aTime);
   virtual void OnRemoving() override;
 
@@ -808,6 +818,9 @@ class nsNavHistoryFolderResultNode final
   void ReindexRange(int32_t aStartIndex, int32_t aEndIndex, int32_t aDelta);
 
   nsNavHistoryResultNode* FindChildById(int64_t aItemId, uint32_t* aNodeIndex);
+
+  nsresult OnBeginUpdateBatch();
+  nsresult OnEndUpdateBatch();
 
  protected:
   virtual ~nsNavHistoryFolderResultNode();

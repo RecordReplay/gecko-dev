@@ -9,7 +9,7 @@
 
 #include <time.h>
 #include "gtest/MozGtestFriend.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsString.h"
 #include "prtime.h"
 #include "unicode/udat.h"
@@ -37,7 +37,8 @@ class DateTimeFormat {
 
   enum class Style { Wide, Abbreviated };
 
-  enum class Skeleton { yyyyMM, yyyyMMMM };
+  // Weekday (E, EEEE) only used in Thunderbird.
+  enum class Skeleton { yyyyMM, yyyyMMMM, E, EEEE };
 
   // performs a locale sensitive date formatting operation on the PRTime
   // parameter
@@ -89,7 +90,7 @@ class DateTimeFormat {
                                   nsAString& aStringOut);
 
   static nsCString* mLocale;
-  static nsDataHashtable<nsCStringHashKey, UDateFormat*>* mFormatCache;
+  static nsTHashMap<nsCStringHashKey, UDateFormat*>* mFormatCache;
 };
 
 }  // namespace mozilla

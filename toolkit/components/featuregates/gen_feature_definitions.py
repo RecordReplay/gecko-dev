@@ -86,7 +86,11 @@ class FeatureGateException(Exception):
     def __repr__(self):
         # Turn "FeatureGateExcept(<message>,)" into "FeatureGateException(<message>, filename=<filename>)"
         original = super(FeatureGateException, self).__repr__()
-        return original[:-1] + " filename={!r})".format(self.filename)
+        with_comma = original[:-1]
+        # python 2 adds a trailing comma and python 3 does not, so we need to conditionally reinclude it
+        if len(with_comma) > 0 and with_comma[-1] != ",":
+            with_comma = with_comma + ","
+        return with_comma + " filename={!r})".format(self.filename)
 
 
 def process_files(filenames):
@@ -145,7 +149,8 @@ def expand_feature(feature):
 
     if feature["type"] == "boolean":
         feature.setdefault("preference", "features.{}.enabled".format(feature["id"]))
-        feature.setdefault("defaultValue", False)
+        # set default value to None so that we can test for perferences where we forgot to set the default value
+        feature.setdefault("defaultValue", None)
     elif "preference" not in feature:
         raise FeatureGateException(
             "Features of type {} must specify an explicit preference name".format(
@@ -160,7 +165,7 @@ def expand_feature(feature):
             feature[key] = process_configured_value(key, feature[key])
     except FeatureGateException as e:
         raise FeatureGateException(
-            "Error when processing feature {}: {}".format(feature["id"], e.message)
+            "Error when processing feature {}: {}".format(feature["id"], e)
         )
 
     return feature
@@ -183,6 +188,7 @@ def process_configured_value(name, value):
             "linux",
             "android",
             "nightly",
+            "early_beta_or_earlier",
             "beta",
             "release",
             "dev-edition",

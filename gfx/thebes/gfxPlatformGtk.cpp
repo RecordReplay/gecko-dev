@@ -26,11 +26,15 @@
 #include "gfxTextRun.h"
 #include "GLContextProvider.h"
 #include "mozilla/Atomics.h"
+#include "mozilla/Components.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/FontPropertyTypes.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/gfx/XlibDisplay.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "nsAppRunner.h"
 #include "nsIGfxInfo.h"
@@ -58,7 +62,7 @@
 #  include <gdk/gdkwayland.h>
 #  include "mozilla/widget/nsWaylandDisplay.h"
 #  include "mozilla/widget/DMABufLibWrapper.h"
-#  include "mozilla/StaticPrefs_media.h"
+#  include "mozilla/StaticPrefs_widget.h"
 #endif
 
 #define GDK_PIXMAP_SIZE_MAX 32767
@@ -70,7 +74,6 @@ using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::unicode;
 using namespace mozilla::widget;
-using mozilla::dom::SystemFontListEntry;
 
 static FT_Library gPlatformFTLibrary = nullptr;
 static int32_t sDPI;
@@ -80,15 +83,22 @@ static void screen_resolution_changed(GdkScreen* aScreen, GParamSpec* aPspec,
   sDPI = 0;
 }
 
+#if defined(MOZ_X11)
+// TODO(aosmond): The envvar is deprecated. We should remove it once EGL is the
+// default in release.
+static bool IsX11EGLEnvvarEnabled() {
+  const char* eglPref = PR_GetEnv("MOZ_X11_EGL");
+  return (eglPref && *eglPref);
+}
+#endif
+
 gfxPlatformGtk::gfxPlatformGtk() {
   if (!gfxPlatform::IsHeadless()) {
     gtk_init(nullptr, nullptr);
   }
 
   mMaxGenericSubstitutions = UNINITIALIZED_VALUE;
-  mIsX11Display = gfxPlatform::IsHeadless()
-                      ? false
-                      : GDK_IS_X11_DISPLAY(gdk_display_get_default());
+  mIsX11Display = gfxPlatform::IsHeadless() ? false : GdkIsX11Display();
   if (XRE_IsParentProcess()) {
 #ifdef MOZ_X11
     if (mIsX11Display && mozilla::Preferences::GetBool("gfx.xrender.enabled")) {
@@ -96,26 +106,22 @@ gfxPlatformGtk::gfxPlatformGtk() {
     }
 #endif
 
-    bool useEGLOnX11 = false;
-#ifdef MOZ_X11
-    useEGLOnX11 = IsX11EGLEnabled();
-#endif
-    if (IsWaylandDisplay() || useEGLOnX11) {
+    InitX11EGLConfig();
+    if (IsWaylandDisplay() || gfxConfig::IsEnabled(Feature::X11_EGL)) {
       gfxVars::SetUseEGL(true);
+    }
 
-      nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-      nsAutoCString drmRenderDevice;
-      gfxInfo->GetDrmRenderDevice(drmRenderDevice);
-      gfxVars::SetDrmRenderDevice(drmRenderDevice);
+    InitDmabufConfig();
+    if (gfxConfig::IsEnabled(Feature::DMABUF)) {
+      gfxVars::SetUseDMABuf(true);
     }
   }
 
-  InitBackendPrefs(GetBackendPrefs());
-
 #ifdef MOZ_WAYLAND
-  mUseWebGLDmabufBackend =
-      gfxVars::UseEGL() && GetDMABufDevice()->IsDMABufWebGLEnabled();
+  mUseWebGLDmabufBackend = true;
 #endif
+
+  InitBackendPrefs(GetBackendPrefs());
 
   gPlatformFTLibrary = Factory::NewFTLibrary();
   MOZ_RELEASE_ASSERT(gPlatformFTLibrary);
@@ -126,6 +132,10 @@ gfxPlatformGtk::gfxPlatformGtk() {
     g_signal_connect(gdkScreen, "notify::resolution",
                      G_CALLBACK(screen_resolution_changed), nullptr);
   }
+
+  // Bug 1714483: Force disable FXAA Antialiasing on NV drivers. This is a
+  // temporary workaround for a driver bug.
+  PR_SetEnv("__GL_ALLOW_FXAA_USAGE=0");
 }
 
 gfxPlatformGtk::~gfxPlatformGtk() {
@@ -133,10 +143,116 @@ gfxPlatformGtk::~gfxPlatformGtk() {
   gPlatformFTLibrary = nullptr;
 }
 
-void gfxPlatformGtk::FlushContentDrawing() {
-  if (gfxVars::UseXRender()) {
-    XFlush(DefaultXDisplay());
+void gfxPlatformGtk::InitX11EGLConfig() {
+  FeatureState& feature = gfxConfig::GetFeature(Feature::X11_EGL);
+#ifdef MOZ_X11
+  feature.EnableByDefault();
+
+  if (StaticPrefs::gfx_x11_egl_force_enabled_AtStartup()) {
+    feature.UserForceEnable("Force enabled by pref");
+  } else if (IsX11EGLEnvvarEnabled()) {
+    feature.UserForceEnable("Force enabled by envvar");
+  } else if (StaticPrefs::gfx_x11_egl_force_disabled_AtStartup()) {
+    feature.UserDisable("Force disabled by pref",
+                        "FEATURE_FAILURE_USER_FORCE_DISABLED"_ns);
   }
+
+  nsCString failureId;
+  int32_t status;
+  nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+  if (NS_FAILED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_X11_EGL,
+                                          failureId, &status))) {
+    feature.Disable(FeatureStatus::BlockedNoGfxInfo, "gfxInfo is broken",
+                    "FEATURE_FAILURE_NO_GFX_INFO"_ns);
+  } else if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
+    feature.Disable(FeatureStatus::Blocklisted, "Blocklisted by gfxInfo",
+                    failureId);
+  }
+
+  nsAutoString testType;
+  gfxInfo->GetTestType(testType);
+  // We can only use X11/EGL if we actually found the EGL library and
+  // successfully use it to determine system information in glxtest.
+  if (testType != u"EGL") {
+    feature.ForceDisable(FeatureStatus::Broken, "glxtest could not use EGL",
+                         "FEATURE_FAILURE_GLXTEST_NO_EGL"_ns);
+  }
+#else
+  feature.DisableByDefault(FeatureStatus::Unavailable, "X11 support missing",
+                           "FEATURE_FAILURE_NO_X11"_ns);
+#endif
+}
+
+void gfxPlatformGtk::InitDmabufConfig() {
+  FeatureState& feature = gfxConfig::GetFeature(Feature::DMABUF);
+#ifdef MOZ_WAYLAND
+  feature.EnableByDefault();
+
+  if (StaticPrefs::widget_dmabuf_force_enabled_AtStartup()) {
+    feature.UserForceEnable("Force enabled by pref");
+  }
+
+  nsCString failureId;
+  int32_t status;
+  nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+  if (NS_FAILED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DMABUF, failureId,
+                                          &status))) {
+    feature.Disable(FeatureStatus::BlockedNoGfxInfo, "gfxInfo is broken",
+                    "FEATURE_FAILURE_NO_GFX_INFO"_ns);
+  } else if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
+    feature.Disable(FeatureStatus::Blocklisted, "Blocklisted by gfxInfo",
+                    failureId);
+  }
+
+  if (!gfxVars::UseEGL()) {
+    feature.ForceDisable(FeatureStatus::Unavailable, "Requires EGL",
+                         "FEATURE_FAILURE_REQUIRES_EGL"_ns);
+  }
+
+  if (feature.IsEnabled()) {
+    nsAutoCString drmRenderDevice;
+    gfxInfo->GetDrmRenderDevice(drmRenderDevice);
+    gfxVars::SetDrmRenderDevice(drmRenderDevice);
+
+    if (!GetDMABufDevice()->Configure(failureId)) {
+      feature.ForceDisable(FeatureStatus::Failed, "Failed to configure",
+                           failureId);
+    }
+  }
+#else
+  feature.DisableByDefault(FeatureStatus::Unavailable,
+                           "Wayland support missing",
+                           "FEATURE_FAILURE_NO_WAYLAND"_ns);
+#endif
+}
+
+void gfxPlatformGtk::InitWebRenderConfig() {
+  gfxPlatform::InitWebRenderConfig();
+
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
+  FeatureState& feature = gfxConfig::GetFeature(Feature::WEBRENDER_COMPOSITOR);
+  if (feature.IsEnabled()) {
+    if (!(gfxConfig::IsEnabled(Feature::WEBRENDER) ||
+          gfxConfig::IsEnabled(Feature::WEBRENDER_SOFTWARE))) {
+      feature.ForceDisable(FeatureStatus::Unavailable, "WebRender disabled",
+                           "FEATURE_FAILURE_WR_DISABLED"_ns);
+    } else if (!IsWaylandDisplay()) {
+      feature.ForceDisable(FeatureStatus::Unavailable,
+                           "Wayland support missing",
+                           "FEATURE_FAILURE_NO_WAYLAND"_ns);
+    }
+#ifdef MOZ_WAYLAND
+    else if (!widget::WaylandDisplayGet()->GetViewporter()) {
+      feature.ForceDisable(FeatureStatus::Unavailable,
+                           "Requires wp_viewporter protocol support",
+                           "FEATURE_FAILURE_REQUIRES_WPVIEWPORTER"_ns);
+    }
+#endif
+  }
+  gfxVars::SetUseWebRenderCompositor(feature.IsEnabled());
 }
 
 void gfxPlatformGtk::InitPlatformGPUProcessPrefs() {
@@ -223,6 +339,8 @@ static const char kFontDroidSansFallback[] = "Droid Sans Fallback";
 static const char kFontWenQuanYiMicroHei[] = "WenQuanYi Micro Hei";
 static const char kFontNanumGothic[] = "NanumGothic";
 static const char kFontSymbola[] = "Symbola";
+static const char kFontNotoSansSymbols[] = "Noto Sans Symbols";
+static const char kFontNotoSansSymbols2[] = "Noto Sans Symbols2";
 
 void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
                                             eFontPresentation aPresentation,
@@ -236,6 +354,8 @@ void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
   aFontList.AppendElement(kFontDejaVuSans);
   aFontList.AppendElement(kFontFreeSans);
   aFontList.AppendElement(kFontSymbola);
+  aFontList.AppendElement(kFontNotoSansSymbols);
+  aFontList.AppendElement(kFontNotoSansSymbols2);
 
   // add fonts for CJK ranges
   // xxx - this isn't really correct, should use the same CJK font ordering
@@ -250,20 +370,18 @@ void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
 }
 
 void gfxPlatformGtk::ReadSystemFontList(
-    nsTArray<SystemFontListEntry>* retValue) {
+    mozilla::dom::SystemFontList* retValue) {
   gfxFcPlatformFontList::PlatformFontList()->ReadSystemFontList(retValue);
 }
 
-gfxPlatformFontList* gfxPlatformGtk::CreatePlatformFontList() {
-  gfxPlatformFontList* list = new gfxFcPlatformFontList();
-  if (NS_SUCCEEDED(list->InitFontList())) {
-    return list;
-  }
-  gfxPlatformFontList::Shutdown();
-  return nullptr;
+bool gfxPlatformGtk::CreatePlatformFontList() {
+  return gfxPlatformFontList::Initialize(new gfxFcPlatformFontList);
 }
 
 int32_t gfxPlatformGtk::GetFontScaleDPI() {
+  MOZ_ASSERT(XRE_IsParentProcess(),
+             "You can access this via LookAndFeel if you need it in child "
+             "processes");
   if (MOZ_LIKELY(sDPI != 0)) {
     return sDPI;
   }
@@ -321,7 +439,7 @@ gfxImageFormat gfxPlatformGtk::GetOffscreenFormat() {
 
 void gfxPlatformGtk::FontsPrefsChanged(const char* aPref) {
   // only checking for generic substitions, pass other changes up
-  if (strcmp(GFX_PREF_MAX_GENERIC_SUBSTITUTIONS, aPref)) {
+  if (strcmp(GFX_PREF_MAX_GENERIC_SUBSTITUTIONS, aPref) != 0) {
     gfxPlatform::FontsPrefsChanged(aPref);
     return;
   }
@@ -345,6 +463,15 @@ uint32_t gfxPlatformGtk::MaxGenericSubstitions() {
 }
 
 bool gfxPlatformGtk::AccelerateLayersByDefault() { return true; }
+
+#ifdef MOZ_WAYLAND
+bool gfxPlatformGtk::UseDMABufWebGL() {
+  static bool dmabufAvailable = []() {
+    return gfxVars::UseDMABuf() && GetDMABufDevice()->IsDMABufWebGLEnabled();
+  }();
+  return dmabufAvailable && mUseWebGLDmabufBackend;
+}
+#endif
 
 #if defined(MOZ_X11)
 
@@ -381,6 +508,26 @@ nsTArray<uint8_t> gfxPlatformGtk::GetPlatformCMSOutputProfileData() {
   nsTArray<uint8_t> prefProfileData = GetPrefCMSOutputProfileData();
   if (!prefProfileData.IsEmpty()) {
     return prefProfileData;
+  }
+
+  if (XRE_IsContentProcess()) {
+    MOZ_ASSERT(NS_IsMainThread());
+    // This will be passed in during InitChild so we can avoid sending a
+    // sync message back to the parent during init.
+    const mozilla::gfx::ContentDeviceData* contentDeviceData =
+        GetInitContentDeviceData();
+    if (contentDeviceData) {
+      // On Windows, we assert that the profile isn't empty, but on
+      // Linux it can legitimately be empty if the display isn't
+      // calibrated.  Thus, no assertion here.
+      return contentDeviceData->cmsOutputProfileData().Clone();
+    }
+
+    // Otherwise we need to ask the parent for the updated color profile
+    mozilla::dom::ContentChild* cc = mozilla::dom::ContentChild::GetSingleton();
+    nsTArray<uint8_t> result;
+    Unused << cc->SendGetOutputColorProfileData(&result);
+    return result;
   }
 
   if (!mIsX11Display) {
@@ -427,7 +574,7 @@ nsTArray<uint8_t> gfxPlatformGtk::GetPlatformCMSOutputProfileData() {
   }
 
   // Format documented in "VESA E-EDID Implementation Guide"
-  float gamma = (100 + retProperty[0x17]) / 100.0f;
+  float gamma = (100 + (float)retProperty[0x17]) / 100.0f;
 
   qcms_CIE_xyY whitePoint;
   whitePoint.x =
@@ -468,7 +615,9 @@ nsTArray<uint8_t> gfxPlatformGtk::GetPlatformCMSOutputProfileData() {
   result.AppendElements(static_cast<uint8_t*>(mem), size);
   free(mem);
 
-  return result;
+  // XXX: It seems like we get wrong colors when using this constructed profile:
+  // See bug 1696819. For now just forget that we made it.
+  return nsTArray<uint8_t>();
 }
 
 #else  // defined(MOZ_X11)
@@ -557,8 +706,9 @@ class GtkVsyncSource final : public VsyncSource {
         return;
       }
 
-      mGLContext = gl::GLContextGLX::CreateGLContext({}, mXDisplay, root,
-                                                     config, false, nullptr);
+      mGLContext = gl::GLContextGLX::CreateGLContext(
+          {}, gfx::XlibDisplay::Borrow(mXDisplay), root, config, false,
+          nullptr);
 
       if (!mGLContext) {
         lock.NotifyAll();
@@ -645,7 +795,7 @@ class GtkVsyncSource final : public VsyncSource {
         // until the parity of the counter value changes.
         unsigned int nextSync = syncCounter + 1;
         int status;
-        if ((status = gl::sGLXLibrary.fWaitVideoSync(2, nextSync % 2,
+        if ((status = gl::sGLXLibrary.fWaitVideoSync(2, (int)nextSync % 2,
                                                      &syncCounter)) != 0) {
           gfxWarningOnce() << "glXWaitVideoSync returned " << status;
           useSoftware = true;
@@ -661,7 +811,7 @@ class GtkVsyncSource final : public VsyncSource {
           double remaining =
               (1000.f / 60.f) - (TimeStamp::Now() - lastVsync).ToMilliseconds();
           if (remaining > 0) {
-            PlatformThread::Sleep(remaining);
+            PlatformThread::Sleep((int)remaining);
           }
         }
 
@@ -702,7 +852,7 @@ already_AddRefed<gfx::VsyncSource> gfxPlatformGtk::CreateHardwareVsyncSource() {
   }
 #  endif
 
-  // Only use GLX vsync when the OpenGL compositor / WebRedner is being used.
+  // Only use GLX vsync when the OpenGL compositor / WebRender is being used.
   // The extra cost of initializing a GLX context while blocking the main
   // thread is not worth it when using basic composition.
   //
@@ -712,13 +862,13 @@ already_AddRefed<gfx::VsyncSource> gfxPlatformGtk::CreateHardwareVsyncSource() {
   if (gfxConfig::IsEnabled(Feature::HW_COMPOSITING)) {
     bool useGlxVsync = false;
 
-    nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+    nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
     nsString adapterDriverVendor;
     gfxInfo->GetAdapterDriverVendor(adapterDriverVendor);
 
     // Nvidia doesn't support GLX at the same time as EGL but Mesa does.
     if (!gfxVars::UseEGL() || (adapterDriverVendor.Find("mesa") != -1)) {
-      useGlxVsync = gl::sGLXLibrary.SupportsVideoSync();
+      useGlxVsync = gl::sGLXLibrary.SupportsVideoSync(DefaultXDisplay());
     }
     if (useGlxVsync) {
       RefPtr<VsyncSource> vsyncSource = new GtkVsyncSource();
@@ -736,3 +886,9 @@ already_AddRefed<gfx::VsyncSource> gfxPlatformGtk::CreateHardwareVsyncSource() {
 }
 
 #endif
+
+void gfxPlatformGtk::BuildContentDeviceData(ContentDeviceData* aOut) {
+  gfxPlatform::BuildContentDeviceData(aOut);
+
+  aOut->cmsOutputProfileData() = GetPlatformCMSOutputProfileData();
+}

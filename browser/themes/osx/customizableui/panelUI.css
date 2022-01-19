@@ -4,20 +4,46 @@
 
 %include ../../shared/customizableui/panelUI.inc.css
 
-.restoreallitem > .toolbarbutton-icon {
-  display: none;
+panel[type="arrow"][side="top"],
+panel[type="arrow"][side="bottom"] {
+  margin-inline: -16px;
 }
 
-.subviewbutton {
-  padding-inline-start: 18px;
+panel[type="arrow"][side="left"],
+panel[type="arrow"][side="right"] {
+  margin-block: -16px;
 }
 
-.subviewbutton.download {
-  padding-inline-start: 14px;
+#customizationui-widget-panel[viewId="PanelUI-profiler"][type="arrow"][side="top"],
+#customizationui-widget-panel[viewId="PanelUI-profiler"][type="arrow"][side="bottom"] {
+  margin-inline: -8px;
+}
+
+#customizationui-widget-panel[viewId="PanelUI-profiler"][type="arrow"][side="left"],
+#customizationui-widget-panel[viewId="PanelUI-profiler"][type="arrow"][side="right"] {
+  margin-block: -8px;
+}
+
+#downloadsPanel,
+#widget-overflow,
+#appMenu-popup,
+#customizationui-widget-panel,
+#identity-popup,
+#permission-popup,
+#protections-popup {
+  margin-top: -1px; /* Overrides value from panelUI.inc.css */
+}
+
+#BMB_bookmarksPopup {
+  margin-top: -4px; /* Overrides value from panelUI.inc.css */
 }
 
 panelmultiview .toolbaritem-combined-buttons > spacer.before-label {
   width: 42px; /* 18px toolbarbutton padding + 16px icon + 8px label padding start */
+}
+
+.panel-subview-body {
+  scrollbar-color: color-mix(in srgb, currentColor 26%, transparent) transparent;
 }
 
 #appMenu-addon-banners > .addon-banner-item,
@@ -39,17 +65,23 @@ panelmultiview .toolbaritem-combined-buttons > spacer.before-label {
   display: none;
 }
 
+#BMB_bookmarksPopup .subviewbutton > .menu-iconic-left {
+  margin-inline-end: 3px;
+}
+
+#BMB_bookmarksPopup .subviewbutton > .menu-iconic-text {
+  padding-inline-start: 0;
+}
+
 #BMB_bookmarksPopup menupopup[placespopup=true]:-moz-lwtheme {
   appearance: none;
   background: transparent;
+  --panel-background: var(--arrowpanel-background);
+  --panel-border-color: var(--arrowpanel-border-color);
+  --panel-color: var(--arrowpanel-color);
 }
 
-#BMB_bookmarksPopup menupopup[placespopup=true]:-moz-lwtheme::part(innerbox) {
-  background: var(--arrowpanel-background);
-  border-radius: var(--arrowpanel-border-radius);
-  box-shadow: 0 0 0 1px var(--arrowpanel-border-color);
-  color: var(--arrowpanel-color);
-  border: none;
+#BMB_bookmarksPopup menupopup[placespopup=true]:-moz-lwtheme::part(content) {
   margin: 1px;
 }
 
@@ -57,11 +89,6 @@ panelmultiview .toolbaritem-combined-buttons > spacer.before-label {
 menu.subviewbutton > .menu-right {
   margin-inline-end: -4px;
   appearance: none;
-}
-
-.PanelUI-subView menuseparator,
-.cui-widget-panelview menuseparator {
-  padding: 0 !important;
 }
 
 .PanelUI-remotetabs-clientcontainer > label[itemtype="client"] {

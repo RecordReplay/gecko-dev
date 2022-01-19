@@ -51,7 +51,8 @@ const PanelUI = {
   _notifications: null,
   _notificationPanel: null,
 
-  init() {
+  init(shouldSuppress) {
+    this._shouldSuppress = shouldSuppress;
     this._initElements();
 
     this.menuButton.addEventListener("mousedown", this);
@@ -82,7 +83,7 @@ const PanelUI = {
           window.removeEventListener("fullscreen", this);
         }
 
-        this._updateNotifications(false);
+        this.updateNotifications(false);
       },
       autoHidePref => autoHidePref && Services.appinfo.OS !== "Darwin"
     );
@@ -92,29 +93,6 @@ const PanelUI = {
     } else {
       window.addEventListener("MozDOMFullscreen:Entered", this);
       window.addEventListener("MozDOMFullscreen:Exited", this);
-    }
-
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "libraryRecentHighlightsEnabled",
-      "browser.library.activity-stream.enabled",
-      false,
-      (pref, previousValue, newValue) => {
-        if (!newValue) {
-          this.clearLibraryRecentHighlights();
-        }
-      }
-    );
-
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "protonAppMenuEnabled",
-      "browser.proton.appmenu.enabled",
-      false
-    );
-
-    if (this.protonAppMenuEnabled) {
-      this.multiView.setAttribute("mainViewId", "appMenu-protonMainView");
     }
 
     window.addEventListener("activate", this);
@@ -203,9 +181,6 @@ const PanelUI = {
     this.menuButton.removeEventListener("mousedown", this);
     this.menuButton.removeEventListener("keypress", this);
     CustomizableUI.removeListener(this);
-    if (this.libraryView) {
-      this.libraryView.removeEventListener("ViewShowing", this);
-    }
     if (this.whatsNewPanel) {
       this.whatsNewPanel.removeEventListener("ViewShowing", this);
     }
@@ -277,7 +252,7 @@ const PanelUI = {
     switch (topic) {
       case "fullscreen-nav-toolbox":
         if (this._notifications) {
-          this._updateNotifications(false);
+          this.updateNotifications(false);
         }
         break;
       case "appMenu-notifications":
@@ -286,7 +261,7 @@ const PanelUI = {
           break;
         }
         this._notifications = AppMenuNotifications.notifications;
-        this._updateNotifications(true);
+        this.updateNotifications(true);
         break;
       case "show-update-progress":
         openAboutDialog();
@@ -314,7 +289,7 @@ const PanelUI = {
         }
       // Fall through
       case "popuphidden":
-        this._updateNotifications();
+        this.updateNotifications();
         this._updatePanelButton(aEvent.target);
         if (aEvent.type == "popuphidden") {
           CustomizableUI.removePanelCloseListeners(this.panel);
@@ -340,12 +315,10 @@ const PanelUI = {
       case "MozDOMFullscreen:Exited":
       case "fullscreen":
       case "activate":
-        this._updateNotifications();
+        this.updateNotifications();
         break;
       case "ViewShowing":
-        if (aEvent.target == this.libraryView) {
-          this.onLibraryViewShowing(aEvent.target).catch(Cu.reportError);
-        } else if (aEvent.target == this.whatsNewPanel) {
+        if (aEvent.target == this.whatsNewPanel) {
           this.onWhatsNewPanelShowing();
         }
         break;
@@ -392,6 +365,22 @@ const PanelUI = {
   showHelpView(aAnchor) {
     this._ensureEventListenersAdded();
     this.multiView.showSubView("PanelUI-helpView", aAnchor);
+  },
+
+  /**
+   * Switch the panel to the "More Tools" view.
+   *
+   * @param moreTools The panel showing the "More Tools" view.
+   */
+  showMoreToolsPanel(moreTools) {
+    this.showSubView("appmenu-moreTools", moreTools);
+
+    // Notify DevTools the panel view is showing and need it to populate the
+    // "Browser Tools" section of the panel. We notify the observer setup by
+    // DevTools because we want to ensure the same menuitem list is shared
+    // between both the AppMenu and toolbar button views.
+    let view = document.getElementById("appmenu-developer-tools-view");
+    Services.obs.notifyObservers(view, "web-developer-tools-view-showing");
   },
 
   /**
@@ -462,7 +451,6 @@ const PanelUI = {
       return;
     }
 
-    this.ensureLibraryInitialized(viewNode);
     this.ensureWhatsNewInitialized(viewNode);
     this.ensurePanicViewInitialized(viewNode);
 
@@ -479,6 +467,9 @@ const PanelUI = {
       tempPanel.setAttribute("viewId", aViewId);
       if (aAnchor.getAttribute("tabspecific")) {
         tempPanel.setAttribute("tabspecific", true);
+      }
+      if (aAnchor.getAttribute("locationspecific")) {
+        tempPanel.setAttribute("locationspecific", true);
       }
       if (this._disableAnimations) {
         tempPanel.setAttribute("animate", "false");
@@ -539,172 +530,6 @@ const PanelUI = {
         panelRemover();
       }
     }
-  },
-
-  /**
-   * Sets up the event listener for when the Library view is shown.
-   *
-   * @param {panelview} viewNode The library view.
-   */
-  ensureLibraryInitialized(viewNode) {
-    if (viewNode.id != "appMenu-libraryView" || viewNode._initialized) {
-      return;
-    }
-
-    if (!this.libraryView) {
-      this.libraryView = viewNode;
-    }
-
-    viewNode._initialized = true;
-    viewNode.addEventListener("ViewShowing", this);
-  },
-
-  /**
-   * When the Library view is showing, we can start fetching and populating the
-   * list of Recent Highlights.
-   * This is done asynchronously and may finish when the view is already visible.
-   *
-   * @param {panelview} viewNode The library view.
-   */
-  async onLibraryViewShowing(viewNode) {
-    // Since the library is the first view shown, we don't want to add a blocker
-    // to the event, which would make PanelMultiView wait to show it. Instead,
-    // we keep the space currently reserved for the items, but we hide them.
-    if (this._loadingRecentHighlights || !this.libraryRecentHighlightsEnabled) {
-      return;
-    }
-
-    if (!this.libraryRecentHighlights) {
-      this.libraryRecentHighlights = document.getElementById(
-        "appMenu-library-recentHighlights"
-      );
-    }
-
-    // When these prefs are made the default, add this data-l10n-id directly to browser.xhtml.
-    if (
-      Services.prefs.getBoolPref(
-        "browser.newtabpage.activity-stream.customizationMenu.enabled"
-      ) ||
-      Services.prefs.getBoolPref(
-        "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
-      )
-    ) {
-      this.libraryRecentHighlights.previousElementSibling.setAttribute(
-        "data-l10n-id",
-        "library-recent-activity-title"
-      );
-    } else {
-      this.libraryRecentHighlights.previousElementSibling.removeAttribute(
-        "data-l10n-id"
-      );
-    }
-
-    // Make the elements invisible synchronously, before the view is shown.
-    this.makeLibraryRecentHighlightsInvisible();
-
-    // Perform the rest asynchronously while protecting from re-entrancy.
-    this._loadingRecentHighlights = true;
-    try {
-      await this.fetchAndPopulateLibraryRecentHighlights();
-    } finally {
-      this._loadingRecentHighlights = false;
-    }
-  },
-
-  /**
-   * Fetches the list of Recent Highlights and replaces the items in the Library
-   * view with the results.
-   */
-  async fetchAndPopulateLibraryRecentHighlights() {
-    let highlights = await NewTabUtils.activityStreamLinks
-      .getHighlights({
-        // As per bug 1402023, hard-coded limit, until Activity Stream develops a
-        // richer list.
-        numItems: 6,
-        withFavicons: true,
-        excludePocket: true,
-      })
-      .catch(ex => {
-        // Just hide the section if we can't retrieve the items from the database.
-        Cu.reportError(ex);
-        return [];
-      });
-
-    // Since the call above is asynchronous, the panel may be already hidden
-    // at this point, but we still prepare the items for the next time the
-    // panel is shown, so their space is reserved. The part of this function
-    // that adds the elements is the least expensive anyways.
-    this.clearLibraryRecentHighlights();
-    if (!highlights.length) {
-      return;
-    }
-
-    let container = this.libraryRecentHighlights;
-    container.hidden = container.previousElementSibling.hidden = container.previousElementSibling.previousElementSibling.hidden = false;
-    let fragment = document.createDocumentFragment();
-    for (let highlight of highlights) {
-      let button = document.createXULElement("toolbarbutton");
-      button.classList.add(
-        "subviewbutton",
-        "highlight",
-        "subviewbutton-iconic",
-        "bookmark-item"
-      );
-      let title = highlight.title || highlight.url;
-      button.setAttribute("label", title);
-      button.setAttribute("tooltiptext", title);
-      button.setAttribute("type", "highlight-" + highlight.type);
-      button.setAttribute("onclick", "PanelUI.onLibraryHighlightClick(event)");
-      if (highlight.favicon) {
-        button.setAttribute("image", highlight.favicon);
-      }
-      button._highlight = highlight;
-      fragment.appendChild(button);
-    }
-    container.appendChild(fragment);
-  },
-
-  /**
-   * Make all nodes from the 'Recent Highlights' section invisible while we
-   * refresh its contents. This is done while the Library view is opening to
-   * avoid showing potentially stale items, but still keep the space reserved.
-   */
-  makeLibraryRecentHighlightsInvisible() {
-    for (let button of this.libraryRecentHighlights.children) {
-      button.style.visibility = "hidden";
-    }
-  },
-
-  /**
-   * Remove all the nodes from the 'Recent Highlights' section and hide it as well.
-   */
-  clearLibraryRecentHighlights() {
-    let container = this.libraryRecentHighlights;
-    while (container.firstChild) {
-      container.firstChild.remove();
-    }
-    container.hidden = container.previousElementSibling.hidden = container.previousElementSibling.previousElementSibling.hidden = true;
-  },
-
-  /**
-   * Event handler; invoked when an item of the Recent Highlights is clicked.
-   *
-   * @param {MouseEvent} event Click event, originating from the Highlight.
-   */
-  onLibraryHighlightClick(event) {
-    let button = event.target;
-    if (event.button > 1 || !button._highlight) {
-      return;
-    }
-    if (event.button == 1) {
-      // Bug 1402849, close library panel on mid mouse click
-      CustomizableUI.hidePanelForNode(button);
-    }
-    window.openUILink(button._highlight.url, event, {
-      triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal(
-        {}
-      ),
-    });
   },
 
   /**
@@ -796,8 +621,20 @@ const PanelUI = {
    * on the state of the panel.
    */
   _updatePanelButton() {
-    this.menuButton.open =
-      this.panel.state == "open" || this.panel.state == "showing";
+    let { state } = this.panel;
+    if (state == "open" || state == "showing") {
+      this.menuButton.open = true;
+      document.l10n.setAttributes(
+        this.menuButton,
+        "appmenu-menu-button-opened2"
+      );
+    } else {
+      this.menuButton.open = false;
+      document.l10n.setAttributes(
+        this.menuButton,
+        "appmenu-menu-button-closed2"
+      );
+    }
   },
 
   _onHelpViewShow(aEvent) {
@@ -806,7 +643,15 @@ const PanelUI = {
 
     let helpMenu = document.getElementById("menu_HelpPopup");
     let items = this.getElementsByTagName("vbox")[0];
-    let attrs = ["command", "oncommand", "onclick", "key", "disabled"];
+    let attrs = [
+      "command",
+      "oncommand",
+      "onclick",
+      "key",
+      "disabled",
+      "accesskey",
+      "label",
+    ];
 
     // Remove all buttons from the view
     while (items.firstChild) {
@@ -834,41 +679,32 @@ const PanelUI = {
       // We have AppMenu-specific strings for the Help menu. By convention,
       // their localization IDs are set on "appmenu-data-l10n-id" attributes.
       let l10nId = node.getAttribute("appmenu-data-l10n-id");
-      button.setAttribute("data-l10n-id", l10nId);
+      if (l10nId) {
+        button.setAttribute("data-l10n-id", l10nId);
+      }
 
       if (node.id) {
         button.id = "appMenu_" + node.id;
       }
-      button.setAttribute("class", "subviewbutton subviewbutton-iconic");
+
+      button.classList.add("subviewbutton");
       fragment.appendChild(button);
     }
-    items.appendChild(fragment);
-  },
 
-  _updateQuitTooltip() {
-    if (AppConstants.platform == "win") {
-      return;
+    // The Enterprise Support menu item has a different location than its
+    // placement in the menubar, so we need to specify it here.
+    let helpPolicySupport = fragment.querySelector(
+      "#appMenu_helpPolicySupport"
+    );
+    if (helpPolicySupport) {
+      fragment.insertBefore(
+        helpPolicySupport,
+        fragment.querySelector("#appMenu_menu_HelpPopup_reportPhishingtoolmenu")
+          .nextSibling
+      );
     }
 
-    let tooltipId =
-      AppConstants.platform == "macosx"
-        ? "quit-button.tooltiptext.mac"
-        : "quit-button.tooltiptext.linux2";
-
-    let brands = Services.strings.createBundle(
-      "chrome://branding/locale/brand.properties"
-    );
-    let stringArgs = [brands.GetStringFromName("brandShortName")];
-
-    let key = document.getElementById("key_quitApplication");
-    stringArgs.push(ShortcutUtils.prettifyShortcut(key));
-    let tooltipString = CustomizableUI.getLocalizedProperty(
-      { x: tooltipId },
-      "x",
-      stringArgs
-    );
-    let quitButton = document.getElementById("PanelUI-quit");
-    quitButton.setAttribute("tooltiptext", tooltipString);
+    items.appendChild(fragment);
   },
 
   _hidePopup() {
@@ -881,7 +717,7 @@ const PanelUI = {
     }
   },
 
-  _updateNotifications(notificationsChanged) {
+  updateNotifications(notificationsChanged) {
     let notifications = this._notifications;
     if (!notifications || !notifications.length) {
       if (notificationsChanged) {
@@ -893,7 +729,8 @@ const PanelUI = {
 
     if (
       (window.fullScreen && FullScreen.navToolboxHidden) ||
-      document.fullscreenElement
+      document.fullscreenElement ||
+      this._shouldSuppress()
     ) {
       this._hidePopup();
       return;
@@ -904,8 +741,10 @@ const PanelUI = {
     );
 
     if (this.panel.state == "showing" || this.panel.state == "open") {
-      // If the menu is already showing, then we need to dismiss all notifications
-      // since we don't want their doorhangers competing for attention
+      // If the menu is already showing, then we need to dismiss all
+      // notifications since we don't want their doorhangers competing for
+      // attention. Don't hide the badge though; it isn't really in competition
+      // with anything.
       doorhangers.forEach(n => {
         n.dismissed = true;
         if (n.options.onDismissed) {
@@ -913,7 +752,6 @@ const PanelUI = {
         }
       });
       this._hidePopup();
-      this._clearBadge();
       if (!notifications[0].options.badgeOnly) {
         this._showBannerItem(notifications[0]);
       }
@@ -998,9 +836,7 @@ const PanelUI = {
     if (!this._mainView) {
       this._mainView = PanelMultiView.getViewNode(
         document,
-        this.protonAppMenuEnabled
-          ? "appMenu-protonMainView"
-          : "appMenu-mainView"
+        "appMenu-protonMainView"
       );
     }
     return this._mainView;
@@ -1010,7 +846,7 @@ const PanelUI = {
     if (!this._addonNotificationContainer) {
       this._addonNotificationContainer = PanelMultiView.getViewNode(
         document,
-        "appMenu-addon-banners"
+        "appMenu-proton-addon-banners"
       );
     }
 
@@ -1053,6 +889,7 @@ const PanelUI = {
     }
     if (notification.options.popupIconURL) {
       popupnotification.setAttribute("icon", notification.options.popupIconURL);
+      popupnotification.setAttribute("hasicon", true);
     }
 
     popupnotification.notification = notification;

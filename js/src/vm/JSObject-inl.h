@@ -14,6 +14,7 @@
 #include "vm/EnvironmentObject.h"
 #include "vm/JSFunction.h"
 #include "vm/Probes.h"
+#include "vm/PropertyResult.h"
 #include "vm/TypedArrayObject.h"
 
 #include "gc/FreeOp-inl.h"
@@ -24,19 +25,9 @@
 
 namespace js {
 
-/*
- * Get the GC kind to use for scripted 'new' on the given class.
- * FIXME bug 547327: estimate the size from the allocation site.
- */
-static inline gc::AllocKind NewObjectGCKind(const JSClass* clasp) {
-  if (clasp == &ArrayObject::class_) {
-    return gc::AllocKind::OBJECT8;
-  }
-  if (clasp == &JSFunction::class_) {
-    return gc::AllocKind::OBJECT2;
-  }
-  return gc::AllocKind::OBJECT4;
-}
+// Get the GC kind to use for scripted 'new', empty object literals ({}), and
+// the |Object| constructor.
+static inline gc::AllocKind NewObjectGCKind() { return gc::AllocKind::OBJECT4; }
 
 }  // namespace js
 
@@ -93,10 +84,9 @@ inline void JSObject::finalize(JSFreeOp* fop) {
 #endif
 
   const JSClass* clasp = getClass();
-  js::NativeObject* nobj = nullptr;
-  if (clasp->isNative()) {
-    nobj = &as<js::NativeObject>();
-  }
+  js::NativeObject* nobj =
+      clasp->isNativeObject() ? &as<js::NativeObject>() : nullptr;
+
   if (clasp->hasFinalize()) {
     clasp->doFinalize(fop, this);
   }
@@ -119,40 +109,11 @@ inline void JSObject::finalize(JSFreeOp* fop) {
   }
 }
 
-MOZ_ALWAYS_INLINE void js::NativeObject::sweepDictionaryListPointer() {
-  // Dictionary mode shapes can have pointers to nursery-allocated
-  // objects. There's no postbarrier for this pointer so this method is called
-  // to clear it when such an object dies.
-  MOZ_ASSERT(inDictionaryMode());
-  if (shape()->dictNext == DictionaryShapeLink(this)) {
-    shape()->dictNext.setNone();
-  }
-}
-
-MOZ_ALWAYS_INLINE void
-js::NativeObject::updateDictionaryListPointerAfterMinorGC(NativeObject* old) {
-  MOZ_ASSERT(this == Forwarded(old));
-
-  // Dictionary objects can be allocated in the nursery and when they are
-  // tenured the shape's pointer to the object needs to be updated.
-  if (shape()->dictNext == DictionaryShapeLink(old)) {
-    shape()->dictNext = DictionaryShapeLink(this);
-  }
-}
-
-inline void JSObject::setGroup(js::ObjectGroup* group) {
-  MOZ_RELEASE_ASSERT(group);
-  MOZ_ASSERT(maybeCCWRealm() == group->realm());
-  setGroupRaw(group);
-}
-
-/* * */
-
 inline bool JSObject::isQualifiedVarObj() const {
   if (is<js::DebugEnvironmentProxy>()) {
     return as<js::DebugEnvironmentProxy>().environment().isQualifiedVarObj();
   }
-  bool rv = hasAllFlags(js::BaseShape::QUALIFIED_VAROBJ);
+  bool rv = hasFlag(js::ObjectFlag::QualifiedVarObj);
   MOZ_ASSERT_IF(rv, is<js::GlobalObject>() || is<js::CallObject>() ||
                         is<js::VarEnvironmentObject>() ||
                         is<js::ModuleEnvironmentObject>() ||
@@ -177,7 +138,7 @@ inline bool ClassCanHaveFixedData(const JSClass* clasp) {
   // arrays we only use enough to cover the class reserved slots, so that
   // the remaining space in the object's allocation is available for the
   // buffer's data.
-  return !clasp->isNative() || clasp == &js::ArrayBufferObject::class_ ||
+  return !clasp->isNativeObject() || clasp == &js::ArrayBufferObject::class_ ||
          js::IsTypedArrayClass(clasp);
 }
 
@@ -207,8 +168,8 @@ class MOZ_RAII AutoSuppressAllocationMetadataBuilder {
 // may be the passed pointer, relocated by GC. If no GC could occur, it's just
 // passed through. We root nothing unless necessary.
 template <typename T>
-static MOZ_ALWAYS_INLINE MOZ_MUST_USE T* SetNewObjectMetadata(JSContext* cx,
-                                                              T* obj) {
+[[nodiscard]] static MOZ_ALWAYS_INLINE T* SetNewObjectMetadata(JSContext* cx,
+                                                               T* obj) {
   MOZ_ASSERT(!cx->realm()->hasObjectPendingMetadata());
 
   // The metadata builder is invoked for each object created on the active
@@ -240,32 +201,23 @@ inline js::GlobalObject& JSObject::nonCCWGlobal() const {
   return *nonCCWRealm()->unsafeUnbarrieredMaybeGlobal();
 }
 
-inline bool JSObject::hasAllFlags(js::BaseShape::Flag flags) const {
-  MOZ_ASSERT(flags);
-  return shape()->hasAllObjectFlags(flags);
-}
-
 inline bool JSObject::nonProxyIsExtensible() const {
-  MOZ_ASSERT(!uninlinedIsProxy());
+  MOZ_ASSERT(!uninlinedIsProxyObject());
 
   // [[Extensible]] for ordinary non-proxy objects is an object flag.
-  return !hasAllFlags(js::BaseShape::NOT_EXTENSIBLE);
+  return !hasFlag(js::ObjectFlag::NotExtensible);
 }
 
 inline bool JSObject::isBoundFunction() const {
   return is<JSFunction>() && as<JSFunction>().isBoundFunction();
 }
 
-inline bool JSObject::isDelegate() const {
-  return hasAllFlags(js::BaseShape::DELEGATE);
-}
-
 inline bool JSObject::hasUncacheableProto() const {
-  return hasAllFlags(js::BaseShape::UNCACHEABLE_PROTO);
+  return hasFlag(js::ObjectFlag::UncacheableProto);
 }
 
 MOZ_ALWAYS_INLINE bool JSObject::maybeHasInterestingSymbolProperty() const {
-  if (isNative()) {
+  if (is<js::NativeObject>()) {
     return as<js::NativeObject>().hasInterestingSymbol();
   }
   return true;
@@ -273,7 +225,7 @@ MOZ_ALWAYS_INLINE bool JSObject::maybeHasInterestingSymbolProperty() const {
 
 inline bool JSObject::staticPrototypeIsImmutable() const {
   MOZ_ASSERT(hasStaticPrototype());
-  return hasAllFlags(js::BaseShape::IMMUTABLE_PROTOTYPE);
+  return hasFlag(js::ObjectFlag::ImmutablePrototype);
 }
 
 namespace js {
@@ -289,16 +241,6 @@ static MOZ_ALWAYS_INLINE bool IsFunctionObject(const js::Value& v,
     return true;
   }
   return false;
-}
-
-static MOZ_ALWAYS_INLINE bool IsNativeFunction(const js::Value& v) {
-  JSFunction* fun;
-  return IsFunctionObject(v, &fun) && fun->isNative();
-}
-
-static MOZ_ALWAYS_INLINE bool IsNativeFunction(const js::Value& v,
-                                               JSFunction** fun) {
-  return IsFunctionObject(v, fun) && (*fun)->isNative();
 }
 
 static MOZ_ALWAYS_INLINE bool IsNativeFunction(const js::Value& v,
@@ -334,23 +276,23 @@ static MOZ_ALWAYS_INLINE bool HasNoToPrimitiveMethodPure(JSObject* obj,
   JSObject* holder;
   if (!MaybeHasInterestingSymbolProperty(cx, obj, toPrimitive, &holder)) {
 #ifdef DEBUG
-    JSObject* pobj;
+    NativeObject* pobj;
     PropertyResult prop;
     MOZ_ASSERT(
         LookupPropertyPure(cx, obj, SYMBOL_TO_JSID(toPrimitive), &pobj, &prop));
-    MOZ_ASSERT(!prop);
+    MOZ_ASSERT(prop.isNotFound());
 #endif
     return true;
   }
 
-  JSObject* pobj;
+  NativeObject* pobj;
   PropertyResult prop;
   if (!LookupPropertyPure(cx, holder, SYMBOL_TO_JSID(toPrimitive), &pobj,
                           &prop)) {
     return false;
   }
 
-  return !prop;
+  return prop.isNotFound();
 }
 
 extern bool ToPropertyKeySlow(JSContext* cx, HandleValue argument,
@@ -377,19 +319,18 @@ inline bool IsInternalFunctionObject(JSObject& funobj) {
 }
 
 inline gc::InitialHeap GetInitialHeap(NewObjectKind newKind,
-                                      const JSClass* clasp) {
+                                      const JSClass* clasp,
+                                      gc::AllocSite* site = nullptr) {
   if (newKind != GenericObject) {
     return gc::TenuredHeap;
   }
   if (clasp->hasFinalize() && !CanNurseryAllocateFinalizedClass(clasp)) {
     return gc::TenuredHeap;
   }
+  if (site) {
+    return site->initialHeap();
+  }
   return gc::DefaultHeap;
-}
-
-inline gc::InitialHeap GetInitialHeap(NewObjectKind newKind,
-                                      ObjectGroup* group) {
-  return GetInitialHeap(newKind, group->clasp());
 }
 
 /*
@@ -400,14 +341,14 @@ JSObject* NewObjectWithGivenTaggedProto(JSContext* cx, const JSClass* clasp,
                                         Handle<TaggedProto> proto,
                                         gc::AllocKind allocKind,
                                         NewObjectKind newKind,
-                                        uint32_t initialShapeFlags = 0);
+                                        ObjectFlags objectFlags = {});
 
 template <NewObjectKind NewKind>
 inline JSObject* NewObjectWithGivenTaggedProto(JSContext* cx,
                                                const JSClass* clasp,
                                                Handle<TaggedProto> proto) {
   gc::AllocKind allocKind = gc::GetGCObjectKind(clasp);
-  return NewObjectWithGivenTaggedProto(cx, clasp, proto, allocKind, NewKind, 0);
+  return NewObjectWithGivenTaggedProto(cx, clasp, proto, allocKind, NewKind);
 }
 
 namespace detail {
@@ -549,25 +490,6 @@ inline T* NewBuiltinClassInstance(JSContext* cx, gc::AllocKind allocKind,
 
 // Used to optimize calls to (new Object())
 bool NewObjectScriptedCall(JSContext* cx, MutableHandleObject obj);
-
-JSObject* NewObjectWithGroupCommon(JSContext* cx, HandleObjectGroup group,
-                                   gc::AllocKind allocKind,
-                                   NewObjectKind newKind);
-
-template <typename T>
-inline T* NewObjectWithGroup(JSContext* cx, HandleObjectGroup group,
-                             gc::AllocKind allocKind,
-                             NewObjectKind newKind = GenericObject) {
-  JSObject* obj = NewObjectWithGroupCommon(cx, group, allocKind, newKind);
-  return obj ? &obj->as<T>() : nullptr;
-}
-
-template <typename T>
-inline T* NewObjectWithGroup(JSContext* cx, HandleObjectGroup group,
-                             NewObjectKind newKind = GenericObject) {
-  gc::AllocKind allocKind = gc::GetGCObjectKind(group->clasp());
-  return NewObjectWithGroup<T>(cx, group, allocKind, newKind);
-}
 
 /*
  * As for gc::GetGCObjectKind, where numElements is a guess at the final size of

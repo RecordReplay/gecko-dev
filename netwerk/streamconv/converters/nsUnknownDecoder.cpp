@@ -75,8 +75,9 @@ nsUnknownDecoder::ConvertedStreamListener::OnStopRequest(nsIRequest* request,
   return NS_OK;
 }
 
-nsUnknownDecoder::nsUnknownDecoder()
-    : mBuffer(nullptr),
+nsUnknownDecoder::nsUnknownDecoder(nsIStreamListener* aListener)
+    : mNextListener(aListener),
+      mBuffer(nullptr),
       mBufferLen(0),
       mRequireHTMLsuffix(false),
       mMutex("nsUnknownDecoder"),
@@ -84,8 +85,9 @@ nsUnknownDecoder::nsUnknownDecoder()
   nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
   if (prefs) {
     bool val;
-    if (NS_SUCCEEDED(prefs->GetBoolPref("security.requireHTMLsuffix", &val)))
+    if (NS_SUCCEEDED(prefs->GetBoolPref("security.requireHTMLsuffix", &val))) {
       mRequireHTMLsuffix = val;
+    }
   }
 }
 
@@ -561,10 +563,10 @@ bool nsUnknownDecoder::SniffForHTML(nsIRequest* aRequest) {
   uint32_t bufSize = end - str;
   // We use sizeof(_tagstr) below because that's the length of _tagstr
   // with the one char " " or ">" appended.
-#define MATCHES_TAG(_tagstr)                                  \
-  (bufSize >= sizeof(_tagstr) &&                              \
-   (PL_strncasecmp(str, _tagstr " ", sizeof(_tagstr)) == 0 || \
-    PL_strncasecmp(str, _tagstr ">", sizeof(_tagstr)) == 0))
+#define MATCHES_TAG(_tagstr)                                      \
+  (bufSize >= sizeof(_tagstr) &&                                  \
+   (nsCRT::strncasecmp(str, _tagstr " ", sizeof(_tagstr)) == 0 || \
+    nsCRT::strncasecmp(str, _tagstr ">", sizeof(_tagstr)) == 0))
 
   if (MATCHES_TAG("html") || MATCHES_TAG("frameset") || MATCHES_TAG("body") ||
       MATCHES_TAG("head") || MATCHES_TAG("script") || MATCHES_TAG("iframe") ||

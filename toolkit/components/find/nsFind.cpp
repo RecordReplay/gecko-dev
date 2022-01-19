@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-//#define DEBUG_FIND 1
+// #define DEBUG_FIND 1
 
 #include "nsFind.h"
 #include "mozilla/Likely.h"
@@ -39,13 +39,6 @@ using namespace mozilla::unicode;
 
 // Yikes!  Casting a char to unichar can fill with ones!
 #define CHAR_TO_UNICHAR(c) ((char16_t)(unsigned char)c)
-
-#define CH_QUOTE ((char16_t)0x22)
-#define CH_APOSTROPHE ((char16_t)0x27)
-#define CH_LEFT_SINGLE_QUOTE ((char16_t)0x2018)
-#define CH_RIGHT_SINGLE_QUOTE ((char16_t)0x2019)
-#define CH_LEFT_DOUBLE_QUOTE ((char16_t)0x201C)
-#define CH_RIGHT_DOUBLE_QUOTE ((char16_t)0x201D)
 
 #define CH_SHY ((char16_t)0xAD)
 
@@ -161,7 +154,7 @@ static bool ShouldFindAnonymousContent(const nsIContent& aContent) {
     }
 
     // We want to avoid finding in password inputs anyway, as it is confusing.
-    if (formControl->ControlType() == NS_FORM_INPUT_PASSWORD) {
+    if (formControl->ControlType() == FormControlType::InputPassword) {
       return false;
     }
   }
@@ -611,14 +604,16 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
     return NS_OK;
   }
 
+  const int32_t patternStart = mFindBackward ? patLen : 0;
+
   // current offset into the pattern -- reset to beginning/end:
-  int32_t pindex = (mFindBackward ? patLen : 0);
+  int32_t pindex = patternStart;
 
   // Current offset into the fragment
   int32_t findex = 0;
 
   // Direction to move pindex and ptr*
-  int incr = (mFindBackward ? -1 : 1);
+  int incr = mFindBackward ? -1 : 1;
 
   const nsTextFragment* frag = nullptr;
   int32_t fragLen = 0;
@@ -648,10 +643,14 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
   Text* current = nullptr;
 
   auto EndPartialMatch = [&]() -> bool {
-    bool hadAnchorNode = !!matchAnchorNode;
     // If we didn't match, go back to the beginning of patStr, and set findex
     // back to the next char after we started the current match.
-    if (matchAnchorNode) {  // we're ending a partial match
+    //
+    // There's no need to do this if we're still at the beginning of the pattern
+    // (this can happen e.g. with whitespace, and prevents exponential
+    // complexity when scanning a pattern that starts with whitespace).
+    const bool restart = !!matchAnchorNode && pindex != patternStart;
+    if (restart) {  // we're ending a partial match
       findex = matchAnchorOffset;
       state.mIterOffset = matchAnchorOffset;
       c = matchAnchorChar;
@@ -672,10 +671,10 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
     matchAnchorChar = 0;
     inWhitespace = false;
     prevCharInMatch = 0;
-    pindex = mFindBackward ? patLen : 0;
+    pindex = patternStart;
     DEBUG_FIND_PRINTF("Setting findex back to %d, pindex to %d\n", findex,
                       pindex);
-    return hadAnchorNode;
+    return restart;
   };
 
   while (true) {
@@ -780,7 +779,8 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
     // diacritics, don't leave c set to a combining diacritical mark. (patc is
     // already guaranteed to not be a combining diacritical mark.)
     c = (t2b ? DecodeChar(t2b, &findex) : CHAR_TO_UNICHAR(t1b[findex]));
-    if (!mMatchDiacritics && IsCombiningDiacritic(c)) {
+    if (!mMatchDiacritics && IsCombiningDiacritic(c) &&
+        !IsMathOrMusicSymbol(prevChar)) {
       continue;
     }
     patc = DecodeChar(patStr, &pindex);
@@ -822,33 +822,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
       continue;
     }
 
-    if (!mCaseSensitive) {
-      switch (c) {
-        // treat curly and straight quotes as identical
-        case CH_LEFT_SINGLE_QUOTE:
-        case CH_RIGHT_SINGLE_QUOTE:
-          c = CH_APOSTROPHE;
-          break;
-        case CH_LEFT_DOUBLE_QUOTE:
-        case CH_RIGHT_DOUBLE_QUOTE:
-          c = CH_QUOTE;
-          break;
-      }
-
-      switch (patc) {
-        // treat curly and straight quotes as identical
-        case CH_LEFT_SINGLE_QUOTE:
-        case CH_RIGHT_SINGLE_QUOTE:
-          patc = CH_APOSTROPHE;
-          break;
-        case CH_LEFT_DOUBLE_QUOTE:
-        case CH_RIGHT_DOUBLE_QUOTE:
-          patc = CH_QUOTE;
-          break;
-      }
-    }
-
-    if (pindex != (mFindBackward ? patLen : 0) && c != patc && !inWhitespace) {
+    if (pindex != patternStart && c != patc && !inWhitespace) {
       // A non-matching '\n' between CJ characters is ignored
       if (c == '\n' && t2b && IS_CJ_CHAR(prevCharInMatch)) {
         int32_t nindex = findex + incr;
@@ -907,16 +881,17 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
 
         // Make the range:
         // Check for word break (if necessary)
-        if (mWordBreaker) {
+        if (mWordBreaker || inWhitespace) {
           int32_t nextfindex = findex + incr;
 
           char16_t nextChar;
           // If still in array boundaries, get nextChar.
           if (mFindBackward ? (nextfindex >= 0) : (nextfindex < fragLen)) {
-            if (t2b)
+            if (t2b) {
               nextChar = DecodeChar(t2b, &nextfindex);
-            else
+            } else {
               nextChar = CHAR_TO_UNICHAR(t1b[nextfindex]);
+            }
           } else {
             // Get next character from the next node.
             nextChar = PeekNextChar(state, !!matchAnchorNode);
@@ -927,8 +902,14 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
           }
 
           // If a word break isn't there when it needs to be, reset search.
-          if (!BreakInBetween(c, nextChar)) {
+          if (mWordBreaker && !BreakInBetween(c, nextChar)) {
             matchAnchorNode = nullptr;
+            continue;
+          }
+
+          if (inWhitespace && IsSpace(nextChar)) {
+            // If the next character is also an space, keep going, this space
+            // will collapse.
             continue;
           }
         }

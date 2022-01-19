@@ -22,8 +22,8 @@ GPU_IMPL_CYCLE_COLLECTION(CommandEncoder, mParent, mBridge)
 GPU_IMPL_JS_WRAP(CommandEncoder)
 
 void CommandEncoder::ConvertTextureDataLayoutToFFI(
-    const dom::GPUTextureDataLayout& aLayout,
-    ffi::WGPUTextureDataLayout* aLayoutFFI) {
+    const dom::GPUImageDataLayout& aLayout,
+    ffi::WGPUImageDataLayout* aLayoutFFI) {
   *aLayoutFFI = {};
   aLayoutFFI->offset = aLayout.mOffset;
   aLayoutFFI->bytes_per_row = aLayout.mBytesPerRow;
@@ -31,12 +31,13 @@ void CommandEncoder::ConvertTextureDataLayoutToFFI(
 }
 
 void CommandEncoder::ConvertTextureCopyViewToFFI(
-    const dom::GPUTextureCopyView& aView, ffi::WGPUTextureCopyView* aViewFFI) {
+    const dom::GPUImageCopyTexture& aCopy,
+    ffi::WGPUImageCopyTexture* aViewFFI) {
   *aViewFFI = {};
-  aViewFFI->texture = aView.mTexture->mId;
-  aViewFFI->mip_level = aView.mMipLevel;
-  if (aView.mOrigin.WasPassed()) {
-    const auto& origin = aView.mOrigin.Value();
+  aViewFFI->texture = aCopy.mTexture->mId;
+  aViewFFI->mip_level = aCopy.mMipLevel;
+  if (aCopy.mOrigin.WasPassed()) {
+    const auto& origin = aCopy.mOrigin.Value();
     if (origin.IsRangeEnforcedUnsignedLongSequence()) {
       const auto& seq = origin.GetAsRangeEnforcedUnsignedLongSequence();
       aViewFFI->origin.x = seq.Length() > 0 ? seq[0] : 0;
@@ -60,29 +61,29 @@ void CommandEncoder::ConvertExtent3DToFFI(const dom::GPUExtent3D& aExtent,
     const auto& seq = aExtent.GetAsRangeEnforcedUnsignedLongSequence();
     aExtentFFI->width = seq.Length() > 0 ? seq[0] : 0;
     aExtentFFI->height = seq.Length() > 1 ? seq[1] : 0;
-    aExtentFFI->depth = seq.Length() > 2 ? seq[2] : 0;
+    aExtentFFI->depth_or_array_layers = seq.Length() > 2 ? seq[2] : 0;
   } else if (aExtent.IsGPUExtent3DDict()) {
     const auto& dict = aExtent.GetAsGPUExtent3DDict();
     aExtentFFI->width = dict.mWidth;
     aExtentFFI->height = dict.mHeight;
-    aExtentFFI->depth = dict.mDepth;
+    aExtentFFI->depth_or_array_layers = dict.mDepthOrArrayLayers;
   } else {
     MOZ_CRASH("Unexptected extent type");
   }
 }
 
-static ffi::WGPUBufferCopyView ConvertBufferCopyView(
-    const dom::GPUBufferCopyView& aView) {
-  ffi::WGPUBufferCopyView view = {};
-  view.buffer = aView.mBuffer->mId;
-  CommandEncoder::ConvertTextureDataLayoutToFFI(aView, &view.layout);
+static ffi::WGPUImageCopyBuffer ConvertBufferCopyView(
+    const dom::GPUImageCopyBuffer& aCopy) {
+  ffi::WGPUImageCopyBuffer view = {};
+  view.buffer = aCopy.mBuffer->mId;
+  CommandEncoder::ConvertTextureDataLayoutToFFI(aCopy, &view.layout);
   return view;
 }
 
-static ffi::WGPUTextureCopyView ConvertTextureCopyView(
-    const dom::GPUTextureCopyView& aView) {
-  ffi::WGPUTextureCopyView view = {};
-  CommandEncoder::ConvertTextureCopyViewToFFI(aView, &view);
+static ffi::WGPUImageCopyTexture ConvertTextureCopyView(
+    const dom::GPUImageCopyTexture& aCopy) {
+  ffi::WGPUImageCopyTexture view = {};
+  CommandEncoder::ConvertTextureCopyViewToFFI(aCopy, &view);
   return view;
 }
 
@@ -123,8 +124,8 @@ void CommandEncoder::CopyBufferToBuffer(const Buffer& aSource,
 }
 
 void CommandEncoder::CopyBufferToTexture(
-    const dom::GPUBufferCopyView& aSource,
-    const dom::GPUTextureCopyView& aDestination,
+    const dom::GPUImageCopyBuffer& aSource,
+    const dom::GPUImageCopyTexture& aDestination,
     const dom::GPUExtent3D& aCopySize) {
   if (mValid) {
     ipc::ByteBuf bb;
@@ -132,11 +133,16 @@ void CommandEncoder::CopyBufferToTexture(
         ConvertBufferCopyView(aSource), ConvertTextureCopyView(aDestination),
         ConvertExtent(aCopySize), ToFFI(&bb));
     mBridge->SendCommandEncoderAction(mId, mParent->mId, std::move(bb));
+
+    const auto& targetCanvas = aDestination.mTexture->mTargetCanvasElement;
+    if (targetCanvas) {
+      mTargetCanvases.AppendElement(targetCanvas);
+    }
   }
 }
 void CommandEncoder::CopyTextureToBuffer(
-    const dom::GPUTextureCopyView& aSource,
-    const dom::GPUBufferCopyView& aDestination,
+    const dom::GPUImageCopyTexture& aSource,
+    const dom::GPUImageCopyBuffer& aDestination,
     const dom::GPUExtent3D& aCopySize) {
   if (mValid) {
     ipc::ByteBuf bb;
@@ -147,8 +153,8 @@ void CommandEncoder::CopyTextureToBuffer(
   }
 }
 void CommandEncoder::CopyTextureToTexture(
-    const dom::GPUTextureCopyView& aSource,
-    const dom::GPUTextureCopyView& aDestination,
+    const dom::GPUImageCopyTexture& aSource,
+    const dom::GPUImageCopyTexture& aDestination,
     const dom::GPUExtent3D& aCopySize) {
   if (mValid) {
     ipc::ByteBuf bb;
@@ -156,6 +162,11 @@ void CommandEncoder::CopyTextureToTexture(
         ConvertTextureCopyView(aSource), ConvertTextureCopyView(aDestination),
         ConvertExtent(aCopySize), ToFFI(&bb));
     mBridge->SendCommandEncoderAction(mId, mParent->mId, std::move(bb));
+
+    const auto& targetCanvas = aDestination.mTexture->mTargetCanvasElement;
+    if (targetCanvas) {
+      mTargetCanvases.AppendElement(targetCanvas);
+    }
   }
 }
 
@@ -168,13 +179,13 @@ already_AddRefed<ComputePassEncoder> CommandEncoder::BeginComputePass(
 already_AddRefed<RenderPassEncoder> CommandEncoder::BeginRenderPass(
     const dom::GPURenderPassDescriptor& aDesc) {
   for (const auto& at : aDesc.mColorAttachments) {
-    auto* targetCanvasElement = at.mAttachment->GetTargetCanvasElement();
+    auto* targetCanvasElement = at.mView->GetTargetCanvasElement();
     if (targetCanvasElement) {
-      if (mTargetCanvasElement) {
-        NS_WARNING("Command encoder touches more than one canvas");
-      } else {
-        mTargetCanvasElement = targetCanvasElement;
-      }
+      mTargetCanvases.AppendElement(targetCanvasElement);
+    }
+    if (at.mResolveTarget.WasPassed()) {
+      targetCanvasElement = at.mResolveTarget.Value().GetTargetCanvasElement();
+      mTargetCanvases.AppendElement(targetCanvasElement);
     }
   }
 
@@ -212,7 +223,7 @@ already_AddRefed<CommandBuffer> CommandEncoder::Finish(
     id = mBridge->CommandEncoderFinish(mId, mParent->mId, aDesc);
   }
   RefPtr<CommandBuffer> comb =
-      new CommandBuffer(mParent, id, mTargetCanvasElement);
+      new CommandBuffer(mParent, id, std::move(mTargetCanvases));
   return comb.forget();
 }
 

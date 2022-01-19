@@ -32,7 +32,7 @@ void DocAccessibleWrap::AttributeChanged(dom::Element* aElement,
   DocAccessible::AttributeChanged(aElement, aNameSpaceID, aAttribute, aModType,
                                   aOldValue);
   if (aAttribute == nsGkAtoms::aria_live) {
-    Accessible* accessible =
+    LocalAccessible* accessible =
         mContent != aElement ? GetAccessible(aElement) : this;
     if (!accessible) {
       return;
@@ -67,7 +67,7 @@ void DocAccessibleWrap::AttributeChanged(dom::Element* aElement,
                              accessible);
           }
         } else if (nsStaticAtom* value = GetAccService()->MarkupAttribute(
-                       aElement, nsGkAtoms::live)) {
+                       aElement, nsGkAtoms::aria_live)) {
           // HTML element defines it as a live region. It's live!
           if (value == nsGkAtoms::polite || value == nsGkAtoms::assertive) {
             FireDelayedEvent(nsIAccessibleEvent::EVENT_LIVE_REGION_REMOVED,
@@ -79,18 +79,18 @@ void DocAccessibleWrap::AttributeChanged(dom::Element* aElement,
   }
 }
 
-void DocAccessibleWrap::QueueNewLiveRegion(Accessible* aAccessible) {
+void DocAccessibleWrap::QueueNewLiveRegion(LocalAccessible* aAccessible) {
   if (!aAccessible) {
     return;
   }
 
-  mNewLiveRegions.PutEntry(aAccessible->UniqueID());
+  mNewLiveRegions.Insert(aAccessible->UniqueID());
 }
 
 void DocAccessibleWrap::ProcessNewLiveRegions() {
-  for (auto iter = mNewLiveRegions.Iter(); !iter.Done(); iter.Next()) {
-    if (Accessible* liveRegion =
-            GetAccessibleByUniqueID(const_cast<void*>(iter.Get()->GetKey()))) {
+  for (const auto& uniqueID : mNewLiveRegions) {
+    if (LocalAccessible* liveRegion =
+            GetAccessibleByUniqueID(const_cast<void*>(uniqueID))) {
       FireDelayedEvent(nsIAccessibleEvent::EVENT_LIVE_REGION_ADDED, liveRegion);
     }
   }

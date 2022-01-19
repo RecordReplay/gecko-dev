@@ -57,18 +57,16 @@ loader.lazyRequireGetter(
 );
 loader.lazyRequireGetter(
   this,
-  "saveScreenshot",
-  "devtools/client/shared/save-screenshot"
-);
-loader.lazyRequireGetter(
-  this,
   "PICKER_TYPES",
   "devtools/shared/picker-constants"
 );
+loader.lazyRequireGetter(
+  this,
+  "captureAndSaveScreenshot",
+  "devtools/client/shared/screenshot",
+  true
+);
 
-// This import to chrome code is forbidden according to the inspector specific
-// eslintrc. TODO: Fix in Bug 1591091.
-// eslint-disable-next-line mozilla/reject-some-requires
 loader.lazyImporter(
   this,
   "DeferredTask",
@@ -141,16 +139,16 @@ const TELEMETRY_SCALAR_NODE_SELECTION_COUNT =
  *      Fired when the stylesheet source links have been updated (when switching
  *      to source-mapped files)
  */
-function Inspector(toolbox) {
+function Inspector(toolbox, commands) {
   EventEmitter.decorate(this);
 
   this._toolbox = toolbox;
+  this._commands = commands;
   this.panelDoc = window.document;
   this.panelWin = window;
   this.panelWin.inspector = this;
   this.telemetry = toolbox.telemetry;
   this.store = createStore(this);
-  this.isReady = false;
 
   // Map [panel id => panel instance]
   // Stores all the instances of sidebar panels like rule view, computed view, ...
@@ -162,13 +160,11 @@ function Inspector(toolbox) {
   );
   this._onTargetAvailable = this._onTargetAvailable.bind(this);
   this._onTargetDestroyed = this._onTargetDestroyed.bind(this);
-  this._onBeforeNavigate = this._onBeforeNavigate.bind(this);
-  this._onMarkupFrameLoad = this._onMarkupFrameLoad.bind(this);
+  this._onWillNavigate = this._onWillNavigate.bind(this);
   this._updateSearchResultsLabel = this._updateSearchResultsLabel.bind(this);
 
   this.onDetached = this.onDetached.bind(this);
   this.onHostChanged = this.onHostChanged.bind(this);
-  this.onMarkupLoaded = this.onMarkupLoaded.bind(this);
   this.onNewSelection = this.onNewSelection.bind(this);
   this.onResourceAvailable = this.onResourceAvailable.bind(this);
   this.onRootNodeAvailable = this.onRootNodeAvailable.bind(this);
@@ -197,37 +193,30 @@ Inspector.prototype = {
     this._fluentL10n = new FluentL10n();
     await this._fluentL10n.init(["devtools/client/compatibility.ftl"]);
 
-    // The markup view will be initialized in onRootNodeAvailable, which will be
-    // called through watchTargets and _onTargetAvailable, when a root node is
-    // available for the top-level target.
-    this._onFirstMarkupLoaded = this.once("markuploaded");
+    // Display the main inspector panel with: search input, markup view and breadcrumbs.
+    this.panelDoc.getElementById("inspector-main-content").style.visibility =
+      "visible";
 
-    // If the server-side stylesheet watcher is enabled, we should start to watch
-    // stylesheet resources before instanciating the inspector front since pageStyle
-    // actor should refer the watcher.
-    if (
-      this.toolbox.resourceWatcher.hasResourceWatcherSupport(
-        this.toolbox.resourceWatcher.TYPES.STYLESHEET
-      )
-    ) {
-      this._isServerSideStyleSheetWatcherEnabled = true;
-      await this.toolbox.resourceWatcher.watchResources(
-        [this.toolbox.resourceWatcher.TYPES.STYLESHEET],
-        { onAvailable: this.onResourceAvailable }
-      );
-    }
+    // Setup the splitter before watching targets & resources.
+    // The markup view will be initialized after we get the first root-node
+    // resource, and the splitter should be initialized before that.
+    // The markup view is rendered in an iframe and the splitter will move the
+    // parent of the iframe in the DOM tree which would reset the state of the
+    // iframe if it had already been initialized.
+    this.setupSplitter();
 
-    await this.toolbox.targetList.watchTargets(
-      [this.toolbox.targetList.TYPES.FRAME],
+    await this.commands.targetCommand.watchTargets(
+      [this.commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable,
       this._onTargetDestroyed
     );
 
-    await this.toolbox.resourceWatcher.watchResources(
+    await this.toolbox.resourceCommand.watchResources(
       [
-        this.toolbox.resourceWatcher.TYPES.ROOT_NODE,
+        this.toolbox.resourceCommand.TYPES.ROOT_NODE,
         // To observe CSS change before opening changes view.
-        this.toolbox.resourceWatcher.TYPES.CSS_CHANGE,
+        this.toolbox.resourceCommand.TYPES.CSS_CHANGE,
+        this.toolbox.resourceCommand.TYPES.DOCUMENT_EVENT,
       ],
       { onAvailable: this.onResourceAvailable }
     );
@@ -235,9 +224,35 @@ Inspector.prototype = {
     // Store the URL of the target page prior to navigation in order to ensure
     // telemetry counts in the Grid Inspector are not double counted on reload.
     this.previousURL = this.currentTarget.url;
-    this.styleChangeTracker = new InspectorStyleChangeTracker(this);
 
-    return this._deferredOpen();
+    // Note: setupSidebar() really has to be called after the first target has
+    // been processed, so that the cssProperties getter works.
+    // But the rest could be moved before the watch* calls.
+    this.styleChangeTracker = new InspectorStyleChangeTracker(this);
+    this.setupSidebar();
+    this.breadcrumbs = new HTMLBreadcrumbs(this);
+    this.setupExtensionSidebars();
+    this.setupSearchBox();
+
+    this.onNewSelection();
+
+    this.toolbox.on("host-changed", this.onHostChanged);
+    this.toolbox.nodePicker.on("picker-node-hovered", this.onPickerHovered);
+    this.toolbox.nodePicker.on("picker-node-canceled", this.onPickerCanceled);
+    this.toolbox.nodePicker.on("picker-node-picked", this.onPickerPicked);
+    this.selection.on("new-node-front", this.onNewSelection);
+    this.selection.on("detached-front", this.onDetached);
+
+    // Log the 3 pane inspector setting on inspector open. The question we want to answer
+    // is:
+    // "What proportion of users use the 3 pane vs 2 pane inspector on inspector open?"
+    this.telemetry.keyedScalarAdd(
+      THREE_PANE_ENABLED_SCALAR,
+      this.is3PaneModeEnabled,
+      1
+    );
+
+    return this;
   },
 
   async _onTargetAvailable({ targetFront }) {
@@ -247,8 +262,6 @@ Inspector.prototype = {
     }
 
     await this.initInspectorFront(targetFront);
-
-    targetFront.on("will-navigate", this._onBeforeNavigate);
 
     await Promise.all([
       this._getCssProperties(),
@@ -261,24 +274,150 @@ Inspector.prototype = {
     if (!targetFront.isTopLevel) {
       return;
     }
-    targetFront.off("will-navigate", this._onBeforeNavigate);
 
     this._defaultNode = null;
     this.selection.setNodeFront(null);
   },
 
+  onResourceAvailable: function(resources) {
+    // Store all onRootNodeAvailable calls which are asynchronous.
+    const rootNodeAvailablePromises = [];
+
+    for (const resource of resources) {
+      const isTopLevelTarget = !!resource.targetFront?.isTopLevel;
+      const isTopLevelDocument = !!resource.isTopLevelDocument;
+      if (
+        resource.resourceType ===
+          this.toolbox.resourceCommand.TYPES.ROOT_NODE &&
+        // It might happen that the ROOT_NODE resource (which is a Front) is already
+        // destroyed, and in such case we want to ignore it.
+        !resource.isDestroyed() &&
+        isTopLevelTarget &&
+        isTopLevelDocument
+      ) {
+        rootNodeAvailablePromises.push(this.onRootNodeAvailable(resource));
+      }
+
+      // Only consider top level document, and ignore remote iframes top document
+      if (
+        resource.resourceType ===
+          this.toolbox.resourceCommand.TYPES.DOCUMENT_EVENT &&
+        resource.name === "will-navigate" &&
+        isTopLevelTarget
+      ) {
+        this._onWillNavigate();
+      }
+    }
+
+    return Promise.all(rootNodeAvailablePromises);
+  },
+
+  /**
+   * Reset the inspector on new root mutation.
+   */
+  onRootNodeAvailable: async function(rootNodeFront) {
+    // Record new-root timing for telemetry
+    this._newRootStart = this.panelWin.performance.now();
+
+    this._defaultNode = null;
+    this.selection.setNodeFront(null);
+    this._destroyMarkup();
+
+    try {
+      const defaultNode = await this._getDefaultNodeForSelection(rootNodeFront);
+      if (!defaultNode) {
+        return;
+      }
+
+      this.selection.setNodeFront(defaultNode, {
+        reason: "inspector-default-selection",
+      });
+
+      await this._initMarkupView();
+
+      // Setup the toolbar again, since its content may depend on the current document.
+      this.setupToolbar();
+    } catch (e) {
+      this._handleRejectionIfNotDestroyed(e);
+    }
+  },
+
+  _initMarkupView: async function() {
+    if (!this._markupFrame) {
+      this._markupFrame = this.panelDoc.createElement("iframe");
+      this._markupFrame.setAttribute(
+        "aria-label",
+        INSPECTOR_L10N.getStr("inspector.panelLabel.markupView")
+      );
+      this._markupFrame.setAttribute("flex", "1");
+      // This is needed to enable tooltips inside the iframe document.
+      this._markupFrame.setAttribute("tooltip", "aHTMLTooltip");
+
+      this._markupBox = this.panelDoc.getElementById("markup-box");
+      this._markupBox.style.visibility = "hidden";
+      this._markupBox.appendChild(this._markupFrame);
+
+      const onMarkupFrameLoaded = new Promise(r =>
+        this._markupFrame.addEventListener("load", r, {
+          capture: true,
+          once: true,
+        })
+      );
+
+      this._markupFrame.setAttribute("src", "markup/markup.xhtml");
+
+      await onMarkupFrameLoaded;
+    }
+
+    this._markupFrame.contentWindow.focus();
+    this._markupBox.style.visibility = "visible";
+    this.markup = new MarkupView(this, this._markupFrame, this._toolbox.win);
+    // TODO: We might be able to merge markuploaded, new-root and reloaded.
+    this.emitForTests("markuploaded");
+
+    const onExpand = this.markup.expandNode(this.selection.nodeFront);
+
+    // Restore the highlighter states prior to emitting "new-root".
+    if (this._highlighters) {
+      await Promise.all([
+        this.highlighters.restoreFlexboxState(),
+        this.highlighters.restoreGridState(),
+      ]);
+    }
+    this.emit("new-root");
+
+    // Wait for full expand of the selected node in order to ensure
+    // the markup view is fully emitted before firing 'reloaded'.
+    // 'reloaded' is used to know when the panel is fully updated
+    // after a page reload.
+    await onExpand;
+
+    this.emit("reloaded");
+
+    // Record the time between new-root event and inspector fully loaded.
+    if (this._newRootStart) {
+      // Only log the timing when inspector is not destroyed and is in foreground.
+      if (this.toolbox && this.toolbox.currentToolId == "inspector") {
+        const delay = this.panelWin.performance.now() - this._newRootStart;
+        const telemetryKey = "DEVTOOLS_INSPECTOR_NEW_ROOT_TO_RELOAD_DELAY_MS";
+        const histogram = this.telemetry.getHistogramById(telemetryKey);
+        histogram.add(delay);
+      }
+      delete this._newRootStart;
+    }
+  },
+
   async initInspectorFront(targetFront) {
     this.inspectorFront = await targetFront.getFront("inspector");
     this.walker = this.inspectorFront.walker;
-
-    // PageStyle front need the resource watcher when the server-side stylesheet watcher is enabled.
-    if (this._isServerSideStyleSheetWatcherEnabled) {
-      this.inspectorFront.pageStyle.resourceWatcher = this.toolbox.resourceWatcher;
-    }
   },
 
   get toolbox() {
     return this._toolbox;
+  },
+
+  get commands() {
+    return this._commands;
   },
 
   /**
@@ -289,8 +428,8 @@ Inspector.prototype = {
    * @return {Array} The list of InspectorFront instances.
    */
   async getAllInspectorFronts() {
-    return this.toolbox.targetList.getAllFronts(
-      this.toolbox.targetList.TYPES.FRAME,
+    return this.commands.targetCommand.getAllFronts(
+      [this.commands.targetCommand.TYPES.FRAME],
       "inspector"
     );
   },
@@ -382,53 +521,12 @@ Inspector.prototype = {
     }
   },
 
-  _deferredOpen: async function() {
-    // Setup the splitter before the sidebar is displayed so, we don't miss any events.
-    this.setupSplitter();
-
-    // We can display right panel with: tab bar, markup view and breadbrumb. Right after
-    // the splitter set the right and left panel sizes, in order to avoid resizing it
-    // during load of the inspector.
-    this.panelDoc.getElementById("inspector-main-content").style.visibility =
-      "visible";
-
-    // Setup the sidebar panels.
-    this.setupSidebar();
-
-    await this._onFirstMarkupLoaded;
-    this.isReady = true;
-
-    // All the components are initialized. Take care of the remaining initialization
-    // and setup.
-    this.breadcrumbs = new HTMLBreadcrumbs(this);
-    this.setupExtensionSidebars();
-    this.setupSearchBox();
-
-    this.onNewSelection();
-
-    this.toolbox.on("host-changed", this.onHostChanged);
-    this.toolbox.nodePicker.on("picker-node-hovered", this.onPickerHovered);
-    this.toolbox.nodePicker.on("picker-node-canceled", this.onPickerCanceled);
-    this.toolbox.nodePicker.on("picker-node-picked", this.onPickerPicked);
-    this.selection.on("new-node-front", this.onNewSelection);
-    this.selection.on("detached-front", this.onDetached);
-
-    // Log the 3 pane inspector setting on inspector open. The question we want to answer
-    // is:
-    // "What proportion of users use the 3 pane vs 2 pane inspector on inspector open?"
-    this.telemetry.keyedScalarAdd(
-      THREE_PANE_ENABLED_SCALAR,
-      this.is3PaneModeEnabled,
-      1
-    );
-
-    this.emit("ready");
-    return this;
-  },
-
-  _onBeforeNavigate: function() {
+  _onWillNavigate: function() {
     this._defaultNode = null;
     this.selection.setNodeFront(null);
+    if (this._highlighters) {
+      this._highlighters.onWillNavigate();
+    }
     this._destroyMarkup();
     this._pendingSelectionUnique = null;
   },
@@ -497,7 +595,7 @@ Inspector.prototype = {
    * Top level target front getter.
    */
   get currentTarget() {
-    return this.toolbox.targetList.targetFront;
+    return this.commands.targetCommand.targetFront;
   },
 
   /**
@@ -643,7 +741,7 @@ Inspector.prototype = {
     }
 
     const splitterBox = this.panelDoc.getElementById("inspector-splitter-box");
-    const { width } = window.windowUtils.getBoundsWithoutFlushing(splitterBox);
+    const width = splitterBox.clientWidth;
 
     return this.is3PaneModeEnabled &&
       (this.toolbox.hostType == Toolbox.HostType.LEFT ||
@@ -997,12 +1095,6 @@ Inspector.prototype = {
         );
         panel = new LayoutView(this, this.panelWin);
         break;
-      case "newruleview":
-        const RulesView = this.browserRequire(
-          "devtools/client/inspector/rules/new-rules"
-        );
-        panel = new RulesView(this, this.panelWin);
-        break;
       case "ruleview":
         const {
           RuleViewTool,
@@ -1098,15 +1190,6 @@ Inspector.prototype = {
       id: "animationinspector",
       title: INSPECTOR_L10N.getStr("inspector.sidebar.animationInspectorTitle"),
     });
-
-    if (
-      Services.prefs.getBoolPref("devtools.inspector.new-rulesview.enabled")
-    ) {
-      sidebarPanels.push({
-        id: "newruleview",
-        title: INSPECTOR_L10N.getStr("inspector.sidebar.ruleViewTitle"),
-      });
-    }
 
     for (const { id, title } of sidebarPanels) {
       // The Computed panel is not a React-based panel. We pick its element container from
@@ -1306,93 +1389,6 @@ Inspector.prototype = {
     }
   },
 
-  onResourceAvailable: function(resources) {
-    for (const resource of resources) {
-      if (
-        resource.resourceType === this.toolbox.resourceWatcher.TYPES.ROOT_NODE
-      ) {
-        const rootNodeFront = resource;
-        const isTopLevelTarget = !!resource.targetFront.isTopLevel;
-        if (rootNodeFront.isTopLevelDocument && isTopLevelTarget) {
-          this.onRootNodeAvailable(rootNodeFront);
-        }
-      }
-    }
-  },
-
-  /**
-   * Reset the inspector on new root mutation.
-   */
-  onRootNodeAvailable: async function(rootNodeFront) {
-    // Record new-root timing for telemetry
-    this._newRootStart = this.panelWin.performance.now();
-
-    this._defaultNode = null;
-    this.selection.setNodeFront(null);
-    this._destroyMarkup();
-
-    try {
-      const defaultNode = await this._getDefaultNodeForSelection(rootNodeFront);
-      if (!defaultNode) {
-        return;
-      }
-
-      this.selection.setNodeFront(defaultNode, {
-        reason: "inspector-default-selection",
-      });
-
-      this._initMarkup();
-
-      // Setup the toolbar again, since its content may depend on the current document.
-      this.setupToolbar();
-    } catch (e) {
-      this._handleRejectionIfNotDestroyed(e);
-    }
-  },
-
-  /**
-   * Handler for "markuploaded" event fired on a new root mutation and after the markup
-   * view is initialized. Expands the current selected node and restores the saved
-   * highlighter state.
-   */
-  async onMarkupLoaded() {
-    if (!this.markup) {
-      return;
-    }
-
-    const onExpand = this.markup.expandNode(this.selection.nodeFront);
-
-    // Restore the highlighter states prior to emitting "new-root".
-    if (this._highlighters) {
-      await Promise.all([
-        this.highlighters.restoreFlexboxState(),
-        this.highlighters.restoreGridState(),
-      ]);
-    }
-
-    this.emit("new-root");
-
-    // Wait for full expand of the selected node in order to ensure
-    // the markup view is fully emitted before firing 'reloaded'.
-    // 'reloaded' is used to know when the panel is fully updated
-    // after a page reload.
-    await onExpand;
-
-    this.emit("reloaded");
-
-    // Record the time between new-root event and inspector fully loaded.
-    if (this._newRootStart) {
-      // Only log the timing when inspector is not destroyed and is in foreground.
-      if (this.toolbox && this.toolbox.currentToolId == "inspector") {
-        const delay = this.panelWin.performance.now() - this._newRootStart;
-        const telemetryKey = "DEVTOOLS_INSPECTOR_NEW_ROOT_TO_RELOAD_DELAY_MS";
-        const histogram = this.telemetry.getHistogramById(telemetryKey);
-        histogram.add(delay);
-      }
-      delete this._newRootStart;
-    }
-  },
-
   _selectionCssSelectors: null,
 
   /**
@@ -1542,25 +1538,38 @@ Inspector.prototype = {
       return;
     }
 
-    const { targetFront } = this.selection.nodeFront;
-    this.reflowFront = await targetFront.getFront("reflow");
-    this.reflowFront.on("reflows", this.onReflowInSelection);
-    this.reflowFront.start();
+    if (this._destroyed) {
+      return;
+    }
+
+    try {
+      await this.commands.resourceCommand.watchResources(
+        [this.commands.resourceCommand.TYPES.REFLOW],
+        {
+          onAvailable: this.onReflowInSelection,
+        }
+      );
+    } catch (e) {
+      // it can happen that watchResources fails as the client closes while we're processing
+      // some asynchronous call.
+      // In order to still get valid exceptions, we re-throw the exception if the inspector
+      // isn't destroyed.
+      if (!this._destroyed) {
+        throw e;
+      }
+    }
   },
 
   /**
    * Stops listening for reflows.
    */
   untrackReflowsInSelection() {
-    // Check the actorID because the reflowFront is a target scoped actor and
-    // might have been destroyed after switching targets.
-    if (!this.reflowFront || !this.reflowFront.actorID) {
-      return;
-    }
-
-    this.reflowFront.off("reflows", this.onReflowInSelection);
-    this.reflowFront.stop();
-    this.reflowFront = null;
+    this.commands.resourceCommand.unwatchResources(
+      [this.commands.resourceCommand.TYPES.REFLOW],
+      {
+        onAvailable: this.onReflowInSelection,
+      }
+    );
   },
 
   onReflowInSelection() {
@@ -1660,7 +1669,6 @@ Inspector.prototype = {
     this.toolbox.nodePicker.off("picker-node-canceled", this.onPickerCanceled);
     this.toolbox.nodePicker.off("picker-node-hovered", this.onPickerHovered);
     this.toolbox.nodePicker.off("picker-node-picked", this.onPickerPicked);
-    this.currentTarget.off("will-navigate", this._onBeforeNavigate);
 
     for (const [, panel] of this._panels) {
       panel.destroy();
@@ -1669,14 +1677,6 @@ Inspector.prototype = {
 
     if (this._highlighters) {
       this._highlighters.destroy();
-    }
-
-    if (this._markupFrame) {
-      this._markupFrame.removeEventListener(
-        "load",
-        this._onMarkupFrameLoad,
-        true
-      );
     }
 
     if (this._search) {
@@ -1696,16 +1696,21 @@ Inspector.prototype = {
     this.styleChangeTracker.destroy();
     this.searchboxShortcuts.destroy();
 
-    const { targetList, resourceWatcher } = this.toolbox;
-    targetList.unwatchTargets(
-      [targetList.TYPES.FRAME],
+    this.commands.targetCommand.unwatchTargets(
+      [this.commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable,
       this._onTargetDestroyed
     );
-    resourceWatcher.unwatchResources(
-      [resourceWatcher.TYPES.ROOT_NODE, resourceWatcher.TYPES.CSS_CHANGE],
+    const { resourceCommand } = this.toolbox;
+    resourceCommand.unwatchResources(
+      [
+        resourceCommand.TYPES.ROOT_NODE,
+        resourceCommand.TYPES.CSS_CHANGE,
+        resourceCommand.TYPES.DOCUMENT_EVENT,
+      ],
       { onAvailable: this.onResourceAvailable }
     );
+    this.untrackReflowsInSelection();
 
     this._is3PaneModeChromeEnabled = null;
     this._is3PaneModeEnabled = null;
@@ -1724,57 +1729,15 @@ Inspector.prototype = {
     this.telemetry = null;
   },
 
-  _initMarkup: function() {
-    this.once("markuploaded", this.onMarkupLoaded);
-
-    if (!this._markupFrame) {
-      this._markupFrame = this.panelDoc.createElement("iframe");
-      this._markupFrame.setAttribute(
-        "aria-label",
-        INSPECTOR_L10N.getStr("inspector.panelLabel.markupView")
-      );
-      this._markupFrame.setAttribute("flex", "1");
-      // This is needed to enable tooltips inside the iframe document.
-      this._markupFrame.setAttribute("tooltip", "aHTMLTooltip");
-
-      this._markupBox = this.panelDoc.getElementById("markup-box");
-      this._markupBox.style.visibility = "hidden";
-      this._markupBox.appendChild(this._markupFrame);
-
-      this._markupFrame.addEventListener("load", this._onMarkupFrameLoad, true);
-      this._markupFrame.setAttribute("src", "markup/markup.xhtml");
-    } else {
-      this._onMarkupFrameLoad();
-    }
-  },
-
-  _onMarkupFrameLoad: function() {
-    this._markupFrame.removeEventListener(
-      "load",
-      this._onMarkupFrameLoad,
-      true
-    );
-    this._markupFrame.contentWindow.focus();
-    this._markupBox.style.visibility = "visible";
-    this.markup = new MarkupView(this, this._markupFrame, this._toolbox.win);
-    this.emit("markuploaded");
-  },
-
   _destroyMarkup: function() {
-    let destroyPromise;
-
     if (this.markup) {
-      destroyPromise = this.markup.destroy();
+      this.markup.destroy();
       this.markup = null;
-    } else {
-      destroyPromise = promise.resolve();
     }
 
     if (this._markupBox) {
       this._markupBox.style.visibility = "hidden";
     }
-
-    return destroyPromise;
   },
 
   onEyeDropperButtonClicked: function() {
@@ -1903,15 +1866,30 @@ Inspector.prototype = {
       "devtools.screenshot.clipboard.enabled"
     );
     const args = {
-      file: true,
+      file: !clipboardEnabled,
       nodeActorID: this.selection.nodeFront.actorID,
       clipboard: clipboardEnabled,
     };
-    const screenshotFront = await this.selection.nodeFront.targetFront.getFront(
-      "screenshot"
+
+    const messages = await captureAndSaveScreenshot(
+      this.selection.nodeFront.targetFront,
+      this.panelWin,
+      args
     );
-    const screenshot = await screenshotFront.capture(args);
-    await saveScreenshot(this.panelWin, args, screenshot);
+    const notificationBox = this.toolbox.getNotificationBox();
+    const priorityMap = {
+      error: notificationBox.PRIORITY_CRITICAL_HIGH,
+      warn: notificationBox.PRIORITY_WARNING_HIGH,
+    };
+    for (const { text, level } of messages) {
+      // captureAndSaveScreenshot returns "saved" messages, that indicate where the
+      // screenshot was saved. We don't want to display them as the download UI can be
+      // used to open the file.
+      if (level !== "warn" && level !== "error") {
+        continue;
+      }
+      notificationBox.appendNotification(text, null, null, priorityMap[level]);
+    }
   },
 
   /**

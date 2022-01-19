@@ -63,9 +63,9 @@
 #define PROP_DESC_GETTER_INDEX 1
 #define PROP_DESC_SETTER_INDEX 2
 
-// The extended slot of uncloned self-hosted function, in which the original
+// The extended slot of uncloned self-hosted function, in which the canonical
 // name for self-hosted builtins is stored by `_SetCanonicalName`.
-#define ORIGINAL_FUNCTION_NAME_SLOT 0
+#define CANONICAL_FUNCTION_NAME_SLOT 0
 
 // The extended slot of cloned self-hosted function, in which the self-hosted
 // name for self-hosted builtins is stored.
@@ -91,6 +91,7 @@
 #define REGEXP_STICKY_FLAG 0x08
 #define REGEXP_UNICODE_FLAG 0x10
 #define REGEXP_DOTALL_FLAG 0x20
+#define REGEXP_HASINDICES_FLAG 0x40
 
 #define REGEXP_STRING_ITERATOR_REGEXP_SLOT 0
 #define REGEXP_STRING_ITERATOR_STRING_SLOT 1
@@ -110,7 +111,7 @@
 #define MODULE_OBJECT_EVALUATION_ERROR_SLOT 4
 #define MODULE_OBJECT_DFS_INDEX_SLOT 14
 #define MODULE_OBJECT_DFS_ANCESTOR_INDEX_SLOT 15
-#define MODULE_OBJECT_ASYNC_EVALUATING_SLOT 17
+#define MODULE_OBJECT_ASYNC_EVALUATING_POST_ORDER_SLOT 17
 #define MODULE_OBJECT_TOP_LEVEL_CAPABILITY_SLOT 18
 #define MODULE_OBJECT_PENDING_ASYNC_DEPENDENCIES_SLOT 20
 

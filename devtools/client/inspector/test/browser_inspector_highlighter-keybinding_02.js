@@ -9,7 +9,11 @@
 const TEST_URL = URL_ROOT + "doc_inspector_highlighter_dom.html";
 
 add_task(async function() {
-  const { inspector, toolbox, testActor } = await openInspectorForURL(TEST_URL);
+  const {
+    inspector,
+    toolbox,
+    highlighterTestFront,
+  } = await openInspectorForURL(TEST_URL);
   const { waitForHighlighterTypeShown } = getHighlighterTestHelpers(inspector);
 
   await startPicker(toolbox);
@@ -20,29 +24,29 @@ add_task(async function() {
   info("Selecting the ahoy paragraph DIV");
   await hoverElement(inspector, "#ahoy");
 
-  await doKeyHover({ key: "VK_LEFT", options: {} });
+  await doKeyHover("VK_LEFT");
   ok(
-    await testActor.assertHighlightedNode("#simple-div2"),
+    await highlighterTestFront.assertHighlightedNode("#simple-div2"),
     "The highlighter shows #simple-div2. OK."
   );
 
-  await doKeyHover({ key: "VK_RIGHT", options: {} });
+  await doKeyHover("VK_RIGHT");
   ok(
-    await testActor.assertHighlightedNode("#ahoy"),
+    await highlighterTestFront.assertHighlightedNode("#ahoy"),
     "The highlighter shows #ahoy. OK."
   );
 
   info("Going back up to the complex-div DIV");
-  await doKeyHover({ key: "VK_LEFT", options: {} });
-  await doKeyHover({ key: "VK_LEFT", options: {} });
+  await doKeyHover("VK_LEFT");
+  await doKeyHover("VK_LEFT");
   ok(
-    await testActor.assertHighlightedNode("#complex-div"),
+    await highlighterTestFront.assertHighlightedNode("#complex-div"),
     "The highlighter shows #complex-div. OK."
   );
 
-  await doKeyHover({ key: "VK_RIGHT", options: {} });
+  await doKeyHover("VK_RIGHT");
   ok(
-    await testActor.assertHighlightedNode("#simple-div2"),
+    await highlighterTestFront.assertHighlightedNode("#simple-div2"),
     "The highlighter shows #simple-div2. OK."
   );
 
@@ -51,13 +55,13 @@ add_task(async function() {
   info("Stopping the picker");
   await toolbox.nodePicker.stop();
 
-  function doKeyHover(args) {
+  function doKeyHover(key) {
     info("Key pressed. Waiting for element to be highlighted/hovered");
     const onPickerHovered = toolbox.nodePicker.once("picker-node-hovered");
     const onHighlighterShown = waitForHighlighterTypeShown(
       inspector.highlighters.TYPES.BOXMODEL
     );
-    testActor.synthesizeKey(args);
+    BrowserTestUtils.synthesizeKey(key, {}, gBrowser.selectedBrowser);
     return Promise.all([onPickerHovered, onHighlighterShown]);
   }
 });

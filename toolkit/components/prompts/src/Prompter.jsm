@@ -8,13 +8,20 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-const { objectToPropBag } = ChromeUtils.import(
-  "resource://gre/modules/BrowserUtils.jsm"
-).BrowserUtils;
 // This is redefined below, for strange and unfortunate reasons.
 var { PromptUtils } = ChromeUtils.import(
   "resource://gre/modules/SharedPromptUtils.jsm"
 );
+
+const {
+  MODAL_TYPE_TAB,
+  MODAL_TYPE_CONTENT,
+  MODAL_TYPE_WINDOW,
+  MODAL_TYPE_INTERNAL_WINDOW,
+} = Ci.nsIPrompt;
+
+const COMMON_DIALOG = "chrome://global/content/commonDialog.xhtml";
+const SELECT_DIALOG = "chrome://global/content/selectDialog.xhtml";
 
 function Prompter() {
   // Note that EmbedPrompter clones this implementation.
@@ -454,6 +461,7 @@ Prompter.prototype = {
   ) {
     let p = this.pickPrompter({ domWin });
     return p.nsIPrompt_promptUsernameAndPassword(
+      null,
       title,
       text,
       user,
@@ -490,7 +498,7 @@ Prompter.prototype = {
    */
   promptUsernameAndPasswordBC(browsingContext, modalType, ...promptArgs) {
     let p = this.pickPrompter({ browsingContext, modalType });
-    return p.nsIPrompt_promptUsernameAndPassword(...promptArgs);
+    return p.nsIPrompt_promptUsernameAndPassword(null, ...promptArgs);
   },
 
   /**
@@ -512,7 +520,7 @@ Prompter.prototype = {
    */
   asyncPromptUsernameAndPassword(browsingContext, modalType, ...promptArgs) {
     let p = this.pickPrompter({ browsingContext, modalType, async: true });
-    return p.nsIPrompt_promptUsernameAndPassword(...promptArgs);
+    return p.nsIPrompt_promptUsernameAndPassword(null, ...promptArgs);
   },
 
   /**
@@ -534,6 +542,7 @@ Prompter.prototype = {
   promptPassword(domWin, title, text, pass, checkLabel, checkValue) {
     let p = this.pickPrompter({ domWin });
     return p.nsIPrompt_promptPassword(
+      null, // no channel.
       title,
       text,
       pass,
@@ -563,7 +572,7 @@ Prompter.prototype = {
    */
   promptPasswordBC(browsingContext, modalType, ...promptArgs) {
     let p = this.pickPrompter({ browsingContext, modalType });
-    return p.nsIPrompt_promptPassword(...promptArgs);
+    return p.nsIPrompt_promptPassword(null, ...promptArgs);
   },
 
   /**
@@ -583,7 +592,7 @@ Prompter.prototype = {
    */
   asyncPromptPassword(browsingContext, modalType, ...promptArgs) {
     let p = this.pickPrompter({ browsingContext, modalType, async: true });
-    return p.nsIPrompt_promptPassword(...promptArgs);
+    return p.nsIPrompt_promptPassword(null, ...promptArgs);
   },
 
   /**
@@ -691,75 +700,25 @@ Prompter.prototype = {
   },
 
   /**
-   * Asynchronously prompt the user for a username and password.
-   * This has largely the same semantics as promptUsernameAndPassword(),
-   * but returns immediately after calling and returns the entered
-   * data in a callback.
-   *
-   * @param {mozIDOMWindowProxy} domWin - The parent window or null.
-   * @param {nsIChannel} channel - The channel that requires authentication.
-   * @param {nsIAuthPromptCallback} callback - Called once the prompt has been
-   *        closed.
-   * @param {nsISupports} context
-   * @param {Number} level - Security level of the credential transmission.
-   *        Any of nsIAuthPrompt2.<LEVEL_NONE|LEVEL_PW_ENCRYPTED|LEVEL_SECURE>
-   * @param {nsIAuthInformation} authInfo
-   * @param {String} checkLabel - Text to appear with the checkbox.
-   *        If null, check box will not be shown.
-   * @param {Object} checkValue - Contains the initial checked state of the
-   *        checkbox when this method is called and the final checked state
-   *        after the callback.
-   * @returns {nsICancelable} Interface to cancel prompt.
-   */
-  asyncPromptAuth(
-    domWin,
-    channel,
-    callback,
-    context,
-    level,
-    authInfo,
-    checkLabel,
-    checkValue
-  ) {
-    let p = this.pickPrompter({ domWin });
-    return p.asyncPromptAuth(
-      channel,
-      callback,
-      context,
-      level,
-      authInfo,
-      checkLabel,
-      checkValue
-    );
-  },
-
-  /**
-   * Asynchronously prompt the user for a username and password.
-   * This has largely the same semantics as promptUsernameAndPassword(),
-   * but returns immediately after calling and returns the entered
-   * data in a callback.
-   *
+   * Requests a username and a password. Shows a dialog with username and
+   * password field, depending on flags also a domain field.
    * @param {BrowsingContext} browsingContext - The browsing context the
    *        prompt should be opened for.
    * @param {Number} modalType - The modal type of the prompt.
    *        nsIPromptService.<MODAL_TYPE_WINDOW|MODAL_TYPE_TAB|MODAL_TYPE_CONTENT>
    * @param {nsIChannel} channel - The channel that requires authentication.
-   * @param {nsIAuthPromptCallback} callback - Called once the prompt has been
-   *        closed.
-   * @param {nsISupports} context
    * @param {Number} level - Security level of the credential transmission.
    *        Any of nsIAuthPrompt2.<LEVEL_NONE|LEVEL_PW_ENCRYPTED|LEVEL_SECURE>
-   * @param {nsIAuthInformation} authInfo
+   * @param {nsIAuthInformation} authInfo - Authentication information object.
    * @param {String} checkLabel - Text to appear with the checkbox.
    *        If null, check box will not be shown.
-   * @param {Object} checkValue - Contains the initial checked state of the
-   *        checkbox when this method is called and the final checked state
-   *        after the callback.
-   * @returns {nsICancelable} Interface to cancel prompt.
+   * @param {Object} checkValue - Initial checked state of the checkbox.
+   * @returns {Promise<nsIPropertyBag<{ ok: Boolean }>>}
+   *          A promise which resolves when the prompt is dismissed.
    */
-  asyncPromptAuthBC(browsingContext, modalType, ...promptArgs) {
-    let p = this.pickPrompter({ browsingContext, modalType });
-    return p.asyncPromptAuth(...promptArgs);
+  asyncPromptAuth(browsingContext, modalType, ...promptArgs) {
+    let p = this.pickPrompter({ browsingContext, modalType, async: true });
+    return p.promptAuth(...promptArgs);
   },
 };
 
@@ -866,9 +825,9 @@ var PromptUtilsTemp = {
     return uri.scheme + "://" + uri.hostPort;
   },
 
-  // Copied from login manager
+  // Note: there's a similar implementation in the login manager.
   getAuthTarget(aChannel, aAuthInfo) {
-    let hostname, realm;
+    let displayHost, realm;
 
     // If our proxy is demanding authentication, don't use the
     // channel's actual destination.
@@ -887,47 +846,96 @@ var PromptUtilsTemp = {
       let idnService = Cc["@mozilla.org/network/idn-service;1"].getService(
         Ci.nsIIDNService
       );
-      hostname =
+      displayHost =
         "moz-proxy://" +
         idnService.convertUTF8toACE(info.host) +
         ":" +
         info.port;
       realm = aAuthInfo.realm;
       if (!realm) {
-        realm = hostname;
+        realm = displayHost;
       }
 
-      return [hostname, realm];
+      return { realm, displayHost };
     }
 
-    hostname = this.getFormattedHostname(aChannel.URI);
+    displayHost = this.getFormattedHostname(aChannel.URI);
+    let displayHostOnly = aChannel.URI.hostPort;
 
     // If a HTTP WWW-Authenticate header specified a realm, that value
     // will be available here. If it wasn't set or wasn't HTTP, we'll use
     // the formatted hostname instead.
     realm = aAuthInfo.realm;
     if (!realm) {
-      realm = hostname;
+      realm = displayHost;
     }
 
-    return [hostname, realm];
+    return { realm, displayHostOnly, displayHost };
   },
 
-  makeAuthMessage(channel, authInfo) {
+  makeAuthMessage(prompt, channel, authInfo) {
+    if (prompt.modalType != MODAL_TYPE_TAB) {
+      return this._legacyMakeAuthMessage(channel, authInfo);
+    }
+
+    let isProxy = authInfo.flags & Ci.nsIAuthInformation.AUTH_PROXY;
+    let isPassOnly = authInfo.flags & Ci.nsIAuthInformation.ONLY_PASSWORD;
+    let isCrossOrig =
+      authInfo.flags & Ci.nsIAuthInformation.CROSS_ORIGIN_SUB_RESOURCE;
+    let username = authInfo.username;
+
+    // We use the realm and displayHost only for proxy auth,
+    // and the displayHostOnly (hostPort) only for x-origin auth prompts.
+    // Otherwise we rely on the title of the dialog displaying the correct
+    // title.
+    let { displayHost, realm, displayHostOnly } = this.getAuthTarget(
+      channel,
+      authInfo
+    );
+
+    if (isProxy) {
+      // The realm is server-controlled. Trim it if it's very long, to
+      // avoid the dialog becoming unusable.
+      // For background, see https://bugzilla.mozilla.org/show_bug.cgi?id=244273
+      if (realm.length > 150) {
+        realm = realm.substring(0, 150);
+        // Append "..." (or localized equivalent).
+        realm += this.ellipsis;
+      }
+
+      return PromptUtils.getLocalizedString("EnterLoginForProxy3", [
+        realm,
+        displayHost,
+      ]);
+    }
+    if (isPassOnly) {
+      return PromptUtils.getLocalizedString("EnterPasswordOnlyFor", [username]);
+    }
+    if (isCrossOrig) {
+      return PromptUtils.getLocalizedString("EnterCredentialsCrossOrigin", [
+        displayHostOnly,
+      ]);
+    }
+    return PromptUtils.getLocalizedString("EnterCredentials");
+  },
+
+  _legacyMakeAuthMessage(channel, authInfo) {
     let isProxy = authInfo.flags & Ci.nsIAuthInformation.AUTH_PROXY;
     let isPassOnly = authInfo.flags & Ci.nsIAuthInformation.ONLY_PASSWORD;
     let isCrossOrig =
       authInfo.flags & Ci.nsIAuthInformation.CROSS_ORIGIN_SUB_RESOURCE;
 
     let username = authInfo.username;
-    let [displayHost, realm] = this.getAuthTarget(channel, authInfo);
+    let { displayHost, realm } = this.getAuthTarget(channel, authInfo);
 
     // Suppress "the site says: $realm" when we synthesized a missing realm.
     if (!authInfo.realm && !isProxy) {
       realm = "";
     }
 
-    // Trim obnoxiously long realms.
+    // The realm is server-controlled. Trim it if it's very long, to
+    // avoid the dialog becoming unusable.
+    // For background, see https://bugzilla.mozilla.org/show_bug.cgi?id=244273
     if (realm.length > 150) {
       realm = realm.substring(0, 150);
       // Append "..." (or localized equivalent).
@@ -1020,6 +1028,15 @@ class ModalPrompter {
       this.browsingContext = browsingContext;
     }
 
+    if (
+      domWin &&
+      (!modalType || modalType == MODAL_TYPE_WINDOW) &&
+      !this.browsingContext?.isContent &&
+      this.browsingContext?.associatedWindow?.gDialogBox
+    ) {
+      modalType = MODAL_TYPE_INTERNAL_WINDOW;
+    }
+
     // Use given modal type or fallback to default
     this.modalType = modalType || ModalPrompter.defaultModalType;
 
@@ -1035,19 +1052,42 @@ class ModalPrompter {
 
   set modalType(modalType) {
     // Setting modal type window is always allowed
-    if (modalType == Ci.nsIPrompt.MODAL_TYPE_WINDOW) {
+    if (modalType == MODAL_TYPE_WINDOW) {
       this._modalType = modalType;
       return;
     }
 
-    // We can't use content / tab prompts if we don't have a suitable parent.
-    if (!this.browsingContext?.isContent) {
-      modalType = Ci.nsIPrompt.MODAL_TYPE_WINDOW;
-
-      Cu.reportError(
-        "Prompter: Browser not available. Falling back to window prompt."
-      );
+    // For content prompts for non-content windows, use window prompts:
+    if (modalType == MODAL_TYPE_CONTENT && !this.browsingContext?.isContent) {
+      this._modalType = MODAL_TYPE_WINDOW;
+      return;
     }
+
+    // We can't use content / tab prompts if we don't have a suitable parent.
+    if (
+      !this.browsingContext?.isContent &&
+      modalType != MODAL_TYPE_INTERNAL_WINDOW
+    ) {
+      // Only show this error if we're not about to fall back again and show a different one.
+      if (this.browsingContext?.associatedWindow?.gDialogBox) {
+        Cu.reportError(
+          "Prompter: Browser not available. Falling back to internal window prompt."
+        );
+      }
+      modalType = MODAL_TYPE_INTERNAL_WINDOW;
+    }
+
+    if (
+      modalType == MODAL_TYPE_INTERNAL_WINDOW &&
+      (this.browsingContext?.isContent ||
+        !this.browsingContext?.associatedWindow?.gDialogBox)
+    ) {
+      Cu.reportError(
+        "Prompter: internal dialogs not available in this context. Falling back to window prompt."
+      );
+      modalType = MODAL_TYPE_WINDOW;
+    }
+
     this._modalType = modalType;
   }
 
@@ -1074,27 +1114,36 @@ class ModalPrompter {
       .finally(() => {
         closed = true;
       });
-    Services.tm.spinEventLoopUntilOrShutdown(() => closed);
+    Services.tm.spinEventLoopUntilOrQuit(
+      "prompts/Prompter.jsm:openPromptSync",
+      () => closed
+    );
   }
 
   async openPrompt(args) {
     if (!this.browsingContext) {
       // We don't have a browsing context, fallback to a window prompt.
+      args.modalType = MODAL_TYPE_WINDOW;
       this.openWindowPrompt(null, args);
+      return args;
+    }
+
+    if (this._modalType == MODAL_TYPE_INTERNAL_WINDOW) {
+      await this.openInternalWindowPrompt(
+        this.browsingContext.associatedWindow,
+        args
+      );
       return args;
     }
 
     // Select prompts are not part of CommonDialog
     // and thus not supported as tab or content prompts yet. See Bug 1622817.
     // Once they are integrated this override should be removed.
-    if (
-      args.promptType == "select" &&
-      this.modalType !== Ci.nsIPrompt.MODAL_TYPE_WINDOW
-    ) {
+    if (args.promptType == "select" && this.modalType !== MODAL_TYPE_WINDOW) {
       Cu.reportError(
         "Prompter: 'select' prompts do not support tab/content prompting. Falling back to window prompt."
       );
-      args.modalType = Ci.nsIPrompt.MODAL_TYPE_WINDOW;
+      args.modalType = MODAL_TYPE_WINDOW;
     } else {
       args.modalType = this.modalType;
     }
@@ -1127,15 +1176,33 @@ class ModalPrompter {
       return args;
     }
 
-    if (IS_CONTENT) {
+    /* For prompts with a channel, we want to show the origin requesting
+     * authentication. This is different from the prompt principal,
+     * which is based on the document loaded in the browsing context over
+     * which the prompt appears. So if page foo.com loads bar.com, and the
+     * latter asks for auth, we want that bar.com's origin, not foo.com.
+     * To avoid confusion, we use different properties
+     * (authOrigin / promptPrincipal) to track this information.
+     */
+    if (args.channel) {
+      try {
+        args.authOrigin = args.channel.URI.hostPort;
+      } catch (ex) {
+        args.authOrigin = args.channel.URI.prePath;
+      }
+      args.isInsecureAuth =
+        args.channel.URI.schemeIs("http") &&
+        !args.channel.loadInfo.isTopLevelLoad;
+    } else {
       args.promptPrincipal = this.browsingContext.window?.document.nodePrincipal;
-
+    }
+    if (IS_CONTENT) {
       let docShell = this.browsingContext.docShell;
       let inPermitUnload = docShell?.contentViewer?.inPermitUnload;
       args.inPermitUnload = inPermitUnload;
       let eventDetail = Cu.cloneInto(
         {
-          tabPrompt: this.modalType != Ci.nsIPrompt.MODAL_TYPE_WINDOW,
+          tabPrompt: this.modalType != MODAL_TYPE_WINDOW,
           inPermitUnload,
         },
         this.browsingContext.window
@@ -1152,6 +1219,8 @@ class ModalPrompter {
       if (windowUtils) {
         windowUtils.enterModalState();
       }
+    } else if (args.inPermitUnload) {
+      args.promptPrincipal = this.browsingContext.currentWindowGlobal.documentPrincipal;
     }
 
     // It is technically possible for multiple prompts to be sent from a single
@@ -1217,9 +1286,6 @@ class ModalPrompter {
    * @param {Object} args - Prompt options and return values.
    */
   openWindowPrompt(parentWindow = null, args) {
-    const COMMON_DIALOG = "chrome://global/content/commonDialog.xhtml";
-    const SELECT_DIALOG = "chrome://global/content/selectDialog.xhtml";
-
     let uri = args.promptType == "select" ? SELECT_DIALOG : COMMON_DIALOG;
     let propBag = PromptUtils.objectToPropBag(args);
     Services.ww.openWindow(
@@ -1229,6 +1295,19 @@ class ModalPrompter {
       "centerscreen,chrome,modal,titlebar",
       propBag
     );
+    PromptUtils.propBagToObject(propBag, args);
+  }
+
+  async openInternalWindowPrompt(parentWindow, args) {
+    if (!parentWindow?.gDialogBox || !ModalPrompter.windowPromptSubDialog) {
+      this.openWindowPrompt(parentWindow, args);
+      return;
+    }
+    let propBag = PromptUtils.objectToPropBag(args);
+    propBag.setProperty("async", this.async);
+    let uri = args.promptType == "select" ? SELECT_DIALOG : COMMON_DIALOG;
+    await parentWindow.gDialogBox.open(uri, propBag);
+    propBag.deleteProperty("async");
     PromptUtils.propBagToObject(propBag, args);
   }
 
@@ -1254,7 +1333,7 @@ class ModalPrompter {
     if (!(taskResult instanceof Object)) {
       throw new Error("task must return object");
     }
-    return objectToPropBag(taskResult);
+    return PromptUtils.objectToPropBag(taskResult);
   }
 
   /*
@@ -1276,7 +1355,10 @@ class ModalPrompter {
   promptUsernameAndPassword() {
     // Both have 6 args, so use types.
     if (typeof arguments[2] == "object") {
-      return this.nsIPrompt_promptUsernameAndPassword.apply(this, arguments);
+      // Add the null channel:
+      let args = Array.from(arguments);
+      args.unshift(null);
+      return this.nsIPrompt_promptUsernameAndPassword.apply(this, args);
     }
     return this.nsIAuthPrompt_promptUsernameAndPassword.apply(this, arguments);
   }
@@ -1284,7 +1366,10 @@ class ModalPrompter {
   promptPassword() {
     // Both have 5 args, so use types.
     if (typeof arguments[2] == "object") {
-      return this.nsIPrompt_promptPassword.apply(this, arguments);
+      // Add the null channel:
+      let args = Array.from(arguments);
+      args.unshift(null);
+      return this.nsIPrompt_promptPassword.apply(this, args);
     }
     return this.nsIAuthPrompt_promptPassword.apply(this, arguments);
   }
@@ -1483,6 +1568,7 @@ class ModalPrompter {
   }
 
   nsIPrompt_promptUsernameAndPassword(
+    channel,
     title,
     text,
     user,
@@ -1497,6 +1583,7 @@ class ModalPrompter {
     }
 
     let args = {
+      channel,
       promptType: "promptUserAndPass",
       title,
       text,
@@ -1504,6 +1591,7 @@ class ModalPrompter {
       pass: this.async ? pass : pass.value,
       checkLabel,
       checked: this.async ? checkValue : checkValue.value,
+      button0Label: PromptUtils.getLocalizedString("SignIn"),
       ok: false,
     };
 
@@ -1529,7 +1617,7 @@ class ModalPrompter {
     return ok;
   }
 
-  nsIPrompt_promptPassword(title, text, pass, checkLabel, checkValue) {
+  nsIPrompt_promptPassword(channel, title, text, pass, checkLabel, checkValue) {
     if (!title) {
       title = PromptUtils.getLocalizedString("PromptPassword3", [
         PromptUtils.getBrandFullName(),
@@ -1537,12 +1625,14 @@ class ModalPrompter {
     }
 
     let args = {
+      channel,
       promptType: "promptPassword",
       title,
       text,
       pass: this.async ? pass : pass.value,
       checkLabel,
       checked: this.async ? checkValue : checkValue.value,
+      button0Label: PromptUtils.getLocalizedString("SignIn"),
       ok: false,
     };
 
@@ -1625,6 +1715,7 @@ class ModalPrompter {
   ) {
     // The passwordRealm and savePassword args were ignored by nsPrompt.cpp
     return this.nsIPrompt_promptUsernameAndPassword(
+      null,
       title,
       text,
       user,
@@ -1635,23 +1726,25 @@ class ModalPrompter {
   }
 
   nsIAuthPrompt_promptPassword(title, text, passwordRealm, savePassword, pass) {
-    // The passwordRealm and savePassword args were ignored by nsPrompt.cpp
-    return this.nsIPrompt_promptPassword(title, text, pass, null, {});
+    // The passwordRealm and savePassword args were ignored by nsPrompt.cpp,
+    // and we don't have a channel here.
+    return this.nsIPrompt_promptPassword(null, title, text, pass, null, {});
   }
 
   /* ----------  nsIAuthPrompt2  ---------- */
 
   promptAuth(channel, level, authInfo, checkLabel, checkValue) {
-    let message = PromptUtils.makeAuthMessage(channel, authInfo);
+    let message = PromptUtils.makeAuthMessage(this, channel, authInfo);
 
     let [username, password] = PromptUtils.getAuthInfo(authInfo);
 
-    let userParam = { value: username };
-    let passParam = { value: password };
+    let userParam = this.async ? username : { value: username };
+    let passParam = this.async ? password : { value: password };
 
-    let ok;
+    let result;
     if (authInfo.flags & Ci.nsIAuthInformation.ONLY_PASSWORD) {
-      ok = this.nsIPrompt_promptPassword(
+      result = this.nsIPrompt_promptPassword(
+        channel,
         null,
         message,
         passParam,
@@ -1659,7 +1752,8 @@ class ModalPrompter {
         checkValue
       );
     } else {
-      ok = this.nsIPrompt_promptUsernameAndPassword(
+      result = this.nsIPrompt_promptUsernameAndPassword(
+        channel,
         null,
         message,
         userParam,
@@ -1669,10 +1763,25 @@ class ModalPrompter {
       );
     }
 
-    if (ok) {
+    // For the async case result is an nsIPropertyBag with prompt results.
+    if (this.async) {
+      return result.then(bag => {
+        let ok = bag.getProperty("ok");
+        if (ok) {
+          let username = bag.getProperty("user");
+          let password = bag.getProperty("pass");
+          PromptUtils.setAuthInfo(authInfo, username, password);
+        }
+        return ok;
+      });
+    }
+
+    // For the sync case result is the "ok" boolean which indicates whether
+    // the user has confirmed the dialog.
+    if (result) {
       PromptUtils.setAuthInfo(authInfo, userParam.value, passParam.value);
     }
-    return ok;
+    return result;
   }
 
   asyncPromptAuth(
@@ -1709,7 +1818,14 @@ XPCOMUtils.defineLazyPreferenceGetter(
   ModalPrompter,
   "defaultModalType",
   "prompts.defaultModalType",
-  Ci.nsIPrompt.MODAL_TYPE_WINDOW
+  MODAL_TYPE_WINDOW
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  ModalPrompter,
+  "windowPromptSubDialog",
+  "prompts.windowPromptSubDialog",
+  false
 );
 
 function AuthPromptAdapterFactory() {}
@@ -1735,14 +1851,18 @@ AuthPromptAdapter.prototype = {
   /* ----------  nsIAuthPrompt2 ---------- */
 
   promptAuth(channel, level, authInfo, checkLabel, checkValue) {
-    let message = PromptUtils.makeAuthMessage(channel, authInfo);
+    let message = PromptUtils.makeAuthMessage(
+      this.oldPrompter,
+      channel,
+      authInfo
+    );
 
     let [username, password] = PromptUtils.getAuthInfo(authInfo);
     let userParam = { value: username };
     let passParam = { value: password };
 
-    let [host, realm] = PromptUtils.getAuthTarget(channel, authInfo);
-    let authTarget = host + " (" + realm + ")";
+    let { displayHost, realm } = PromptUtils.getAuthTarget(channel, authInfo);
+    let authTarget = displayHost + " (" + realm + ")";
 
     let ok;
     if (authInfo.flags & Ci.nsIAuthInformation.ONLY_PASSWORD) {

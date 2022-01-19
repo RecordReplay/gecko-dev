@@ -4,29 +4,24 @@
 
 "use strict";
 
-/* globals ExtensionAPI */
+/* globals ExtensionAPI, Services, XPCOMUtils */
 
 const CACHED_STYLESHEETS = new WeakMap();
-
-const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-const { XPCOMUtils } = ChromeUtils.import(
-  "resource://gre/modules/XPCOMUtils.jsm"
-);
 
 ChromeUtils.defineModuleGetter(
   this,
   "FormAutofill",
-  "resource://formautofill/FormAutofill.jsm"
+  "resource://autofill/FormAutofill.jsm"
 );
 ChromeUtils.defineModuleGetter(
   this,
   "FormAutofillStatus",
-  "resource://formautofill/FormAutofillParent.jsm"
+  "resource://autofill/FormAutofillParent.jsm"
 );
 ChromeUtils.defineModuleGetter(
   this,
   "FormAutofillParent",
-  "resource://formautofill/FormAutofillParent.jsm"
+  "resource://autofill/FormAutofillParent.jsm"
 );
 ChromeUtils.defineModuleGetter(
   this,
@@ -186,10 +181,10 @@ this.formautofill = class extends ExtensionAPI {
 
     ChromeUtils.registerWindowActor("FormAutofill", {
       parent: {
-        moduleURI: "resource://formautofill/FormAutofillParent.jsm",
+        moduleURI: "resource://autofill/FormAutofillParent.jsm",
       },
       child: {
-        moduleURI: "resource://formautofill/FormAutofillChild.jsm",
+        moduleURI: "resource://autofill/FormAutofillChild.jsm",
         events: {
           focusin: {},
           DOMFormBeforeSubmit: {},

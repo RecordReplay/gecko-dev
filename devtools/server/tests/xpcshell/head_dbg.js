@@ -45,7 +45,7 @@ const { DevToolsServer: WorkerDevToolsServer } = worker.require(
 const { DevToolsClient } = require("devtools/client/devtools-client");
 const { ObjectFront } = require("devtools/client/fronts/object");
 const { LongStringFront } = require("devtools/client/fronts/string");
-const { TargetFactory } = require("devtools/client/framework/target");
+const { createCommandsDictionary } = require("devtools/shared/commands/index");
 
 const { addDebuggerToGlobal } = ChromeUtils.import(
   "resource://gre/modules/jsdebugger.jsm"
@@ -371,27 +371,38 @@ async function getTestTab(client, title) {
   }
   return null;
 }
-
-// Attach to |client|'s tab whose title is |title|; and return the targetFront instance
-// referring to that tab.
+/**
+ *  Attach to the client's tab whose title is specified
+ * @param {Object} client
+ * @param {Object} title
+ * @returns commands
+ */
 async function attachTestTab(client, title) {
   const descriptorFront = await getTestTab(client, title);
-  const targetFront = await descriptorFront.getTarget();
-  await targetFront.attach();
-  return targetFront;
+  const commands = await createCommandsDictionary(descriptorFront);
+  await commands.targetCommand.startListening();
+  return commands;
 }
 
-// Attach to |client|'s tab whose title is |title|, and then attach to
-// that tab's thread. Return the TargetFront referring to the tab,
-// and a ThreadFront referring to the thread.
+/**
+ * Attach to the client's tab whose title is specified, and then attach to
+ * that tab's thread.
+ * @param {Object} client
+ * @param {Object} title
+ * @returns {Object}
+ *         targetFront
+ *         threadFront
+ *         commands
+ */
 async function attachTestThread(client, title) {
-  const targetFront = await attachTestTab(client, title);
+  const commands = await attachTestTab(client, title);
+  const targetFront = commands.targetCommand.targetFront;
   const threadFront = await targetFront.getFront("thread");
   await targetFront.attachThread({
     autoBlackBox: true,
   });
   Assert.equal(threadFront.state, "attached", "Thread front is attached");
-  return { targetFront, threadFront };
+  return { targetFront, threadFront, commands };
 }
 
 /**
@@ -735,6 +746,15 @@ async function getSourceFormById(threadFront, id) {
   return sources.find(source => source.actor == id);
 }
 
+async function checkFramesLength(threadFront, expectedFrames) {
+  const frameResponse = await threadFront.getFrames(0, null);
+  Assert.equal(
+    frameResponse.frames.length,
+    expectedFrames,
+    "Thread front has the expected number of frames"
+  );
+}
+
 /**
  * Do a reload which clears the thread debugger
  *
@@ -858,7 +878,7 @@ function threadFrontTest(test, options = {}) {
 
     // Attach to the fake tab target and retrieve the ThreadFront instance.
     // Automatically resume as the thread is paused by default after attach.
-    const { targetFront, threadFront } = await attachTestThread(
+    const { targetFront, threadFront, commands } = await attachTestThread(
       client,
       scriptName
     );
@@ -879,6 +899,7 @@ function threadFrontTest(test, options = {}) {
       client,
       server,
       targetFront,
+      commands,
     };
     if (waitForFinish) {
       // Use dispatchToMainThread so that the test function does not have to

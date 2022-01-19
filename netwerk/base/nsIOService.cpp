@@ -161,6 +161,8 @@ int16_t gBadPortList[] = {
     587,    // smtp (outgoing)
     601,    // syslog-conn
     636,    // ldap+ssl
+    989,    // ftps-data
+    990,    // ftps
     993,    // imap+ssl
     995,    // pop3+ssl
     1719,   // h323gatestat
@@ -196,26 +198,9 @@ uint32_t nsIOService::gDefaultSegmentCount = 24;
 ////////////////////////////////////////////////////////////////////////////////
 
 nsIOService::nsIOService()
-    : mOffline(true),
-      mOfflineForProfileChange(false),
-      mManageLinkStatus(false),
-      mConnectivity(true),
-      mSettingOffline(false),
-      mSetOfflineValue(false),
-      mSocketProcessLaunchComplete(false),
-      mShutdown(false),
-      mHttpHandlerAlreadyShutingDown(false),
-      mNetworkLinkServiceInitialized(false),
-      mChannelEventSinks(NS_CHANNEL_EVENT_SINK_CATEGORY),
-      mMutex("nsIOService::mMutex"),
-      mTotalRequests(0),
-      mCacheWon(0),
-      mNetWon(0),
-      mLastOfflineStateChange(PR_IntervalNow()),
+    : mLastOfflineStateChange(PR_IntervalNow()),
       mLastConnectivityChange(PR_IntervalNow()),
-      mLastNetworkLinkChange(PR_IntervalNow()),
-      mNetTearingDownStarted(0),
-      mSocketProcess(nullptr) {}
+      mLastNetworkLinkChange(PR_IntervalNow()) {}
 
 static const char* gCallbackPrefs[] = {
     PORT_PREF_PREFIX,
@@ -258,7 +243,6 @@ static const char* gCallbackSecurityPrefs[] = {
     "security.ssl.enable_ocsp_stapling",
     "security.ssl.enable_ocsp_must_staple",
     "security.pki.certificate_transparency.mode",
-    "security.cert_pinning.enforcement_level",
     "security.pki.name_matching_mode",
     nullptr,
 };
@@ -275,20 +259,21 @@ nsresult nsIOService::Init() {
   InitializeCaptivePortalService();
 
   // setup our bad port list stuff
-  for (int i = 0; gBadPortList[i]; i++)
+  for (int i = 0; gBadPortList[i]; i++) {
     mRestrictedPortList.AppendElement(gBadPortList[i]);
+  }
 
   // Further modifications to the port list come from prefs
   Preferences::RegisterPrefixCallbacks(nsIOService::PrefsChanged,
                                        gCallbackPrefs, this);
   PrefsChanged();
 
-  mSocketProcessTopicBlackList.PutEntry(
+  mSocketProcessTopicBlackList.Insert(
       nsLiteralCString(NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID));
-  mSocketProcessTopicBlackList.PutEntry(
+  mSocketProcessTopicBlackList.Insert(
       nsLiteralCString(NS_XPCOM_SHUTDOWN_OBSERVER_ID));
-  mSocketProcessTopicBlackList.PutEntry("xpcom-shutdown-threads"_ns);
-  mSocketProcessTopicBlackList.PutEntry("profile-do-change"_ns);
+  mSocketProcessTopicBlackList.Insert("xpcom-shutdown-threads"_ns);
+  mSocketProcessTopicBlackList.Insert("profile-do-change"_ns);
 
   // Register for profile change notifications
   mObserverService = services::GetObserverService();
@@ -352,7 +337,7 @@ nsIOService::AddObserver(nsIObserver* aObserver, const char* aTopic,
     return NS_ERROR_FAILURE;
   }
 
-  mObserverTopicForSocketProcess.PutEntry(topic);
+  mObserverTopicForSocketProcess.Insert(topic);
 
   // This happens when AddObserver() is called by nsIOService::Init(). We don't
   // want to add nsIOService again.
@@ -404,7 +389,6 @@ void nsIOService::OnTLSPrefChange(const char* aPref, void* aSelf) {
   } else if (pref.EqualsLiteral("security.ssl.enable_ocsp_stapling") ||
              pref.EqualsLiteral("security.ssl.enable_ocsp_must_staple") ||
              pref.EqualsLiteral("security.pki.certificate_transparency.mode") ||
-             pref.EqualsLiteral("security.cert_pinning.enforcement_level") ||
              pref.EqualsLiteral("security.pki.name_matching_mode")) {
     SetValidationOptionsCommon();
   }
@@ -743,16 +727,10 @@ nsresult nsIOService::RecheckCaptivePortalIfLocalRedirect(nsIChannel* newChan) {
     return rv;
   }
 
-  PRNetAddr prAddr;
-  if (PR_StringToNetAddr(host.BeginReading(), &prAddr) != PR_SUCCESS) {
-    // The redirect wasn't to an IP literal, so there's probably no need
-    // to trigger the captive portal detection right now. It can wait.
-    return NS_OK;
-  }
-
-  NetAddr netAddr(&prAddr);
-  if (netAddr.IsIPAddrLocal()) {
-    // Redirects to local IP addresses are probably captive portals
+  NetAddr addr;
+  // If the redirect wasn't to an IP literal, so there's probably no need
+  // to trigger the captive portal detection right now. It can wait.
+  if (NS_SUCCEEDED(addr.InitFromString(host)) && addr.IsIPAddrLocal()) {
     RecheckCaptivePortal();
   }
 
@@ -867,14 +845,6 @@ static bool UsesExternalProtocolHandler(const char* aScheme) {
     return false;
   }
 
-  // When ftp protocol is disabled, return true if external protocol handler was
-  // not explicitly disabled by the prererence.
-  if ("ftp"_ns.Equals(aScheme) &&
-      !Preferences::GetBool("network.ftp.enabled", true) &&
-      Preferences::GetBool("network.protocol-handler.external.ftp", true)) {
-    return true;
-  }
-
   for (const auto& forcedExternalScheme : gForcedExternalSchemes) {
     if (!nsCRT::strcasecmp(forcedExternalScheme, aScheme)) {
       return true;
@@ -955,13 +925,9 @@ nsIOService::HostnameIsLocalIPAddress(nsIURI* aURI, bool* aResult) {
 
   *aResult = false;
 
-  PRNetAddr addr;
-  PRStatus result = PR_StringToNetAddr(host.get(), &addr);
-  if (result == PR_SUCCESS) {
-    NetAddr netAddr(&addr);
-    if (netAddr.IsIPAddrLocal()) {
-      *aResult = true;
-    }
+  NetAddr addr;
+  if (NS_SUCCEEDED(addr.InitFromString(host)) && addr.IsIPAddrLocal()) {
+    *aResult = true;
   }
 
   return NS_OK;
@@ -982,13 +948,9 @@ nsIOService::HostnameIsSharedIPAddress(nsIURI* aURI, bool* aResult) {
 
   *aResult = false;
 
-  PRNetAddr addr;
-  PRStatus result = PR_StringToNetAddr(host.get(), &addr);
-  if (result == PR_SUCCESS) {
-    NetAddr netAddr(&addr);
-    if (netAddr.IsIPAddrShared()) {
-      *aResult = true;
-    }
+  NetAddr addr;
+  if (NS_SUCCEEDED(addr.InitFromString(host)) && addr.IsIPAddrShared()) {
+    *aResult = true;
   }
 
   return NS_OK;
@@ -1252,8 +1214,9 @@ nsIOService::SetOffline(bool offline) {
   LOG(("nsIOService::SetOffline offline=%d\n", offline));
   // When someone wants to go online (!offline) after we got XPCOM shutdown
   // throw ERROR_NOT_AVAILABLE to prevent return to online state.
-  if ((mShutdown || mOfflineForProfileChange) && !offline)
+  if ((mShutdown || mOfflineForProfileChange) && !offline) {
     return NS_ERROR_NOT_AVAILABLE;
+  }
 
   // SetOffline() may re-enter while it's shutting down services.
   // If that happens, save the most recent value and it will be
@@ -1289,18 +1252,20 @@ nsIOService::SetOffline(bool offline) {
       mOffline = true;  // indicate we're trying to shutdown
 
       // don't care if notifications fail
-      if (observerService)
+      if (observerService) {
         observerService->NotifyObservers(subject,
                                          NS_IOSERVICE_GOING_OFFLINE_TOPIC,
                                          u"" NS_IOSERVICE_OFFLINE);
+      }
 
       if (mSocketTransportService) mSocketTransportService->SetOffline(true);
 
       mLastOfflineStateChange = PR_IntervalNow();
-      if (observerService)
+      if (observerService) {
         observerService->NotifyObservers(subject,
                                          NS_IOSERVICE_OFFLINE_STATUS_TOPIC,
                                          u"" NS_IOSERVICE_OFFLINE);
+      }
     } else if (!offline && mOffline) {
       // go online
       InitializeSocketTransportService();
@@ -1417,7 +1382,7 @@ nsIOService::AllowPort(int32_t inPort, const char* scheme, bool* _retval) {
     return NS_OK;
   }
 
-  if (port == 0) {
+  if (port <= 0 || port > std::numeric_limits<uint16_t>::max()) {
     *_retval = false;
     return NS_OK;
   }
@@ -1427,7 +1392,6 @@ nsIOService::AllowPort(int32_t inPort, const char* scheme, bool* _retval) {
     MutexAutoLock lock(mMutex);
     restrictedPortList.Assign(mRestrictedPortList);
   }
-
   // first check to see if the port is in our blacklist:
   int32_t badPortListCnt = restrictedPortList.Length();
   for (int i = 0; i < badPortListCnt; i++) {
@@ -1463,12 +1427,14 @@ void nsIOService::PrefsChanged(const char* pref, void* self) {
 
 void nsIOService::PrefsChanged(const char* pref) {
   // Look for extra ports to block
-  if (!pref || strcmp(pref, PORT_PREF("banned")) == 0)
+  if (!pref || strcmp(pref, PORT_PREF("banned")) == 0) {
     ParsePortList(PORT_PREF("banned"), false);
+  }
 
   // ...as well as previous blocks to remove.
-  if (!pref || strcmp(pref, PORT_PREF("banned.override")) == 0)
+  if (!pref || strcmp(pref, PORT_PREF("banned.override")) == 0) {
     ParsePortList(PORT_PREF("banned.override"), true);
+  }
 
   if (!pref || strcmp(pref, MANAGE_OFFLINE_STATUS_PREF) == 0) {
     bool manage;
@@ -1484,20 +1450,23 @@ void nsIOService::PrefsChanged(const char* pref) {
   if (!pref || strcmp(pref, NECKO_BUFFER_CACHE_COUNT_PREF) == 0) {
     int32_t count;
     if (NS_SUCCEEDED(
-            Preferences::GetInt(NECKO_BUFFER_CACHE_COUNT_PREF, &count)))
+            Preferences::GetInt(NECKO_BUFFER_CACHE_COUNT_PREF, &count))) {
       /* check for bogus values and default if we find such a value */
       if (count > 0) gDefaultSegmentCount = count;
+    }
   }
 
   if (!pref || strcmp(pref, NECKO_BUFFER_CACHE_SIZE_PREF) == 0) {
     int32_t size;
-    if (NS_SUCCEEDED(Preferences::GetInt(NECKO_BUFFER_CACHE_SIZE_PREF, &size)))
+    if (NS_SUCCEEDED(
+            Preferences::GetInt(NECKO_BUFFER_CACHE_SIZE_PREF, &size))) {
       /* check for bogus values and default if we find such a value
        * the upper limit here is arbitrary. having a 1mb segment size
        * is pretty crazy.  if you remove this, consider adding some
        * integer rollover test.
        */
       if (size > 0 && size < 1024 * 1024) gDefaultSegmentSize = size;
+    }
     NS_WARNING_ASSERTION(!(size & (size - 1)),
                          "network segment size is not a power of 2!");
   }
@@ -1538,21 +1507,24 @@ void nsIOService::ParsePortList(const char* pref, bool remove) {
         if ((portBegin < 65536) && (portEnd < 65536)) {
           int32_t curPort;
           if (remove) {
-            for (curPort = portBegin; curPort <= portEnd; curPort++)
+            for (curPort = portBegin; curPort <= portEnd; curPort++) {
               restrictedPortList.RemoveElement(curPort);
+            }
           } else {
-            for (curPort = portBegin; curPort <= portEnd; curPort++)
+            for (curPort = portBegin; curPort <= portEnd; curPort++) {
               restrictedPortList.AppendElement(curPort);
+            }
           }
         }
       } else {
         nsresult aErrorCode;
         int32_t port = portListArray[index].ToInteger(&aErrorCode);
         if (NS_SUCCEEDED(aErrorCode) && port < 65536) {
-          if (remove)
+          if (remove) {
             restrictedPortList.RemoveElement(port);
-          else
+          } else {
             restrictedPortList.AppendElement(port);
+          }
         }
       }
     }
@@ -1842,8 +1814,9 @@ nsIOService::EscapeString(const nsACString& aString, uint32_t aEscapeType,
   nsAutoCString stringCopy(aString);
   nsCString result;
 
-  if (!NS_Escape(stringCopy, result, (nsEscapeMask)aEscapeType))
+  if (!NS_Escape(stringCopy, result, (nsEscapeMask)aEscapeType)) {
     return NS_ERROR_OUT_OF_MEMORY;
+  }
 
   aResult.Assign(result);
 

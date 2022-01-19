@@ -32,7 +32,7 @@
 #include "mozilla/Types.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/jni/Utils.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 
 #include "Units.h"
 
@@ -93,9 +93,6 @@ class AndroidBridge final {
 
   static AndroidBridge* Bridge() { return sBridge; }
 
-  void ContentDocumentChanged(mozIDOMWindowProxy* aDOMWindow);
-  bool IsContentDocumentDisplayed(mozIDOMWindowProxy* aDOMWindow);
-
   bool GetHandlersForURL(const nsAString& aURL,
                          nsIMutableArray* handlersArray = nullptr,
                          nsIHandlerApp** aDefaultApp = nullptr,
@@ -145,8 +142,6 @@ class AndroidBridge final {
   uint32_t GetScreenOrientation();
   uint16_t GetScreenAngle();
 
-  int GetAPIVersion() { return mAPIVersion; }
-
   nsresult GetProxyForURI(const nsACString& aSpec, const nsACString& aScheme,
                           const nsACString& aHost, const int32_t aPort,
                           nsACString& aResult);
@@ -173,29 +168,12 @@ class AndroidBridge final {
                                   uint32_t aCount, uint32_t* aRead);
 
  protected:
-  static nsDataHashtable<nsStringHashKey, nsString> sStoragePaths;
+  static nsTHashMap<nsStringHashKey, nsString> sStoragePaths;
 
   static AndroidBridge* sBridge;
 
   AndroidBridge();
   ~AndroidBridge();
-
-  int mAPIVersion;
-
-  // intput stream
-  jclass jReadableByteChannel;
-  jclass jChannels;
-  jmethodID jChannelCreate;
-  jmethodID jByteBufferRead;
-
-  jclass jInputStream;
-  jmethodID jClose;
-  jmethodID jAvailable;
-
-  jmethodID jCalculateLength;
-
-  // some convinient types to have around
-  jclass jStringClass;
 
   jni::Object::GlobalRef mMessageQueue;
   jfieldID mMessageQueueMessages;

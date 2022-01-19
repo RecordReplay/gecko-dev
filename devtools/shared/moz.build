@@ -7,8 +7,8 @@
 include("../templates.mozbuild")
 
 DIRS += [
-    "acorn",
     "css",
+    "commands",
     "compatibility",
     "discovery",
     "heapsnapshot",
@@ -22,7 +22,6 @@ DIRS += [
     "platform",
     "protocol",
     "qrcode",
-    "resources",
     "security",
     "sprintfjs",
     "specs",
@@ -71,9 +70,9 @@ DevToolsModules(
     "plural-form.js",
     "protocol.js",
     "system.js",
-    "task.js",
     "ThreadSafeDevToolsUtils.js",
     "throttle.js",
+    "validate-breakpoint.jsm",
 )
 
 with Files("**"):

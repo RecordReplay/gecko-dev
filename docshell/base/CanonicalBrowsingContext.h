@@ -10,6 +10,10 @@
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/MediaControlKeySource.h"
 #include "mozilla/dom/BrowsingContextWebProgress.h"
+#include "mozilla/dom/Promise.h"
+#include "mozilla/dom/SessionHistoryEntry.h"
+#include "mozilla/dom/SessionStoreRestoreData.h"
+#include "mozilla/dom/SessionStoreUtils.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/MozPromise.h"
@@ -22,10 +26,12 @@
 
 class nsISHistory;
 class nsIWidget;
+class nsIPrintSettings;
 class nsSHistory;
 class nsBrowserStatusFilter;
 class nsSecureBrowserUI;
 class CallerWillNotifyHistoryIndexAndLengthChanges;
+class nsITimer;
 
 namespace mozilla {
 enum class CallState;
@@ -37,12 +43,23 @@ class DocumentLoadListener;
 namespace dom {
 
 class BrowserParent;
+class BrowserBridgeParent;
 class FeaturePolicy;
 struct LoadURIOptions;
 class MediaController;
 struct LoadingSessionHistoryInfo;
-class SessionHistoryEntry;
+class SSCacheCopy;
 class WindowGlobalParent;
+
+// RemotenessChangeOptions is passed through the methods to store the state
+// of the possible remoteness change.
+struct RemotenessChangeOptions {
+  nsCString mRemoteType;
+  bool mReplaceBrowsingContext = false;
+  uint64_t mSpecificGroupId = 0;
+  bool mTryUseBFCache = false;
+  RefPtr<SessionHistoryEntry> mActiveSessionHistoryEntry;
+};
 
 // CanonicalBrowsingContext is a BrowsingContext living in the parent
 // process, with whatever extra data that a BrowsingContext in the
@@ -50,8 +67,8 @@ class WindowGlobalParent;
 class CanonicalBrowsingContext final : public BrowsingContext {
  public:
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(CanonicalBrowsingContext,
-                                           BrowsingContext)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(
+      CanonicalBrowsingContext, BrowsingContext)
 
   static already_AddRefed<CanonicalBrowsingContext> Get(uint64_t aId);
   static CanonicalBrowsingContext* Cast(BrowsingContext* aContext);
@@ -72,10 +89,6 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   void GetCurrentRemoteType(nsACString& aRemoteType, ErrorResult& aRv) const;
 
   void SetOwnerProcessId(uint64_t aProcessId);
-
-  void SetInFlightProcessId(uint64_t aProcessId);
-  void ClearInFlightProcessId(uint64_t aProcessId);
-  uint64_t GetInFlightProcessId() const { return mInFlightProcessId; }
 
   // The ID of the BrowsingContext which caused this BrowsingContext to be
   // opened, or `0` if this is unknown.
@@ -111,12 +124,16 @@ class CanonicalBrowsingContext final : public BrowsingContext {
 
   nsISHistory* GetSessionHistory();
   SessionHistoryEntry* GetActiveSessionHistoryEntry();
+  void SetActiveSessionHistoryEntry(SessionHistoryEntry* aEntry);
 
   UniquePtr<LoadingSessionHistoryInfo> CreateLoadingSessionHistoryEntryForLoad(
       nsDocShellLoadState* aLoadState, nsIChannel* aChannel);
 
   UniquePtr<LoadingSessionHistoryInfo> ReplaceLoadingSessionHistoryEntryForLoad(
       LoadingSessionHistoryInfo* aInfo, nsIChannel* aChannel);
+
+  already_AddRefed<Promise> Print(nsIPrintSettings* aPrintSettings,
+                                  ErrorResult& aRv);
 
   // Call the given callback on all top-level descendant BrowsingContexts.
   // Return Callstate::Stop from the callback to stop calling
@@ -150,10 +167,10 @@ class CanonicalBrowsingContext final : public BrowsingContext {
 
   void RemoveDynEntriesFromActiveSessionHistoryEntry();
 
-  void RemoveFromSessionHistory();
+  void RemoveFromSessionHistory(const nsID& aChangeID);
 
   void HistoryGo(int32_t aIndex, uint64_t aHistoryEpoch,
-                 bool aRequireUserInteraction,
+                 bool aRequireUserInteraction, bool aUserActivation,
                  Maybe<ContentParentId> aContentId,
                  std::function<void(int32_t&&)>&& aResolver);
 
@@ -190,15 +207,20 @@ class CanonicalBrowsingContext final : public BrowsingContext {
                ErrorResult& aError);
 
   void GoBack(const Optional<int32_t>& aCancelContentJSEpoch,
-              bool aRequireUserInteraction);
+              bool aRequireUserInteraction, bool aUserActivation);
   void GoForward(const Optional<int32_t>& aCancelContentJSEpoch,
-                 bool aRequireUserInteraction);
-  void GoToIndex(int32_t aIndex,
-                 const Optional<int32_t>& aCancelContentJSEpoch);
+                 bool aRequireUserInteraction, bool aUserActivation);
+  void GoToIndex(int32_t aIndex, const Optional<int32_t>& aCancelContentJSEpoch,
+                 bool aUserActivation);
   void Reload(uint32_t aReloadFlags);
   void Stop(uint32_t aStopFlags);
 
+  // Get the publicly exposed current URI loaded in this BrowsingContext.
+  already_AddRefed<nsIURI> GetCurrentURI() const;
+  void SetCurrentRemoteURI(nsIURI* aCurrentRemoteURI);
+
   BrowserParent* GetBrowserParent() const;
+  void SetCurrentBrowserParent(BrowserParent* aBrowserParent);
 
   // Internal method to change which process a BrowsingContext is being loaded
   // in. The returned promise will resolve when the process switch is completed.
@@ -206,10 +228,8 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   // A NOT_REMOTE_TYPE aRemoteType argument will perform a process switch into
   // the parent process, and the method will resolve with a null BrowserParent.
   using RemotenessPromise = MozPromise<RefPtr<BrowserParent>, nsresult, false>;
-  RefPtr<RemotenessPromise> ChangeRemoteness(const nsACString& aRemoteType,
-                                             uint64_t aPendingSwitchId,
-                                             bool aReplaceBrowsingContext,
-                                             uint64_t aSpecificGroupId);
+  RefPtr<RemotenessPromise> ChangeRemoteness(
+      const RemotenessChangeOptions& aOptions, uint64_t aPendingSwitchId);
 
   // Return a media controller from the top-level browsing context that can
   // control all media belonging to this browsing context tree. Return nullptr
@@ -247,7 +267,8 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   // process).
   // aNewContext is the newly created BrowsingContext that is replacing
   // us.
-  void ReplacedBy(CanonicalBrowsingContext* aNewContext);
+  void ReplacedBy(CanonicalBrowsingContext* aNewContext,
+                  const RemotenessChangeOptions& aRemotenessOptions);
 
   bool HasHistoryEntry(nsISHEntry* aEntry);
 
@@ -269,9 +290,57 @@ class CanonicalBrowsingContext final : public BrowsingContext {
     return mContainerFeaturePolicy;
   }
 
+  void SetRestoreData(SessionStoreRestoreData* aData, ErrorResult& aError);
+  void ClearRestoreState();
+  void RequestRestoreTabContent(WindowGlobalParent* aWindow);
+  already_AddRefed<Promise> GetRestorePromise();
+
+  nsresult WriteSessionStorageToSessionStore(
+      const nsTArray<SSCacheCopy>& aSesssionStorage, uint32_t aEpoch);
+
+  void UpdateSessionStoreSessionStorage(const std::function<void()>& aDone);
+
+  static void UpdateSessionStoreForStorage(uint64_t aBrowsingContextId);
+
+  // Called when a BrowserParent for this BrowsingContext has been fully
+  // destroyed (i.e. `ActorDestroy` was called).
+  void BrowserParentDestroyed(BrowserParent* aBrowserParent,
+                              bool aAbnormalShutdown);
+
+  void StartUnloadingHost(uint64_t aChildID);
+  void ClearUnloadingHost(uint64_t aChildID);
+
+  bool AllowedInBFCache(const Maybe<uint64_t>& aChannelId);
+
+  // Methods for getting and setting the active state for top level
+  // browsing contexts, for the process priority manager.
+  bool IsPriorityActive() const {
+    MOZ_RELEASE_ASSERT(IsTop());
+    return mPriorityActive;
+  }
+  void SetPriorityActive(bool aIsActive) {
+    MOZ_RELEASE_ASSERT(IsTop());
+    mPriorityActive = aIsActive;
+  }
+
+  void SetTouchEventsOverride(dom::TouchEventsOverride, ErrorResult& aRv);
+
+  bool IsReplaced() const { return mIsReplaced; }
+
+  const JS::Heap<JS::Value>& PermanentKey() { return mPermanentKey; }
+  void ClearPermanentKey() { mPermanentKey.setNull(); }
+  void MaybeSetPermanentKey(Element* aEmbedder);
+
  protected:
   // Called when the browsing context is being discarded.
   void CanonicalDiscard();
+
+  // Called when the browsing context is being attached.
+  void CanonicalAttach();
+
+  // Called when the browsing context private mode is changed after
+  // being attached, but before being discarded.
+  void AdjustPrivateBrowsingCount(bool aPrivateBrowsing);
 
   using Type = BrowsingContext::Type;
   CanonicalBrowsingContext(WindowContext* aParentWindow,
@@ -284,7 +353,7 @@ class CanonicalBrowsingContext final : public BrowsingContext {
  private:
   friend class BrowsingContext;
 
-  ~CanonicalBrowsingContext() = default;
+  virtual ~CanonicalBrowsingContext();
 
   class PendingRemotenessChange {
    public:
@@ -293,7 +362,7 @@ class CanonicalBrowsingContext final : public BrowsingContext {
     PendingRemotenessChange(CanonicalBrowsingContext* aTarget,
                             RemotenessPromise::Private* aPromise,
                             uint64_t aPendingSwitchId,
-                            bool aReplaceBrowsingContext);
+                            const RemotenessChangeOptions& aOptions);
 
     void Cancel(nsresult aRv);
 
@@ -301,9 +370,13 @@ class CanonicalBrowsingContext final : public BrowsingContext {
     friend class CanonicalBrowsingContext;
 
     ~PendingRemotenessChange();
+    void ProcessLaunched();
     void ProcessReady();
     void Finish();
     void Clear();
+
+    nsresult FinishTopContent();
+    nsresult FinishSubframe();
 
     RefPtr<CanonicalBrowsingContext> mTarget;
     RefPtr<RemotenessPromise::Private> mPromise;
@@ -312,7 +385,22 @@ class CanonicalBrowsingContext final : public BrowsingContext {
     RefPtr<BrowsingContextGroup> mSpecificGroup;
 
     uint64_t mPendingSwitchId;
-    bool mReplaceBrowsingContext;
+    RemotenessChangeOptions mOptions;
+  };
+
+  struct RestoreState {
+    NS_INLINE_DECL_REFCOUNTING(RestoreState)
+
+    void ClearData() { mData = nullptr; }
+    void Resolve();
+
+    RefPtr<SessionStoreRestoreData> mData;
+    RefPtr<Promise> mPromise;
+    uint32_t mRequests = 0;
+    uint32_t mResolves = 0;
+
+   private:
+    ~RestoreState() = default;
   };
 
   friend class net::DocumentLoadListener;
@@ -332,16 +420,26 @@ class CanonicalBrowsingContext final : public BrowsingContext {
       const nsID& aChangeID,
       const CallerWillNotifyHistoryIndexAndLengthChanges& aProofOfCaller);
 
+  struct UnloadingHost {
+    uint64_t mChildID;
+    nsTArray<std::function<void()>> mCallbacks;
+  };
+  nsTArray<UnloadingHost>::iterator FindUnloadingHost(uint64_t aChildID);
+
+  // Called when we want to show the subframe crashed UI as our previous browser
+  // has become unloaded for one reason or another.
+  void ShowSubframeCrashedUI(BrowserBridgeParent* aBridge);
+
+  void MaybeScheduleSessionStoreUpdate();
+
+  void CancelSessionStoreUpdate();
+
   // XXX(farre): Store a ContentParent pointer here rather than mProcessId?
   // Indicates which process owns the docshell.
   uint64_t mProcessId;
 
   // Indicates which process owns the embedder element.
   uint64_t mEmbedderProcessId;
-
-  // The ID of the former owner process during an ownership change, which may
-  // have in-flight messages that assume it is still the owner.
-  uint64_t mInFlightProcessId = 0;
 
   uint64_t mCrossGroupOpenerId = 0;
 
@@ -350,6 +448,14 @@ class CanonicalBrowsingContext final : public BrowsingContext {
   // setting user interaction on SH entries. Should be called anytime SH
   // entries are added or replaced.
   void ResetSHEntryHasUserInteractionCache();
+
+  RefPtr<BrowserParent> mCurrentBrowserParent;
+
+  nsTArray<UnloadingHost> mUnloadingHosts;
+
+  // The current URI loaded in this BrowsingContext. This value is only set for
+  // BrowsingContexts loaded in content processes.
+  nsCOMPtr<nsIURI> mCurrentRemoteURI;
 
   // The current remoteness change which is in a pending state.
   RefPtr<PendingRemotenessChange> mPendingRemotenessChange;
@@ -372,9 +478,23 @@ class CanonicalBrowsingContext final : public BrowsingContext {
 
   RefPtr<nsSecureBrowserUI> mSecureBrowserUI;
   RefPtr<BrowsingContextWebProgress> mWebProgress;
+
+  nsCOMPtr<nsIWebProgressListener> mDocShellProgressBridge;
   RefPtr<nsBrowserStatusFilter> mStatusFilter;
 
   RefPtr<FeaturePolicy> mContainerFeaturePolicy;
+
+  RefPtr<RestoreState> mRestoreState;
+
+  // If this is a top level context, this is true if our browser ID is marked as
+  // active in the process priority manager.
+  bool mPriorityActive = false;
+
+  nsCOMPtr<nsITimer> mSessionStoreSessionStorageUpdateTimer;
+
+  bool mIsReplaced = false;
+
+  JS::Heap<JS::Value> mPermanentKey;
 };
 
 }  // namespace dom

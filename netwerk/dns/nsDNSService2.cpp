@@ -15,6 +15,7 @@
 #include "nsProxyRelease.h"
 #include "nsReadableUtils.h"
 #include "nsString.h"
+#include "nsCRT.h"
 #include "nsNetCID.h"
 #include "nsError.h"
 #include "nsDNSPrefetch.h"
@@ -71,8 +72,7 @@ class nsDNSRecord : public nsIDNSAddrRecord {
   NS_DECL_NSIDNSRECORD
   NS_DECL_NSIDNSADDRRECORD
 
-  explicit nsDNSRecord(nsHostRecord* hostRecord)
-      : mIterGenCnt(-1), mDone(false) {
+  explicit nsDNSRecord(nsHostRecord* hostRecord) {
     mHostRecord = do_QueryObject(hostRecord);
   }
 
@@ -95,10 +95,10 @@ class nsDNSRecord : public nsIDNSAddrRecord {
     return &*mIter;
   }
 
-  int mIterGenCnt;  // the generation count of
-                    // mHostRecord->addr_info when we
-                    // start iterating
-  bool mDone;
+  int mIterGenCnt = -1;  // the generation count of
+                         // mHostRecord->addr_info when we
+                         // start iterating
+  bool mDone = false;
 };
 
 NS_IMPL_ISUPPORTS(nsDNSRecord, nsIDNSRecord, nsIDNSAddrRecord)
@@ -130,7 +130,9 @@ NS_IMETHODIMP
 nsDNSRecord::IsTRR(bool* retval) {
   MutexAutoLock lock(mHostRecord->addr_info_lock);
   if (mHostRecord->addr_info) {
-    *retval = mHostRecord->addr_info->IsTRR();
+    // TODO: Let the consumers of nsIDNSRecord be unaware of the difference of
+    // TRR and ODoH. Will let them know the truth when needed.
+    *retval = mHostRecord->addr_info->IsTRROrODoH();
   } else {
     *retval = false;
   }
@@ -140,7 +142,7 @@ nsDNSRecord::IsTRR(bool* retval) {
 NS_IMETHODIMP
 nsDNSRecord::GetTrrFetchDuration(double* aTime) {
   MutexAutoLock lock(mHostRecord->addr_info_lock);
-  if (mHostRecord->addr_info && mHostRecord->addr_info->IsTRR()) {
+  if (mHostRecord->addr_info && mHostRecord->addr_info->IsTRROrODoH()) {
     *aTime = mHostRecord->addr_info->GetTrrFetchDuration();
   } else {
     *aTime = 0;
@@ -151,7 +153,7 @@ nsDNSRecord::GetTrrFetchDuration(double* aTime) {
 NS_IMETHODIMP
 nsDNSRecord::GetTrrFetchDurationNetworkOnly(double* aTime) {
   MutexAutoLock lock(mHostRecord->addr_info_lock);
-  if (mHostRecord->addr_info && mHostRecord->addr_info->IsTRR()) {
+  if (mHostRecord->addr_info && mHostRecord->addr_info->IsTRROrODoH()) {
     *aTime = mHostRecord->addr_info->GetTrrFetchDurationNetworkOnly();
   } else {
     *aTime = 0;
@@ -428,6 +430,9 @@ nsDNSByTypeRecord::GetResults(mozilla::net::TypeRecordResultType* aResults) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsDNSByTypeRecord::GetTtl(uint32_t* aTtl) { return mHostRecord->GetTtl(aTtl); }
+
 //-----------------------------------------------------------------------------
 
 class nsDNSAsyncRequest final : public nsResolveHostCallback,
@@ -460,12 +465,12 @@ class nsDNSAsyncRequest final : public nsResolveHostCallback,
   RefPtr<nsHostResolver> mResolver;
   nsCString mHost;       // hostname we're resolving
   nsCString mTrrServer;  // A trr server to be used.
-  uint16_t mType;
+  uint16_t mType = 0;
   const OriginAttributes
       mOriginAttributes;  // The originAttributes for this resolving
   nsCOMPtr<nsIDNSListener> mListener;
-  uint16_t mFlags;
-  uint16_t mAF;
+  uint16_t mFlags = 0;
+  uint16_t mAF = 0;
 
  private:
   virtual ~nsDNSAsyncRequest() = default;
@@ -518,6 +523,7 @@ size_t nsDNSAsyncRequest::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const {
 NS_IMETHODIMP
 nsDNSAsyncRequest::Cancel(nsresult reason) {
   NS_ENSURE_ARG(NS_FAILED(reason));
+  MOZ_DIAGNOSTIC_ASSERT(mResolver, "mResolver should not be null");
   mResolver->DetachCallback(mHost, mTrrServer, mType, mOriginAttributes, mFlags,
                             mAF, this, reason);
   return NS_OK;
@@ -528,21 +534,20 @@ nsDNSAsyncRequest::Cancel(nsresult reason) {
 class nsDNSSyncRequest : public nsResolveHostCallback {
   NS_DECL_THREADSAFE_ISUPPORTS
  public:
-  explicit nsDNSSyncRequest(PRMonitor* mon)
-      : mDone(false), mStatus(NS_OK), mMonitor(mon) {}
+  explicit nsDNSSyncRequest(PRMonitor* mon) : mMonitor(mon) {}
 
   void OnResolveHostComplete(nsHostResolver*, nsHostRecord*, nsresult) override;
   bool EqualsAsyncListener(nsIDNSListener* aListener) override;
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const override;
 
-  bool mDone;
-  nsresult mStatus;
+  bool mDone = false;
+  nsresult mStatus = NS_OK;
   RefPtr<nsHostRecord> mHostRecord;
 
  private:
   virtual ~nsDNSSyncRequest() = default;
 
-  PRMonitor* mMonitor;
+  PRMonitor* mMonitor = nullptr;
 };
 
 NS_IMPL_ISUPPORTS0(nsDNSSyncRequest)
@@ -598,23 +603,6 @@ class NotifyDNSResolution : public Runnable {
 
 //-----------------------------------------------------------------------------
 
-nsDNSService::nsDNSService()
-    : mLock("nsDNSServer.mLock"),
-      mDisableIPv6(false),
-      mDisablePrefetch(false),
-      mBlockDotOnion(false),
-      mNotifyResolution(false),
-      mOfflineLocalhost(false),
-      mForceResolveOn(false),
-      mTrrService(nullptr),
-      mHasSocksProxy(false),
-      mResCacheEntries(0),
-      mResCacheExpiration(0),
-      mResCacheGrace(0),
-      mResolverPrefsUpdated(false) {}
-
-nsDNSService::~nsDNSService() = default;
-
 NS_IMPL_ISUPPORTS(nsDNSService, nsIDNSService, nsPIDNSService, nsIObserver,
                   nsIMemoryReporter)
 
@@ -623,29 +611,66 @@ NS_IMPL_ISUPPORTS(nsDNSService, nsIDNSService, nsPIDNSService, nsIObserver,
  * singleton instance ctor/dtor methods
  ******************************************************************************/
 static StaticRefPtr<nsDNSService> gDNSService;
+static Atomic<bool> gInited(false);
+
+already_AddRefed<nsIDNSService> GetOrInitDNSService() {
+  if (gInited) {
+    return nsDNSService::GetXPCOMSingleton();
+  }
+
+  nsCOMPtr<nsIDNSService> dns = nullptr;
+  auto initTask = [&dns]() { dns = do_GetService(NS_DNSSERVICE_CID); };
+  if (!NS_IsMainThread()) {
+    // Forward to the main thread synchronously.
+    RefPtr<nsIThread> mainThread = do_GetMainThread();
+    if (!mainThread) {
+      return nullptr;
+    }
+
+    SyncRunnable::DispatchToThread(mainThread,
+                                   new SyncRunnable(NS_NewRunnableFunction(
+                                       "GetOrInitDNSService", initTask)));
+  } else {
+    initTask();
+  }
+
+  return dns.forget();
+}
 
 already_AddRefed<nsIDNSService> nsDNSService::GetXPCOMSingleton() {
-  if (nsIOService::UseSocketProcess()) {
-    if (XRE_IsSocketProcess()) {
+  auto getDNSHelper = []() -> already_AddRefed<nsIDNSService> {
+    if (nsIOService::UseSocketProcess()) {
+      if (XRE_IsSocketProcess()) {
+        return GetSingleton();
+      }
+
+      if (XRE_IsContentProcess() || XRE_IsParentProcess()) {
+        return ChildDNSService::GetSingleton();
+      }
+
+      return nullptr;
+    }
+
+    if (XRE_IsParentProcess()) {
       return GetSingleton();
     }
 
-    if (XRE_IsContentProcess() || XRE_IsParentProcess()) {
+    if (XRE_IsContentProcess() || XRE_IsSocketProcess()) {
       return ChildDNSService::GetSingleton();
     }
 
     return nullptr;
+  };
+
+  if (gInited) {
+    return getDNSHelper();
   }
 
-  if (XRE_IsParentProcess()) {
-    return GetSingleton();
+  nsCOMPtr<nsIDNSService> dns = getDNSHelper();
+  if (dns) {
+    gInited = true;
   }
-
-  if (XRE_IsContentProcess() || XRE_IsSocketProcess()) {
-    return ChildDNSService::GetSingleton();
-  }
-
-  return nullptr;
+  return dns.forget();
 }
 
 already_AddRefed<nsDNSService> nsDNSService::GetSingleton() {
@@ -745,7 +770,7 @@ nsresult nsDNSService::ReadPrefs(const char* name) {
                                            nsTokenizerFlags::SeparatorOptional>(
              localDomains, ',')
              .ToRange()) {
-      mLocalDomains.PutEntry(token);
+      mLocalDomains.Insert(token);
     }
   }
   if (!name || !strcmp(name, kPrefDnsForceResolve)) {
@@ -775,6 +800,7 @@ nsDNSService::Init() {
     observerService->AddObserver(this, "last-pb-context-exited", false);
     observerService->AddObserver(this, NS_NETWORK_LINK_TOPIC, false);
     observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
+    observerService->AddObserver(this, "odoh-service-activated", false);
   }
 
   RefPtr<nsHostResolver> res;
@@ -827,10 +853,10 @@ nsDNSService::Shutdown() {
   RefPtr<nsHostResolver> res;
   {
     MutexAutoLock lock(mLock);
-    res = mResolver;
-    mResolver = nullptr;
+    res = std::move(mResolver);
   }
   if (res) {
+    // Shutdown outside lock.
     res->Shutdown();
   }
 
@@ -875,17 +901,21 @@ bool nsDNSService::DNSForbiddenByActiveProxy(const nsACString& aHostname,
   }
 
   // We should avoid doing DNS when a proxy is in use.
-  PRNetAddr tempAddr;
+  NetAddr tempAddr;
   if (StaticPrefs::network_proxy_type() ==
           nsIProtocolProxyService::PROXYCONFIG_MANUAL &&
       mHasSocksProxy && StaticPrefs::network_proxy_socks_remote_dns()) {
     // Allow IP lookups through, but nothing else.
-    if (PR_StringToNetAddr(nsCString(aHostname).get(), &tempAddr) !=
-        PR_SUCCESS) {
+    if (!HostIsIPLiteral(aHostname)) {
       return true;
     }
   }
   return false;
+}
+
+already_AddRefed<nsHostResolver> nsDNSService::GetResolverLocked() {
+  MutexAutoLock lock(mLock);
+  return do_AddRef(mResolver);
 }
 
 nsresult nsDNSService::PreprocessHostname(bool aLocalDomain,
@@ -947,7 +977,7 @@ nsresult nsDNSService::AsyncResolveInternal(
 
     res = mResolver;
     idn = mIDN;
-    localDomain = mLocalDomains.GetEntry(aHostname);
+    localDomain = mLocalDomains.Contains(aHostname);
   }
 
   if (mNotifyResolution) {
@@ -1026,7 +1056,7 @@ nsresult nsDNSService::CancelAsyncResolveInternal(
 
     res = mResolver;
     idn = mIDN;
-    localDomain = mLocalDomains.GetEntry(aHostname);
+    localDomain = mLocalDomains.Contains(aHostname);
   }
   if (!res) {
     return NS_ERROR_OFFLINE;
@@ -1158,7 +1188,7 @@ nsresult nsDNSService::ResolveInternal(
     MutexAutoLock lock(mLock);
     res = mResolver;
     idn = mIDN;
-    localDomain = mLocalDomains.GetEntry(aHostname);
+    localDomain = mLocalDomains.Contains(aHostname);
   }
 
   if (mNotifyResolution) {
@@ -1241,29 +1271,41 @@ nsDNSService::GetMyHostName(nsACString& result) {
 }
 
 NS_IMETHODIMP
+nsDNSService::GetODoHActivated(bool* aResult) {
+  NS_ENSURE_ARG(aResult);
+
+  *aResult = mODoHActivated;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDNSService::Observe(nsISupports* subject, const char* topic,
                       const char16_t* data) {
   bool flushCache = false;
+  RefPtr<nsHostResolver> resolver = GetResolverLocked();
+
   if (!strcmp(topic, NS_NETWORK_LINK_TOPIC)) {
     nsAutoCString converted = NS_ConvertUTF16toUTF8(data);
-    if (mResolver && !strcmp(converted.get(), NS_NETWORK_LINK_DATA_CHANGED)) {
+    if (!strcmp(converted.get(), NS_NETWORK_LINK_DATA_CHANGED)) {
       flushCache = true;
     }
   } else if (!strcmp(topic, "last-pb-context-exited")) {
     flushCache = true;
   } else if (!strcmp(topic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     ReadPrefs(NS_ConvertUTF16toUTF8(data).get());
-    NS_ENSURE_TRUE(mResolver, NS_ERROR_NOT_INITIALIZED);
-    if (mResolverPrefsUpdated && mResolver) {
-      mResolver->SetCacheLimits(mResCacheEntries, mResCacheExpiration,
-                                mResCacheGrace);
+    NS_ENSURE_TRUE(resolver, NS_ERROR_NOT_INITIALIZED);
+    if (mResolverPrefsUpdated && resolver) {
+      resolver->SetCacheLimits(mResCacheEntries, mResCacheExpiration,
+                               mResCacheGrace);
     }
   } else if (!strcmp(topic, NS_XPCOM_SHUTDOWN_OBSERVER_ID)) {
     Shutdown();
+  } else if (!strcmp(topic, "odoh-service-activated")) {
+    mODoHActivated = u"true"_ns.Equals(data);
   }
 
-  if (flushCache && mResolver) {
-    mResolver->FlushCache(false);
+  if (flushCache && resolver) {
+    resolver->FlushCache(false);
     return NS_OK;
   }
 
@@ -1308,7 +1350,7 @@ uint16_t nsDNSService::GetAFForLookup(const nsACString& host, uint32_t flags) {
       domainLen = end - domain;
       if (domainLen && hostLen >= domainLen) {
         const char* hostTail = hostStart.get() + hostLen - domainLen;
-        if (PL_strncasecmp(domain, hostTail, domainLen) == 0) {
+        if (nsCRT::strncasecmp(domain, hostTail, domainLen) == 0) {
           // now, make sure either that the hostname is a direct match or
           // that the hostname begins with a dot.
           if (hostLen == domainLen || *hostTail == '.' ||
@@ -1333,15 +1375,17 @@ uint16_t nsDNSService::GetAFForLookup(const nsACString& host, uint32_t flags) {
 NS_IMETHODIMP
 nsDNSService::GetDNSCacheEntries(
     nsTArray<mozilla::net::DNSCacheEntries>* args) {
-  NS_ENSURE_TRUE(mResolver, NS_ERROR_NOT_INITIALIZED);
-  mResolver->GetDNSCacheEntries(args);
+  RefPtr<nsHostResolver> resolver = GetResolverLocked();
+  NS_ENSURE_TRUE(resolver, NS_ERROR_NOT_INITIALIZED);
+  resolver->GetDNSCacheEntries(args);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsDNSService::ClearCache(bool aTrrToo) {
-  NS_ENSURE_TRUE(mResolver, NS_ERROR_NOT_INITIALIZED);
-  mResolver->FlushCache(aTrrToo);
+  RefPtr<nsHostResolver> resolver = GetResolverLocked();
+  NS_ENSURE_TRUE(resolver, NS_ERROR_NOT_INITIALIZED);
+  resolver->FlushCache(aTrrToo);
   return NS_OK;
 }
 
@@ -1371,10 +1415,19 @@ nsDNSService::GetCurrentTrrURI(nsACString& aURI) {
 }
 
 NS_IMETHODIMP
-nsDNSService::GetCurrentTrrMode(uint32_t* aMode) {
-  *aMode = 0;  // The default mode.
+nsDNSService::GetCurrentTrrMode(nsIDNSService::ResolverMode* aMode) {
+  *aMode = nsIDNSService::MODE_NATIVEONLY;  // The default mode.
   if (mTrrService) {
     *aMode = mTrrService->Mode();
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDNSService::GetCurrentTrrConfirmationState(uint32_t* aConfirmationState) {
+  *aConfirmationState = uint32_t(TRRService::CONFIRM_OFF);
+  if (mTrrService) {
+    *aConfirmationState = mTrrService->ConfirmationState();
   }
   return NS_OK;
 }
@@ -1391,10 +1444,9 @@ size_t nsDNSService::SizeOfIncludingThis(
   n += mIPv4OnlyDomains.SizeOfExcludingThisIfUnshared(mallocSizeOf);
   n += mLocalDomains.SizeOfExcludingThis(mallocSizeOf);
   n += mFailedSVCDomainNames.ShallowSizeOfExcludingThis(mallocSizeOf);
-  for (auto iter = mFailedSVCDomainNames.ConstIter(); !iter.Done();
-       iter.Next()) {
-    n += iter.UserData()->ShallowSizeOfExcludingThis(mallocSizeOf);
-    for (const auto& name : *iter.UserData()) {
+  for (const auto& data : mFailedSVCDomainNames.Values()) {
+    n += data->ShallowSizeOfExcludingThis(mallocSizeOf);
+    for (const auto& name : *data) {
       n += name.SizeOfExcludingThisIfUnshared(mallocSizeOf);
     }
   }
@@ -1418,13 +1470,8 @@ nsDNSService::ReportFailedSVCDomainName(const nsACString& aOwnerName,
                                         const nsACString& aSVCDomainName) {
   MutexAutoLock lock(mLock);
 
-  nsTArray<nsCString>* failedList = mFailedSVCDomainNames.Get(aOwnerName);
-  if (!failedList) {
-    failedList = new nsTArray<nsCString>(1);
-    mFailedSVCDomainNames.Put(aOwnerName, failedList);
-  }
-
-  failedList->AppendElement(aSVCDomainName);
+  mFailedSVCDomainNames.GetOrInsertNew(aOwnerName, 1)
+      ->AppendElement(aSVCDomainName);
   return NS_OK;
 }
 

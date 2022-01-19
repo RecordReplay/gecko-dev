@@ -96,15 +96,7 @@ impl Cert {
         let value = value.to_vec();
         let id = Sha256::digest(&value).to_vec();
         let label = get_cert_subject_dn(&cert_info)?;
-        let issuer = unsafe {
-            slice::from_raw_parts(cert_info.Issuer.pbData, cert_info.Issuer.cbData as usize)
-        };
-        let issuer = issuer.to_vec();
-        let serial_number = read_encoded_serial_number(&value)?;
-        let subject = unsafe {
-            slice::from_raw_parts(cert_info.Subject.pbData, cert_info.Subject.cbData as usize)
-        };
-        let subject = subject.to_vec();
+        let (serial_number, issuer, subject) = read_encoded_certificate_identifiers(&value)?;
         Ok(Cert {
             class: serialize_uint(CKO_CERTIFICATE)?,
             token: serialize_uint(CK_TRUE)?,
@@ -361,7 +353,7 @@ fn sign_cryptoapi(
     // data will be an encoded DigestInfo, which specifies the hash algorithm and bytes of the hash
     // to sign. However, CryptoAPI requires directly specifying the bytes of the hash, so it must
     // be extracted first.
-    let hash_bytes = read_digest(data)?;
+    let (_, hash_bytes) = read_digest_info(data)?;
     let hash = HCryptHash::new(hcryptprov, hash_bytes)?;
     let mut signature_len = 0;
     if unsafe {
@@ -572,6 +564,8 @@ pub struct Key {
     key_type_enum: KeyType,
     /// Which slot this key should be exposed on.
     slot_type: SlotType,
+    /// A handle on the OS mechanism that represents this key.
+    key_handle: Option<KeyHandle>,
 }
 
 impl Key {
@@ -620,6 +614,7 @@ impl Key {
             ec_params,
             key_type_enum,
             slot_type: SlotType::Modern,
+            key_handle: None,
         })
     }
 
@@ -705,36 +700,64 @@ impl Key {
     }
 
     pub fn get_signature_length(
-        &self,
+        &mut self,
         data: &[u8],
         params: &Option<CK_RSA_PKCS_PSS_PARAMS>,
     ) -> Result<usize, ()> {
-        match self.sign_internal(data, params, false) {
+        match self.sign_with_retry(data, params, false) {
             Ok(dummy_signature_bytes) => Ok(dummy_signature_bytes.len()),
             Err(()) => Err(()),
         }
     }
 
     pub fn sign(
-        &self,
+        &mut self,
         data: &[u8],
         params: &Option<CK_RSA_PKCS_PSS_PARAMS>,
     ) -> Result<Vec<u8>, ()> {
-        self.sign_internal(data, params, true)
+        self.sign_with_retry(data, params, true)
+    }
+
+    fn sign_with_retry(
+        &mut self,
+        data: &[u8],
+        params: &Option<CK_RSA_PKCS_PSS_PARAMS>,
+        do_signature: bool,
+    ) -> Result<Vec<u8>, ()> {
+        let result = self.sign_internal(data, params, do_signature);
+        if result.is_ok() {
+            return result;
+        }
+        // Some devices appear to not work well when the key handle is held for too long or if a
+        // card is inserted/removed while Firefox is running. Try refreshing the key handle.
+        debug!("sign failed: refreshing key handle");
+        let _ = self.key_handle.take();
+        self.sign_internal(data, params, do_signature)
     }
 
     /// data: the data to sign
     /// do_signature: if true, actually perform the signature. Otherwise, return a `Vec<u8>` of the
     /// length the signature would be, if performed.
     fn sign_internal(
-        &self,
+        &mut self,
         data: &[u8],
         params: &Option<CK_RSA_PKCS_PSS_PARAMS>,
         do_signature: bool,
     ) -> Result<Vec<u8>, ()> {
-        // Acquiring a handle on the key can cause the OS to show some UI to the user, so we do this
-        // as late as possible (i.e. here).
-        let key = KeyHandle::from_cert(&self.cert)?;
+        // If this key hasn't been used for signing yet, there won't be a cached key handle. Obtain
+        // and cache it if this is the case. Doing so can cause the underlying implementation to
+        // show an authentication or pin prompt to the user. Caching the handle can avoid causing
+        // multiple prompts to be displayed in some cases.
+        if self.key_handle.is_none() {
+            let _ = self.key_handle.replace(KeyHandle::from_cert(&self.cert)?);
+        }
+        let key = match &self.key_handle {
+            Some(key) => key,
+            None => {
+                error!("key_handle not set when it should have just been set?");
+                return Err(());
+            }
+        };
         key.sign(data, params, do_signature, self.key_type_enum)
     }
 }

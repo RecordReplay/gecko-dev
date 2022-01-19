@@ -29,7 +29,7 @@ js::GCParallelTask::~GCParallelTask() {
 
 void js::GCParallelTask::startWithLockHeld(AutoLockHelperThreadState& lock) {
   MOZ_ASSERT(CanUseExtraThreads());
-  MOZ_ASSERT(!HelperThreadState().threads(lock).empty());
+  MOZ_ASSERT(HelperThreadState().isInitialized(lock));
   assertIdle();
 
   setDispatched(lock);
@@ -101,7 +101,7 @@ void js::GCParallelTask::joinRunningOrFinishedTask(
 
   // Wait for the task to run to completion.
   while (!isFinished(lock)) {
-    HelperThreadState().wait(lock, GlobalHelperThreadState::CONSUMER);
+    HelperThreadState().wait(lock);
   }
 
   setIdle(lock);

@@ -6,6 +6,7 @@
 
 #include "RenderAndroidSurfaceTextureHost.h"
 
+#include "GLReadTexImageHelper.h"
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/webrender/RenderThread.h"
 #include "GLContext.h"
@@ -46,7 +47,7 @@ wr::WrExternalImage RenderAndroidSurfaceTextureHost::Lock(
               mPrepareStatus == STATUS_UPDATE_TEX_IMAGE_NEEDED));
 
   if (mGL.get() != aGL) {
-    // This should not happen. On android, SharedGL is used.
+    // This should not happen. On android, SingletonGL is used.
     MOZ_ASSERT_UNREACHABLE("Unexpected GL context");
     return InvalidToWrExternalImage();
   }
@@ -98,7 +99,7 @@ bool RenderAndroidSurfaceTextureHost::EnsureAttachedToGLContext() {
   }
 
   if (!mGL) {
-    mGL = RenderThread::Get()->SharedGL();
+    mGL = RenderThread::Get()->SingletonGL();
   }
 
   if (!mSurfTex || !mGL || !mGL->MakeCurrent()) {
@@ -186,6 +187,82 @@ void RenderAndroidSurfaceTextureHost::NotifyNotUsed() {
   }
 
   mPrepareStatus = STATUS_NONE;
+}
+
+gfx::SurfaceFormat RenderAndroidSurfaceTextureHost::GetFormat() const {
+  MOZ_ASSERT(mFormat == gfx::SurfaceFormat::R8G8B8A8 ||
+             mFormat == gfx::SurfaceFormat::R8G8B8X8);
+
+  if (mFormat == gfx::SurfaceFormat::R8G8B8A8) {
+    return gfx::SurfaceFormat::B8G8R8A8;
+  }
+
+  if (mFormat == gfx::SurfaceFormat::R8G8B8X8) {
+    return gfx::SurfaceFormat::B8G8R8X8;
+  }
+
+  gfxCriticalNoteOnce
+      << "Unexpected color format of RenderAndroidSurfaceTextureHost";
+
+  return gfx::SurfaceFormat::UNKNOWN;
+}
+
+already_AddRefed<DataSourceSurface>
+RenderAndroidSurfaceTextureHost::ReadTexImage() {
+  if (!mGL) {
+    mGL = RenderThread::Get()->SingletonGL();
+    if (!mGL) {
+      return nullptr;
+    }
+  }
+
+  /* Allocate resulting image surface */
+  int32_t stride = mSize.width * BytesPerPixel(GetFormat());
+  RefPtr<DataSourceSurface> surf =
+      Factory::CreateDataSourceSurfaceWithStride(mSize, GetFormat(), stride);
+  if (!surf) {
+    return nullptr;
+  }
+
+  layers::ShaderConfigOGL config = layers::ShaderConfigFromTargetAndFormat(
+      LOCAL_GL_TEXTURE_EXTERNAL, mFormat);
+  int shaderConfig = config.mFeatures;
+
+  bool ret = mGL->ReadTexImageHelper()->ReadTexImage(
+      surf, mSurfTex->GetTexName(), LOCAL_GL_TEXTURE_EXTERNAL, mSize,
+      shaderConfig, /* aYInvert */ false);
+  if (!ret) {
+    return nullptr;
+  }
+
+  return surf.forget();
+}
+
+bool RenderAndroidSurfaceTextureHost::MapPlane(RenderCompositor* aCompositor,
+                                               uint8_t aChannelIndex,
+                                               PlaneInfo& aPlaneInfo) {
+  RefPtr<gfx::DataSourceSurface> readback = ReadTexImage();
+  if (!readback) {
+    return false;
+  }
+
+  DataSourceSurface::MappedSurface map;
+  if (!readback->Map(DataSourceSurface::MapType::READ, &map)) {
+    return false;
+  }
+
+  mReadback = readback;
+  aPlaneInfo.mSize = mSize;
+  aPlaneInfo.mStride = map.mStride;
+  aPlaneInfo.mData = map.mData;
+  return true;
+}
+
+void RenderAndroidSurfaceTextureHost::UnmapPlanes() {
+  if (mReadback) {
+    mReadback->Unmap();
+    mReadback = nullptr;
+  }
 }
 
 }  // namespace wr

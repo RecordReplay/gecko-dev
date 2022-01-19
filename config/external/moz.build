@@ -9,9 +9,14 @@ external_dirs = []
 DIRS += [
     "lgpllibs",
     "rlbox",
-    "rlbox_lucet_sandbox",
     "sqlite",
 ]
+
+if CONFIG["MOZ_USING_WASM_SANDBOXING"]:
+    DIRS += [
+        "rlbox_lucet_sandbox",
+    ]
+
 if not CONFIG["MOZ_SYSTEM_JPEG"]:
     external_dirs += ["media/libjpeg"]
 
@@ -54,6 +59,9 @@ if CONFIG["CPU_ARCH"] == "arm":
 
 if CONFIG["MOZ_FFVPX"]:
     external_dirs += ["media/ffvpx"]
+
+if CONFIG["MOZ_JXL"]:
+    external_dirs += ["media/libjxl", "media/highway"]
 
 external_dirs += [
     "media/kiss_fft",

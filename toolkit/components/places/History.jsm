@@ -62,10 +62,10 @@
  *
  *
  *
- * Each successful operation notifies through the nsINavHistoryObserver
- * interface. To listen to such notifications you must register using
- * nsINavHistoryService `addObserver` and `removeObserver` methods.
- * @see nsINavHistoryObserver
+ * Each successful operation notifies through the PlacesObservers. To listen to such
+ * notifications you must register using
+ * PlacesObservers `addListener` and `removeListener` methods.
+ * @see PlacesObservers
  */
 
 var EXPORTED_SYMBOLS = ["History"];
@@ -222,7 +222,7 @@ var History = Object.freeze({
   /**
    * Adds a number of visits for a single page.
    *
-   * Any change may be observed through nsINavHistoryObserver
+   * Any change may be observed through PlacesObservers.
    *
    * @param pageInfo: (PageInfo)
    *      Information on a page. This `PageInfo` MUST contain
@@ -269,7 +269,7 @@ var History = Object.freeze({
   /**
    * Adds a number of visits for a number of pages.
    *
-   * Any change may be observed through nsINavHistoryObserver
+   * Any change may be observed through PlacesObservers.
    *
    * @param pageInfos: (Array<PageInfo>)
    *      Information on a page. This `PageInfo` MUST contain
@@ -339,7 +339,7 @@ var History = Object.freeze({
   /**
    * Remove pages from the database.
    *
-   * Any change may be observed through nsINavHistoryObserver
+   * Any change may be observed through PlacesObservers.
    *
    *
    * @param page: (URL or nsIURI)
@@ -422,7 +422,7 @@ var History = Object.freeze({
   /**
    * Remove visits matching specific characteristics.
    *
-   * Any change may be observed through nsINavHistoryObserver.
+   * Any change may be observed through PlacesObservers.
    *
    * @param filter: (object)
    *      The `object` may contain some of the following
@@ -516,7 +516,7 @@ var History = Object.freeze({
   /**
    * Remove pages from the database based on a filter.
    *
-   * Any change may be observed through nsINavHistoryObserver
+   * Any change may be observed through PlacesObservers
    *
    *
    * @param filter: An object containing a non empty subset of the following
@@ -1031,69 +1031,64 @@ function removeOrphanIcons(db) {
  *          - hasForeign: (boolean) If `true`, the page has at least
  *              one foreign reference (i.e. a bookmark), so the page should
  *              be kept and its frecency updated.
- * @param transition: (Number)
+ * @param transitionType: (Number)
  *      Set to a valid TRANSITIONS value to indicate all transitions of a
- *      certain type have been removed, otherwise defaults to -1 (unknown value).
+ *      certain type have been removed, otherwise defaults to 0 (unknown value).
  * @return (Promise)
  */
-var notifyCleanup = async function(db, pages, transition = -1) {
+var notifyCleanup = async function(db, pages, transitionType = 0) {
+  const notifications = [];
   let notifiedCount = 0;
-  let observers = PlacesUtils.history.getObservers();
   let bookmarkObservers = PlacesUtils.bookmarks.getObservers();
 
-  let reason = Ci.nsINavHistoryObserver.REASON_DELETED;
-
   for (let page of pages) {
-    let uri = Services.io.newURI(page.url.href);
-    let guid = page.guid;
-    if (page.hasVisits || page.hasForeign) {
-      // We have removed all visits, but the page is still alive, e.g.
-      // because of a bookmark.
-      notify(observers, "onDeleteVisits", [
-        uri,
-        page.hasVisits > 0,
-        guid,
-        reason,
-        transition,
-      ]);
-      // Also asynchronously notify bookmarks for this uri if all the visits
-      // have been removed.
-      if (!page.hasVisits) {
-        PlacesUtils.bookmarks
-          .fetch({ url: page.url }, async bookmark => {
-            let itemId = await PlacesUtils.promiseItemId(bookmark.guid);
-            let parentId = await PlacesUtils.promiseItemId(bookmark.parentGuid);
-            notify(
-              bookmarkObservers,
-              "onItemChanged",
-              [
-                itemId,
-                "cleartime",
-                false,
-                "",
-                0,
-                PlacesUtils.bookmarks.TYPE_BOOKMARK,
-                parentId,
-                bookmark.guid,
-                bookmark.parentGuid,
-                "",
-                PlacesUtils.bookmarks.SOURCES.DEFAULT,
-              ],
-              { concurrent: true }
-            );
-          })
-          .catch(Cu.reportError);
-      }
-    } else {
-      // The page has been entirely removed.
-      notify(observers, "onDeleteURI", [uri, guid, reason]);
-    }
-    if (++notifiedCount % NOTIFICATION_CHUNK_SIZE == 0) {
-      // Every few notifications, yield time back to the main
-      // thread to avoid jank.
-      await Promise.resolve();
+    const isRemovedFromStore = !page.hasVisits && !page.hasForeign;
+    notifications.push(
+      new PlacesVisitRemoved({
+        url: Services.io.newURI(page.url.href).spec,
+        pageGuid: page.guid,
+        reason: PlacesVisitRemoved.REASON_DELETED,
+        transitionType,
+        isRemovedFromStore,
+        isPartialVisistsRemoval: !isRemovedFromStore && page.hasVisits > 0,
+      })
+    );
+
+    if (page.hasForeign && !page.hasVisits) {
+      PlacesUtils.bookmarks
+        .fetch({ url: page.url }, async bookmark => {
+          let itemId = await PlacesUtils.promiseItemId(bookmark.guid);
+          let parentId = await PlacesUtils.promiseItemId(bookmark.parentGuid);
+          notify(
+            bookmarkObservers,
+            "onItemChanged",
+            [
+              itemId,
+              "cleartime",
+              false,
+              "",
+              0,
+              PlacesUtils.bookmarks.TYPE_BOOKMARK,
+              parentId,
+              bookmark.guid,
+              bookmark.parentGuid,
+              "",
+              PlacesUtils.bookmarks.SOURCES.DEFAULT,
+            ],
+            { concurrent: true }
+          );
+
+          if (++notifiedCount % NOTIFICATION_CHUNK_SIZE == 0) {
+            // Every few notifications, yield time back to the main
+            // thread to avoid jank.
+            await Promise.resolve();
+          }
+        })
+        .catch(Cu.reportError);
     }
   }
+
+  PlacesObservers.notifyListeners(notifications);
 };
 
 /**

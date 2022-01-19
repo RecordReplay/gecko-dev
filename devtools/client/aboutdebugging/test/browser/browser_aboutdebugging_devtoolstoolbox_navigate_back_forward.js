@@ -7,20 +7,30 @@ const ORIGINAL_URL = "about:home";
 const OTHER_URL = "about:blank";
 
 async function waitForUrl(url, toolbox, browserTab, win) {
+  const {
+    onDomCompleteResource,
+  } = await waitForNextTopLevelDomCompleteResource(toolbox.commands);
+
   return Promise.all([
     waitUntil(
       () =>
         toolbox.target.url === url &&
         browserTab.linkedBrowser.currentURI.spec === url
     ),
-    toolbox.target.once("navigate"),
-    toolbox.target.client.waitForRequestsToSettle(),
-    waitForRequestsToSettle(win.AboutDebugging.store),
+    onDomCompleteResource,
+    toolbox.commands.client.waitForRequestsToSettle(),
+    waitForAboutDebuggingRequests(win.AboutDebugging.store),
   ]);
 }
 
 // Test that ensures the remote page can go forward and back via UI buttons
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   const browserTab = await addTab(ORIGINAL_URL);
 
   const { document, tab, window } = await openAboutDebugging();

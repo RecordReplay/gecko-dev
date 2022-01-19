@@ -1,12 +1,11 @@
 import json
 import time
-import six
 
 from collections import defaultdict
 from mozlog.formatters import base
 
 
-class ChromiumFormatter(base.BaseFormatter):
+class ChromiumFormatter(base.BaseFormatter):  # type: ignore
     """Formatter to produce results matching the Chromium JSON Test Results format.
     https://chromium.googlesource.com/chromium/src/+/master/docs/testing/json_test_results_format.md
 
@@ -88,7 +87,7 @@ class ChromiumFormatter(base.BaseFormatter):
         :param str artifact_name: the name of the artifact
         :param str artifact_value: the value of the artifact
         """
-        assert isinstance(artifact_value, six.string_types), "artifact_value must be a str"
+        assert isinstance(artifact_value, str), "artifact_value must be a str"
         if "artifacts" not in cur_dict.keys():
             cur_dict["artifacts"] = defaultdict(list)
         cur_dict["artifacts"][artifact_name].append(artifact_value)
@@ -272,5 +271,6 @@ class ChromiumFormatter(base.BaseFormatter):
         return json.dumps(final_result)
 
     def process_output(self, data):
-        if 'command' in data and 'chromedriver' in data['command']:
+        cmd = data.get("command", "")
+        if any(c in cmd for c in ["chromedriver", "logcat"]):
             self.browser_log.append(data['data'])

@@ -15,12 +15,18 @@ class nsIWidget;
 class nsWindow;
 
 namespace mozilla {
+
+namespace layers {
+class NativeLayerRootWayland;
+}  // namespace layers
+
 namespace widget {
 
 class PlatformCompositorWidgetDelegate : public CompositorWidgetDelegate {
  public:
   virtual void NotifyClientSizeChanged(
       const LayoutDeviceIntSize& aClientSize) = 0;
+  virtual GtkCompositorWidget* AsGtkCompositorWidget() { return nullptr; };
 
   // CompositorWidgetDelegate Overrides
 
@@ -45,7 +51,7 @@ class GtkCompositorWidget : public CompositorWidget,
   void EndRemoteDrawing() override;
 
   already_AddRefed<gfx::DrawTarget> StartRemoteDrawingInRegion(
-      LayoutDeviceIntRegion& aInvalidRegion,
+      const LayoutDeviceIntRegion& aInvalidRegion,
       layers::BufferMode* aBufferMode) override;
   void EndRemoteDrawingInRegion(
       gfx::DrawTarget* aDrawTarget,
@@ -55,26 +61,25 @@ class GtkCompositorWidget : public CompositorWidget,
   LayoutDeviceIntSize GetClientSize() override;
 
   nsIWidget* RealWidget() override;
-  GtkCompositorWidget* AsX11() override { return this; }
+  GtkCompositorWidget* AsGTK() override { return this; }
   CompositorWidgetDelegate* AsDelegate() override { return this; }
 
   EGLNativeWindowType GetEGLNativeWindow();
-  int32_t GetDepth();
 
-  void ClearBeforePaint(RefPtr<gfx::DrawTarget> aTarget,
-                        const LayoutDeviceIntRegion& aRegion) override;
+  LayoutDeviceIntRegion GetTransparentRegion() override;
 
 #if defined(MOZ_X11)
-  Display* XDisplay() const { return mXDisplay; }
   Window XWindow() const { return mXWindow; }
 #endif
 #if defined(MOZ_WAYLAND)
   void SetEGLNativeWindowSize(const LayoutDeviceIntSize& aEGLWindowSize);
+  RefPtr<mozilla::layers::NativeLayerRoot> GetNativeLayerRoot() override;
 #endif
 
   // PlatformCompositorWidgetDelegate Overrides
 
   void NotifyClientSizeChanged(const LayoutDeviceIntSize& aClientSize) override;
+  GtkCompositorWidget* AsGtkCompositorWidget() override { return this; }
 
  protected:
   nsWindow* mWidget;
@@ -91,10 +96,11 @@ class GtkCompositorWidget : public CompositorWidget,
   WindowSurfaceProvider mProvider;
 
 #if defined(MOZ_X11)
-  Display* mXDisplay = {};
   Window mXWindow = {};
 #endif
-  int32_t mDepth = {};
+#ifdef MOZ_WAYLAND
+  RefPtr<mozilla::layers::NativeLayerRootWayland> mNativeLayerRoot;
+#endif
 };
 
 }  // namespace widget

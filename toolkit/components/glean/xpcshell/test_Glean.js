@@ -73,20 +73,13 @@ add_task(function test_setup() {
   // Mock SysInfo.
   SysInfo.overrides = {
     version: "1.2.3",
-    arc: "x64",
+    arch: "x64",
   };
   MockRegistrar.register("@mozilla.org/system-info;1", SysInfo);
 
   // We need to initialize it once, otherwise operations will be stuck in the pre-init queue.
   let FOG = Cc["@mozilla.org/toolkit/glean;1"].createInstance(Ci.nsIFOG);
   FOG.initializeFOG();
-});
-
-add_task(function test_osversion_is_set() {
-  Assert.equal(
-    "1.2.3",
-    Glean.fogValidation.osVersion.testGetValue("fog-validation")
-  );
 });
 
 add_task(function test_fog_counter_works() {
@@ -119,6 +112,10 @@ add_task(async function test_fog_string_list_works() {
 });
 
 add_task(async function test_fog_timespan_works() {
+  Glean.testOnly.canWeTimeIt.start();
+  Glean.testOnly.canWeTimeIt.cancel();
+  Assert.equal(undefined, Glean.testOnly.canWeTimeIt.testGetValue());
+
   // We start, briefly sleep and then stop.
   // That guarantees some time to measure.
   Glean.testOnly.canWeTimeIt.start();
@@ -139,14 +136,13 @@ add_task(async function test_fog_uuid_works() {
   Assert.notEqual(kTestUuid, Glean.testOnly.whatIdIt.testGetValue("test-ping"));
 });
 
-// Enable test after bug 1677448 is fixed.
-add_task({ skip_if: () => true }, function test_fog_datetime_works() {
+add_task(function test_fog_datetime_works() {
   const value = new Date("2020-06-11T12:00:00");
 
   Glean.testOnly.whatADate.set(value.getTime() * 1000);
 
   const received = Glean.testOnly.whatADate.testGetValue("test-ping");
-  Assert.ok(received.startsWith("2020-06-11T12:00:00"));
+  Assert.equal(received.getTime(), value.getTime());
 });
 
 add_task(function test_fog_boolean_works() {
@@ -158,13 +154,51 @@ add_task(function test_fog_boolean_works() {
 
 add_task(async function test_fog_event_works() {
   Glean.testOnlyIpc.noExtraEvent.record();
-  // FIXME(bug 1678567): Check that the value was recorded when we can.
-  // Assert.ok(Glean.testOnlyIpc.noExtraEvent.testGetValue("store1"));
+  var events = Glean.testOnlyIpc.noExtraEvent.testGetValue();
+  Assert.equal(1, events.length);
+  Assert.equal("test_only.ipc", events[0].category);
+  Assert.equal("no_extra_event", events[0].name);
 
   let extra = { extra1: "can set extras", extra2: "passing more data" };
   Glean.testOnlyIpc.anEvent.record(extra);
-  // FIXME(bug 1678567): Check that the value was recorded when we can.
-  // Assert.ok(Glean.testOnlyIpc.anEvent.testGetValue("store1"));
+  events = Glean.testOnlyIpc.anEvent.testGetValue();
+  Assert.equal(1, events.length);
+  Assert.equal("test_only.ipc", events[0].category);
+  Assert.equal("an_event", events[0].name);
+  Assert.deepEqual(extra, events[0].extra);
+
+  let extra2 = {
+    extra1: "can set extras",
+    extra2: 37,
+    extra3_longer_name: false,
+  };
+  Glean.testOnlyIpc.eventWithExtra.record(extra2);
+  events = Glean.testOnlyIpc.eventWithExtra.testGetValue();
+  Assert.equal(1, events.length);
+  Assert.equal("test_only.ipc", events[0].category);
+  Assert.equal("event_with_extra", events[0].name);
+  let expectedExtra = {
+    extra1: "can set extras",
+    extra2: "37",
+    extra3_longer_name: "false",
+  };
+  Assert.deepEqual(expectedExtra, events[0].extra);
+
+  // Invalid extra keys don't crash, the event is not recorded.
+  let extra3 = {
+    extra1_nonexistent_extra: "this does not crash",
+  };
+  Glean.testOnlyIpc.eventWithExtra.record(extra3);
+  events = Glean.testOnlyIpc.eventWithExtra.testGetValue();
+  Assert.equal(1, events.length, "Recorded one event too many.");
+
+  // Quantities need to be non-negative.
+  let extra4 = {
+    extra2: -1,
+  };
+  Glean.testOnlyIpc.eventWithExtra.record(extra4);
+  events = Glean.testOnlyIpc.eventWithExtra.testGetValue();
+  Assert.equal(1, events.length, "Recorded one event too many.");
 });
 
 add_task(async function test_fog_memory_distribution_works() {
@@ -182,10 +216,36 @@ add_task(async function test_fog_memory_distribution_works() {
   }
 });
 
+add_task(async function test_fog_custom_distribution_works() {
+  Glean.testOnlyIpc.aCustomDist.accumulateSamples([7, 268435458]);
+
+  let data = Glean.testOnlyIpc.aCustomDist.testGetValue("store1");
+  Assert.equal(7 + 268435458, data.sum, "Sum's correct");
+  for (let [bucket, count] of Object.entries(data.values)) {
+    Assert.ok(
+      count == 0 || (count == 1 && (bucket == 1 || bucket == 268435456)),
+      `Only two buckets have a sample ${bucket} ${count}`
+    );
+  }
+
+  // Negative values will not be recorded, instead an error is recorded.
+  Glean.testOnlyIpc.aCustomDist.accumulateSamples([-7]);
+  Assert.throws(
+    () => Glean.testOnlyIpc.aCustomDist.testGetValue(),
+    /NS_ERROR_LOSS_OF_SIGNIFICANT_DATA/
+  );
+});
+
 add_task(function test_fog_custom_pings() {
   Assert.ok("onePingOnly" in GleanPings);
-  // Don't bother sending it, we'll test that in the integration suite.
-  // See also bug 1681742.
+  let submitted = false;
+  Glean.testOnly.onePingOneBool.set(false);
+  GleanPings.onePingOnly.testBeforeNextSubmit(reason => {
+    submitted = true;
+    Assert.equal(false, Glean.testOnly.onePingOneBool.testGetValue());
+  });
+  GleanPings.onePingOnly.submit();
+  Assert.ok(submitted, "Ping was submitted, callback was called.");
 });
 
 add_task(async function test_fog_timing_distribution_works() {
@@ -204,9 +264,11 @@ add_task(async function test_fog_timing_distribution_works() {
 
   let data = Glean.testOnly.whatTimeIsIt.testGetValue();
   const NANOS_IN_MILLIS = 1e6;
+  // bug 1701949 - Sleep gets close, but sometimes doesn't wait long enough.
+  const EPSILON = 40000;
 
   // Variance in timing makes getting the sum impossible to know.
-  Assert.greater(data.sum, 15 * NANOS_IN_MILLIS, "Total time elapsed: > 15ms");
+  Assert.greater(data.sum, 15 * NANOS_IN_MILLIS - EPSILON);
 
   // No guarantees from timers means no guarantees on buckets.
   // But we can guarantee it's only two samples.
@@ -218,4 +280,94 @@ add_task(async function test_fog_timing_distribution_works() {
     ),
     "Only two buckets with samples"
   );
+});
+
+add_task(async function test_fog_labeled_boolean_works() {
+  Assert.equal(
+    undefined,
+    Glean.testOnly.mabelsLikeBalloons.at_parties.testGetValue(),
+    "New labels with no values should return undefined"
+  );
+  Glean.testOnly.mabelsLikeBalloons.at_parties.set(true);
+  Glean.testOnly.mabelsLikeBalloons.at_funerals.set(false);
+  Assert.equal(
+    true,
+    Glean.testOnly.mabelsLikeBalloons.at_parties.testGetValue()
+  );
+  Assert.equal(
+    false,
+    Glean.testOnly.mabelsLikeBalloons.at_funerals.testGetValue()
+  );
+  // What about invalid/__other__?
+  Assert.equal(
+    undefined,
+    Glean.testOnly.mabelsLikeBalloons.__other__.testGetValue()
+  );
+  Glean.testOnly.mabelsLikeBalloons.InvalidLabel.set(true);
+  Assert.equal(
+    true,
+    Glean.testOnly.mabelsLikeBalloons.__other__.testGetValue()
+  );
+  // TODO: Test that we have the right number and type of errors (bug 1683171)
+});
+
+add_task(async function test_fog_labeled_counter_works() {
+  Assert.equal(
+    undefined,
+    Glean.testOnly.mabelsKitchenCounters.near_the_sink.testGetValue(),
+    "New labels with no values should return undefined"
+  );
+  Glean.testOnly.mabelsKitchenCounters.near_the_sink.add(1);
+  Glean.testOnly.mabelsKitchenCounters.with_junk_on_them.add(2);
+  Assert.equal(
+    1,
+    Glean.testOnly.mabelsKitchenCounters.near_the_sink.testGetValue()
+  );
+  Assert.equal(
+    2,
+    Glean.testOnly.mabelsKitchenCounters.with_junk_on_them.testGetValue()
+  );
+  // What about invalid/__other__?
+  Assert.equal(
+    undefined,
+    Glean.testOnly.mabelsKitchenCounters.__other__.testGetValue()
+  );
+  Glean.testOnly.mabelsKitchenCounters.InvalidLabel.add(1);
+  Assert.throws(
+    () => Glean.testOnly.mabelsKitchenCounters.__other__.testGetValue(),
+    /NS_ERROR_LOSS_OF_SIGNIFICANT_DATA/
+  );
+});
+
+add_task(async function test_fog_labeled_string_works() {
+  Assert.equal(
+    undefined,
+    Glean.testOnly.mabelsBalloonStrings.colour_of_99.testGetValue(),
+    "New labels with no values should return undefined"
+  );
+  Glean.testOnly.mabelsBalloonStrings.colour_of_99.set("crimson");
+  Glean.testOnly.mabelsBalloonStrings.string_lengths.set("various");
+  Assert.equal(
+    "crimson",
+    Glean.testOnly.mabelsBalloonStrings.colour_of_99.testGetValue()
+  );
+  Assert.equal(
+    "various",
+    Glean.testOnly.mabelsBalloonStrings.string_lengths.testGetValue()
+  );
+  // What about invalid/__other__?
+  Assert.equal(
+    undefined,
+    Glean.testOnly.mabelsBalloonStrings.__other__.testGetValue()
+  );
+  Glean.testOnly.mabelsBalloonStrings.InvalidLabel.set("valid");
+  Assert.throws(
+    () => Glean.testOnly.mabelsBalloonStrings.__other__.testGetValue(),
+    /NS_ERROR_LOSS_OF_SIGNIFICANT_DATA/
+  );
+});
+
+add_task(function test_fog_quantity_works() {
+  Glean.testOnly.meaningOfLife.set(42);
+  Assert.equal(42, Glean.testOnly.meaningOfLife.testGetValue());
 });

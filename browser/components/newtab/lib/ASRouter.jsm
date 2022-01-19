@@ -29,7 +29,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   KintoHttpClient: "resource://services-common/kinto-http-client.js",
   Downloader: "resource://services-settings/Attachments.jsm",
   RemoteL10n: "resource://activity-stream/lib/RemoteL10n.jsm",
-  ExperimentAPI: "resource://messaging-system/experiments/ExperimentAPI.jsm",
+  ExperimentAPI: "resource://nimbus/ExperimentAPI.jsm",
   SpecialMessageActions:
     "resource://messaging-system/lib/SpecialMessageActions.jsm",
   TargetingContext: "resource://messaging-system/targeting/Targeting.jsm",
@@ -344,27 +344,13 @@ const MessageLoaderUtils = {
   },
 
   async _experimentsAPILoader(provider, options) {
-    try {
-      await ExperimentAPI.ready();
-    } catch (e) {
-      MessageLoaderUtils.reportError(e);
-      return [];
-    }
+    await ExperimentAPI.ready();
 
     let experiments = [];
     for (const featureId of provider.messageGroups) {
-      let experimentData;
-      try {
-        experimentData = ExperimentAPI.getExperiment({
-          featureId,
-          sendExposurePing: false,
-        });
-        // Not enrolled in any experiment for this feature, we can skip
-        if (!experimentData) {
-          continue;
-        }
-      } catch (e) {
-        MessageLoaderUtils.reportError(e);
+      let experimentData = ExperimentAPI.getExperiment({ featureId });
+      // Not enrolled in any experiment for this feature, we can skip
+      if (!experimentData) {
         continue;
       }
 
@@ -375,7 +361,6 @@ const MessageLoaderUtils = {
       if (featureData.enabled) {
         experiments.push({
           forExposureEvent: {
-            sent: experimentData.exposurePingSent,
             experimentSlug: experimentData.slug,
             branchSlug: experimentData.branch.slug,
           },
@@ -502,16 +487,6 @@ const MessageLoaderUtils = {
             groups: messageData.groups || [],
             provider: provider.id,
           };
-
-          // This is to support a personalization experiment
-          if (provider.personalized) {
-            const score = ASRouterPreferences.personalizedCfrScores[message.id];
-            if (score) {
-              message.score = score;
-            }
-            message.personalizedModelVersion =
-              provider.personalizedModelVersion;
-          }
 
           return message;
         })
@@ -696,9 +671,11 @@ class _ASRouter {
    */
   _resetInitialization() {
     this.initialized = false;
+    this.initializing = false;
     this.waitForInitialized = new Promise(resolve => {
       this._finishInitializing = () => {
         this.initialized = true;
+        this.initializing = false;
         resolve();
       };
     });
@@ -900,6 +877,10 @@ class _ASRouter {
     updateAdminState,
     dispatchCFRAction,
   }) {
+    if (this.initializing || this.initialized) {
+      return null;
+    }
+    this.initializing = true;
     this._storage = storage;
     this.ALLOWLIST_HOSTS = this._loadSnippetsAllowHosts();
     this.clearChildMessages = this.toWaitForInitFunc(clearChildMessages);
@@ -1703,12 +1684,13 @@ class _ASRouter {
     // Exposure events only apply to messages that come from the
     // messaging-experiments provider
     if (nonReachMessages.length && nonReachMessages[0].forExposureEvent) {
-      ExperimentAPI.recordExposureEvent(
+      ExperimentAPI.recordExposureEvent({
         // Any message processed by ASRouter will report the exposure event
         // as `cfr`
-        "cfr",
-        nonReachMessages[0].forExposureEvent
-      );
+        featureId: "cfr",
+        // experimentSlug and branchSlug
+        ...nonReachMessages[0].forExposureEvent,
+      });
     }
 
     return this.routeCFRMessage(

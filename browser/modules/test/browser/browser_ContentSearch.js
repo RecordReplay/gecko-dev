@@ -441,8 +441,9 @@ async function waitForNewEngine(browser, basename) {
   let statePromise = await waitForTestMsg(browser, "CurrentState", 2);
 
   // Wait for addOpenSearchEngine().
-  let url = getRootDirectory(gTestPath) + basename;
-  let engine = await Services.search.addOpenSearchEngine(url, "");
+  let engine = await SearchTestUtils.promiseNewSearchEngine(
+    getRootDirectory(gTestPath) + basename
+  );
   let results = await statePromise.donePromise;
   return [engine, ...results];
 }
@@ -475,7 +476,8 @@ var currentStateObj = async function(isPrivateWindowValue, hiddenEngine = "") {
     });
   }
   if (typeof isPrivateWindowValue == "boolean") {
-    state.isPrivateWindow = isPrivateWindowValue;
+    state.isInPrivateBrowsingMode = isPrivateWindowValue;
+    state.isAboutPrivateBrowsing = isPrivateWindowValue;
   }
   return state;
 };

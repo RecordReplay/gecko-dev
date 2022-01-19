@@ -181,6 +181,17 @@ class DisplayPortUtils {
                                   const nsIFrame* aScrolledFrame = nullptr);
 
   /**
+   * Check whether the given element has a non-minimal displayport.
+   */
+  static bool HasNonMinimalDisplayPort(nsIContent* aContent);
+
+  /**
+   * Check whether the given element has a non-minimal displayport that also has
+   * non-zero margins. A display port rect is considered non-minimal non-zero.
+   */
+  static bool HasNonMinimalNonZeroDisplayPort(nsIContent* aContent);
+
+  /**
    * Check if the given element has a margins based displayport but is missing a
    * displayport base rect that it needs to properly compute a displayport rect.
    */
@@ -230,10 +241,13 @@ class DisplayPortUtils {
    * @param aRepaintMode whether to schedule a paint after setting the margins
    * @return true if the new margins were applied.
    */
+  enum class ClearMinimalDisplayPortProperty { No, Yes };
+
   static bool SetDisplayPortMargins(
       nsIContent* aContent, PresShell* aPresShell,
-      const DisplayPortMargins& aMargins, uint32_t aPriority = 0,
-      RepaintMode aRepaintMode = RepaintMode::Repaint);
+      const DisplayPortMargins& aMargins,
+      ClearMinimalDisplayPortProperty aClearMinimalDisplayPortProperty,
+      uint32_t aPriority = 0, RepaintMode aRepaintMode = RepaintMode::Repaint);
 
   /**
    * Set the display port base rect for given element to be used with display
@@ -325,6 +339,16 @@ class DisplayPortUtils {
    * ancestor.
    */
   static void ExpireDisplayPortOnAsyncScrollableAncestor(nsIFrame* aFrame);
+
+  /**
+   * Returns root displayport base rect for |aPresShell|. In the case where
+   * |aPresShell| is in an out-of-process iframe, this function may return
+   * Nothing() if we haven't received the iframe's visible rect from the parent
+   * content.
+   * |aPresShell| should be top level content or in-process root or root in the
+   * browser process.
+   */
+  static Maybe<nsRect> GetRootDisplayportBase(PresShell* aPresShell);
 };
 
 }  // namespace mozilla

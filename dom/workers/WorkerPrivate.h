@@ -12,6 +12,7 @@
 #include "ScriptLoader.h"
 #include "js/ContextOptions.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/AutoRestore.h"
 #include "mozilla/CondVar.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/Maybe.h"
@@ -34,6 +35,7 @@
 #include "mozilla/dom/WorkerStatus.h"
 #include "mozilla/dom/workerinternals/JSSettings.h"
 #include "mozilla/dom/workerinternals/Queue.h"
+#include "mozilla/StaticPrefs_extensions.h"
 #include "nsContentUtils.h"
 #include "nsIChannel.h"
 #include "nsIContentSecurityPolicy.h"
@@ -49,8 +51,8 @@ namespace dom {
 
 // If you change this, the corresponding list in nsIWorkerDebugger.idl needs
 // to be updated too. And histograms enum for worker use counters uses the same
-// order of worker type. Please also update dom/base/usecounters.py.
-enum WorkerType { WorkerTypeDedicated, WorkerTypeShared, WorkerTypeService };
+// order of worker kind. Please also update dom/base/usecounters.py.
+enum WorkerKind { WorkerKindDedicated, WorkerKindShared, WorkerKindService };
 
 class ClientInfo;
 class ClientSource;
@@ -106,7 +108,7 @@ class SharedMutex {
 
 nsString ComputeWorkerPrivateId();
 
-class WorkerPrivate : public RelativeTimeline {
+class WorkerPrivate final : public RelativeTimeline {
  public:
   struct LocationInfo {
     nsCString mHref;
@@ -124,7 +126,7 @@ class WorkerPrivate : public RelativeTimeline {
 
   static already_AddRefed<WorkerPrivate> Constructor(
       JSContext* aCx, const nsAString& aScriptURL, bool aIsChromeWorker,
-      WorkerType aWorkerType, const nsAString& aWorkerName,
+      WorkerKind aWorkerKind, const nsAString& aWorkerName,
       const nsACString& aServiceWorkerScope, WorkerLoadInfo* aLoadInfo,
       ErrorResult& aRv, nsString aId = u""_ns);
 
@@ -134,7 +136,7 @@ class WorkerPrivate : public RelativeTimeline {
                               WorkerPrivate* aParent,
                               const nsAString& aScriptURL, bool aIsChromeWorker,
                               LoadGroupBehavior aLoadGroupBehavior,
-                              WorkerType aWorkerType,
+                              WorkerKind aWorkerKind,
                               WorkerLoadInfo* aLoadInfo);
 
   void Traverse(nsCycleCollectionTraversalCallback& aCb);
@@ -166,6 +168,14 @@ class WorkerPrivate : public RelativeTimeline {
 
     // No need to lock here since this is only ever modified by the same thread.
     return mDebuggerRegistered;
+  }
+
+  bool ExtensionAPIAllowed() {
+    // This method should never be actually called if the extension background
+    // service worker is disabled by pref.
+    MOZ_ASSERT(
+        StaticPrefs::extensions_backgroundServiceWorker_enabled_AtStartup());
+    return mExtensionAPIAllowed;
   }
 
   void SetIsDebuggerRegistered(bool aDebuggerRegistered) {
@@ -599,25 +609,25 @@ class WorkerPrivate : public RelativeTimeline {
 
   const nsString& WorkerName() const { return mWorkerName; }
 
-  WorkerType Type() const { return mWorkerType; }
+  WorkerKind Kind() const { return mWorkerKind; }
 
-  bool IsDedicatedWorker() const { return mWorkerType == WorkerTypeDedicated; }
+  bool IsDedicatedWorker() const { return mWorkerKind == WorkerKindDedicated; }
 
-  bool IsSharedWorker() const { return mWorkerType == WorkerTypeShared; }
+  bool IsSharedWorker() const { return mWorkerKind == WorkerKindShared; }
 
-  bool IsServiceWorker() const { return mWorkerType == WorkerTypeService; }
+  bool IsServiceWorker() const { return mWorkerKind == WorkerKindService; }
 
   nsContentPolicyType ContentPolicyType() const {
-    return ContentPolicyType(mWorkerType);
+    return ContentPolicyType(mWorkerKind);
   }
 
-  static nsContentPolicyType ContentPolicyType(WorkerType aWorkerType) {
-    switch (aWorkerType) {
-      case WorkerTypeDedicated:
+  static nsContentPolicyType ContentPolicyType(WorkerKind aWorkerKind) {
+    switch (aWorkerKind) {
+      case WorkerKindDedicated:
         return nsIContentPolicy::TYPE_INTERNAL_WORKER;
-      case WorkerTypeShared:
+      case WorkerKindShared:
         return nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER;
-      case WorkerTypeService:
+      case WorkerKindService:
         return nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER;
       default:
         MOZ_ASSERT_UNREACHABLE("Invalid worker type");
@@ -975,10 +985,15 @@ class WorkerPrivate : public RelativeTimeline {
 
   void SetCCCollectedAnything(bool collectedAnything);
 
+  uint32_t GetCurrentTimerNestingLevel() const {
+    auto data = mWorkerThreadAccessible.Access();
+    return data->mCurrentTimerNestingLevel;
+  }
+
  private:
   WorkerPrivate(
       WorkerPrivate* aParent, const nsAString& aScriptURL, bool aIsChromeWorker,
-      WorkerType aWorkerType, const nsAString& aWorkerName,
+      WorkerKind aWorkerKind, const nsAString& aWorkerName,
       const nsACString& aServiceWorkerScope, WorkerLoadInfo& aLoadInfo,
       nsString&& aId, const nsID& aAgentClusterId,
       const nsILoadInfo::CrossOriginOpenerPolicy aAgentClusterOpenerPolicy);
@@ -1109,7 +1124,7 @@ class WorkerPrivate : public RelativeTimeline {
   // This is the worker name for shared workers and dedicated workers.
   const nsString mWorkerName;
 
-  const WorkerType mWorkerType;
+  const WorkerKind mWorkerKind;
 
   // The worker is owned by its thread, which is represented here.  This is set
   // in Constructor() and emptied by WorkerFinishedRunnable, and conditionally
@@ -1261,6 +1276,19 @@ class WorkerPrivate : public RelativeTimeline {
     uint32_t mErrorHandlerRecursionCount;
     uint32_t mNextTimeoutId;
 
+    // Tracks the current setTimeout/setInterval nesting level.
+    // When there isn't a TimeoutHandler on the stack, this will be 0.
+    // Whenever setTimeout/setInterval are called, a new TimeoutInfo will be
+    // created with a nesting level one more than the current nesting level,
+    // saturating at the kClampTimeoutNestingLevel.
+    //
+    // When RunExpiredTimeouts is run, it sets this value to the
+    // TimeoutInfo::mNestingLevel for the duration of
+    // the WorkerScriptTimeoutHandler::Call which will explicitly trigger a
+    // microtask checkpoint so that any immediately-resolved promises will
+    // still see the nesting level.
+    uint32_t mCurrentTimerNestingLevel;
+
     bool mFrozen;
     bool mTimerRunning;
     bool mRunningExpiredTimeouts;
@@ -1318,6 +1346,14 @@ class WorkerPrivate : public RelativeTimeline {
   bool mDebuggerReady;
   nsTArray<RefPtr<WorkerRunnable>> mDelayedDebuggeeRunnables;
 
+  // Whether this worker should have access to the WebExtension API bindings
+  // (currently only the Extension Background ServiceWorker declared in the
+  // extension manifest is allowed to access any WebExtension API bindings).
+  // This default to false, and it is eventually set to true by
+  // RemoteWorkerChild::ExecWorkerOnMainThread if the needed conditions
+  // are met.
+  bool mExtensionAPIAllowed;
+
   // mIsInAutomation is true when we're running in test automation.
   // We expose some extra testing functions in that case.
   bool mIsInAutomation;
@@ -1340,6 +1376,15 @@ class WorkerPrivate : public RelativeTimeline {
   // better consistency with the COEP spec.
   Maybe<nsILoadInfo::CrossOriginEmbedderPolicy> mEmbedderPolicy;
   Maybe<nsILoadInfo::CrossOriginEmbedderPolicy> mOwnerEmbedderPolicy;
+
+  /* Privileged add-on flag extracted from the AddonPolicy on the nsIPrincipal
+   * on the main thread when constructing a top-level worker. The flag is
+   * propagated to nested workers. The flag is only allowed to take effect in
+   * extension processes and is forbidden in content scripts in content
+   * processes. The flag may be read on either the parent/owner thread as well
+   * as on the worker thread itself. When bug 1443925 is fixed allowing
+   * nsIPrincipal to be used OMT, it may be possible to remove this flag. */
+  bool mIsPrivilegedAddonGlobal;
 };
 
 class AutoSyncLoopHolder {

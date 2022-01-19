@@ -97,6 +97,9 @@ static mozilla::LauncherFlags ProcessCmdLine(int& aArgc, wchar_t* aArgv[]) {
       mozilla::CheckArg(aArgc, aArgv, L"marionette",
                         static_cast<const wchar_t**>(nullptr),
                         mozilla::CheckArgFlag::None) == mozilla::ARG_FOUND ||
+      mozilla::CheckArg(aArgc, aArgv, L"backgroundtask",
+                        static_cast<const wchar_t**>(nullptr),
+                        mozilla::CheckArgFlag::None) == mozilla::ARG_FOUND ||
       mozilla::CheckArg(aArgc, aArgv, L"headless",
                         static_cast<const wchar_t**>(nullptr),
                         mozilla::CheckArgFlag::None) == mozilla::ARG_FOUND ||
@@ -248,8 +251,8 @@ Maybe<int> LauncherMain(int& argc, wchar_t* argv[],
 
   // Make sure that the launcher process itself has image load policies set
   if (IsWin10AnniversaryUpdateOrLater()) {
-    static const StaticDynamicallyLinkedFunctionPtr<decltype(
-        &SetProcessMitigationPolicy)>
+    static const StaticDynamicallyLinkedFunctionPtr<
+        decltype(&SetProcessMitigationPolicy)>
         pSetProcessMitigationPolicy(L"kernel32.dll",
                                     "SetProcessMitigationPolicy");
     if (pSetProcessMitigationPolicy) {
@@ -369,6 +372,15 @@ Maybe<int> LauncherMain(int& argc, wchar_t* argv[],
       // whitelist policy, so only the handles added to attrs will be inherited.
       inheritHandles = TRUE;
     }
+  }
+
+  // Pass on the path of the shortcut used to launch this process, if any.
+  STARTUPINFOW currentStartupInfo;
+  GetStartupInfoW(&currentStartupInfo);
+  if ((currentStartupInfo.dwFlags & STARTF_TITLEISLINKNAME) &&
+      currentStartupInfo.lpTitle) {
+    siex.StartupInfo.dwFlags |= STARTF_TITLEISLINKNAME;
+    siex.StartupInfo.lpTitle = currentStartupInfo.lpTitle;
   }
 
   PROCESS_INFORMATION pi = {};

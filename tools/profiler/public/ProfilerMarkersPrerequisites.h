@@ -14,6 +14,7 @@
 #define ProfilerMarkersPrerequisites_h
 
 #include "mozilla/BaseProfilerMarkersPrerequisites.h"
+#include "mozilla/ProfilerState.h"
 
 #ifdef MOZ_GECKO_PROFILER
 

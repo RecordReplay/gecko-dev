@@ -10,6 +10,7 @@
 #include "js/Proxy.h"
 #include "proxy/DeadObjectProxy.h"
 #include "vm/ProxyObject.h"
+#include "vm/WellKnownAtom.h"  // js_*_str
 #include "vm/WrapperObject.h"
 
 #include "vm/JSContext-inl.h"
@@ -64,11 +65,11 @@ bool BaseProxyHandler::has(JSContext* cx, HandleObject proxy, HandleId id,
 bool BaseProxyHandler::hasOwn(JSContext* cx, HandleObject proxy, HandleId id,
                               bool* bp) const {
   assertEnteredPolicy(cx, proxy, id, GET);
-  Rooted<PropertyDescriptor> desc(cx);
+  Rooted<mozilla::Maybe<PropertyDescriptor>> desc(cx);
   if (!getOwnPropertyDescriptor(cx, proxy, id, &desc)) {
     return false;
   }
-  *bp = !!desc.object();
+  *bp = desc.isSome();
   return true;
 }
 
@@ -81,14 +82,16 @@ bool BaseProxyHandler::get(JSContext* cx, HandleObject proxy,
   // (January 21, 2016) 9.1.8 fairly closely.
 
   // Step 2. (Step 1 is a superfluous assertion.)
-  Rooted<PropertyDescriptor> desc(cx);
+  Rooted<mozilla::Maybe<PropertyDescriptor>> desc(cx);
   if (!getOwnPropertyDescriptor(cx, proxy, id, &desc)) {
     return false;
   }
-  desc.assertCompleteIfFound();
+  if (desc.isSome()) {
+    desc->assertComplete();
+  }
 
   // Step 3.
-  if (!desc.object()) {
+  if (desc.isNothing()) {
     // The spec calls this variable "parent", but that word has weird
     // connotations in SpiderMonkey, so let's go with "proto".
     // Step 3.a.
@@ -108,14 +111,14 @@ bool BaseProxyHandler::get(JSContext* cx, HandleObject proxy,
   }
 
   // Step 4.
-  if (desc.isDataDescriptor()) {
-    vp.set(desc.value());
+  if (desc->isDataDescriptor()) {
+    vp.set(desc->value());
     return true;
   }
 
   // Step 5.
-  MOZ_ASSERT(desc.isAccessorDescriptor());
-  RootedObject getter(cx, desc.getterObject());
+  MOZ_ASSERT(desc->isAccessorDescriptor());
+  RootedObject getter(cx, desc->getter());
 
   // Step 6.
   if (!getter) {
@@ -138,11 +141,13 @@ bool BaseProxyHandler::set(JSContext* cx, HandleObject proxy, HandleId id,
   // SpiderMonkey's particular foibles.
 
   // Steps 2-3.  (Step 1 is a superfluous assertion.)
-  Rooted<PropertyDescriptor> ownDesc(cx);
+  Rooted<mozilla::Maybe<PropertyDescriptor>> ownDesc(cx);
   if (!getOwnPropertyDescriptor(cx, proxy, id, &ownDesc)) {
     return false;
   }
-  ownDesc.assertCompleteIfFound();
+  if (ownDesc.isSome()) {
+    ownDesc->assertComplete();
+  }
 
   // The rest is factored out into a separate function with a weird name.
   // This algorithm continues just below.
@@ -150,15 +155,14 @@ bool BaseProxyHandler::set(JSContext* cx, HandleObject proxy, HandleId id,
                                         result);
 }
 
-bool js::SetPropertyIgnoringNamedGetter(JSContext* cx, HandleObject obj,
-                                        HandleId id, HandleValue v,
-                                        HandleValue receiver,
-                                        Handle<PropertyDescriptor> ownDesc_,
-                                        ObjectOpResult& result) {
-  Rooted<PropertyDescriptor> ownDesc(cx, ownDesc_);
+bool js::SetPropertyIgnoringNamedGetter(
+    JSContext* cx, HandleObject obj, HandleId id, HandleValue v,
+    HandleValue receiver, Handle<mozilla::Maybe<PropertyDescriptor>> ownDesc_,
+    ObjectOpResult& result) {
+  Rooted<PropertyDescriptor> ownDesc(cx);
 
   // Step 4.
-  if (!ownDesc.object()) {
+  if (ownDesc_.isNothing()) {
     // The spec calls this variable "parent", but that word has weird
     // connotations in SpiderMonkey, so let's go with "proto".
     RootedObject proto(cx);
@@ -170,7 +174,12 @@ bool js::SetPropertyIgnoringNamedGetter(JSContext* cx, HandleObject obj,
     }
 
     // Step 4.d.
-    ownDesc.setDataDescriptor(UndefinedHandleValue, JSPROP_ENUMERATE);
+    ownDesc.set(PropertyDescriptor::Data(
+        UndefinedValue(),
+        {JS::PropertyAttribute::Configurable, JS::PropertyAttribute::Enumerable,
+         JS::PropertyAttribute::Writable}));
+  } else {
+    ownDesc.set(*ownDesc_);
   }
 
   // Step 5.
@@ -184,44 +193,43 @@ bool js::SetPropertyIgnoringNamedGetter(JSContext* cx, HandleObject obj,
     }
     RootedObject receiverObj(cx, &receiver.toObject());
 
-    // Nonstandard SpiderMonkey special case: setter ops.
-    if (SetterOp setter = ownDesc.setter()) {
-      return CallJSSetterOp(cx, setter, receiverObj, id, v, result);
-    }
-
     // Steps 5.c-d.
-    Rooted<PropertyDescriptor> existingDescriptor(cx);
+    Rooted<mozilla::Maybe<PropertyDescriptor>> existingDescriptor(cx);
     if (!GetOwnPropertyDescriptor(cx, receiverObj, id, &existingDescriptor)) {
       return false;
     }
 
     // Step 5.e.
-    if (existingDescriptor.object()) {
+    if (existingDescriptor.isSome()) {
       // Step 5.e.i.
-      if (existingDescriptor.isAccessorDescriptor()) {
+      if (existingDescriptor->isAccessorDescriptor()) {
         return result.fail(JSMSG_OVERWRITING_ACCESSOR);
       }
 
       // Step 5.e.ii.
-      if (!existingDescriptor.writable()) {
+      if (!existingDescriptor->writable()) {
         return result.fail(JSMSG_READ_ONLY);
       }
     }
 
     // Steps 5.e.iii-iv. and 5.f.i.
-    unsigned attrs = existingDescriptor.object()
-                         ? JSPROP_IGNORE_ENUMERATE | JSPROP_IGNORE_READONLY |
-                               JSPROP_IGNORE_PERMANENT
-                         : JSPROP_ENUMERATE;
-
-    return DefineDataProperty(cx, receiverObj, id, v, attrs, result);
+    Rooted<PropertyDescriptor> desc(cx);
+    if (existingDescriptor.isSome()) {
+      desc = PropertyDescriptor::Empty();
+      desc.setValue(v);
+    } else {
+      desc = PropertyDescriptor::Data(v, {JS::PropertyAttribute::Configurable,
+                                          JS::PropertyAttribute::Enumerable,
+                                          JS::PropertyAttribute::Writable});
+    }
+    return DefineProperty(cx, receiverObj, id, desc, result);
   }
 
   // Step 6.
   MOZ_ASSERT(ownDesc.isAccessorDescriptor());
   RootedObject setter(cx);
-  if (ownDesc.hasSetterObject()) {
-    setter = ownDesc.setterObject();
+  if (ownDesc.hasSetter()) {
+    setter = ownDesc.setter();
   }
   if (!setter) {
     return result.fail(JSMSG_GETTER_ONLY);
@@ -248,18 +256,20 @@ bool BaseProxyHandler::getOwnEnumerablePropertyKeys(
   for (size_t j = 0, len = props.length(); j < len; j++) {
     MOZ_ASSERT(i <= j);
     id = props[j];
-    if (JSID_IS_SYMBOL(id)) {
+    if (id.isSymbol()) {
       continue;
     }
 
     AutoWaivePolicy policy(cx, proxy, id, BaseProxyHandler::GET);
-    Rooted<PropertyDescriptor> desc(cx);
+    Rooted<mozilla::Maybe<PropertyDescriptor>> desc(cx);
     if (!getOwnPropertyDescriptor(cx, proxy, id, &desc)) {
       return false;
     }
-    desc.assertCompleteIfFound();
+    if (desc.isSome()) {
+      desc->assertComplete();
+    }
 
-    if (desc.object() && desc.enumerable()) {
+    if (desc.isSome() && desc->enumerable()) {
       props[i++].set(id);
     }
   }
@@ -387,7 +397,7 @@ bool BaseProxyHandler::isCallable(JSObject* obj) const { return false; }
 
 bool BaseProxyHandler::isConstructor(JSObject* obj) const { return false; }
 
-JS_FRIEND_API void js::NukeNonCCWProxy(JSContext* cx, HandleObject proxy) {
+JS_PUBLIC_API void js::NukeNonCCWProxy(JSContext* cx, HandleObject proxy) {
   MOZ_ASSERT(proxy->is<ProxyObject>());
   MOZ_ASSERT(!proxy->is<CrossCompartmentWrapperObject>());
 
@@ -402,7 +412,7 @@ JS_FRIEND_API void js::NukeNonCCWProxy(JSContext* cx, HandleObject proxy) {
   MOZ_ASSERT(IsDeadProxyObject(proxy));
 }
 
-JS_FRIEND_API void js::NukeRemovedCrossCompartmentWrapper(JSContext* cx,
+JS_PUBLIC_API void js::NukeRemovedCrossCompartmentWrapper(JSContext* cx,
                                                           JSObject* wrapper) {
   MOZ_ASSERT(wrapper->is<CrossCompartmentWrapperObject>());
 

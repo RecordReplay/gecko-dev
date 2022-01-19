@@ -169,8 +169,8 @@ void GamepadManager::RemoveListener(nsGlobalWindowInner* aWindow) {
     return;  // doesn't exist
   }
 
-  for (auto iter = mGamepads.Iter(); !iter.Done(); iter.Next()) {
-    aWindow->RemoveGamepad(iter.Key());
+  for (const auto& key : mGamepads.Keys()) {
+    aWindow->RemoveGamepad(key);
   }
 
   mListeners.RemoveElement(aWindow);
@@ -205,8 +205,8 @@ void GamepadManager::AddGamepad(GamepadHandle aHandle, const nsAString& aId,
 
   // We store the gamepad related to its index given by the parent process,
   // and no duplicate index is allowed.
-  MOZ_ASSERT(!mGamepads.Get(aHandle, nullptr));
-  mGamepads.Put(aHandle, std::move(newGamepad));
+  MOZ_ASSERT(!mGamepads.Contains(aHandle));
+  mGamepads.InsertOrUpdate(aHandle, std::move(newGamepad));
   NewConnectionEvent(aHandle, true);
 }
 
@@ -624,8 +624,8 @@ void GamepadManager::StopHaptics() {
     return;
   }
 
-  for (auto iter = mGamepads.Iter(); !iter.Done(); iter.Next()) {
-    const GamepadHandle handle = iter.UserData()->GetHandle();
+  for (const auto& entry : mGamepads) {
+    const GamepadHandle handle = entry.GetWeak()->GetHandle();
     if (handle.GetKind() == GamepadHandleKind::VR) {
       if (gfx::VRManagerChild::IsCreated()) {
         gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();

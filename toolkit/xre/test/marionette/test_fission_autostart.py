@@ -99,10 +99,13 @@ class TestFissionAutostart(MarionetteTestCase):
           return {
             prefLocked: Services.prefs.prefIsLocked(arguments[0]),
             releaseOrBeta: AppConstants.RELEASE_OR_BETA,
+            nightlyBuild: AppConstants.NIGHTLY_BUILD,
           };
         """,
             script_args=(PREF,),
         )
+
+        self.nightly_build = res["nightlyBuild"]
 
         if res["prefLocked"]:
             self.assertTrue(

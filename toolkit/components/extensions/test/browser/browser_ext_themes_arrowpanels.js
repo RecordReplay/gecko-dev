@@ -7,7 +7,7 @@ function openIdentityPopup() {
     true,
     event => event.target == gIdentityHandler._identityPopup
   );
-  gIdentityHandler._identityBox.click();
+  gIdentityHandler._identityIconBox.click();
   return promise;
 }
 
@@ -56,9 +56,7 @@ add_task(async function test_popup_styling(browser, accDoc) {
       // Open the information arrow panel
       await openIdentityPopup();
 
-      let arrowContent = gIdentityHandler._identityPopup.shadowRoot.querySelector(
-        ".panel-arrowcontent"
-      );
+      let arrowContent = gIdentityHandler._identityPopup.panelContent;
       let arrowContentComputedStyle = window.getComputedStyle(arrowContent);
       // Ensure popup background color was set properly
       Assert.equal(
@@ -76,7 +74,7 @@ add_task(async function test_popup_styling(browser, accDoc) {
 
       Assert.equal(
         arrowContentComputedStyle.getPropertyValue("--panel-description-color"),
-        `rgba(${hexToRGB(POPUP_TEXT_COLOR).join(", ")}, 0.65)`,
+        `rgba(${hexToRGB(POPUP_TEXT_COLOR).join(", ")}, 0.7)`,
         "Popup text description color should have been themed"
       );
 

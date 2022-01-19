@@ -66,13 +66,13 @@ function InfallibleGetBoolPref(key) {
 /**
  * Represents the Options Panel in the Toolbox.
  */
-function OptionsPanel(iframeWindow, toolbox) {
+function OptionsPanel(iframeWindow, toolbox, commands) {
   this.panelDoc = iframeWindow.document;
   this.panelWin = iframeWindow;
 
   this.toolbox = toolbox;
+  this.commands = commands;
   this.telemetry = toolbox.telemetry;
-  this.isReady = false;
 
   this.setupToolsList = this.setupToolsList.bind(this);
   this._prefChanged = this._prefChanged.bind(this);
@@ -101,8 +101,6 @@ OptionsPanel.prototype = {
     this.setupThemeList();
     this.setupAdditionalOptions();
     await this.populatePreferences();
-    this.isReady = true;
-    this.emit("ready");
     return this;
   },
 
@@ -436,7 +434,7 @@ OptionsPanel.prototype = {
       });
     }
 
-    if (this.target.isParentProcess) {
+    if (this.toolbox.isBrowserToolbox) {
       // The Multiprocess Browser Toolbox is only displayed in the settings
       // panel for the Browser Toolbox, or when debugging the main process in
       // remote debugging.
@@ -450,7 +448,7 @@ OptionsPanel.prototype = {
         // custom behavior for the Browser Toolbox, so we pass an additional
         // onChange callback.
         onChange: async checked => {
-          if (!this.toolbox.isBrowserToolbox()) {
+          if (!this.toolbox.isBrowserToolbox) {
             // If we are debugging a parent process, but the toolbox is not a
             // Browser Toolbox, it means we are remote debugging another
             // browser. In this case, the value of devtools.browsertoolbox.fission
@@ -464,7 +462,7 @@ OptionsPanel.prototype = {
           // regular Firefox Profile to the Browser Toolbox profile.
           // If the preference is not updated on the regular Firefox profile, the
           // new value will be lost on the next Browser Toolbox restart.
-          const { mainRoot } = this.target.client;
+          const { mainRoot } = this.commands.client;
           const preferenceFront = await mainRoot.getFront("preference");
           preferenceFront.setBoolPref(
             "devtools.browsertoolbox.fission",
@@ -570,8 +568,8 @@ OptionsPanel.prototype = {
     }
 
     if (!this.target.chrome) {
-      this.disableJSNode.checked = !this.target.configureOptions
-        .javascriptEnabled;
+      const isJavascriptEnabled = await this.commands.targetConfigurationCommand.isJavascriptEnabled();
+      this.disableJSNode.checked = !isJavascriptEnabled;
       this.disableJSNode.addEventListener("click", this._disableJSClicked);
     } else {
       // Hide the checkbox and label
@@ -607,10 +605,10 @@ OptionsPanel.prototype = {
 
   /**
    * Disables JavaScript for the currently loaded tab. We force a page refresh
-   * here because setting docShell.allowJavascript to true fails to block JS
-   * execution from event listeners added using addEventListener(), AJAX calls
-   * and timers. The page refresh prevents these things from being added in the
-   * first place.
+   * here because setting browsingContext.allowJavascript to true fails to block
+   * JS execution from event listeners added using addEventListener(), AJAX
+   * calls and timers. The page refresh prevents these things from being added
+   * in the first place.
    *
    * @param {Event} event
    *        The event sent by checking / unchecking the disable JS checkbox.
@@ -618,11 +616,9 @@ OptionsPanel.prototype = {
   _disableJSClicked: function(event) {
     const checked = event.target.checked;
 
-    const options = {
+    this.commands.targetConfigurationCommand.updateConfiguration({
       javascriptEnabled: !checked,
-    };
-
-    this.target.reconfigure({ options });
+    });
   },
 
   destroy: function() {

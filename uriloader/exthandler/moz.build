@@ -13,7 +13,6 @@ XPIDL_SOURCES += [
     "nsIContentDispatchChooser.idl",
     "nsIExternalHelperAppService.idl",
     "nsIExternalProtocolService.idl",
-    "nsIExternalURLHandlerService.idl",
     "nsIHandlerService.idl",
     "nsIHelperAppLauncherDialog.idl",
     "nsISharingHandlerApp.idl",
@@ -40,14 +39,6 @@ EXPORTS += [
     "nsOSHelperAppServiceChild.h",
 ]
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
-    EXPORTS += [
-        "%s/%s" % (osdir, f)
-        for f in [
-            "nsExternalURLHandlerService.h",
-        ]
-    ]
-
 EXPORTS += [
     "nsLocalHandlerApp.h",
 ]
@@ -68,6 +59,9 @@ UNIFIED_SOURCES += [
     "nsMIMEInfoImpl.cpp",
     "nsOSHelperAppServiceChild.cpp",
 ]
+
+if CONFIG["MOZ_BUILD_APP"] == "browser":
+    DEFINES["MOZ_BUILD_APP_IS_BROWSER"] = True
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     UNIFIED_SOURCES += [
@@ -96,8 +90,6 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
     UNIFIED_SOURCES += [
-        "android/nsAndroidHandlerApp.cpp",
-        "android/nsExternalURLHandlerService.cpp",
         "android/nsMIMEInfoAndroid.cpp",
     ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":

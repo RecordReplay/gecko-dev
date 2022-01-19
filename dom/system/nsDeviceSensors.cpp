@@ -18,7 +18,6 @@
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/DeviceLightEvent.h"
 #include "mozilla/dom/DeviceOrientationEvent.h"
-#include "mozilla/dom/DeviceProximityEvent.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/UserProximityEvent.h"
@@ -331,7 +330,7 @@ void nsDeviceSensors::Notify(const mozilla::hal::SensorData& aSensorData) {
         FireDOMOrientationEvent(target, orient.alpha, orient.beta, orient.gamma,
                                 Orientation::kRelative);
       } else if (type == nsIDeviceSensorData::TYPE_PROXIMITY) {
-        FireDOMProximityEvent(target, x, y, z);
+        MaybeFireDOMUserProximityEvent(target, x, z);
       } else if (type == nsIDeviceSensorData::TYPE_LIGHT) {
         FireDOMLightEvent(target, x);
       }
@@ -353,26 +352,8 @@ void nsDeviceSensors::FireDOMLightEvent(mozilla::dom::EventTarget* aTarget,
   aTarget->DispatchEvent(*event);
 }
 
-void nsDeviceSensors::FireDOMProximityEvent(mozilla::dom::EventTarget* aTarget,
-                                            double aValue, double aMin,
-                                            double aMax) {
-  DeviceProximityEventInit init;
-  init.mBubbles = true;
-  init.mCancelable = false;
-  init.mValue = aValue;
-  init.mMin = aMin;
-  init.mMax = aMax;
-  RefPtr<DeviceProximityEvent> event =
-      DeviceProximityEvent::Constructor(aTarget, u"deviceproximity"_ns, init);
-  event->SetTrusted(true);
-
-  aTarget->DispatchEvent(*event);
-
-  // Some proximity sensors only support a binary near or
-  // far measurement. In this case, the sensor should report
-  // its maximum range value in the far state and a lesser
-  // value in the near state.
-
+void nsDeviceSensors::MaybeFireDOMUserProximityEvent(
+    mozilla::dom::EventTarget* aTarget, double aValue, double aMax) {
   bool near = (aValue < aMax);
   if (mIsUserProximityNear != near) {
     mIsUserProximityNear = near;

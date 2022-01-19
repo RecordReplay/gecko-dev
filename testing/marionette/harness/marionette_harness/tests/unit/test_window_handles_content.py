@@ -19,7 +19,7 @@ class TestWindowHandles(WindowManagerMixin, MarionetteTestCase):
     def setUp(self):
         super(TestWindowHandles, self).setUp()
 
-        self.chrome_dialog = "chrome://marionette/content/test_dialog.xhtml"
+        self.chrome_dialog = "chrome://remote/content/marionette/test_dialog.xhtml"
 
     def tearDown(self):
         self.close_all_windows()
@@ -120,6 +120,22 @@ class TestWindowHandles(WindowManagerMixin, MarionetteTestCase):
         self.assertEqual(window_handles, self.marionette.window_handles)
 
         self.marionette.switch_to_window(new_window)
+
+    def test_window_handles_include_unloaded_tabs(self):
+        new_tab = self.open_tab()
+        self.assert_window_handles()
+        self.assertEqual(len(self.marionette.window_handles), len(self.start_tabs) + 1)
+        self.assertEqual(self.marionette.current_window_handle, self.start_tab)
+
+        self.marionette.switch_to_window(new_tab)
+        self.assert_window_handles()
+        self.assertEqual(self.marionette.current_window_handle, new_tab)
+
+        # The restart will cause the background tab to stay unloaded
+        self.marionette.restart(in_app=True)
+
+        self.assert_window_handles()
+        self.assertEqual(len(self.marionette.window_handles), len(self.start_tabs) + 1)
 
     def test_window_handles_after_closing_original_tab(self):
         new_tab = self.open_tab()

@@ -4,20 +4,23 @@
 
 from __future__ import division, print_function, unicode_literals
 
-import errno
-import json
 import math
 import os
 import platform
 import shutil
-import subprocess
+import site
 import sys
-import uuid
 
 if sys.version_info[0] < 3:
     import __builtin__ as builtins
+
+    class MetaPathFinder(object):
+        pass
+
+
 else:
-    import builtins
+    from importlib.abc import MetaPathFinder
+
 
 from types import ModuleType
 
@@ -60,6 +63,7 @@ MACH_MODULES = [
     "python/mozperftest/mozperftest/mach_commands.py",
     "python/mozrelease/mozrelease/mach_commands.py",
     "remote/mach_commands.py",
+    "security/manager/tools/mach_commands.py",
     "taskcluster/mach_commands.py",
     "testing/awsy/mach_commands.py",
     "testing/condprofile/mach_commands.py",
@@ -140,41 +144,18 @@ CATEGORIES = {
 
 def search_path(mozilla_dir, packages_txt):
     with open(os.path.join(mozilla_dir, packages_txt)) as f:
-        packages = [line.rstrip().split(":") for line in f]
+        packages = [line.rstrip().split(":", maxsplit=1) for line in f]
 
-    def handle_package(package):
-        if package[0] == "optional":
-            try:
-                for path in handle_package(package[1:]):
-                    yield path
-            except Exception:
-                pass
-
-        if package[0] in ("windows", "!windows"):
-            for_win = not package[0].startswith("!")
-            is_win = sys.platform == "win32"
-            if is_win == for_win:
-                for path in handle_package(package[1:]):
-                    yield path
-
-        if package[0] in ("python2", "python3"):
-            for_python3 = package[0].endswith("3")
-            is_python3 = sys.version_info[0] > 2
-            if is_python3 == for_python3:
-                for path in handle_package(package[1:]):
-                    yield path
-
-        if package[0] == "packages.txt":
-            assert len(package) == 2
-            for p in search_path(mozilla_dir, package[1]):
+    def handle_package(action, package):
+        if action == "packages.txt":
+            for p in search_path(mozilla_dir, package):
                 yield os.path.join(mozilla_dir, p)
 
-        if package[0].endswith(".pth"):
-            assert len(package) == 2
-            yield os.path.join(mozilla_dir, package[1])
+        if action == "pth":
+            yield os.path.join(mozilla_dir, package)
 
-    for package in packages:
-        for path in handle_package(package):
+    for current_action, current_package in packages:
+        for path in handle_package(current_action, current_package):
             yield path
 
 
@@ -185,16 +166,13 @@ def mach_sys_path(mozilla_dir):
     ]
 
 
-def bootstrap(topsrcdir, mozilla_dir=None):
-    if mozilla_dir is None:
-        mozilla_dir = topsrcdir
-
+def bootstrap(topsrcdir):
     # Ensure we are running Python 2.7 or 3.5+. We put this check here so we
     # generate a user-friendly error message rather than a cryptic stack trace
     # on module import.
-    major, minor = sys.version_info[:2]
-    if (major == 2 and minor < 7) or (major == 3 and minor < 5):
-        print("Python 2.7 or Python 3.5+ is required to run mach.")
+    major = sys.version_info[:2][0]
+    if sys.version_info < (3, 6):
+        print("Python 3.6+ is required to run mach.")
         print("You are running Python", platform.python_version())
         sys.exit(1)
 
@@ -205,6 +183,15 @@ def bootstrap(topsrcdir, mozilla_dir=None):
     if os.path.exists(deleted_dir):
         shutil.rmtree(deleted_dir, ignore_errors=True)
 
+    if major == 3 and sys.prefix == sys.base_prefix:
+        # We are not in a virtualenv. Remove global site packages
+        # from sys.path.
+        # Note that we don't ever invoke mach from a Python 2 virtualenv,
+        # and "sys.base_prefix" doesn't exist before Python 3.3, so we
+        # guard with the "major == 3" check.
+        site_paths = set(site.getsitepackages() + [site.getusersitepackages()])
+        sys.path = [path for path in sys.path if path not in site_paths]
+
     # Global build system and mach state is stored in a central directory. By
     # default, this is ~/.mozbuild. However, it can be defined via an
     # environment variable. We detect first run (by lack of this directory
@@ -213,7 +200,7 @@ def bootstrap(topsrcdir, mozilla_dir=None):
     # case. For default behavior, we educate users and give them an opportunity
     # to react. We always exit after creating the directory because users don't
     # like surprises.
-    sys.path[0:0] = mach_sys_path(mozilla_dir)
+    sys.path[0:0] = mach_sys_path(topsrcdir)
     import mach.base
     import mach.main
     from mach.util import setenv
@@ -271,7 +258,7 @@ def bootstrap(topsrcdir, mozilla_dir=None):
             # This API doesn't respect the vcs binary choices from configure.
             # If we ever need to use the VCS binary here, consider something
             # more robust.
-            return mozversioncontrol.get_repository_object(path=mozilla_dir)
+            return mozversioncontrol.get_repository_object(path=topsrcdir)
         except (mozversioncontrol.InvalidRepoPath, mozversioncontrol.MissingVCSTool):
             return None
 
@@ -317,9 +304,6 @@ def bootstrap(topsrcdir, mozilla_dir=None):
 
         _finalize_telemetry_glean(
             context.telemetry, handler.name == "bootstrap", success
-        )
-        _finalize_telemetry_legacy(
-            context, instance, handler, success, start_time, end_time, topsrcdir
         )
 
     def populate_context(key=None):
@@ -377,113 +361,26 @@ def bootstrap(topsrcdir, mozilla_dir=None):
         # default global machrc location
         driver.settings_paths.append(get_state_dir())
     # always load local repository configuration
-    driver.settings_paths.append(mozilla_dir)
+    driver.settings_paths.append(topsrcdir)
 
     for category, meta in CATEGORIES.items():
         driver.define_category(category, meta["short"], meta["long"], meta["priority"])
 
+    # Sparse checkouts may not have all mach_commands.py files. Ignore
+    # errors from missing files. Same for spidermonkey tarballs.
     repo = resolve_repository()
+    missing_ok = (
+        repo is not None and repo.sparse_checkout_present()
+    ) or os.path.exists(os.path.join(topsrcdir, "INSTALL"))
 
     for path in MACH_MODULES:
-        # Sparse checkouts may not have all mach_commands.py files. Ignore
-        # errors from missing files.
         try:
-            driver.load_commands_from_file(os.path.join(mozilla_dir, path))
+            driver.load_commands_from_file(os.path.join(topsrcdir, path))
         except mach.base.MissingFileError:
-            if not repo or not repo.sparse_checkout_present():
+            if not missing_ok:
                 raise
 
     return driver
-
-
-def _finalize_telemetry_legacy(
-    context, instance, handler, success, start_time, end_time, topsrcdir
-):
-    """Record and submit legacy telemetry.
-
-    Parameterized by the raw gathered telemetry, this function handles persisting and
-    submission of the data.
-
-    This has been designated as "legacy" telemetry because modern telemetry is being
-    submitted with "Glean".
-    """
-    from mozboot.util import get_state_dir
-    from mozbuild.base import MozbuildObject
-    from mozbuild.telemetry import gather_telemetry
-    from mach.telemetry import is_telemetry_enabled, is_applicable_telemetry_environment
-
-    if not (
-        is_applicable_telemetry_environment() and is_telemetry_enabled(context.settings)
-    ):
-        return
-
-    if not isinstance(instance, MozbuildObject):
-        instance = MozbuildObject.from_environment()
-
-    command_attrs = getattr(context, "command_attrs", {})
-
-    # We gather telemetry for every operation.
-    data = gather_telemetry(
-        command=handler.name,
-        success=success,
-        start_time=start_time,
-        end_time=end_time,
-        mach_context=context,
-        instance=instance,
-        command_attrs=command_attrs,
-    )
-    if data:
-        telemetry_dir = os.path.join(get_state_dir(), "telemetry")
-        try:
-            os.mkdir(telemetry_dir)
-        except OSError as e:
-            if e.errno != errno.EEXIST:
-                raise
-        outgoing_dir = os.path.join(telemetry_dir, "outgoing")
-        try:
-            os.mkdir(outgoing_dir)
-        except OSError as e:
-            if e.errno != errno.EEXIST:
-                raise
-
-        with open(os.path.join(outgoing_dir, str(uuid.uuid4()) + ".json"), "w") as f:
-            json.dump(data, f, sort_keys=True)
-
-    # The user is performing a maintenance command, skip the upload
-    if handler.name in (
-        "bootstrap",
-        "doctor",
-        "mach-commands",
-        "vcs-setup",
-        "create-mach-environment",
-        "install-moz-phab",
-        # We call mach environment in client.mk which would cause the
-        # data submission to block the forward progress of make.
-        "environment",
-    ):
-        return False
-
-    if "TEST_MACH_TELEMETRY_NO_SUBMIT" in os.environ:
-        # In our telemetry tests, we want telemetry to be collected for analysis, but
-        # we don't want it submitted.
-        return False
-
-    state_dir = get_state_dir()
-
-    machpath = os.path.join(instance.topsrcdir, "mach")
-    with open(os.devnull, "wb") as devnull:
-        subprocess.Popen(
-            [
-                sys.executable,
-                machpath,
-                "python",
-                "--no-virtualenv",
-                os.path.join(topsrcdir, "build", "submit_telemetry_data.py"),
-                state_dir,
-            ],
-            stdout=devnull,
-            stderr=devnull,
-        )
 
 
 def _finalize_telemetry_glean(telemetry, is_bootstrap, success):
@@ -498,16 +395,23 @@ def _finalize_telemetry_glean(telemetry, is_bootstrap, success):
         get_cpu_brand,
         get_distro_and_version,
         get_psutil_stats,
+        get_shell_info,
     )
 
     mach_metrics = telemetry.metrics(MACH_METRICS_PATH)
     mach_metrics.mach.duration.stop()
     mach_metrics.mach.success.set(success)
     system_metrics = mach_metrics.mach.system
-    system_metrics.cpu_brand.set(get_cpu_brand())
+    cpu_brand = get_cpu_brand()
+    if cpu_brand:
+        system_metrics.cpu_brand.set(cpu_brand)
     distro, version = get_distro_and_version()
     system_metrics.distro.set(distro)
     system_metrics.distro_version.set(version)
+
+    vscode_terminal, ssh_connection = get_shell_info()
+    system_metrics.vscode_terminal.set(vscode_terminal)
+    system_metrics.ssh_connection.set(ssh_connection)
 
     has_psutil, logical_cores, physical_cores, memory_total = get_psutil_stats()
     if has_psutil:
@@ -592,6 +496,69 @@ class ImportHook(object):
         return module
 
 
+# Hook import such that .pyc/.pyo files without a corresponding .py file in
+# the source directory are essentially ignored. See further below for details
+# and caveats.
+# Objdirs outside the source directory are ignored because in most cases, if
+# a .pyc/.pyo file exists there, a .py file will be next to it anyways.
+class FinderHook(MetaPathFinder):
+    def __init__(self, klass):
+        # Assume the source directory is the parent directory of the one
+        # containing this file.
+        self._source_dir = (
+            os.path.normcase(
+                os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+            )
+            + os.sep
+        )
+        self.finder_class = klass
+
+    def find_spec(self, full_name, paths=None, target=None):
+        spec = self.finder_class.find_spec(full_name, paths, target)
+
+        # Some modules don't have an origin.
+        if spec is None or spec.origin is None:
+            return spec
+
+        # Normalize the origin path.
+        path = os.path.normcase(os.path.abspath(spec.origin))
+        # Note: we could avoid normcase and abspath above for non pyc/pyo
+        # files, but those are actually rare, so it doesn't really matter.
+        if not path.endswith((".pyc", ".pyo")):
+            return spec
+
+        # Ignore modules outside our source directory
+        if not path.startswith(self._source_dir):
+            return spec
+
+        # If there is no .py corresponding to the .pyc/.pyo module we're
+        # resolving, remove the .pyc/.pyo file, and try again.
+        if not os.path.exists(spec.origin[:-1]):
+            if os.path.exists(spec.origin):
+                os.remove(spec.origin)
+            spec = self.finder_class.find_spec(full_name, paths, target)
+
+        return spec
+
+
+# Additional hook for python >= 3.8's importlib.metadata.
+class MetadataHook(FinderHook):
+    def find_distributions(self, *args, **kwargs):
+        return self.finder_class.find_distributions(*args, **kwargs)
+
+
+def hook(finder):
+    has_find_spec = hasattr(finder, "find_spec")
+    has_find_distributions = hasattr(finder, "find_distributions")
+    if has_find_spec and has_find_distributions:
+        return MetadataHook(finder)
+    elif has_find_spec:
+        return FinderHook(finder)
+    return finder
+
+
 # Install our hook. This can be deleted when the Python 3 migration is complete.
 if sys.version_info[0] < 3:
     builtins.__import__ = ImportHook(builtins.__import__)
+else:
+    sys.meta_path = [hook(c) for c in sys.meta_path]

@@ -14,6 +14,7 @@
 
 #include "mozilla/Base64.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/IntentionalCrash.h"
 #include "mozilla/PerformanceMetricsCollector.h"
 #include "mozilla/PerfStats.h"
@@ -32,6 +33,7 @@
 #include "mozilla/dom/Performance.h"
 #include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/Record.h"
 #include "mozilla/dom/ReportingHeader.h"
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/dom/WindowBinding.h"  // For IdleRequestCallback/Options
@@ -42,7 +44,8 @@
 #include "IOActivityMonitor.h"
 #include "nsThreadUtils.h"
 #include "mozJSComponentLoader.h"
-#include "GeckoProfiler.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "nsIException.h"
 
 namespace mozilla::dom {
@@ -189,14 +192,17 @@ void ChromeUtils::AddProfilerMarker(
     const Optional<nsACString>& aText) {
 #ifdef MOZ_GECKO_PROFILER
   MarkerOptions options;
+
   MarkerCategory category = ::geckoprofiler::category::JS;
 
   DOMHighResTimeStamp startTime = 0;
+  uint64_t innerWindowId = 0;
   if (aOptions.IsDouble()) {
     startTime = aOptions.GetAsDouble();
   } else {
     const ProfilerMarkerOptions& opt = aOptions.GetAsProfilerMarkerOptions();
     startTime = opt.mStartTime;
+    innerWindowId = opt.mInnerWindowId;
 
     if (opt.mCaptureStack) {
       options.Set(MarkerStack::Capture());
@@ -241,6 +247,12 @@ void ChromeUtils::AddProfilerMarker(
           TimeStamp::ProcessCreation() +
           TimeDuration::FromMilliseconds(startTime)));
     }
+  }
+
+  if (innerWindowId) {
+    options.Set(MarkerInnerWindowId(innerWindowId));
+  } else {
+    options.Set(MarkerInnerWindowIdFromJSContext(aGlobal.Context()));
   }
 
   {
@@ -331,18 +343,18 @@ void ChromeUtils::ShallowClone(GlobalObject& aGlobal, JS::HandleObject aObj,
       return;
     }
 
-    JS::Rooted<JS::PropertyDescriptor> desc(cx);
+    JS::Rooted<Maybe<JS::PropertyDescriptor>> desc(cx);
     JS::RootedId id(cx);
     for (jsid idVal : ids) {
       id = idVal;
       if (!JS_GetOwnPropertyDescriptorById(cx, obj, id, &desc)) {
         continue;
       }
-      if (desc.setter() || desc.getter()) {
+      if (desc.isNothing() || desc->isAccessorDescriptor()) {
         continue;
       }
       valuesIds.infallibleAppend(id);
-      values.infallibleAppend(desc.value());
+      values.infallibleAppend(desc->value());
     }
   }
 
@@ -648,9 +660,8 @@ static bool DefineGetter(JSContext* aCx, JS::Handle<JSObject*> aTarget,
 
   js::SetFunctionNativeReserved(getter, SLOT_URI, uri);
 
-  return JS_DefinePropertyById(
-      aCx, aTarget, id, getter, setter,
-      JSPROP_GETTER | JSPROP_SETTER | JSPROP_ENUMERATE);
+  return JS_DefinePropertyById(aCx, aTarget, id, getter, setter,
+                               JSPROP_ENUMERATE);
 }
 }  // namespace module_getter
 
@@ -698,6 +709,19 @@ void ChromeUtils::CreateOriginAttributesFromOrigin(
 }
 
 /* static */
+void ChromeUtils::CreateOriginAttributesFromOriginSuffix(
+    dom::GlobalObject& aGlobal, const nsAString& aSuffix,
+    dom::OriginAttributesDictionary& aAttrs, ErrorResult& aRv) {
+  OriginAttributes attrs;
+  nsAutoCString suffix;
+  if (!attrs.PopulateFromSuffix(NS_ConvertUTF16toUTF8(aSuffix))) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return;
+  }
+  aAttrs = attrs;
+}
+
+/* static */
 void ChromeUtils::FillNonDefaultOriginAttributes(
     dom::GlobalObject& aGlobal, const dom::OriginAttributesDictionary& aAttrs,
     dom::OriginAttributesDictionary& aNewAttrs) {
@@ -716,6 +740,24 @@ bool ChromeUtils::IsOriginAttributesEqual(
     const dom::OriginAttributesDictionary& aA,
     const dom::OriginAttributesDictionary& aB) {
   return aA == aB;
+}
+
+/* static */
+void ChromeUtils::GetBaseDomainFromPartitionKey(dom::GlobalObject& aGlobal,
+                                                const nsAString& aPartitionKey,
+                                                nsAString& aBaseDomain,
+                                                ErrorResult& aRv) {
+  nsString scheme;
+  nsString pkBaseDomain;
+  int32_t port;
+
+  if (!mozilla::OriginAttributes::ParsePartitionKey(aPartitionKey, scheme,
+                                                    pkBaseDomain, port)) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return;
+  }
+
+  aBaseDomain = pkBaseDomain;
 }
 
 #ifdef NIGHTLY_BUILD
@@ -743,9 +785,18 @@ void ChromeUtils::ClearRecentJSDevError(GlobalObject&) {
 }
 #endif  // NIGHTLY_BUILD
 
-void ChromeUtils::ClearStyleSheetCache(GlobalObject&,
-                                       nsIPrincipal* aForPrincipal) {
+void ChromeUtils::ClearStyleSheetCacheByPrincipal(GlobalObject&,
+                                                  nsIPrincipal* aForPrincipal) {
   SharedStyleSheetCache::Clear(aForPrincipal);
+}
+
+void ChromeUtils::ClearStyleSheetCacheByBaseDomain(
+    GlobalObject&, const nsACString& aBaseDomain) {
+  SharedStyleSheetCache::Clear(nullptr, &aBaseDomain);
+}
+
+void ChromeUtils::ClearStyleSheetCache(GlobalObject&) {
+  SharedStyleSheetCache::Clear();
 }
 
 #define PROCTYPE_TO_WEBIDL_CASE(_procType, _webidl) \
@@ -769,7 +820,6 @@ static WebIDLProcType ProcTypeToWebIDL(mozilla::ProcType aType) {
     PROCTYPE_TO_WEBIDL_CASE(WebCOOPCOEP, WithCoopCoep);
     PROCTYPE_TO_WEBIDL_CASE(WebLargeAllocation, WebLargeAllocation);
     PROCTYPE_TO_WEBIDL_CASE(Browser, Browser);
-    PROCTYPE_TO_WEBIDL_CASE(Plugin, Plugin);
     PROCTYPE_TO_WEBIDL_CASE(IPDLUnitTest, IpdlUnitTest);
     PROCTYPE_TO_WEBIDL_CASE(GMPlugin, GmpPlugin);
     PROCTYPE_TO_WEBIDL_CASE(GPU, Gpu);
@@ -852,9 +902,6 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
           }
           case GeckoProcessType::GeckoProcessType_Default:
             type = mozilla::ProcType::Browser;
-            break;
-          case GeckoProcessType::GeckoProcessType_Plugin:
-            type = mozilla::ProcType::Plugin;
             break;
           case GeckoProcessType::GeckoProcessType_GMPlugin:
             type = mozilla::ProcType::GMPlugin;
@@ -962,14 +1009,14 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
 
     // Attach DOM window information to the process.
     nsTArray<WindowInfo> windows;
-    for (const auto& browserParentWrapper :
+    for (const auto& browserParentWrapperKey :
          contentParent->ManagedPBrowserParent()) {
-      for (const auto& windowGlobalParentWrapper :
-           browserParentWrapper.GetKey()->ManagedPWindowGlobalParent()) {
+      for (const auto& windowGlobalParentWrapperKey :
+           browserParentWrapperKey->ManagedPWindowGlobalParent()) {
         // WindowGlobalParent is the only immediate subclass of
         // PWindowGlobalParent.
-        auto* windowGlobalParent = static_cast<WindowGlobalParent*>(
-            windowGlobalParentWrapper.GetKey());
+        auto* windowGlobalParent =
+            static_cast<WindowGlobalParent*>(windowGlobalParentWrapperKey);
 
         nsString documentTitle;
         windowGlobalParent->GetDocumentTitle(documentTitle);
@@ -1375,6 +1422,19 @@ void ChromeUtils::GetAllDOMProcesses(
   for (auto* cp : ContentParent::AllProcesses(ContentParent::eLive)) {
     aParents.AppendElement(cp);
   }
+}
+
+/* static */
+void ChromeUtils::ConsumeInteractionData(
+    GlobalObject& aGlobal, Record<nsString, InteractionData>& aInteractions,
+    ErrorResult& aRv) {
+  if (!XRE_IsParentProcess()) {
+    aRv.ThrowNotAllowedError(
+        "consumeInteractionData() may only be called in the parent "
+        "process");
+    return;
+  }
+  EventStateManager::ConsumeInteractionData(aInteractions);
 }
 
 }  // namespace mozilla::dom

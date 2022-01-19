@@ -206,6 +206,16 @@
   --theme-toolbarbutton-active-background: var(--grey-90-a20);
   --theme-toolbarbutton-active-color: var(--grey-90);
 
+  /* Used for select elements */
+  /* Note: we don't use the pair of system properties Field/FieldText here (like
+   * above), because this lightgrey background makes it possible to remove the
+   * border, which is more stylish. The downsides is that we don't adjust with
+   * the OS' dark mode setting. Hopefully this trade-off is OK.
+   */
+  --theme-select-background: var(--grey-20);
+  --theme-select-color: #0c0c0d;
+  --theme-select-hover-border-color: var(--grey-30);
+
   /* Warning colors */
   --theme-warning-background: hsl(54, 100%, 92%);
   --theme-warning-border: rgba(215, 182, 0, 0.28); /* Yellow 60 + opacity */
@@ -216,15 +226,6 @@
   --theme-contrast-background-alpha: rgba(255, 233, 0, 0.4); /* Yellow 50-a40 */
   --theme-contrast-color: black;
   --theme-contrast-border: var(--yellow-60);
-}
-
-/*
- * For doorhangers elsewhere in Firefox, Mac uses fixed colors rather than
- * system colors.
- */
-:root[platform="mac"].theme-light {
-  --theme-popup-color: hsl(0, 0%, 10%);
-  --theme-popup-border-color: var(--grey-90-a20);
 }
 
 :root.theme-dark {
@@ -332,6 +333,11 @@
   --theme-toolbarbutton-checked-hover-color: var(--grey-30);
   --theme-toolbarbutton-active-background: var(--grey-10-a30);
   --theme-toolbarbutton-active-color: var(--grey-30);
+
+  /* Used for select elements */
+  --theme-select-background: var(--grey-60);
+  --theme-select-color: #fff;
+  --theme-select-hover-border-color: var(--grey-50);
 
   /* Warning colors */
   --theme-warning-background: hsl(42, 37%, 19%);

@@ -15,9 +15,6 @@
 #include "nsGkAtoms.h"
 #include "nsError.h"
 #include "mozilla/dom/Document.h"
-#include "nsIPluginDocument.h"
-#include "nsIObjectFrame.h"
-#include "nsNPAPIPluginInstance.h"
 #include "nsIWidget.h"
 #include "nsContentUtils.h"
 #ifdef XP_MACOSX
@@ -31,7 +28,7 @@ namespace mozilla::dom {
 HTMLObjectElement::HTMLObjectElement(
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
     FromParser aFromParser)
-    : nsGenericHTMLFormElement(std::move(aNodeInfo), NS_FORM_OBJECT),
+    : nsGenericHTMLFormElement(std::move(aNodeInfo), FormControlType::Object),
       mIsDoneAddingChildren(!aFromParser) {
   RegisterActivityObserver();
   SetIsNetworkCreated(aFromParser == FROM_PARSER_NETWORK);
@@ -80,6 +77,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLObjectElement,
                                                 nsGenericHTMLFormElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mValidity)
+  nsObjectLoadingContent::Unlink(tmp);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(
@@ -98,18 +96,11 @@ nsresult HTMLObjectElement::BindToTree(BindContext& aContext,
   rv = nsObjectLoadingContent::BindToTree(aContext, aParent);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // Don't kick off load from being bound to a plugin document - the plugin
-  // document will call nsObjectLoadingContent::InitializeFromChannel() for the
-  // initial load.
-  if (IsInComposedDoc()) {
-    nsCOMPtr<nsIPluginDocument> pluginDoc =
-        do_QueryInterface(&aContext.OwnerDoc());
-    // If we already have all the children, start the load.
-    if (mIsDoneAddingChildren && !pluginDoc) {
-      void (HTMLObjectElement::*start)() = &HTMLObjectElement::StartObjectLoad;
-      nsContentUtils::AddScriptRunner(
-          NewRunnableMethod("dom::HTMLObjectElement::BindToTree", this, start));
-    }
+  // If we already have all the children, start the load.
+  if (IsInComposedDoc() && mIsDoneAddingChildren) {
+    void (HTMLObjectElement::*start)() = &HTMLObjectElement::StartObjectLoad;
+    nsContentUtils::AddScriptRunner(
+        NewRunnableMethod("dom::HTMLObjectElement::BindToTree", this, start));
   }
 
   return NS_OK;
@@ -154,7 +145,14 @@ nsresult HTMLObjectElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
     // attributes before inserting the node into the document.
     if (aNotify && IsInComposedDoc() && mIsDoneAddingChildren &&
         aName == nsGkAtoms::data && !BlockEmbedOrObjectContentLoading()) {
-      return LoadObject(aNotify, true);
+      nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
+          "HTMLObjectElement::LoadObject",
+          [self = RefPtr<HTMLObjectElement>(this), aNotify]() {
+            if (self->IsInComposedDoc()) {
+              self->LoadObject(aNotify, true);
+            }
+          }));
+      return NS_OK;
     }
   }
 
@@ -175,9 +173,8 @@ bool HTMLObjectElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
     return false;
   }
 
-  // If we have decided that this is a blocked plugin then do not allow focus.
-  if ((Type() == eType_Null) &&
-      (PluginFallbackType() == eFallbackBlockAllPlugins)) {
+  // Plugins that show the empty fallback should not accept focus.
+  if (Type() == eType_Fallback) {
     if (aTabIndex) {
       *aTabIndex = -1;
     }
@@ -188,17 +185,6 @@ bool HTMLObjectElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
 
   const nsAttrValue* attrVal = mAttrs.GetAttr(nsGkAtoms::tabindex);
   bool isFocusable = attrVal && attrVal->Type() == nsAttrValue::eInteger;
-
-  // Has plugin content: let the plugin decide what to do in terms of
-  // internal focus from mouse clicks
-  if (Type() == eType_Plugin) {
-    if (aTabIndex) {
-      *aTabIndex = isFocusable ? attrVal->GetIntegerValue() : -1;
-    }
-
-    *aIsFocusable = true;
-    return false;
-  }
 
   // This method doesn't call nsGenericHTMLFormElement intentionally.
   // TODO: It should probably be changed when bug 597242 will be fixed.
@@ -221,39 +207,6 @@ bool HTMLObjectElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
   }
 
   return false;
-}
-
-NS_IMETHODIMP
-HTMLObjectElement::Reset() { return NS_OK; }
-
-NS_IMETHODIMP
-HTMLObjectElement::SubmitNamesValues(HTMLFormSubmission* aFormSubmission) {
-  nsAutoString name;
-  if (!GetAttr(kNameSpaceID_None, nsGkAtoms::name, name)) {
-    // No name, don't submit.
-
-    return NS_OK;
-  }
-
-  nsIFrame* frame = GetPrimaryFrame();
-
-  nsIObjectFrame* objFrame = do_QueryFrame(frame);
-  if (!objFrame) {
-    // No frame, nothing to submit.
-
-    return NS_OK;
-  }
-
-  RefPtr<nsNPAPIPluginInstance> pi = objFrame->GetPluginInstance();
-  if (!pi) {
-    return NS_OK;
-  }
-
-  nsAutoString value;
-  nsresult rv = pi->GetFormValue(value);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return aFormSubmission->AddNameValuePair(name, value);
 }
 
 int32_t HTMLObjectElement::TabIndexDefault() { return 0; }
@@ -352,13 +305,7 @@ nsresult HTMLObjectElement::CopyInnerTo(Element* aDest) {
 
 JSObject* HTMLObjectElement::WrapNode(JSContext* aCx,
                                       JS::Handle<JSObject*> aGivenProto) {
-  JS::Rooted<JSObject*> obj(
-      aCx, HTMLObjectElement_Binding::Wrap(aCx, this, aGivenProto));
-  if (!obj) {
-    return nullptr;
-  }
-  SetupProtoChain(aCx, obj);
-  return obj;
+  return HTMLObjectElement_Binding::Wrap(aCx, this, aGivenProto);
 }
 
 }  // namespace mozilla::dom

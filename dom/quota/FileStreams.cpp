@@ -53,7 +53,7 @@ nsresult FileQuotaStream<FileStreamBase>::DoOpen() {
 
   NS_ASSERTION(!mQuotaObject, "Creating quota object more than once?");
   mQuotaObject = quotaManager->GetQuotaObject(
-      mPersistenceType, mGroupAndOrigin, mClientType,
+      mPersistenceType, mOriginMetadata, mClientType,
       FileStreamBase::mOpenParams.localFile);
 
   QM_TRY(FileStreamBase::DoOpen());
@@ -88,40 +88,40 @@ NS_IMETHODIMP FileQuotaStreamWithWrite<FileStreamBase>::Write(
   return NS_OK;
 }
 
-already_AddRefed<FileInputStream> CreateFileInputStream(
-    PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+Result<NotNull<RefPtr<FileInputStream>>, nsresult> CreateFileInputStream(
+    PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
     Client::Type aClientType, nsIFile* aFile, int32_t aIOFlags, int32_t aPerm,
     int32_t aBehaviorFlags) {
-  RefPtr<FileInputStream> stream =
-      new FileInputStream(aPersistenceType, aGroupAndOrigin, aClientType);
+  const auto stream = MakeNotNull<RefPtr<FileInputStream>>(
+      aPersistenceType, aOriginMetadata, aClientType);
 
-  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags), nullptr);
+  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags));
 
-  return stream.forget();
+  return stream;
 }
 
-already_AddRefed<FileOutputStream> CreateFileOutputStream(
-    PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+Result<NotNull<RefPtr<FileOutputStream>>, nsresult> CreateFileOutputStream(
+    PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
     Client::Type aClientType, nsIFile* aFile, int32_t aIOFlags, int32_t aPerm,
     int32_t aBehaviorFlags) {
-  RefPtr<FileOutputStream> stream =
-      new FileOutputStream(aPersistenceType, aGroupAndOrigin, aClientType);
+  const auto stream = MakeNotNull<RefPtr<FileOutputStream>>(
+      aPersistenceType, aOriginMetadata, aClientType);
 
-  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags), nullptr);
+  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags));
 
-  return stream.forget();
+  return stream;
 }
 
-already_AddRefed<FileStream> CreateFileStream(
-    PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+Result<NotNull<RefPtr<FileStream>>, nsresult> CreateFileStream(
+    PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
     Client::Type aClientType, nsIFile* aFile, int32_t aIOFlags, int32_t aPerm,
     int32_t aBehaviorFlags) {
-  RefPtr<FileStream> stream =
-      new FileStream(aPersistenceType, aGroupAndOrigin, aClientType);
+  const auto stream = MakeNotNull<RefPtr<FileStream>>(
+      aPersistenceType, aOriginMetadata, aClientType);
 
-  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags), nullptr);
+  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags));
 
-  return stream.forget();
+  return stream;
 }
 
 }  // namespace mozilla::dom::quota

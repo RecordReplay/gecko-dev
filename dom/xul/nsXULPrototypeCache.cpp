@@ -160,7 +160,7 @@ nsresult nsXULPrototypeCache::PutPrototype(nsXULPrototypeDocument* aDocument) {
   NS_GetURIWithoutRef(aDocument->GetURI(), getter_AddRefs(uri));
 
   // Put() releases any old value
-  mPrototypeTable.Put(uri, RefPtr{aDocument});
+  mPrototypeTable.InsertOrUpdate(uri, RefPtr{aDocument});
 
   return NS_OK;
 }
@@ -171,12 +171,15 @@ mozilla::StyleSheet* nsXULPrototypeCache::GetStyleSheet(nsIURI* aURI) {
 
 nsresult nsXULPrototypeCache::PutStyleSheet(RefPtr<StyleSheet>&& aStyleSheet) {
   nsIURI* uri = aStyleSheet->GetSheetURI();
-  mStyleSheetTable.Put(uri, std::move(aStyleSheet));
+  mStyleSheetTable.InsertOrUpdate(uri, std::move(aStyleSheet));
   return NS_OK;
 }
 
 JSScript* nsXULPrototypeCache::GetScript(nsIURI* aURI) {
-  return mScriptTable.Get(aURI);
+  if (auto* entry = mScriptTable.GetEntry(aURI)) {
+    return entry->mScript.get();
+  }
+  return nullptr;
 }
 
 nsresult nsXULPrototypeCache::PutScript(nsIURI* aURI,
@@ -194,7 +197,7 @@ nsresult nsXULPrototypeCache::PutScript(nsIURI* aURI,
   }
 #endif
 
-  mScriptTable.Put(aURI, aScriptObject);
+  mScriptTable.PutEntry(aURI)->mScript.set(aScriptObject);
 
   return NS_OK;
 }
@@ -258,7 +261,7 @@ nsresult nsXULPrototypeCache::GetInputStream(nsIURI* uri,
   rv = NewObjectInputStreamFromBuffer(buf, len, getter_AddRefs(ois));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mInputStreamTable.Put(uri, ois);
+  mInputStreamTable.InsertOrUpdate(uri, ois);
 
   ois.forget(stream);
   return NS_OK;
@@ -289,7 +292,7 @@ nsresult nsXULPrototypeCache::GetOutputStream(nsIURI* uri,
     rv = NewObjectOutputWrappedStorageStream(
         getter_AddRefs(objectOutput), getter_AddRefs(storageStream), false);
     NS_ENSURE_SUCCESS(rv, rv);
-    mOutputStreamTable.Put(uri, storageStream);
+    mOutputStreamTable.InsertOrUpdate(uri, storageStream);
   }
   objectOutput.forget(stream);
   return NS_OK;
@@ -464,15 +467,14 @@ nsresult nsXULPrototypeCache::BeginCaching(nsIURI* aURI) {
 }
 
 void nsXULPrototypeCache::MarkInCCGeneration(uint32_t aGeneration) {
-  for (auto iter = mPrototypeTable.Iter(); !iter.Done(); iter.Next()) {
-    iter.Data()->MarkInCCGeneration(aGeneration);
+  for (const auto& prototype : mPrototypeTable.Values()) {
+    prototype->MarkInCCGeneration(aGeneration);
   }
 }
 
 void nsXULPrototypeCache::MarkInGC(JSTracer* aTrc) {
-  for (auto iter = mScriptTable.Iter(); !iter.Done(); iter.Next()) {
-    JS::Heap<JSScript*>& script = iter.Data();
-    JS::TraceEdge(aTrc, &script, "nsXULPrototypeCache script");
+  for (auto& entry : mScriptTable) {
+    JS::TraceEdge(aTrc, &entry.mScript, "nsXULPrototypeCache script");
   }
 }
 
@@ -506,12 +508,11 @@ void nsXULPrototypeCache::CollectMemoryReports(
   // TODO Report content in mPrototypeTable?
 
   other += sInstance->mStyleSheetTable.ShallowSizeOfExcludingThis(mallocSizeOf);
-  for (auto iter = sInstance->mStyleSheetTable.ConstIter(); !iter.Done();
-       iter.Next()) {
+  for (const auto& stylesheet : sInstance->mStyleSheetTable.Values()) {
     // NOTE: If Loader::DoSheetComplete() is ever modified to stop clongin
     // sheets before inserting into this cache, we will need to stop using
     // SizeOfIncludingThis()
-    other += iter.Data()->SizeOfIncludingThis(mallocSizeOf);
+    other += stylesheet->SizeOfIncludingThis(mallocSizeOf);
   }
 
   other += sInstance->mScriptTable.ShallowSizeOfExcludingThis(mallocSizeOf);

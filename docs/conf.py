@@ -25,10 +25,8 @@ EXTRA_PATHS = (
     "testing/mozbase/manifestparser",
     "testing/mozbase/mozfile",
     "testing/mozbase/mozprocess",
-    "third_party/python/futures",
     "third_party/python/jsmin",
     "third_party/python/which",
-    "toolkit/components/glean/sphinx",
 )
 
 sys.path[:0] = [os.path.join(topsrcdir, p) for p in EXTRA_PATHS]
@@ -48,7 +46,7 @@ extensions = [
     "recommonmark",
     "sphinx_copybutton",
     "sphinx_markdown_tables",
-    "glean",
+    "sphinx_panels",
 ]
 
 # JSDoc must run successfully for dirs specified, so running
@@ -56,12 +54,14 @@ extensions = [
 js_source_path = [
     "../browser/components/extensions",
     "../browser/components/uitour",
-    "../testing/marionette",
+    "../remote/marionette",
     "../toolkit/components/extensions",
     "../toolkit/components/extensions/parent",
     "../toolkit/components/featuregates",
     "../toolkit/mozapps/extensions",
     "../toolkit/components/prompts/src",
+    "../toolkit/components/pictureinpicture",
+    "../toolkit/components/pictureinpicture/content",
 ]
 root_for_relative_js_paths = ".."
 jsdoc_config_path = "jsdoc.json"
@@ -74,6 +74,7 @@ html_logo = os.path.join(
     topsrcdir, "browser/branding/nightly/content/firefox-wordmark.svg"
 )
 html_favicon = os.path.join(topsrcdir, "browser/branding/nightly/firefox.ico")
+html_js_files = ["https://cdnjs.cloudflare.com/ajax/libs/mermaid/8.9.1/mermaid.js"]
 
 exclude_patterns = ["_build", "_staging", "_venv"]
 pygments_style = "sphinx"
@@ -112,6 +113,12 @@ html_show_copyright = False
 autosectionlabel_maxdepth = 1
 
 
+def install_sphinx_panels(app, pagename, templatename, context, doctree):
+    if "raptor" in pagename:
+        app.add_js_file("sphinx_panels.js")
+        app.add_css_file("sphinx_panels.css")
+
+
 def setup(app):
     app.add_config_value(
         "recommonmark_config",
@@ -125,3 +132,4 @@ def setup(app):
     )
     app.add_stylesheet("custom_theme.css")
     app.add_transform(AutoStructify)
+    app.connect("html-page-context", install_sphinx_panels)

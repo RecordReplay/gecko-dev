@@ -22,7 +22,6 @@ body {
   inset-inline-start: 0;
   width: 100%;
   height: 100%;
-  min-width: 40em;
 }
 
 /* Avoid scrolling the header */
@@ -35,59 +34,40 @@ body {
   z-index: 1;
   height: 2em;
   border-bottom: 1px solid var(--in-content-border-color);
-  min-width: 40em;
+  width: 100%;
   background-color: var(--in-content-box-background);
 }
 tr {
-  display: table;
-  table-layout: fixed;
+  display: grid;
+  /* Flexible width for the name column, 15% width for the memory and CPU column,
+   * then fixed width (16px icon + 2*10px margin) for the actions column. */
+  grid-template-columns: 1fr 15% 15% 36px;
+  grid-auto-rows: 2em;
   width: 100%;
 }
 
-/* At least one column needs to have a flexible width,
-   so no width specified for td:nth-child(1) aka column-name*/
-
-/* column-memory-resident */
-td:nth-child(2) {
-  width: 15%;
-}
-#process-tbody td:nth-child(2) {
+.cpu, .memory {
   text-align: end;
-}
-
-/* column-cpu-total */
-td:nth-child(3) {
-  width: 15%;
-}
-#process-tbody td:nth-child(3) {
-  text-align: end;
-}
-
-/* column-action-icon */
-td:nth-child(4) {
-  width: 16px;
-  text-align: center;
 }
 
 #process-thead > tr {
   height: inherit;
 }
 
-#process-thead > tr > td {
-  border: none;
+th {
+  font-weight: normal;
+  text-align: start;
   background-color: var(--in-content-button-background);
 }
-#process-thead > tr > td:not(:first-child) {
+th:not(:first-child) {
   border-inline-start: 1px solid;
   border-image: linear-gradient(transparent 0%, transparent 20%, var(--in-content-box-border-color) 20%, var(--in-content-box-border-color) 80%, transparent 80%, transparent 100%) 1 1;
-  border-bottom: 1px solid var(--in-content-border-color);
 }
-td {
+th, td {
   padding: 5px 10px;
   min-height: 16px;
-  max-height: 16px;
+  max-height: 2em;
   color: var(--in-content-text-color);
-  max-width: 70vw;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -103,7 +83,7 @@ td.type, td.favicon {
 td.type:dir(rtl), td.favicon:dir(rtl) {
   background-position-x: right 11px;
 }
-#process-tbody > tr > td:first-child {
+td:first-child {
   text-overflow: ellipsis;
 }
 .twisty {
@@ -112,7 +92,7 @@ td.type:dir(rtl), td.favicon:dir(rtl) {
 /* Putting the background image in a positioned pseudo element lets us
 * use CSS transforms on the background image, which we need for rtl. */
 .twisty::before {
-  content: url("chrome://global/skin/icons/twisty-collapsed.svg");
+  content: url("chrome://global/skin/icons/arrow-right-12.svg");
   position: absolute;
   display: block;
   line-height: 50%;
@@ -123,24 +103,36 @@ td.type:dir(rtl), td.favicon:dir(rtl) {
   fill: currentColor;
 }
 .twisty:dir(rtl)::before {
-  content: url("chrome://global/skin/icons/twisty-collapsed-rtl.svg");
+  content: url("chrome://global/skin/icons/arrow-left-12.svg");
 }
 .twisty.open::before {
-  content: url("chrome://global/skin/icons/twisty-expanded.svg");
+  content: url("chrome://global/skin/icons/arrow-down-12.svg");
 }
-#process-tbody > tr > td.indent {
+.indent {
   padding-inline: 48px 0;
 }
-#process-tbody > tr > td.double_indent {
+.double_indent {
   padding-inline: 58px 0;
 }
 
-#process-tbody > tr[selected] > td {
+tr[selected] > td {
   background-color: var(--in-content-item-selected);
-  color: var(--in-content-selected-text);
+  color: var(--in-content-item-selected-text);
 }
 #process-tbody > tr:hover {
   background-color: var(--in-content-item-hover);
+  color: var(--in-content-item-hover-text);
+}
+
+/* Tab names and thread summary text can extend into memory and CPU columns. */
+.window > :first-child,
+.thread-summary > :first-child {
+  grid-column: 1 / 4;
+}
+
+/* Thread names can extend into the memory column. */
+.thread > :first-child{
+  grid-column: 1 / 3;
 }
 
 .clickable {
@@ -164,28 +156,28 @@ td.type:dir(rtl), td.favicon:dir(rtl) {
   background-image: url(chrome://global/skin/icons/arrow-up-12.svg);
 }
 .desc {
-  background-image: url(chrome://global/skin/icons/arrow-dropdown-12.svg);
+  background-image: url(chrome://global/skin/icons/arrow-down-12.svg);
 }
 %else
 .asc {
-  background-image: url(chrome://global/skin/icons/arrow-dropdown-12.svg);
+  background-image: url(chrome://global/skin/icons/arrow-down-12.svg);
 }
 .desc {
   background-image: url(chrome://global/skin/icons/arrow-up-12.svg);
 }
 %endif
 
-#process-thead > tr > td.clickable:hover {
+th.clickable:hover {
   background-color: var(--in-content-button-background-hover);
 }
-#process-thead > tr > td.clickable:hover:active {
+th.clickable:hover:active {
   background-color: var(--in-content-button-background-active);
 }
 
-#process-tbody > tr.process > td.type {
+tr.process > td.type {
   font-weight: bold;
 }
-#process-tbody > tr.thread {
+tr.thread {
   font-size-adjust: 0.5;
 }
 
@@ -203,8 +195,7 @@ td.type:dir(rtl), td.favicon:dir(rtl) {
 .close-icon {
   background: url("chrome://global/skin/icons/close.svg") no-repeat center;
   opacity: 0;      /* Start out as transparent */
-  fill-opacity: 0; /* Make SVG background transparent */
-  -moz-context-properties: fill, fill-opacity;
+  -moz-context-properties: fill;
   fill: currentColor;
 }
 
@@ -231,7 +222,7 @@ tr:is([selected], :hover):not(.killing) > .close-icon {
   Show a separation between process groups.
  */
 
-#process-tbody > tr.separate-from-previous-process-group {
+tr.separate-from-previous-process-group {
   border-top: dotted 1px var(--in-content-box-border-color);
   margin-top: -1px;
 }

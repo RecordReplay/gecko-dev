@@ -8,14 +8,24 @@
   --reveal-checkbox-opacity: .8;
   --reveal-checkbox-opacity-hover: .6;
   --reveal-checkbox-opacity-active: 1;
-  --success-color: #00c100;
+  --success-color: #2AC3A2;
   --edit-delete-button-color: #4a4a4f;
 }
 
 /* Only overwrite the deemphasized text color in non-dark mode. */
-@media not all and (prefers-color-scheme: dark) {
+@media not (-moz-toolbar-prefers-color-scheme: dark) {
   :host {
     --in-content-deemphasized-text: #737373;
+  }
+}
+
+@media (-moz-toolbar-prefers-color-scheme: dark) {
+  :host {
+    --reveal-checkbox-opacity: .8;
+    --reveal-checkbox-opacity-hover: 1;
+    --reveal-checkbox-opacity-active: .6;
+    --success-color: #54FFBD;
+    --edit-delete-button-color: #cfcfd1;
   }
 }
 
@@ -110,7 +120,7 @@ input[type="url"]:read-only {
 
 .delete-button,
 .edit-button {
-  color: var(--edit-delete-button-color) !important;
+  color: var(--edit-delete-button-color);
   background-repeat: no-repeat;
   background-position: 8px;
   -moz-context-properties: fill;
@@ -131,7 +141,7 @@ input[type="url"]:read-only {
 }
 
 .edit-button {
-  background-image: url("chrome://browser/skin/edit.svg");
+  background-image: url("chrome://global/skin/icons/edit.svg");
   padding-inline-start: 32px; /* 8px on each side, and 16px for icon width */
 }
 
@@ -315,7 +325,7 @@ input[name="password"] {
   /* !important is needed to override common.css styling for checkboxes */
   background-color: transparent !important;
   border-width: 0 !important;
-  background-image: url("chrome://browser/content/aboutlogins/icons/show-password.svg") !important;
+  background-image: url("chrome://browser/content/aboutlogins/icons/password.svg") !important;
   margin-inline: 10px 0 !important;
   cursor: pointer;
   -moz-context-properties: fill;
@@ -334,17 +344,7 @@ input[name="password"] {
 }
 
 .reveal-password-checkbox:checked {
-  background-image: url("chrome://browser/content/aboutlogins/icons/hide-password.svg") !important;
-}
-
-.reveal-password-checkbox:-moz-focusring {
-  outline: 2px solid var(--in-content-border-active);
-  /* offset outline to align with 1px border-width set for buttons/menulists above. */
-  outline-offset: -1px;
-  /* Make outline-radius slightly bigger than the border-radius set above,
-   * to make the thicker outline corners look smooth */
-  -moz-outline-radius: 3px;
-  box-shadow: 0 0 0 4px var(--in-content-border-active-shadow);
+  background-image: url("chrome://browser/content/aboutlogins/icons/password-hide.svg") !important;
 }
 
 .login-item-favicon {
@@ -356,7 +356,7 @@ input[name="password"] {
   height: 24px;
   width: 24px;
   flex-shrink: 0;
-  background-image: url("chrome://mozapps/skin/places/defaultFavicon.svg");
+  background-image: url("chrome://global/skin/icons/defaultFavicon.svg");
   background-repeat: no-repeat;
   background-size: contain;
   -moz-context-properties: fill, fill-opacity;
@@ -370,7 +370,7 @@ input[name="password"] {
 
 .vulnerable-alert,
 .breach-alert {
-  border-radius: var(--panel-border-radius);
+  border-radius: 4px;
   border: 1px solid var(--in-content-border-color);
   box-shadow: 0 2px 8px 0 var(--grey-90-a10);
   font-size: .9em;
@@ -463,20 +463,4 @@ input[name="password"] {
   color: currentColor;
   text-decoration: underline;
   font-weight: 600;
-}
-
-@media (-moz-windows-default-theme: 0) {
-  .alert-icon {
-    fill: currentColor;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :host {
-    --reveal-checkbox-opacity: .8;
-    --reveal-checkbox-opacity-hover: 1;
-    --reveal-checkbox-opacity-active: .6;
-    --success-color: #86DE74;
-    --edit-delete-button-color: #cfcfd1;
-  }
 }

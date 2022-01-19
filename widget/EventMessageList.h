@@ -327,6 +327,9 @@ NS_EVENT_MESSAGE(eContentCommandPaste)
 NS_EVENT_MESSAGE(eContentCommandDelete)
 NS_EVENT_MESSAGE(eContentCommandUndo)
 NS_EVENT_MESSAGE(eContentCommandRedo)
+// eContentCommandInsertText tries to insert text with replacing selection
+// in focused editor.
+NS_EVENT_MESSAGE(eContentCommandInsertText)
 NS_EVENT_MESSAGE(eContentCommandPasteTransferable)
 NS_EVENT_MESSAGE(eContentCommandLookUpDictionary)
 // eContentCommandScroll scrolls the nearest scrollable element to the
@@ -382,7 +385,6 @@ NS_EVENT_MESSAGE(eOpen)
 NS_EVENT_MESSAGE(eDeviceOrientation)
 NS_EVENT_MESSAGE(eAbsoluteDeviceOrientation)
 NS_EVENT_MESSAGE(eDeviceMotion)
-NS_EVENT_MESSAGE(eDeviceProximity)
 NS_EVENT_MESSAGE(eUserProximity)
 NS_EVENT_MESSAGE(eDeviceLight)
 #if defined(MOZ_WIDGET_ANDROID)

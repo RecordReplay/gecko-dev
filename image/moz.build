@@ -14,7 +14,10 @@ if CONFIG["FUZZING_INTERFACES"]:
 with Files("**"):
     BUG_COMPONENT = ("Core", "ImageLib")
 
-BROWSER_CHROME_MANIFESTS += ["test/browser/browser.ini"]
+BROWSER_CHROME_MANIFESTS += [
+    "test/browser/browser.ini",
+    "test/browser/browser_sandbox_headless.ini",
+]
 
 MOCHITEST_MANIFESTS += ["test/mochitest/mochitest.ini"]
 
@@ -61,6 +64,8 @@ EXPORTS.mozilla.image += [
     "encoders/png/nsPNGEncoder.h",
     "ICOFileHeaders.h",
     "ImageMemoryReporter.h",
+    "Resolution.h",
+    "SourceSurfaceBlobImage.h",
 ]
 
 UNIFIED_SOURCES += [
@@ -93,6 +98,7 @@ UNIFIED_SOURCES += [
     "ScriptedNotificationObserver.cpp",
     "ShutdownTracker.cpp",
     "SourceBuffer.cpp",
+    "SourceSurfaceBlobImage.cpp",
     "SurfaceCache.cpp",
     "SurfaceCacheUtils.cpp",
     "SurfacePipe.cpp",
@@ -119,6 +125,8 @@ LOCAL_INCLUDES += [
     "/image/decoders",
     # For URI-related functionality
     "/netwerk/base",
+    # For nsHttpChannel.h
+    "/netwerk/protocol/http",
     # DecodePool uses thread-related facilities.
     "/xpcom/threads",
 ]

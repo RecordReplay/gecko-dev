@@ -15,6 +15,7 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
 #include "mozilla/StaticPrefs_print.h"
+#include "nsPrintfCString.h"
 
 #include "cairo.h"
 #include "cairo-tee.h"
@@ -656,6 +657,37 @@ SurfaceFormat GfxFormatForCairoSurface(cairo_surface_t* surface) {
   return CairoContentToGfxFormat(cairo_surface_get_content(surface));
 }
 
+void DrawTargetCairo::Link(const char* aDestination, const Rect& aRect) {
+  if (!aDestination || !*aDestination) {
+    // No destination? Just bail out.
+    return;
+  }
+
+  // We need to \-escape any single-quotes in the destination string, in order
+  // to pass it via the attributes arg to cairo_tag_begin.
+  // (Encoding of non-ASCII chars etc gets handled later by the PDF backend.)
+  nsAutoCString dest(aDestination);
+  for (size_t i = dest.Length(); i > 0;) {
+    --i;
+    if (dest[i] == '\'') {
+      dest.ReplaceLiteral(i, 1, "\\'");
+    }
+  }
+
+  double x = aRect.x, y = aRect.y, w = aRect.width, h = aRect.height;
+  cairo_user_to_device(mContext, &x, &y);
+  cairo_user_to_device_distance(mContext, &w, &h);
+
+  nsPrintfCString attributes("rect=[%f %f %f %f] uri='%s'", x, y, w, h,
+                             dest.get());
+
+  // We generate a begin/end pair with no content in between, because we are
+  // using the rect attribute of the begin tag to specify the link region
+  // rather than depending on cairo to accumulate the painted area.
+  cairo_tag_begin(mContext, CAIRO_TAG_LINK, attributes.get());
+  cairo_tag_end(mContext, CAIRO_TAG_LINK);
+}
+
 already_AddRefed<SourceSurface> DrawTargetCairo::Snapshot() {
   if (!IsValid()) {
     gfxCriticalNote << "DrawTargetCairo::Snapshot with bad surface "
@@ -794,7 +826,8 @@ void DrawTargetCairo::DrawSurface(SourceSurface* aSurface, const Rect& aDest,
   float sy = aSource.Height() / aDest.Height();
 
   cairo_matrix_t src_mat;
-  cairo_matrix_init_translate(&src_mat, aSource.X(), aSource.Y());
+  cairo_matrix_init_translate(&src_mat, aSource.X() - aSurface->GetRect().x,
+                              aSource.Y() - aSurface->GetRect().y);
   cairo_matrix_scale(&src_mat, sx, sy);
 
   cairo_surface_t* surf = GetCairoSurfaceForSourceSurface(aSurface);
@@ -1508,6 +1541,16 @@ void DrawTargetCairo::PushLayer(bool aOpaque, Float aOpacity,
                                 SourceSurface* aMask,
                                 const Matrix& aMaskTransform,
                                 const IntRect& aBounds, bool aCopyBackground) {
+  PushLayerWithBlend(aOpaque, aOpacity, aMask, aMaskTransform, aBounds,
+                     aCopyBackground, CompositionOp::OP_OVER);
+}
+
+void DrawTargetCairo::PushLayerWithBlend(bool aOpaque, Float aOpacity,
+                                         SourceSurface* aMask,
+                                         const Matrix& aMaskTransform,
+                                         const IntRect& aBounds,
+                                         bool aCopyBackground,
+                                         CompositionOp aCompositionOp) {
   cairo_content_t content = CAIRO_CONTENT_COLOR_ALPHA;
 
   if (mFormat == SurfaceFormat::A8) {
@@ -1529,7 +1572,7 @@ void DrawTargetCairo::PushLayer(bool aOpaque, Float aOpacity,
     cairo_push_group_with_content(mContext, content);
   }
 
-  PushedLayer layer(aOpacity, mPermitSubpixelAA);
+  PushedLayer layer(aOpacity, aCompositionOp, mPermitSubpixelAA);
 
   if (aMask) {
     cairo_surface_t* surf = GetCairoSurfaceForSourceSurface(aMask);
@@ -1563,6 +1606,7 @@ void DrawTargetCairo::PopLayer() {
   mPushedLayers.pop_back();
 
   if (!layer.mMaskPattern) {
+    cairo_set_operator(mContext, GfxOpToCairoOp(layer.mCompositionOp));
     cairo_paint_with_alpha(mContext, layer.mOpacity);
   } else {
     if (layer.mOpacity != Float(1.0)) {
@@ -1573,12 +1617,15 @@ void DrawTargetCairo::PopLayer() {
 
       cairo_pop_group_to_source(mContext);
     }
+    cairo_set_operator(mContext, GfxOpToCairoOp(layer.mCompositionOp));
     cairo_mask(mContext, layer.mMaskPattern);
   }
 
   cairo_matrix_t mat;
   GfxMatrixToCairoMatrix(mTransform, mat);
   cairo_set_matrix(mContext, &mat);
+
+  cairo_set_operator(mContext, CAIRO_OPERATOR_OVER);
 
   cairo_pattern_destroy(layer.mMaskPattern);
   SetPermitSubpixelAA(layer.mWasPermittingSubpixelAA);
@@ -1748,13 +1795,6 @@ already_AddRefed<DrawTarget> DrawTargetCairo::CreateSimilarDrawTarget(
     case CAIRO_SURFACE_TYPE_WIN32:
       similar = cairo_win32_surface_create_with_dib(
           GfxFormatToCairoFormat(aFormat), aSize.width, aSize.height);
-      break;
-#endif
-#ifdef CAIRO_HAS_QUARTZ_SURFACE
-    case CAIRO_SURFACE_TYPE_QUARTZ:
-      similar = cairo_quartz_surface_create_cg_layer(
-          mSurface, GfxFormatToCairoContent(aFormat), aSize.width,
-          aSize.height);
       break;
 #endif
     default:

@@ -35,19 +35,14 @@ connection-proxy-http = HTTP Proxy
     .accesskey = x
 connection-proxy-http-port = Port
     .accesskey = P
-connection-proxy-http-sharing =
-    .label = Also use this proxy for FTP and HTTPS
+connection-proxy-https-sharing =
+    .label = Also use this proxy for HTTPS
     .accesskey = s
 
 connection-proxy-https = HTTPS Proxy
     .accesskey = H
 connection-proxy-ssl-port = Port
     .accesskey = o
-
-connection-proxy-ftp = FTP Proxy
-    .accesskey = F
-connection-proxy-ftp-port = Port
-    .accesskey = r
 
 connection-proxy-socks = SOCKS Host
     .accesskey = C

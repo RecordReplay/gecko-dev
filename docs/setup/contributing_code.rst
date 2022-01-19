@@ -40,8 +40,6 @@ involved a little easier:
    few lines, but they're a great way to learn about setting up your
    development environment, navigating Bugzilla, and making
    contributions to the Mozilla codebase.
--  Visit `firefox-dev.tools <http://firefox-dev.tools>`_ - we list
-   Firefox Developer Tools bugs for new contributors.
 -  `Student Projects <https://bugzil.la/kw:student-project>`_ - are
    larger projects, such as might be suitable for a university student
    for credit. Of course, if you are not a student, feel free to fix one
@@ -74,7 +72,7 @@ We leave this in your hands. Here are some further resources to help:
    `https://developer.mozilla.org/docs/Developer_Guide <https://developer.mozilla.org/docs/Developer_Guide>`_
    and its parent document,
    https://developer.mozilla.org/docs/Mozilla
--  Our :ref:`reviewer checklist <Reviewer_Checklist>` is very
+-  Our :ref:`reviewer checklist <Reviewer Checklist>` is very
    useful, if you have a patch near completion, and seek a favorable
    review
 -  Utilize our build tool :ref:`mach`, its linting,
@@ -154,18 +152,9 @@ making sure there are no unexpected regressions. If you don't have try
 server access already, your mentor, or the person who reviewed your
 patch, will be able to help.
 
-Once you have a **green** try server run, mark that your patch is ready
-to commit by
+Ask the reviewer to land the patch for you.
+For more details, see :ref:`push_a_change`
 
-#. opening the Phabricator page for your patch
-#. clicking the 'Edit Revision' link in the sidebar on the right
-#. then into the 'Tags' field and
-#. typing 'Check-In Needed' to get the tag added.
-
-A friendly Mozillian, with commit access, will be along shortly to push
-your patch to the repository, and update the bug as required. If your
-patch passes all Mozilla's automated testing, it will soon be merged
-into the main branch, and become a part of the Nightly build.
 
 Do it all again!
 ----------------
@@ -190,7 +179,7 @@ to the project. We'll be integrating some information from these pages
 soon, but until then you may find them interesting in their current
 form:
 
--  `A guide to learning the Firefox 
+-  `A guide to learning the Firefox
    codebase <http://www.joshmatthews.net/blog/2010/03/getting-involve-with-mozilla/>`_
 -  `A beginner's guide to SpiderMonkey, Mozilla's Javascript
    engine <https://wiki.mozilla.org/JavaScript:New_to_SpiderMonkey>`_

@@ -31,7 +31,7 @@ inactive-css-not-inline-or-tablecell = <strong>{ $property }</strong> has no eff
 
 inactive-css-property-because-of-display = <strong>{ $property }</strong> has no effect on this element since it has a display of <strong>{ $display }</strong>.
 
-inactive-css-not-display-block-on-floated = The <strong>display</strong> value has been changed by the engine to <strong>block</strong> because the element is <strong>floated<strong>.
+inactive-css-not-display-block-on-floated = The <strong>display</strong> value has been changed by the engine to <strong>block</strong> because the element is <strong>floated</strong>.
 
 inactive-css-property-is-impossible-to-override-in-visited = It’s impossible to override <strong>{ $property }</strong> due to <strong>:visited</strong> restriction.
 
@@ -39,11 +39,13 @@ inactive-css-position-property-on-unpositioned-box = <strong>{ $property }</stro
 
 inactive-text-overflow-when-no-overflow = <strong>{ $property }</strong> has no effect on this element since <strong>overflow:hidden</strong> is not set.
 
-inactive-outline-radius-when-outline-style-auto-or-none = <strong>{ $property }</strong> has no effect on this element because its <strong>outline-style</strong> is <strong>auto</strong> or <strong>none</strong>.
-
 inactive-css-not-for-internal-table-elements = <strong>{ $property }</strong> has no effect on internal table elements.
 
 inactive-css-not-for-internal-table-elements-except-table-cells = <strong>{ $property }</strong> has no effect on internal table elements except table cells.
+
+inactive-css-not-table = <strong>{ $property }</strong> has no effect on this element since it’s not a table.
+
+inactive-scroll-padding-when-not-scroll-container = <strong>{ $property }</strong> has no effect on this element since it doesn’t scroll.
 
 ## In the Rule View when a CSS property cannot be successfully applied we display
 ## an icon. When this icon is hovered this message is displayed to explain how
@@ -79,7 +81,9 @@ inactive-css-not-for-internal-table-elements-fix = Try setting its <strong>displ
 
 inactive-css-not-for-internal-table-elements-except-table-cells-fix = Try setting its <strong>display</strong> property to something else than <strong>table-column</strong>, <strong>table-row</strong>, <strong>table-column-group</strong>, <strong>table-row-group</strong>, or <strong>table-footer-group</strong>. { learn-more }
 
-inactive-outline-radius-when-outline-style-auto-or-none-fix = Try setting its <strong>outline-style</strong> property to something other than <strong>auto</strong> or <strong>none</strong>. { learn-more }
+inactive-css-not-table-fix = Try adding <strong>display:table</strong> or <strong>display:inline-table</strong>. { learn-more }
+
+inactive-scroll-padding-when-not-scroll-container-fix = Try adding <strong>overflow:auto</strong>, <strong>overflow:scroll</strong>, or <strong>overflow:hidden</strong>. { learn-more }
 
 ## In the Rule View when a CSS property may have compatibility issues with other browsers
 ## we display an icon. When this icon is hovered this message is displayed to explain why

@@ -776,6 +776,16 @@ add_task(async function testSideloadRemoveButton() {
   ok(removeButton.disabled, "Remove is disabled");
   ok(!removeButton.hidden, "Remove is visible");
 
+  // Remove but cancel.
+  let prevented = BrowserTestUtils.waitForEvent(card, "remove-disabled");
+  removeButton.click();
+  await prevented;
+
+  // reopen the panel
+  panelOpened = BrowserTestUtils.waitForEvent(moreOptionsPanel, "shown");
+  EventUtils.synthesizeMouseAtCenter(moreOptionsButton, {}, win);
+  await panelOpened;
+
   let sumoLink = removeButton.querySelector("a");
   ok(sumoLink, "There's a link");
   is(
@@ -824,7 +834,7 @@ add_task(async function testOnlyTypeIsShown() {
 });
 
 add_task(async function testPluginIcons() {
-  const pluginIconUrl = "chrome://global/skin/plugins/plugin.svg";
+  const pluginIconUrl = "chrome://global/skin/icons/plugin.svg";
 
   let win = await loadInitialView("plugin");
   let doc = win.document;
@@ -987,4 +997,30 @@ add_task(async function testDisabledDimming() {
 
   await closeView(win);
   await extension.unload();
+});
+
+add_task(async function testEmptyMessage() {
+  let win = await loadInitialView("extension");
+  let doc = win.document;
+  let enabledSection = getSection(doc, "enabled");
+  let disabledSection = getSection(doc, "disabled");
+  const message = doc.querySelector("#empty-addons-message");
+
+  // With 3 enabled addons and 1 disabled, the message is hidden
+  is_element_hidden(message, "Empty addons message hidden");
+
+  // The test runner (Mochitest) relies on add-ons that should not be removed.
+  // Simulate the scenario of zero add-ons by clearing all rendered sections.
+  while (enabledSection.firstChild) {
+    enabledSection.firstChild.remove();
+  }
+
+  while (disabledSection.firstChild) {
+    disabledSection.firstChild.remove();
+  }
+
+  // Message should now be displayed
+  is_element_visible(message, "Empty addons message visible");
+
+  await closeView(win);
 });

@@ -112,6 +112,7 @@ void CallExecutionProgressHook(JSScript* aScript);
   _(js::jit::AssertValidSymbolPtr)                                    \
   _(js::jit::AssertValidValue)                                        \
   _(js::jit::AssumeUnreachable)                                       \
+  _(js::jit::AtomicsStore64)                                          \
   _(js::jit::Bailout)                                                 \
   _(js::jit::BigIntNumberEqual<EqualityKind::Equal>)                  \
   _(js::jit::BigIntNumberEqual<EqualityKind::NotEqual>)               \
@@ -181,23 +182,22 @@ void CallExecutionProgressHook(JSScript* aScript);
 
 // List of all ABI function signature which are using a computed function
 // pointer instead of a statically known function pointer.
-#define ABIFUNCTIONSIG_LIST(_)                       \
-  _(AtomicsCompareExchangeFn)                        \
-  _(AtomicsReadWriteModifyFn)                        \
-  _(bool (*)(BigInt*, BigInt*))                      \
-  _(bool (*)(BigInt*, double))                       \
-  _(bool (*)(double, BigInt*))                       \
-  _(float (*)(float))                                \
-  _(JSJitGetterOp)                                   \
-  _(JSJitMethodOp)                                   \
-  _(JSJitSetterOp)                                   \
-  _(JSNative)                                        \
-  _(js::UnaryMathFunctionType)                       \
-  _(void (*)(js::gc::StoreBuffer*, js::gc::Cell**))  \
-  _(void (*)(JSRuntime * rt, JSObject * *objp))      \
-  _(void (*)(JSRuntime * rt, JSString * *stringp))   \
-  _(void (*)(JSRuntime * rt, ObjectGroup * *groupp)) \
-  _(void (*)(JSRuntime * rt, Shape * *shapep))       \
+#define ABIFUNCTIONSIG_LIST(_)                      \
+  _(AtomicsCompareExchangeFn)                       \
+  _(AtomicsReadWriteModifyFn)                       \
+  _(bool (*)(BigInt*, BigInt*))                     \
+  _(bool (*)(BigInt*, double))                      \
+  _(bool (*)(double, BigInt*))                      \
+  _(float (*)(float))                               \
+  _(JSJitGetterOp)                                  \
+  _(JSJitMethodOp)                                  \
+  _(JSJitSetterOp)                                  \
+  _(JSNative)                                       \
+  _(js::UnaryMathFunctionType)                      \
+  _(void (*)(js::gc::StoreBuffer*, js::gc::Cell**)) \
+  _(void (*)(JSRuntime * rt, JSObject * *objp))     \
+  _(void (*)(JSRuntime * rt, JSString * *stringp))  \
+  _(void (*)(JSRuntime * rt, Shape * *shapep))      \
   _(void (*)(JSRuntime * rt, Value * vp))
 
 // GCC warns when the signature does not have matching attributes (for example

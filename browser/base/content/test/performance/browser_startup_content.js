@@ -32,9 +32,6 @@ const known_scripts = {
     // Logging related
     "resource://gre/modules/Log.jsm",
 
-    // Session store
-    "resource:///modules/sessionstore/ContentSessionStore.jsm",
-
     // Browser front-end
     "resource:///actors/AboutReaderChild.jsm",
     "resource:///actors/BrowserTabChild.jsm",
@@ -62,8 +59,15 @@ const known_scripts = {
   processScripts: new Set([
     "chrome://global/content/process-content.js",
     "resource://gre/modules/extensionProcessScriptLoader.js",
+    "resource://gre/modules/URLQueryStrippingListProcessScript.js",
   ]),
 };
+
+if (!gFissionBrowser) {
+  known_scripts.modules.add(
+    "resource:///modules/sessionstore/ContentSessionStore.jsm"
+  );
+}
 
 // Items on this list *might* load when creating the process, as opposed to
 // items in the main list, which we expect will always load.
@@ -82,6 +86,7 @@ const intermittently_loaded_scripts = {
     // Test related
     "resource://testing-common/BrowserTestUtilsChild.jsm",
     "resource://testing-common/ContentEventListenerChild.jsm",
+    "resource://specialpowers/AppTestDelegateChild.jsm",
     "resource://specialpowers/SpecialPowersChild.jsm",
     "resource://specialpowers/WrapPrivileged.jsm",
   ]),

@@ -4,7 +4,6 @@
 
 use crate::context::QuirksMode;
 use crate::error_reporting::{ContextualParseError, ParseErrorReporter};
-use crate::invalidation::media_queries::{MediaListKey, ToMediaListKey};
 use crate::media_queries::{Device, MediaList};
 use crate::parser::ParserContext;
 use crate::shared_lock::{DeepCloneParams, DeepCloneWithLock, Locked};
@@ -66,6 +65,10 @@ pub struct StylesheetContents {
     pub source_map_url: RwLock<Option<String>>,
     /// This stylesheet's source URL.
     pub source_url: RwLock<Option<String>>,
+
+    /// We don't want to allow construction outside of this file, to guarantee
+    /// that all contents are created with Arc<>.
+    _forbid_construction: (),
 }
 
 impl StylesheetContents {
@@ -83,7 +86,7 @@ impl StylesheetContents {
         use_counters: Option<&UseCounters>,
         allow_import_rules: AllowImportRules,
         sanitization_data: Option<&mut SanitizationData>,
-    ) -> Self {
+    ) -> Arc<Self> {
         let namespaces = RwLock::new(Namespaces::default());
         let (rules, source_map_url, source_url) = Stylesheet::parse_rules(
             css,
@@ -100,15 +103,16 @@ impl StylesheetContents {
             sanitization_data,
         );
 
-        Self {
+        Arc::new(Self {
             rules: CssRules::new(rules, &shared_lock),
-            origin: origin,
+            origin,
             url_data: RwLock::new(url_data),
-            namespaces: namespaces,
-            quirks_mode: quirks_mode,
+            namespaces,
+            quirks_mode,
             source_map_url: RwLock::new(source_map_url),
             source_url: RwLock::new(source_url),
-        }
+            _forbid_construction: (),
+        })
     }
 
     /// Creates a new StylesheetContents with the specified pre-parsed rules,
@@ -127,9 +131,9 @@ impl StylesheetContents {
         origin: Origin,
         url_data: UrlExtraData,
         quirks_mode: QuirksMode,
-    ) -> Self {
+    ) -> Arc<Self> {
         debug_assert!(rules.is_static());
-        Self {
+        Arc::new(Self {
             rules,
             origin,
             url_data: RwLock::new(url_data),
@@ -137,7 +141,8 @@ impl StylesheetContents {
             quirks_mode,
             source_map_url: RwLock::new(None),
             source_url: RwLock::new(None),
-        }
+            _forbid_construction: (),
+        })
     }
 
     /// Returns a reference to the list of rules.
@@ -179,6 +184,7 @@ impl DeepCloneWithLock for StylesheetContents {
             namespaces: RwLock::new((*self.namespaces.read()).clone()),
             source_map_url: RwLock::new((*self.source_map_url.read()).clone()),
             source_url: RwLock::new((*self.source_url.read()).clone()),
+            _forbid_construction: (),
         }
     }
 }
@@ -187,7 +193,7 @@ impl DeepCloneWithLock for StylesheetContents {
 #[derive(Debug)]
 pub struct Stylesheet {
     /// The contents of this stylesheet.
-    pub contents: StylesheetContents,
+    pub contents: Arc<StylesheetContents>,
     /// The lock used for objects inside this stylesheet
     pub shared_lock: SharedRwLock,
     /// List of media associated with the Stylesheet.
@@ -218,12 +224,6 @@ macro_rules! rule_filter {
 
 /// A trait to represent a given stylesheet in a document.
 pub trait StylesheetInDocument: ::std::fmt::Debug {
-    /// Get the stylesheet origin.
-    fn origin(&self, guard: &SharedRwLockReadGuard) -> Origin;
-
-    /// Get the stylesheet quirks mode.
-    fn quirks_mode(&self, guard: &SharedRwLockReadGuard) -> QuirksMode;
-
     /// Get whether this stylesheet is enabled.
     fn enabled(&self) -> bool;
 
@@ -231,7 +231,12 @@ pub trait StylesheetInDocument: ::std::fmt::Debug {
     fn media<'a>(&'a self, guard: &'a SharedRwLockReadGuard) -> Option<&'a MediaList>;
 
     /// Returns a reference to the list of rules in this stylesheet.
-    fn rules<'a, 'b: 'a>(&'a self, guard: &'b SharedRwLockReadGuard) -> &'a [CssRule];
+    fn rules<'a, 'b: 'a>(&'a self, guard: &'b SharedRwLockReadGuard) -> &'a [CssRule] {
+        self.contents().rules(guard)
+    }
+
+    /// Returns a reference to the contents of the stylesheet.
+    fn contents(&self) -> &StylesheetContents;
 
     /// Return an iterator using the condition `C`.
     #[inline]
@@ -243,18 +248,19 @@ pub trait StylesheetInDocument: ::std::fmt::Debug {
     where
         C: NestedRuleIterationCondition,
     {
+        let contents = self.contents();
         RulesIterator::new(
             device,
-            self.quirks_mode(guard),
+            contents.quirks_mode,
             guard,
-            self.rules(guard).iter(),
+            contents.rules(guard).iter(),
         )
     }
 
     /// Returns whether the style-sheet applies for the current device.
     fn is_effective_for_device(&self, device: &Device, guard: &SharedRwLockReadGuard) -> bool {
         match self.media(guard) {
-            Some(medialist) => medialist.evaluate(device, self.quirks_mode(guard)),
+            Some(medialist) => medialist.evaluate(device, self.contents().quirks_mode),
             None => true,
         }
     }
@@ -285,14 +291,6 @@ pub trait StylesheetInDocument: ::std::fmt::Debug {
 }
 
 impl StylesheetInDocument for Stylesheet {
-    fn origin(&self, _guard: &SharedRwLockReadGuard) -> Origin {
-        self.contents.origin
-    }
-
-    fn quirks_mode(&self, _guard: &SharedRwLockReadGuard) -> QuirksMode {
-        self.contents.quirks_mode
-    }
-
     fn media<'a>(&'a self, guard: &'a SharedRwLockReadGuard) -> Option<&'a MediaList> {
         Some(self.media.read_with(guard))
     }
@@ -302,8 +300,8 @@ impl StylesheetInDocument for Stylesheet {
     }
 
     #[inline]
-    fn rules<'a, 'b: 'a>(&'a self, guard: &'b SharedRwLockReadGuard) -> &'a [CssRule] {
-        self.contents.rules(guard)
+    fn contents(&self) -> &StylesheetContents {
+        &self.contents
     }
 }
 
@@ -321,21 +319,7 @@ impl PartialEq for DocumentStyleSheet {
     }
 }
 
-impl ToMediaListKey for DocumentStyleSheet {
-    fn to_media_list_key(&self) -> MediaListKey {
-        self.0.to_media_list_key()
-    }
-}
-
 impl StylesheetInDocument for DocumentStyleSheet {
-    fn origin(&self, guard: &SharedRwLockReadGuard) -> Origin {
-        self.0.origin(guard)
-    }
-
-    fn quirks_mode(&self, guard: &SharedRwLockReadGuard) -> QuirksMode {
-        self.0.quirks_mode(guard)
-    }
-
     fn media<'a>(&'a self, guard: &'a SharedRwLockReadGuard) -> Option<&'a MediaList> {
         self.0.media(guard)
     }
@@ -345,8 +329,8 @@ impl StylesheetInDocument for DocumentStyleSheet {
     }
 
     #[inline]
-    fn rules<'a, 'b: 'a>(&'a self, guard: &'b SharedRwLockReadGuard) -> &'a [CssRule] {
-        self.0.rules(guard)
+    fn contents(&self) -> &StylesheetContents {
+        self.0.contents()
     }
 }
 
@@ -610,9 +594,9 @@ impl Clone for Stylesheet {
         // Make a deep clone of the media, using the new lock.
         let media = self.media.read_with(&guard).clone();
         let media = Arc::new(lock.wrap(media));
-        let contents = self
+        let contents = Arc::new(self
             .contents
-            .deep_clone_with_lock(&lock, &guard, &DeepCloneParams);
+            .deep_clone_with_lock(&lock, &guard, &DeepCloneParams));
 
         Stylesheet {
             contents,

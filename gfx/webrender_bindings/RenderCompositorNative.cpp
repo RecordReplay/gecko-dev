@@ -1,5 +1,3 @@
-#include "RenderCompositorNative.h"
-#include "RenderCompositorNative.h"
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -10,7 +8,10 @@
 
 #include "GLContext.h"
 #include "GLContextProvider.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/gfx/Logging.h"
 #include "mozilla/layers/CompositionRecorder.h"
 #include "mozilla/layers/NativeLayer.h"
 #include "mozilla/layers/SurfacePool.h"
@@ -19,14 +20,13 @@
 #include "mozilla/widget/CompositorWidget.h"
 #include "RenderCompositorRecordedFrame.h"
 
-namespace mozilla {
-namespace wr {
+namespace mozilla::wr {
 
 RenderCompositorNative::RenderCompositorNative(
-    RefPtr<widget::CompositorWidget>&& aWidget, gl::GLContext* aGL)
-    : RenderCompositor(std::move(aWidget)),
+    const RefPtr<widget::CompositorWidget>& aWidget, gl::GLContext* aGL)
+    : RenderCompositor(aWidget),
       mNativeLayerRoot(GetWidget()->GetNativeLayerRoot()) {
-#ifdef XP_MACOSX
+#if defined(XP_MACOSX) || defined(MOZ_WAYLAND)
   auto pool = RenderThread::Get()->SharedSurfacePool();
   if (pool) {
     mSurfacePoolHandle = pool->GetHandleForGL(aGL);
@@ -36,6 +36,7 @@ RenderCompositorNative::RenderCompositorNative(
 }
 
 RenderCompositorNative::~RenderCompositorNative() {
+  Pause();
   mProfilerScreenshotGrabber.Destroy();
   mNativeLayerRoot->SetLayers({});
   mNativeLayerForEntireWindow = nullptr;
@@ -51,6 +52,9 @@ bool RenderCompositorNative::BeginFrame() {
 
   gfx::IntSize bufferSize = GetBufferSize().ToUnknownSize();
   if (!ShouldUseNativeCompositor()) {
+    if (bufferSize.IsEmpty()) {
+      return false;
+    }
     if (mNativeLayerForEntireWindow &&
         mNativeLayerForEntireWindow->GetSize() != bufferSize) {
       mNativeLayerRoot->RemoveLayer(mNativeLayerForEntireWindow);
@@ -59,7 +63,6 @@ bool RenderCompositorNative::BeginFrame() {
     if (!mNativeLayerForEntireWindow) {
       mNativeLayerForEntireWindow =
           mNativeLayerRoot->CreateLayer(bufferSize, false, mSurfacePoolHandle);
-      mNativeLayerForEntireWindow->SetSurfaceIsFlipped(true);
       mNativeLayerRoot->AppendLayer(mNativeLayerForEntireWindow);
     }
   }
@@ -86,14 +89,20 @@ RenderedFrameId RenderCompositorNative::EndFrame(
   return frameId;
 }
 
-void RenderCompositorNative::Pause() {}
+void RenderCompositorNative::Pause() { mNativeLayerRoot->PauseCompositor(); }
 
-bool RenderCompositorNative::Resume() { return true; }
+bool RenderCompositorNative::Resume() {
+  return mNativeLayerRoot->ResumeCompositor();
+}
 
 inline layers::WebRenderCompositor RenderCompositorNative::CompositorType()
     const {
   if (gfx::gfxVars::UseWebRenderCompositor()) {
+#if defined(XP_MACOSX)
     return layers::WebRenderCompositor::CORE_ANIMATION;
+#elif defined(MOZ_WAYLAND)
+    return layers::WebRenderCompositor::WAYLAND;
+#endif
   }
   return layers::WebRenderCompositor::DRAW;
 }
@@ -206,14 +215,6 @@ bool RenderCompositorNative::MaybeProcessScreenshotQueue() {
   return true;
 }
 
-uint32_t RenderCompositorNative::GetMaxUpdateRects() {
-  if (ShouldUseNativeCompositor() &&
-      StaticPrefs::gfx_webrender_compositor_max_update_rects_AtStartup() > 0) {
-    return 1;
-  }
-  return 0;
-}
-
 void RenderCompositorNative::CompositorBeginFrame() {
   mAddedLayers.Clear();
   mAddedTilePixelCount = 0;
@@ -223,10 +224,10 @@ void RenderCompositorNative::CompositorBeginFrame() {
 }
 
 void RenderCompositorNative::CompositorEndFrame() {
-#ifdef MOZ_GECKO_PROFILER
   if (profiler_thread_is_being_profiled()) {
     auto bufferSize = GetBufferSize();
-    uint64_t windowPixelCount = uint64_t(bufferSize.width) * bufferSize.height;
+    [[maybe_unused]] uint64_t windowPixelCount =
+        uint64_t(bufferSize.width) * bufferSize.height;
     int nativeLayerCount = 0;
     for (const auto& it : mSurfaces) {
       nativeLayerCount += int(it.second.mNativeLayers.size());
@@ -244,7 +245,6 @@ void RenderCompositorNative::CompositorEndFrame() {
                         int((mTotalTilePixelCount - mAddedTilePixelCount) *
                             100 / windowPixelCount)));
   }
-#endif
   mDrawnPixelCount = 0;
 
   DoFlush();
@@ -382,7 +382,7 @@ void RenderCompositorNative::AddSurface(
   MOZ_RELEASE_ASSERT(surfaceCursor != mSurfaces.end());
   const Surface& surface = surfaceCursor->second;
 
-  Matrix4x4 transform(
+  gfx::Matrix4x4 transform(
       aTransform.m11, aTransform.m12, aTransform.m13, aTransform.m14,
       aTransform.m21, aTransform.m22, aTransform.m23, aTransform.m24,
       aTransform.m31, aTransform.m32, aTransform.m33, aTransform.m34,
@@ -395,8 +395,8 @@ void RenderCompositorNative::AddSurface(
     gfx::IntPoint layerPosition(surface.mTileSize.width * it->first.mX,
                                 surface.mTileSize.height * it->first.mY);
     layer->SetPosition(layerPosition);
-    gfx::IntRect clipRect(aClipRect.origin.x, aClipRect.origin.y,
-                          aClipRect.size.width, aClipRect.size.height);
+    gfx::IntRect clipRect(aClipRect.min.x, aClipRect.min.y, aClipRect.width(),
+                          aClipRect.height());
     layer->SetClipRect(Some(clipRect));
     layer->SetTransform(transform);
     layer->SetSamplingFilter(ToSamplingFilter(aImageRendering));
@@ -413,22 +413,13 @@ void RenderCompositorNative::AddSurface(
   }
 }
 
-CompositorCapabilities RenderCompositorNative::GetCompositorCapabilities() {
-  CompositorCapabilities caps;
-
-  // CoreAnimation doesn't use virtual surfaces
-  caps.virtual_surface_size = 0;
-
-  return caps;
-}
-
 /* static */
 UniquePtr<RenderCompositor> RenderCompositorNativeOGL::Create(
-    RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError) {
-  RefPtr<gl::GLContext> gl = RenderThread::Get()->SharedGL();
+    const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError) {
+  RefPtr<gl::GLContext> gl = RenderThread::Get()->SingletonGL();
   if (!gl) {
     gl = gl::GLContextProvider::CreateForCompositorWidget(
-        aWidget, /* aWebRender */ true, /* aForceAccelerated */ true);
+        aWidget, /* aHardwareWebRender */ true, /* aForceAccelerated */ true);
     RenderThread::MaybeEnableGLDebugMessage(gl);
   }
   if (!gl || !gl->MakeCurrent()) {
@@ -436,13 +427,13 @@ UniquePtr<RenderCompositor> RenderCompositorNativeOGL::Create(
                     << gfx::hexa(gl.get());
     return nullptr;
   }
-  return MakeUnique<RenderCompositorNativeOGL>(std::move(aWidget),
-                                               std::move(gl));
+  return MakeUnique<RenderCompositorNativeOGL>(aWidget, std::move(gl));
 }
 
 RenderCompositorNativeOGL::RenderCompositorNativeOGL(
-    RefPtr<widget::CompositorWidget>&& aWidget, RefPtr<gl::GLContext>&& aGL)
-    : RenderCompositorNative(std::move(aWidget), aGL), mGL(aGL) {
+    const RefPtr<widget::CompositorWidget>& aWidget,
+    RefPtr<gl::GLContext>&& aGL)
+    : RenderCompositorNative(aWidget, aGL), mGL(aGL) {
   MOZ_ASSERT(mGL);
 }
 
@@ -518,10 +509,10 @@ void RenderCompositorNativeOGL::Bind(wr::NativeTileId aId,
                                      uint32_t* aFboId,
                                      wr::DeviceIntRect aDirtyRect,
                                      wr::DeviceIntRect aValidRect) {
-  gfx::IntRect validRect(aValidRect.origin.x, aValidRect.origin.y,
-                         aValidRect.size.width, aValidRect.size.height);
-  gfx::IntRect dirtyRect(aDirtyRect.origin.x, aDirtyRect.origin.y,
-                         aDirtyRect.size.width, aDirtyRect.size.height);
+  gfx::IntRect validRect(aValidRect.min.x, aValidRect.min.y, aValidRect.width(),
+                         aValidRect.height());
+  gfx::IntRect dirtyRect(aDirtyRect.min.x, aDirtyRect.min.y, aDirtyRect.width(),
+                         aDirtyRect.height());
 
   BindNativeLayer(aId, dirtyRect);
 
@@ -540,18 +531,18 @@ void RenderCompositorNativeOGL::Unbind() {
 
 /* static */
 UniquePtr<RenderCompositor> RenderCompositorNativeSWGL::Create(
-    RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError) {
+    const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError) {
   void* ctx = wr_swgl_create_context();
   if (!ctx) {
     gfxCriticalNote << "Failed SWGL context creation for WebRender";
     return nullptr;
   }
-  return MakeUnique<RenderCompositorNativeSWGL>(std::move(aWidget), ctx);
+  return MakeUnique<RenderCompositorNativeSWGL>(aWidget, ctx);
 }
 
 RenderCompositorNativeSWGL::RenderCompositorNativeSWGL(
-    RefPtr<widget::CompositorWidget>&& aWidget, void* aContext)
-    : RenderCompositorNative(std::move(aWidget)), mContext(aContext) {
+    const RefPtr<widget::CompositorWidget>& aWidget, void* aContext)
+    : RenderCompositorNative(aWidget), mContext(aContext) {
   MOZ_ASSERT(mContext);
 }
 
@@ -628,10 +619,10 @@ bool RenderCompositorNativeSWGL::MapTile(wr::NativeTileId aId,
   if (mNativeLayerForEntireWindow) {
     return false;
   }
-  gfx::IntRect dirtyRect(aDirtyRect.origin.x, aDirtyRect.origin.y,
-                         aDirtyRect.size.width, aDirtyRect.size.height);
-  gfx::IntRect validRect(aValidRect.origin.x, aValidRect.origin.y,
-                         aValidRect.size.width, aValidRect.size.height);
+  gfx::IntRect dirtyRect(aDirtyRect.min.x, aDirtyRect.min.y, aDirtyRect.width(),
+                         aDirtyRect.height());
+  gfx::IntRect validRect(aValidRect.min.x, aValidRect.min.y, aValidRect.width(),
+                         aValidRect.height());
   BindNativeLayer(aId, dirtyRect);
   if (!MapNativeLayer(mCurrentlyBoundNativeLayer, dirtyRect, validRect)) {
     UnbindNativeLayer();
@@ -649,5 +640,4 @@ void RenderCompositorNativeSWGL::UnmapTile() {
   }
 }
 
-}  // namespace wr
-}  // namespace mozilla
+}  // namespace mozilla::wr

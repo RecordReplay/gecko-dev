@@ -18,6 +18,10 @@ linux64/opt:
         max-run-time: 7200
         env:
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            # bug 1690154 - enable full symbols on all branches, but only
+            # upload them on the official set. In conjunction with
+            # `enable-full-crashsymbols`.
+            MOZ_ENABLE_FULL_SYMBOLS: "1"
     run:
         using: mozharness
         actions: [get-secrets, build]
@@ -42,6 +46,7 @@ linux64/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-plain/opt:
@@ -80,6 +85,92 @@ linux64-plain/opt:
             - linux64-node
             - linux64-cbindgen
             - linux64-dump-syms
+            - linux64-sysroot
+    optimization:
+        skip-unless-expanded: null
+
+linux64-gcc/opt:
+    description: "Linux64 GCC Opt"
+    index:
+        product: firefox
+        job-name: linux64-gcc-opt
+    treeherder:
+        platform: linux64/opt
+        symbol: Bgcc
+        tier: 2
+    run-on-projects: ['mozilla-central']
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            MOZ_LOW_PARALLELISM_BUILD: '1'
+            PERFHERDER_EXTRA_OPTIONS: gcc
+            FORCE_GCC: '1'
+    run:
+        using: mozharness
+        actions: [get-secrets, build]
+        config:
+            - builds/releng_base_firefox.py
+            - builds/releng_base_linux_64_builds.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        tooltool-downloads: public
+        need-xvfb: true
+    use-sccache: true
+    fetches:
+        toolchain:
+            - linux64-binutils
+            - linux64-clang
+            - linux64-gcc-11
+            - linux64-rust
+            - linux64-rust-size
+            - linux64-cbindgen
+            - linux64-dump-syms
+            - linux64-sccache
+            - linux64-nasm
+            - linux64-node
+            - linux64-lucetc
+            - linux64-sysroot
+            - wasi-sysroot
+
+linux64-plain-clang-trunk/opt:
+    description: "Linux64 Opt Plain with clang trunk"
+    index:
+        product: firefox
+        job-name: linux64-plain-opt-ct
+    treeherder:
+        platform: linux64/opt
+        symbol: Bp-clang-trunk
+        tier: 2
+    worker-type: b-linux
+    worker:
+        docker-image: {in-tree: debian10-amd64-build}
+        max-run-time: 5400
+        env:
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            PERFHERDER_EXTRA_OPTIONS: plain-clang-trunk
+    run:
+        using: mozharness
+        actions: [build]
+        config:
+            - builds/releng_base_firefox.py
+            - builds/releng_base_linux_64_builds.py
+        script: mozharness/scripts/fx_desktop_build.py
+        tooltool-downloads: public
+        extra-config:
+            disable_package_metrics: true
+        mozconfig-variant: plain-opt-trunk
+    run-on-projects: []
+    fetches:
+        toolchain:
+            - linux64-binutils
+            - linux64-clang-trunk
+            - linux64-rust
+            - linux64-nasm
+            - linux64-node
+            - linux64-cbindgen
+            - linux64-dump-syms
+            - linux64-toolchain-sysroot
     optimization:
         skip-unless-expanded: null
 
@@ -98,7 +189,6 @@ linux64-fuzzing/debug:
     worker:
         max-run-time: 5400
         env:
-            MOZ_LOW_PARALLELISM_BUILD: '1'
             PERFHERDER_EXTRA_OPTIONS: fuzzing
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -127,11 +217,56 @@ linux64-fuzzing/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
+    optimization:
+        skip-unless-expanded: null
+
+linux64-fuzzing-noopt/debug:
+    description: "Linux64 Fuzzing No-optimize Debug"
+    index:
+        product: firefox
+        job-name: linux64-fuzzing-noopt-debug
+    attributes:
+        # The gtest libxul contains libFuzzer targets
+        skip-verify-test-packaging: true
+    treeherder:
+        platform: linux64-noopt/debug
+        symbol: Bf
+    worker-type: b-linux
+    worker:
+        max-run-time: 5400
+        env:
+            PERFHERDER_EXTRA_OPTIONS: fuzzing-noopt-debug
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+    run:
+        using: mozharness
+        actions: [get-secrets, build]
+        config:
+            - builds/releng_base_firefox.py
+            - builds/releng_base_linux_64_builds.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        custom-build-variant-cfg: fuzzing-debug
+        mozconfig-variant: debug-fuzzing-noopt
+        tooltool-downloads: public
+        need-xvfb: true
+    use-sccache: true
+    fetches:
+        toolchain:
+            - linux64-binutils
+            - linux64-clang
+            - linux64-cbindgen
+            - linux64-dump-syms
+            - linux64-llvm-symbolizer
+            - linux64-sccache
+            - linux64-rust
+            - linux64-rust-size
+            - linux64-nasm
+            - linux64-node
+            - linux64-lucetc
+            - linux64-sysroot
+            - wasi-sysroot
     optimization:
         skip-unless-expanded: null
 
@@ -150,6 +285,10 @@ linux64/debug:
         max-run-time: 5400
         env:
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            # bug 1690154 - enable full symbols on all branches, but only
+            # upload them on the official set. In conjunction with
+            # `enable-full-crashsymbols`.
+            MOZ_ENABLE_FULL_SYMBOLS: "1"
     run:
         using: mozharness
         actions: [get-secrets, build]
@@ -175,11 +314,8 @@ linux64/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
 
 linux64/codeql-cpp:
     description: Builds a C++ codeql database
@@ -230,11 +366,8 @@ linux64/codeql-cpp:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
     notifications:
         subject: '{task[shipping-product]} {release_config[version]} build{release_config[build_number]}/{config[params][project]} linux64 codeql-cpp status'
         message: '{task[shipping-product]} {release_config[version]} build{release_config[build_number]}/{config[params][project]} linux64 codeql-cpp status'
@@ -282,6 +415,7 @@ linux64-plain/debug:
             - linux64-node
             - linux64-cbindgen
             - linux64-dump-syms
+            - linux64-sysroot
     optimization:
         skip-unless-expanded: null
 
@@ -305,6 +439,10 @@ linux64-devedition/opt:
         max-run-time: 7200
         env:
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            # bug 1690154 - enable full symbols on all branches, but only
+            # upload them on the official set. In conjunction with
+            # `enable-full-crashsymbols`.
+            MOZ_ENABLE_FULL_SYMBOLS: "1"
     run:
         using: mozharness
         actions: [get-secrets, build]
@@ -331,6 +469,7 @@ linux64-devedition/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux/opt:
@@ -346,8 +485,9 @@ linux/opt:
         symbol: B
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 7200
+        env:
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         using: mozharness
         actions: [get-secrets, build]
@@ -358,7 +498,7 @@ linux/opt:
         secrets: true
         tooltool-downloads: public
         need-xvfb: true
-    run-on-projects: ['mozilla-beta', 'mozilla-release', 'mozilla-esr78']
+    run-on-projects: ['mozilla-beta', 'mozilla-release', 'mozilla-esr78', 'mozilla-esr91']
     use-sccache: true
     fetches:
         toolchain:
@@ -372,6 +512,7 @@ linux/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
 
 linux/debug:
@@ -386,8 +527,9 @@ linux/debug:
         symbol: B
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 5400
+        env:
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         using: mozharness
         actions: [get-secrets, build]
@@ -414,11 +556,8 @@ linux/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
 
 linux-rusttests/opt:
     description: "Linux32 Rust Tests Opt"
@@ -431,7 +570,6 @@ linux-rusttests/opt:
         tier: 1
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 2700
         env:
             PERFHERDER_EXTRA_OPTIONS: rusttests
@@ -460,6 +598,7 @@ linux-rusttests/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
     optimization:
         test-inclusive: [rusttests]
@@ -475,7 +614,6 @@ linux-rusttests/debug:
         tier: 1
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 2700
         env:
             PERFHERDER_EXTRA_OPTIONS: rusttests
@@ -504,6 +642,7 @@ linux-rusttests/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
     optimization:
         test-inclusive: [rusttests]
@@ -525,7 +664,6 @@ linux-devedition/opt:
         symbol: B
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 7200
         env:
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
@@ -555,6 +693,7 @@ linux-devedition/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
 
 linux-shippable/opt:
@@ -574,7 +713,6 @@ linux-shippable/opt:
         symbol: Bpgo(B)
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 9000
         env:
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
@@ -601,6 +739,7 @@ linux-shippable/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
 
 linux-reproduced/opt:
@@ -616,7 +755,6 @@ linux-reproduced/opt:
         symbol: Bpgo(repr)
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 9000
         env:
             PERFHERDER_EXTRA_OPTIONS: repr
@@ -645,6 +783,7 @@ linux-reproduced/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
 
 linux64-reproduced/opt:
@@ -688,6 +827,7 @@ linux64-reproduced/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-asan/opt:
@@ -702,7 +842,6 @@ linux64-asan/opt:
     worker:
         env:
             PERFHERDER_EXTRA_OPTIONS: "opt asan"
-            ASAN_OPTIONS: "detect_leaks=0"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
         max-run-time: 5400
     run:
@@ -722,7 +861,7 @@ linux64-asan/opt:
         toolchain:
             - linux64-binutils
             - linux64-clang
-            - linux64-rust-nightly
+            - linux64-rust-dev
             - linux64-rust-size
             - linux64-cbindgen
             - linux64-dump-syms
@@ -731,6 +870,7 @@ linux64-asan/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-tsan/opt:
@@ -764,7 +904,7 @@ linux64-tsan/opt:
         toolchain:
             - linux64-binutils
             - linux64-clang
-            - linux64-rust-nightly
+            - linux64-rust-dev
             - linux64-rust-size
             - linux64-cbindgen
             - linux64-dump-syms
@@ -773,6 +913,7 @@ linux64-tsan/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-tsan-fuzzing/opt:
@@ -809,7 +950,7 @@ linux64-tsan-fuzzing/opt:
         toolchain:
             - linux64-binutils
             - linux64-clang
-            - linux64-rust-nightly
+            - linux64-rust-dev
             - linux64-rust-size
             - linux64-cbindgen
             - linux64-dump-syms
@@ -818,6 +959,55 @@ linux64-tsan-fuzzing/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
+            - wasi-sysroot
+    optimization:
+        skip-unless-expanded: null
+
+linux64-asan-fuzzing/noopt:
+    description: "Linux64 Fuzzing No-optimize ASAN"
+    index:
+        product: firefox
+        job-name: linux64-fuzzing-asan-noopt
+    attributes:
+        # The gtest libxul contains libFuzzer targets
+        skip-verify-test-packaging: true
+    treeherder:
+        platform: linux64-noopt/asan
+        symbol: Bf
+    worker-type: b-linux
+    worker:
+        env:
+            PERFHERDER_EXTRA_OPTIONS: asan-fuzzing-noopt
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+        max-run-time: 5400
+    run:
+        using: mozharness
+        actions: [get-secrets, build]
+        config:
+            - builds/releng_base_firefox.py
+            - builds/releng_base_linux_64_builds.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        custom-build-variant-cfg: fuzzing-asan-tc
+        mozconfig-variant: nightly-fuzzing-asan-noopt
+        tooltool-downloads: public
+        need-xvfb: true
+    use-sccache: true
+    fetches:
+        toolchain:
+            - linux64-binutils
+            - linux64-clang
+            - linux64-rust-dev
+            - linux64-rust-size
+            - linux64-cbindgen
+            - linux64-dump-syms
+            - linux64-llvm-symbolizer
+            - linux64-sccache
+            - linux64-nasm
+            - linux64-node
+            - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
     optimization:
         skip-unless-expanded: null
@@ -837,7 +1027,6 @@ linux64-asan-fuzzing/opt:
     worker:
         env:
             PERFHERDER_EXTRA_OPTIONS: asan-fuzzing
-            ASAN_OPTIONS: "detect_leaks=0"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
         max-run-time: 5400
     run:
@@ -857,7 +1046,7 @@ linux64-asan-fuzzing/opt:
         toolchain:
             - linux64-binutils
             - linux64-clang
-            - linux64-rust-nightly
+            - linux64-rust-dev
             - linux64-rust-size
             - linux64-cbindgen
             - linux64-dump-syms
@@ -866,6 +1055,7 @@ linux64-asan-fuzzing/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
     optimization:
         skip-unless-expanded: null
@@ -886,7 +1076,6 @@ linux64-asan-fuzzing-ccov/opt:
     worker:
         env:
             PERFHERDER_EXTRA_OPTIONS: asan-fuzzing-ccov
-            ASAN_OPTIONS: "detect_leaks=0"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
         max-run-time: 5400
     run:
@@ -914,6 +1103,7 @@ linux64-asan-fuzzing-ccov/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-fuzzing-ccov/opt:
@@ -929,10 +1119,7 @@ linux64-fuzzing-ccov/opt:
     worker:
         max-run-time: 5400
         env:
-            MOZ_LOW_PARALLELISM_BUILD: '1'
             PERFHERDER_EXTRA_OPTIONS: fuzzing-ccov
-            FORCE_GCC: '1'
-            ASAN_OPTIONS: "detect_leaks=0"
             RUSTC_BOOTSTRAP: '1'
     run:
         using: mozharness
@@ -950,15 +1137,16 @@ linux64-fuzzing-ccov/opt:
         toolchain:
             - linux64-binutils
             - linux64-clang
-            - linux64-gcc-7
             - linux64-cbindgen
             - linux64-dump-syms
+            - linux64-llvm-symbolizer
             - linux64-rust
             - linux64-rust-size
             - linux64-sccache
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
     optimization:
         skip-unless-expanded: null
@@ -983,7 +1171,6 @@ linux64-asan-reporter-shippable/opt:
     worker:
         env:
             PERFHERDER_EXTRA_OPTIONS: asan-reporter
-            ASAN_OPTIONS: "detect_leaks=0"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
         max-run-time: 3600
     run:
@@ -1015,6 +1202,7 @@ linux64-asan-reporter-shippable/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-asan/debug:
@@ -1029,7 +1217,6 @@ linux64-asan/debug:
     worker:
         env:
             PERFHERDER_EXTRA_OPTIONS: "debug asan"
-            ASAN_OPTIONS: "detect_leaks=0"
         max-run-time: 5400
     run:
         using: mozharness
@@ -1048,7 +1235,7 @@ linux64-asan/debug:
         toolchain:
             - linux64-binutils
             - linux64-clang
-            - linux64-rust-nightly
+            - linux64-rust-dev
             - linux64-rust-size
             - linux64-cbindgen
             - linux64-dump-syms
@@ -1057,11 +1244,8 @@ linux64-asan/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
     optimization:
         skip-unless-expanded: null
 
@@ -1086,6 +1270,10 @@ linux64-shippable/opt:
         max-run-time: 9000
         env:
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            # bug 1690154 - enable full symbols on all branches, but only
+            # upload them on the official set. In conjunction with
+            # `enable-full-crashsymbols`.
+            MOZ_ENABLE_FULL_SYMBOLS: "1"
     run:
         using: mozharness
         actions: [get-secrets, build]
@@ -1108,6 +1296,7 @@ linux64-shippable/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-noopt/debug:
@@ -1151,11 +1340,8 @@ linux64-noopt/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
 
 linux64-rusttests/opt:
     description: "Linux64 Rust Tests Opt"
@@ -1196,6 +1382,7 @@ linux64-rusttests/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
     optimization:
         test-inclusive: [rusttests]
@@ -1239,6 +1426,7 @@ linux64-rusttests/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
     optimization:
         test-inclusive: [rusttests]
@@ -1261,8 +1449,6 @@ linux64-ccov/opt:
               type: file
         max-run-time: 7200
         env:
-            MOZ_LOW_PARALLELISM_BUILD: '1'
-            FORCE_GCC: '1'
             RUSTC_BOOTSTRAP: '1'
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -1283,7 +1469,6 @@ linux64-ccov/opt:
             - linux64-binutils
             - linux64-clang
             - linux64-rust
-            - linux64-gcc-7
             - linux64-cbindgen
             - linux64-dump-syms
             - linux64-sccache
@@ -1291,6 +1476,50 @@ linux64-ccov/opt:
             - linux64-node
             - linux64-grcov
             - linux64-lucetc
+            - linux64-sysroot
+            - wasi-sysroot
+
+linux64-ccov/debug:
+    description: "Linux64-CCov Debug"
+    index:
+        product: firefox
+        job-name: linux64-ccov-debug
+    treeherder:
+        platform: linux64-ccov/debug
+        symbol: B
+        tier: 2
+    run-on-projects: []
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            RUSTC_BOOTSTRAP: '1'
+    run:
+        using: mozharness
+        actions: [get-secrets, build]
+        config:
+            - builds/releng_base_firefox.py
+            - builds/releng_base_linux_64_builds.py
+        script: "mozharness/scripts/fx_desktop_build.py"
+        secrets: true
+        custom-build-variant-cfg: code-coverage-debug
+        mozconfig-variant: code-coverage-debug
+        tooltool-downloads: public
+        need-xvfb: true
+    use-sccache: true
+    fetches:
+        toolchain:
+            - linux64-binutils
+            - linux64-clang
+            - linux64-rust
+            - linux64-cbindgen
+            - linux64-dump-syms
+            - linux64-sccache
+            - linux64-nasm
+            - linux64-node
+            - linux64-grcov
+            - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-add-on-devel/opt:
@@ -1331,6 +1560,7 @@ linux64-add-on-devel/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
 
 linux64-aarch64/opt:
@@ -1346,7 +1576,6 @@ linux64-aarch64/opt:
         tier: 2
     worker-type: b-linux
     worker:
-        docker-image: {in-tree: debian10-arm64-build}
         max-run-time: 7200
     run:
         using: mozharness
@@ -1374,6 +1603,7 @@ linux64-aarch64/opt:
             - linux64-sccache
             - linux64-node
             - linux64-lucetc
+            - linux64-aarch64-sysroot
             - wasi-sysroot
     optimization:
         skip-unless-expanded: null
@@ -1391,7 +1621,6 @@ linux-gcp/debug:
         tier: 3
     worker-type: b-linux-gcp
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 5400
         env:
             PERFHERDER_EXTRA_OPTIONS: gcp
@@ -1421,11 +1650,8 @@ linux-gcp/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
     optimization:
         skip-unless-backstop: null
 
@@ -1442,7 +1668,6 @@ linux-gcp/opt:
         tier: 3
     worker-type: b-linux-gcp
     worker:
-        docker-image: {in-tree: debian8-i386-build}
         max-run-time: 7200
         env:
             PERFHERDER_EXTRA_OPTIONS: gcp
@@ -1470,6 +1695,7 @@ linux-gcp/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux32-sysroot
             - wasi-sysroot
 
 linux64-gcp/debug:
@@ -1513,11 +1739,8 @@ linux64-gcp/debug:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot
-            # `fix-stacks` is needed because xpcshell self tests run as part of
-            # the build step. Once bug 1614626 moves them to the xpcshell task,
-            # this dependency can be removed.
-            - linux64-fix-stacks
     optimization:
         skip-unless-backstop: null
 
@@ -1561,4 +1784,5 @@ linux64-gcp/opt:
             - linux64-nasm
             - linux64-node
             - linux64-lucetc
+            - linux64-sysroot
             - wasi-sysroot

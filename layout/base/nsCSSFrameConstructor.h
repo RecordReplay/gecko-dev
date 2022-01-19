@@ -14,6 +14,7 @@
 
 #include "mozilla/ArenaAllocator.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/FunctionRef.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RestyleManager.h"
@@ -333,8 +334,10 @@ class nsCSSFrameConstructor final : public nsFrameManager {
 
   void AddSizeOfIncludingThis(nsWindowSizes& aSizes) const;
 
-  // temporary - please don't add external uses outside of nsBulletFrame
-  nsCounterManager* CounterManager() { return &mCounterManager; }
+#ifdef ACCESSIBILITY
+  // Exposed only for nsLayoutUtils::GetMarkerSpokenText to use.
+  const nsCounterManager* CounterManager() const { return &mCounterManager; }
+#endif
 
  private:
   struct FrameConstructionItem;
@@ -375,6 +378,10 @@ class nsCSSFrameConstructor final : public nsFrameManager {
     AllowTextPathChild,
     // The item is content created by an nsIAnonymousContentCreator frame.
     IsAnonymousContentCreatorContent,
+    // The item will be the rendered legend of a <fieldset>.
+    IsForRenderedLegend,
+    // This will be an outside ::marker.
+    IsForOutsideMarker,
   };
 
   using ItemFlags = mozilla::EnumSet<ItemFlag>;
@@ -387,6 +394,7 @@ class nsCSSFrameConstructor final : public nsFrameManager {
   void AddFrameConstructionItems(nsFrameConstructorState& aState,
                                  nsIContent* aContent,
                                  bool aSuppressWhiteSpaceOptimizations,
+                                 const ComputedStyle& aParentStyle,
                                  const InsertionPoint& aInsertion,
                                  FrameConstructionItemList& aItems,
                                  ItemFlags = {});
@@ -397,16 +405,6 @@ class nsCSSFrameConstructor final : public nsFrameManager {
   bool ShouldCreateItemsForChild(nsFrameConstructorState& aState,
                                  nsIContent* aContent,
                                  nsContainerFrame* aParentFrame);
-
-  // Helper method for AddFrameConstructionItems etc.
-  // Make sure ShouldCreateItemsForChild() returned true before calling this.
-  void DoAddFrameConstructionItems(nsFrameConstructorState& aState,
-                                   nsIContent* aContent,
-                                   ComputedStyle* aComputedStyle,
-                                   bool aSuppressWhiteSpaceOptimizations,
-                                   nsContainerFrame* aParentFrame,
-                                   FrameConstructionItemList& aItems,
-                                   ItemFlags = {});
 
   // Construct the frames for the document element.  This can return null if the
   // document element is display:none, or if it's an SVG element that's not
@@ -458,12 +456,26 @@ class nsCSSFrameConstructor final : public nsFrameManager {
       nsFrameConstructorState& aState, const Element& aOriginatingElement,
       ComputedStyle& aComputedStyle, uint32_t aContentIndex);
 
+  /**
+   * Create child content nodes for a ::marker from its 'list-style-*' values.
+   */
+  void CreateGeneratedContentFromListStyle(
+      nsFrameConstructorState& aState, const ComputedStyle& aPseudoStyle,
+      const mozilla::FunctionRef<void(nsIContent*)> aAddChild);
+  /**
+   * Create child content nodes for a ::marker from its 'list-style-type'.
+   */
+  void CreateGeneratedContentFromListStyleType(
+      nsFrameConstructorState& aState, const ComputedStyle& aPseudoStyle,
+      const mozilla::FunctionRef<void(nsIContent*)> aAddChild);
+
   // aParentFrame may be null; this method doesn't use it directly in any case.
   void CreateGeneratedContentItem(nsFrameConstructorState& aState,
                                   nsContainerFrame* aParentFrame,
                                   Element& aOriginatingElement, ComputedStyle&,
                                   PseudoStyleType aPseudoElement,
-                                  FrameConstructionItemList& aItems);
+                                  FrameConstructionItemList& aItems,
+                                  ItemFlags aExtraFlags = {});
 
   // This method is called by ContentAppended() and ContentRangeInserted() when
   // appending flowed frames to a parent's principal child list. It handles the
@@ -1086,7 +1098,8 @@ class nsCSSFrameConstructor final : public nsFrameManager {
           mIsAllInline(false),
           mIsBlock(false),
           mIsPopup(false),
-          mIsLineParticipant(false) {
+          mIsLineParticipant(false),
+          mIsRenderedLegend(false) {
       MOZ_COUNT_CTOR(FrameConstructionItem);
     }
 
@@ -1160,6 +1173,8 @@ class nsCSSFrameConstructor final : public nsFrameManager {
     bool mIsPopup : 1;
     // Whether this item should be treated as a line participant
     bool mIsLineParticipant : 1;
+    // Whether this item is the rendered legend of a <fieldset>
+    bool mIsRenderedLegend : 1;
 
    private:
     // Not allocated from the general heap - instead, use the new/Delete APIs
@@ -1343,6 +1358,7 @@ class nsCSSFrameConstructor final : public nsFrameManager {
   // If aPossibleTextContent is a text node and doesn't have a frame, append a
   // frame construction item for it to aItems.
   void AddTextItemIfNeeded(nsFrameConstructorState& aState,
+                           const ComputedStyle& aParentStyle,
                            const InsertionPoint& aInsertion,
                            nsIContent* aPossibleTextContent,
                            FrameConstructionItemList& aItems);
@@ -1370,6 +1386,8 @@ class nsCSSFrameConstructor final : public nsFrameManager {
                                                          ComputedStyle&);
   static const FrameConstructionData* FindSearchControlData(const Element&,
                                                             ComputedStyle&);
+  static const FrameConstructionData* FindDateTimeLocalInputData(
+      const Element&, ComputedStyle&);
   static const FrameConstructionData* FindInputData(const Element&,
                                                     ComputedStyle&);
   static const FrameConstructionData* FindObjectData(const Element&,
@@ -1446,14 +1464,10 @@ class nsCSSFrameConstructor final : public nsFrameManager {
 #ifdef MOZ_XUL
   static const FrameConstructionData* FindPopupGroupData(const Element&,
                                                          ComputedStyle&);
-  // sXULTextBoxData used for both labels and descriptions
-  static const FrameConstructionData sXULTextBoxData;
   static const FrameConstructionData* FindXULButtonData(const Element&,
                                                         ComputedStyle&);
-  static const FrameConstructionData* FindXULLabelData(const Element&,
-                                                       ComputedStyle&);
-  static const FrameConstructionData* FindXULDescriptionData(const Element&,
-                                                             ComputedStyle&);
+  static const FrameConstructionData* FindXULLabelOrDescriptionData(
+      const Element&, ComputedStyle&);
 #  ifdef XP_MACOSX
   static const FrameConstructionData* FindXULMenubarData(const Element&,
                                                          ComputedStyle&);
@@ -1875,7 +1889,7 @@ class nsCSSFrameConstructor final : public nsFrameManager {
   nsFirstLetterFrame* CreateFloatingLetterFrame(
       nsFrameConstructorState& aState, mozilla::dom::Text* aTextContent,
       nsIFrame* aTextFrame, nsContainerFrame* aParentFrame,
-      ComputedStyle* aParentComputedStyle, ComputedStyle* aComputedStyle,
+      ComputedStyle* aParentStyle, ComputedStyle* aComputedStyle,
       nsFrameList& aResult);
 
   void CreateLetterFrame(nsContainerFrame* aBlockFrame,

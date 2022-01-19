@@ -97,12 +97,7 @@ const gAllGlobals = [];
 
 function considerScript(script) {
   return script.format == "js" &&
-    RecordReplayControl.shouldUpdateProgressCounter(script.url) &&
-    // Ignore default class constructors. These are cloned from self hosted
-    // scripts and then marked as not self hosted so the debugger can see them.
-    // They won't have instrumentation, though, and we need instrumentation
-    // for script enters/exits to be consistent with the stack contents.
-    !script.isDefaultClassConstructor;
+    RecordReplayControl.shouldUpdateProgressCounter(script.url);
 }
 
 // Call the callback for each frame, starting at the oldest to the newest.

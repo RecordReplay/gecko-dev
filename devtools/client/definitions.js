@@ -92,6 +92,12 @@ loader.lazyRequireGetter(
   "DevToolsFissionPrefs",
   "devtools/client/devtools-fission-prefs"
 );
+loader.lazyRequireGetter(
+  this,
+  "captureAndSaveScreenshot",
+  "devtools/client/shared/screenshot",
+  true
+);
 
 const { MultiLocalizationHelper } = require("devtools/shared/l10n");
 const L10N = new MultiLocalizationHelper(
@@ -119,8 +125,8 @@ Tools.options = {
     return true;
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new OptionsPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new OptionsPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -142,7 +148,7 @@ Tools.inspector = {
     const ctrlShiftC = "Ctrl+Shift+" + l10n("inspector.commandkey");
     return l10n("inspector.tooltip2", ctrlShiftC);
   },
-  inMenu: true,
+  inMenu: false,
 
   preventClosingOnKey: true,
   // preventRaisingOnKey is used to keep the focus on the content window for shortcuts
@@ -156,8 +162,8 @@ Tools.inspector = {
     return target.hasActor("inspector");
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new InspectorPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new InspectorPanel(iframeWindow, toolbox, commands);
   },
 };
 Tools.webConsole = {
@@ -176,7 +182,7 @@ Tools.webConsole = {
         l10n("webconsole.commandkey")
     );
   },
-  inMenu: true,
+  inMenu: false,
 
   preventClosingOnKey: true,
   onkey: function(panel, toolbox) {
@@ -191,8 +197,8 @@ Tools.webConsole = {
   isTargetSupported: function() {
     return true;
   },
-  build: function(iframeWindow, toolbox) {
-    return new WebConsolePanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new WebConsolePanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -211,12 +217,12 @@ Tools.jsdebugger = {
         l10n("jsdebugger.commandkey2")
     );
   },
-  inMenu: true,
+  inMenu: false,
   isTargetSupported: function() {
     return true;
   },
-  build: function(iframeWindow, toolbox) {
-    return new DebuggerPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new DebuggerPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -235,13 +241,13 @@ Tools.styleEditor = {
       "Shift+" + functionkey(l10n("styleeditor.commandkey"))
     );
   },
-  inMenu: true,
+  inMenu: false,
   isTargetSupported: function(target) {
     return target.hasActor("styleSheets");
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new StyleEditorPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new StyleEditorPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -259,7 +265,7 @@ Tools.performance = {
     );
   },
   accesskey: l10n("performance.accesskey"),
-  inMenu: true,
+  inMenu: false,
 };
 
 function switchPerformancePanel() {
@@ -268,22 +274,21 @@ function switchPerformancePanel() {
   ) {
     Tools.performance.url =
       "chrome://devtools/content/performance-new/index.xhtml";
-    Tools.performance.build = function(frame, target) {
-      return new NewPerformancePanel(frame, target);
+    Tools.performance.build = function(frame, toolbox, commands) {
+      return new NewPerformancePanel(frame, toolbox, commands);
     };
     Tools.performance.isTargetSupported = function(target) {
-      // Root actors are lazily initialized, so we can't check if the target has
-      // the perf actor yet. Also this function is not async, so we can't initialize
-      // the actor yet.
-      // We don't display the new performance panel for remote context in the
-      // toolbox, because this has an overhead. Instead we should use
-      // about:debugging.
+      // Only use the new performance panel on local tab toolboxes, as they are guaranteed
+      // to have a performance actor.
+      // Remote tab toolboxes (eg about:devtools-toolbox from about:debugging) should not
+      // use the performance panel; about:debugging provides a "Profile performance" button
+      // which can be used instead, without having the overhead of starting a remote toolbox.
       return target.isLocalTab;
     };
   } else {
     Tools.performance.url = "chrome://devtools/content/performance/index.xhtml";
-    Tools.performance.build = function(frame, target) {
-      return new PerformancePanel(frame, target);
+    Tools.performance.build = function(frame, toolbox, commands) {
+      return new PerformancePanel(frame, toolbox, commands);
     };
     Tools.performance.isTargetSupported = function(target) {
       return target.hasActor("performance");
@@ -322,8 +327,8 @@ Tools.memory = {
     return !target.isAddon && !target.isWorkerTarget;
   },
 
-  build: function(frame, target) {
-    return new MemoryPanel(frame, target);
+  build: function(frame, toolbox, commands) {
+    return new MemoryPanel(frame, toolbox, commands);
   },
 };
 
@@ -343,14 +348,14 @@ Tools.netMonitor = {
         l10n("netmonitor.commandkey")
     );
   },
-  inMenu: true,
+  inMenu: false,
 
   isTargetSupported: function(target) {
     return target.getTrait("networkMonitor") && !target.isWorkerTarget;
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new NetMonitorPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new NetMonitorPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -370,14 +375,14 @@ Tools.storage = {
       "Shift+" + functionkey(l10n("storage.commandkey"))
     );
   },
-  inMenu: true,
+  inMenu: false,
 
   isTargetSupported: function(target) {
     return target.hasActor("storage");
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new StoragePanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new StoragePanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -397,14 +402,14 @@ Tools.dom = {
         l10n("dom.commandkey")
     );
   },
-  inMenu: true,
+  inMenu: false,
 
   isTargetSupported: function(target) {
     return true;
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new DomPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new DomPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -424,14 +429,14 @@ Tools.accessibility = {
       "Shift+" + functionkey(l10n("accessibilityF12.commandkey"))
     );
   },
-  inMenu: true,
+  inMenu: false,
 
   isTargetSupported(target) {
     return target.hasActor("accessibility");
   },
 
-  build(iframeWindow, toolbox) {
-    return new AccessibilityPanel(iframeWindow, toolbox);
+  build(iframeWindow, toolbox, commands) {
+    return new AccessibilityPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -444,14 +449,14 @@ Tools.application = {
   label: l10n("application.label"),
   panelLabel: l10n("application.panellabel"),
   tooltip: l10n("application.tooltip"),
-  inMenu: true,
+  inMenu: false,
 
   isTargetSupported: function(target) {
     return target.hasActor("manifest");
   },
 
-  build: function(iframeWindow, toolbox) {
-    return new ApplicationPanel(iframeWindow, toolbox);
+  build: function(iframeWindow, toolbox, commands) {
+    return new ApplicationPanel(iframeWindow, toolbox, commands);
   },
 };
 
@@ -520,15 +525,18 @@ exports.ToolboxButtons = [
     ),
     isTargetSupported: target => target.isLocalTab,
     onClick(event, toolbox) {
-      const tab = toolbox.target.localTab;
-      const browserWindow = tab.ownerDocument.defaultView;
-      ResponsiveUIManager.toggle(browserWindow, tab, { trigger: "toolbox" });
+      const { localTab } = toolbox.descriptorFront;
+      const browserWindow = localTab.ownerDocument.defaultView;
+      ResponsiveUIManager.toggle(browserWindow, localTab, {
+        trigger: "toolbox",
+      });
     },
     isChecked(toolbox) {
-      if (!toolbox.target.localTab) {
+      const { localTab } = toolbox.descriptorFront;
+      if (!localTab) {
         return false;
       }
-      return ResponsiveUIManager.isActiveForTab(toolbox.target.localTab);
+      return ResponsiveUIManager.isActiveForTab(localTab);
     },
     setup(toolbox, onChange) {
       ResponsiveUIManager.on("on", onChange);
@@ -542,19 +550,57 @@ exports.ToolboxButtons = [
   {
     id: "command-button-screenshot",
     description: l10n("toolbox.buttons.screenshot"),
-    isTargetSupported: target =>
-      !target.chrome && target.hasActor("screenshot"),
+    isTargetSupported: targetFront => {
+      return (
+        // @backward-compat { version 87 } We need to check for the screenshot actor as well
+        // when connecting to older server that does not have the screenshotContentActor
+        targetFront.hasActor("screenshotContent") ||
+        targetFront.hasActor("screenshot")
+      );
+    },
     async onClick(event, toolbox) {
       // Special case for screenshot button to check for clipboard preference
       const clipboardEnabled = Services.prefs.getBoolPref(
         "devtools.screenshot.clipboard.enabled"
       );
-      const args = { fullpage: true, file: true };
-      if (clipboardEnabled) {
-        args.clipboard = true;
+
+      // When screenshot to clipboard is enabled disabling saving to file
+      const args = {
+        fullpage: true,
+        file: !clipboardEnabled,
+        clipboard: clipboardEnabled,
+      };
+
+      const messages = await captureAndSaveScreenshot(
+        toolbox.target,
+        toolbox.win,
+        args
+      );
+      const notificationBox = toolbox.getNotificationBox();
+      const priorityMap = {
+        error: notificationBox.PRIORITY_CRITICAL_HIGH,
+        warn: notificationBox.PRIORITY_WARNING_HIGH,
+      };
+      for (const { text, level } of messages) {
+        // captureAndSaveScreenshot returns "saved" messages, that indicate where the
+        // screenshot was saved. In regular toolbox, we don't want to display them as
+        // the download UI can be used to open them.
+        // But in the browser toolbox, we can't see the download UI, so we'll display the
+        // saved message so the user knows there the file was saved.
+        if (
+          !toolbox.isBrowserToolbox &&
+          level !== "warn" &&
+          level !== "error"
+        ) {
+          continue;
+        }
+        notificationBox.appendNotification(
+          text,
+          null,
+          null,
+          priorityMap[level] || notificationBox.PRIORITY_INFO_MEDIUM
+        );
       }
-      const screenshotFront = await toolbox.target.getFront("screenshot");
-      await screenshotFront.captureAndSave(toolbox.win, args);
     },
   },
   createHighlightButton("RulersHighlighter", "rulers"),

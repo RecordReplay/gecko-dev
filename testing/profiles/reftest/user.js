@@ -57,25 +57,19 @@ user_pref("layout.interruptible-reflow.enabled", false);
 // can't guarantee taking both reftest snapshots at the same point
 // during the fade.
 user_pref("layout.testing.overlay-scrollbars.always-visible", true);
-// Disable all recommended Marionette preferences for Gecko tests.
-// The prefs recommended by Marionette are typically geared towards
-// consumer automation; not vendor testing.
-user_pref("marionette.prefs.recommended", false);
 user_pref("media.gmp-manager.url.override", "http://localhost/dummy-gmp-manager.xml");
 user_pref("media.openUnsupportedTypeWithExternalApp", false);
 // Reftests load a lot of URLs very quickly. This puts avoidable and
 // unnecessary I/O pressure on the Places DB (measured to be in the
 // gigabytes).
 user_pref("places.history.enabled", false);
-// For Firefox 52 only, ESR will support non-Flash plugins while release will
-// not, so we keep testing the non-Flash pathways
-user_pref("plugin.load_flash_only", false);
-// Likewise for lists served from the Mozilla server.
-user_pref("plugins.flashBlock.enabled", false);
-user_pref("plugins.show_infobar", false);
 user_pref("privacy.trackingprotection.annotate_channels", false);
 user_pref("privacy.trackingprotection.enabled", false);
 user_pref("privacy.trackingprotection.pbmode.enabled", false);
+// Disable all recommended Remote Protocol preferences for Gecko tests.
+// The prefs recommended by Remote Protocol are typically geared towards
+// consumer automation; not vendor testing.
+user_pref("remote.prefs.recommended", false);
 // Checking whether two files are the same is slow on Windows.
 // Setting this pref makes tests run much faster there. Reftests also
 // rely on this to load downloadable fonts (which are restricted to same

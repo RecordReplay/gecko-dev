@@ -22,6 +22,7 @@ user_pref("media.mediasource.webm.enabled", true);
 user_pref("media.av1.enabled", true);
 user_pref("media.eme.enabled", true);
 user_pref("dom.forms.datetime.others", true);
+user_pref("dom.forms.datetime-local", true);
 // Enable Gamepad
 user_pref("dom.gamepad.enabled", true);
 user_pref("dom.gamepad.non_standard_events.enabled", true);
@@ -29,5 +30,3 @@ user_pref("dom.gamepad.non_standard_events.enabled", true);
 user_pref("extensions.formautofill.available", "on");
 // Enable CSS clip-path `path()` for testing
 user_pref("layout.css.clip-path-path.enabled", true);
-// Enable visualviewport for testing
-user_pref("dom.visualviewport.enabled", true);

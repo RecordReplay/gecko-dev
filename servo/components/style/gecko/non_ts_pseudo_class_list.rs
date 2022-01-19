@@ -55,8 +55,6 @@ macro_rules! apply_non_ts_list {
                 ("fullscreen", Fullscreen, IN_FULLSCREEN_STATE, _),
                 ("-moz-modal-dialog", MozModalDialog, IN_MODAL_DIALOG_STATE, PSEUDO_CLASS_ENABLED_IN_UA_SHEETS),
                 ("-moz-topmost-modal-dialog", MozTopmostModalDialog, IN_TOPMOST_MODAL_DIALOG_STATE, PSEUDO_CLASS_ENABLED_IN_UA_SHEETS),
-                // TODO(emilio): This is inconsistently named (the capital R).
-                ("-moz-focusring", MozFocusRing, IN_FOCUSRING_STATE, _),
                 ("-moz-broken", MozBroken, IN_BROKEN_STATE, _),
                 ("-moz-loading", MozLoading, IN_LOADING_STATE, _),
                 ("-moz-has-dir-attr", MozHasDirAttr, IN_HAS_DIR_ATTR_STATE, PSEUDO_CLASS_ENABLED_IN_UA_SHEETS),
@@ -65,8 +63,6 @@ macro_rules! apply_non_ts_list {
                 ("-moz-dir-attr-like-auto", MozDirAttrLikeAuto, IN_HAS_DIR_ATTR_LIKE_AUTO_STATE, PSEUDO_CLASS_ENABLED_IN_UA_SHEETS),
 
                 ("-moz-autofill-preview", MozAutofillPreview, IN_AUTOFILL_PREVIEW_STATE, PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME),
-
-                ("-moz-handler-noplugins", MozHandlerNoPlugins, IN_HANDLER_NOPLUGINS, PSEUDO_CLASS_ENABLED_IN_UA_SHEETS_AND_CHROME),
 
                 ("-moz-math-increment-script-level", MozMathIncrementScriptLevel, IN_INCREMENT_SCRIPT_LEVEL_STATE, _),
 
@@ -81,8 +77,8 @@ macro_rules! apply_non_ts_list {
                 ("read-only", ReadOnly, IN_READONLY_STATE, _),
                 ("read-write", ReadWrite, IN_READWRITE_STATE, _),
                 ("-moz-submit-invalid", MozSubmitInvalid, IN_MOZ_SUBMITINVALID_STATE, _),
-                ("-moz-ui-valid", MozUIValid, IN_MOZ_UI_VALID_STATE, _),
-                ("-moz-ui-invalid", MozUIInvalid, IN_MOZ_UI_INVALID_STATE, _),
+                ("user-valid", UserValid, IN_MOZ_UI_VALID_STATE, _),
+                ("user-invalid", UserInvalid, IN_MOZ_UI_INVALID_STATE, _),
                 ("-moz-meter-optimum", MozMeterOptimum, IN_OPTIMUM_STATE, _),
                 ("-moz-meter-sub-optimum", MozMeterSubOptimum, IN_SUB_OPTIMUM_STATE, _),
                 ("-moz-meter-sub-sub-optimum", MozMeterSubSubOptimum, IN_SUB_SUB_OPTIMUM_STATE, _),

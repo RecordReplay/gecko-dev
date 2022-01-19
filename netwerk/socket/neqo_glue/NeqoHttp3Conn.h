@@ -36,17 +36,16 @@ class NeqoHttp3Conn final {
     neqo_http3conn_authenticated(this, aError);
   }
 
-  void ProcessInput(uint8_t* aPacket, uint32_t aLen) {
-    neqo_http3conn_process_input(this, aPacket, aLen);
+  nsresult ProcessInput(const nsACString* aRemoteAddr,
+                        const nsTArray<uint8_t>& aPacket) {
+    return neqo_http3conn_process_input(this, aRemoteAddr, &aPacket);
   }
 
-  uint64_t ProcessOutput() { return neqo_http3conn_process_output(this); }
-
-  bool HasDataToSend() { return neqo_http3conn_has_data_to_send(this); }
-
-  nsresult GetDataToSend(nsTArray<uint8_t>& aData) {
+  bool ProcessOutput(nsACString* aRemoteAddr, uint16_t* aPort,
+                     nsTArray<uint8_t>& aData, uint64_t* aTimeout) {
     aData.TruncateLength(0);
-    return neqo_http3conn_get_data_to_send(this, &aData);
+    return neqo_http3conn_process_output(this, aRemoteAddr, aPort, &aData,
+                                         aTimeout);
   }
 
   nsresult GetEvent(Http3Event* aEvent, nsTArray<uint8_t>& aData) {

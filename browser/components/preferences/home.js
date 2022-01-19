@@ -562,8 +562,6 @@ var gHomePane = {
     if (tabs.length) {
       HomePage.set(tabs.map(getTabURI).join("|")).catch(Cu.reportError);
     }
-
-    Services.telemetry.scalarAdd("preferences.use_current_page", 1);
   },
 
   _setHomePageToBookmarkClosed(rv, aEvent) {
@@ -591,7 +589,6 @@ var gHomePane = {
       },
       rv
     );
-    Services.telemetry.scalarAdd("preferences.use_bookmark", 1);
   },
 
   restoreDefaultHomePage() {
@@ -699,6 +696,7 @@ var gHomePane = {
 
     this._updateUseCurrentButton();
     this._handleHomePageOverrides();
+    this.syncFromNewTabPref();
     window.addEventListener("focus", this._updateUseCurrentButton.bind(this));
 
     // Extension/override-related events

@@ -74,6 +74,8 @@ class WebRenderLayerScrollData final {
     mTransformIsPerspective = aTransformIsPerspective;
   }
   bool GetTransformIsPerspective() const { return mTransformIsPerspective; }
+  void SetResolution(float aResolution) { mResolution = aResolution; }
+  float GetResolution() const { return mResolution; }
 
   EventRegions GetEventRegions() const { return EventRegions(); }
   void SetEventRegionsOverride(const EventRegionsOverride& aOverride) {
@@ -161,7 +163,6 @@ class WebRenderLayerScrollData final {
   Maybe<ScrollableLayerGuid::ViewID> GetAsyncZoomContainerId() const {
     return mAsyncZoomContainerId;
   }
-  bool IsAsyncZoomContainer() const { return mAsyncZoomContainerId.isSome(); }
 
   void Dump(std::ostream& aOut, const WebRenderScrollData& aOwner) const;
 
@@ -186,6 +187,7 @@ class WebRenderLayerScrollData final {
   gfx::Matrix4x4 mAncestorTransform;
   gfx::Matrix4x4 mTransform;
   bool mTransformIsPerspective;
+  float mResolution;
   LayerIntRegion mVisibleRegion;
   // The remote documents only need their size because their origin is always
   // (0, 0).

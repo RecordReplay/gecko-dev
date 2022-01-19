@@ -10,6 +10,7 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/dom/XULTreeElement.h"
+#include "mozilla/CSSOrderAwareFrameIterator.h"
 #include "nsCOMPtr.h"
 #include "nsGkAtoms.h"
 #include "nsIContent.h"
@@ -81,21 +82,13 @@ void nsDisplayXULTreeColSplitterTarget::HitTest(
 
   // Swap left and right for RTL trees in order to find the correct splitter
   if (mFrame->StyleVisibility()->mDirection == StyleDirection::Rtl) {
-    bool tmp = left;
-    left = right;
-    right = tmp;
+    std::swap(left, right);
   }
 
   if (left || right) {
+    nsIFrame* child = nsBoxFrame::SlowOrdinalGroupAwareSibling(mFrame, right);
     // We are a header. Look for the correct splitter.
-    nsIFrame* child;
-    if (left)
-      child = mFrame->GetPrevSibling();
-    else
-      child = mFrame->GetNextSibling();
-
-    if (child && child->GetContent()->NodeInfo()->Equals(nsGkAtoms::splitter,
-                                                         kNameSpaceID_XUL)) {
+    if (child && child->GetContent()->IsXULElement(nsGkAtoms::splitter)) {
       aOutFrames->AppendElement(child);
     }
   }

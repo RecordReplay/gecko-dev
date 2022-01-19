@@ -35,6 +35,10 @@
 #include "nsFrameSelection.h"
 #include "mozilla/LookAndFeel.h"
 
+#ifdef ACCESSIBILITY
+#  include "nsAccessibilityService.h"
+#endif
+
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
@@ -213,6 +217,19 @@ void nsTableCellFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle) {
   if (!aOldComputedStyle)  // avoid this on init
     return;
 
+#ifdef ACCESSIBILITY
+  if (nsAccessibilityService* accService = GetAccService()) {
+    if (StyleBorder()->GetComputedBorder() !=
+        aOldComputedStyle->StyleBorder()->GetComputedBorder()) {
+      // If a table cell's computed border changes, it can change whether or
+      // not its parent table is classified as a layout or data table. We
+      // send a notification here to invalidate the a11y cache on the table
+      // so the next fetch of IsProbablyLayoutTable() is accurate.
+      accService->TableLayoutGuessMaybeChanged(PresShell(), mContent);
+    }
+  }
+#endif
+
   nsTableFrame* tableFrame = GetTableFrame();
   if (tableFrame->IsBorderCollapse() &&
       tableFrame->BCRecalcNeeded(aOldComputedStyle, Style())) {
@@ -277,8 +294,8 @@ void nsTableCellFrame::DecorateForSelection(DrawTarget* aDrawTarget,
       if (displaySelection == nsISelectionController::SELECTION_DISABLED) {
         bordercolor = NS_RGB(176, 176, 176);  // disabled color
       } else {
-        bordercolor =
-            LookAndFeel::GetColor(LookAndFeel::ColorID::TextSelectBackground);
+        bordercolor = LookAndFeel::Color(
+            LookAndFeel::ColorID::TextSelectBackground, this);
       }
       nscoord threePx = nsPresContext::CSSPixelsToAppUnits(3);
       if ((mRect.width > threePx) && (mRect.height > threePx)) {
@@ -446,11 +463,17 @@ void nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     nsRect bgRect = GetRectRelativeToSelf() + aBuilder->ToReferenceFrame(this);
 
     // display background if we need to.
+    AppendedBackgroundType result = AppendedBackgroundType::None;
     if (aBuilder->IsForEventDelivery() ||
         !StyleBackground()->IsTransparent(this) ||
         StyleDisplay()->HasAppearance()) {
-      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
+      result = nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
           aBuilder, this, bgRect, aLists.BorderBackground());
+    }
+
+    if (result == AppendedBackgroundType::None) {
+      aBuilder->BuildCompositorHitTestInfoIfNeeded(this,
+                                                   aLists.BorderBackground());
     }
 
     // display inset box-shadows if we need to.

@@ -9,12 +9,14 @@
 
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "mozilla/layers/ClipManager.h"
+#include "mozilla/layers/HitTestInfoManager.h"
 #include "mozilla/layers/WebRenderMessages.h"
 #include "mozilla/layers/WebRenderScrollData.h"
 #include "mozilla/layers/WebRenderUserData.h"
 #include "mozilla/SVGIntegrationUtils.h"  // for WrFiltersHolder
 #include "nsDisplayList.h"
 #include "nsIFrame.h"
+#include "nsTHashSet.h"
 #include "DisplayItemCache.h"
 
 namespace mozilla {
@@ -33,11 +35,9 @@ class WebRenderParentCommand;
 class WebRenderUserData;
 
 class WebRenderCommandBuilder final {
-  typedef nsTHashtable<nsRefPtrHashKey<WebRenderUserData>>
-      WebRenderUserDataRefTable;
-  typedef nsTHashtable<nsRefPtrHashKey<WebRenderCanvasData>> CanvasDataSet;
-  typedef nsTHashtable<nsRefPtrHashKey<WebRenderLocalCanvasData>>
-      LocalCanvasDataSet;
+  typedef nsTHashSet<RefPtr<WebRenderUserData>> WebRenderUserDataRefTable;
+  typedef nsTHashSet<RefPtr<WebRenderCanvasData>> CanvasDataSet;
+  typedef nsTHashSet<RefPtr<WebRenderLocalCanvasData>> LocalCanvasDataSet;
 
  public:
   explicit WebRenderCommandBuilder(WebRenderLayerManager* aManager);
@@ -66,6 +66,10 @@ class WebRenderCommandBuilder final {
       mozilla::wr::ImageRendering aRendering, const StackingContextHelper& aSc,
       gfx::IntSize& aSize, const Maybe<LayoutDeviceRect>& aAsyncImageBounds);
 
+  Maybe<wr::BlobImageKey> CreateBlobImageKey(
+      nsDisplayItem* aItem, ImageContainer* aContainer,
+      mozilla::wr::IpcResourceUpdateQueue& aResources);
+
   WebRenderUserDataRefTable* GetWebRenderUserDataTable() {
     return &mWebRenderUserDatas;
   }
@@ -75,6 +79,12 @@ class WebRenderCommandBuilder final {
                  mozilla::wr::IpcResourceUpdateQueue& aResources,
                  const StackingContextHelper& aSc,
                  const LayoutDeviceRect& aRect, const LayoutDeviceRect& aClip);
+
+  bool PushBlobImage(nsDisplayItem* aItem, ImageContainer* aContainer,
+                     mozilla::wr::DisplayListBuilder& aBuilder,
+                     mozilla::wr::IpcResourceUpdateQueue& aResources,
+                     const LayoutDeviceRect& aRect,
+                     const LayoutDeviceRect& aClip);
 
   Maybe<wr::ImageMask> BuildWrMaskImage(
       nsDisplayMasksAndClipPaths* aMaskItem, wr::DisplayListBuilder& aBuilder,
@@ -135,15 +145,15 @@ class WebRenderCommandBuilder final {
       frame->AddProperty(WebRenderUserDataProperty::Key(), userDataTable);
     }
 
-    RefPtr<WebRenderUserData>& data = userDataTable->GetOrInsert(
-        WebRenderUserDataKey(aItem->GetPerFrameKey(), T::Type()));
-    if (!data) {
-      data = new T(GetRenderRootStateManager(), aItem);
-      mWebRenderUserDatas.PutEntry(data);
-      if (aOutIsRecycled) {
-        *aOutIsRecycled = false;
-      }
-    }
+    RefPtr<WebRenderUserData>& data = userDataTable->LookupOrInsertWith(
+        WebRenderUserDataKey(aItem->GetPerFrameKey(), T::Type()), [&] {
+          auto data = MakeRefPtr<T>(GetRenderRootStateManager(), aItem);
+          mWebRenderUserDatas.Insert(data);
+          if (aOutIsRecycled) {
+            *aOutIsRecycled = false;
+          }
+          return data;
+        });
 
     MOZ_ASSERT(data);
     MOZ_ASSERT(data->GetType() == T::Type());
@@ -154,10 +164,10 @@ class WebRenderCommandBuilder final {
 
     switch (T::Type()) {
       case WebRenderUserData::UserDataType::eCanvas:
-        mLastCanvasDatas.PutEntry(data->AsCanvasData());
+        mLastCanvasDatas.Insert(data->AsCanvasData());
         break;
       case WebRenderUserData::UserDataType::eLocalCanvas:
-        mLastLocalCanvasDatas.PutEntry(data->AsLocalCanvasData());
+        mLastLocalCanvasDatas.Insert(data->AsLocalCanvasData());
         break;
       default:
         break;
@@ -177,7 +187,15 @@ class WebRenderCommandBuilder final {
                                const StackingContextHelper& aSc,
                                nsDisplayListBuilder* aDisplayListBuilder);
 
+  bool ComputeInvalidationForDisplayItem(nsDisplayListBuilder* aBuilder,
+                                         const nsPoint& aShift,
+                                         nsDisplayItem* aItem);
+  bool ComputeInvalidationForDisplayList(nsDisplayListBuilder* aBuilder,
+                                         const nsPoint& aShift,
+                                         nsDisplayList* aList);
+
   ClipManager mClipManager;
+  HitTestInfoManager mHitTestInfoManager;
 
   // We use this as a temporary data structure while building the mScrollData
   // inside a layers-free transaction.

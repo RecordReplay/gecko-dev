@@ -5,24 +5,20 @@
 @namespace html url("http://www.w3.org/1999/xhtml");
 
 %include ../shared/browser.inc.css
+%include ../shared/browser-custom-colors.inc.css
 
 :root {
-  --toolbar-non-lwt-bgcolor: #f9f9fa;
-  --toolbar-non-lwt-textcolor: #0c0c0d;
+  --toolbar-non-lwt-bgcolor: -moz-dialog;
+  --toolbar-non-lwt-textcolor: -moz-dialogtext;
   --toolbar-non-lwt-bgimage: none;
 
   --toolbarbutton-vertical-text-padding: calc(var(--toolbarbutton-inner-padding) + 1px);
   --toolbarbutton-border-radius: 4px;
-  --toolbarbutton-icon-fill-opacity: .7;
+  --toolbarbutton-icon-fill-opacity: 1;
 
   --panel-separator-color: hsla(210,4%,10%,.14);
-  --arrowpanel-dimmed: hsla(0,0%,80%,.35);
-  --arrowpanel-dimmed-further: hsla(0,0%,80%,.5);
-  --arrowpanel-dimmed-even-further: hsla(0,0%,80%,.8);
 
   --arrowpanel-field-background: rgba(249,249,250,.3);
-
-  --urlbar-separator-color: hsla(0,0%,16%,.2);
 
   --chrome-content-separator-color: #e1e1e2;
 }
@@ -33,25 +29,21 @@
 
 :root[lwt-popup-brighttext] {
   --panel-separator-color: rgba(249,249,250,.1);
-
-  --arrowpanel-dimmed: rgba(249,249,250,.1);
-  --arrowpanel-dimmed-further: rgba(249,249,250,.15);
-  --arrowpanel-dimmed-even-further: rgba(249,249,250,.2);
-
   --arrowpanel-field-background: rgba(12,12,13,.3);
 }
 
 #navigator-toolbox {
   appearance: none;
-  --tabs-border-color: rgba(0,0,0,.2);
 }
 
-#navigator-toolbox:not(:-moz-lwtheme):-moz-window-inactive {
-  --tabs-border-color: rgba(0,0,0,.05);
+#navigator-toolbox:not(:-moz-lwtheme) {
+  background-color: window;
 }
 
-#navigator-toolbox:-moz-lwtheme {
-  --tabs-border-color: rgba(0,0,0,.3);
+@media not (prefers-contrast) {
+  #navigator-toolbox:not(:-moz-lwtheme) {
+    background-color: #f0f0f4;
+  }
 }
 
 /*
@@ -69,15 +61,6 @@
   height: 1px;
   margin-top: -1px;
   opacity: 0.001;
-}
-
-#tabbrowser-tabs {
-  --tab-line-color: #0a84ff;
-}
-
-#navigator-toolbox toolbarbutton:-moz-lwtheme {
-  color: inherit;
-  text-shadow: inherit;
 }
 
 /** Begin titlebar **/
@@ -116,8 +99,11 @@
   border-top: 1px solid rgba(0,0,0,0.65);
 }
 
-.browser-toolbar:not(.titlebar-color) {
+.browser-toolbar {
   appearance: none;
+}
+
+.browser-toolbar:not(.titlebar-color) {
   background: var(--toolbar-bgcolor);
   color: var(--toolbar-color);
 }
@@ -132,11 +118,6 @@
   /* The toolbar buttons that animate are only visible when the #TabsToolbar is not collapsed.
      The animations use position:absolute and require a positioned #nav-bar. */
   position: relative;
-}
-
-#PersonalToolbar:not(:-moz-lwtheme):-moz-window-inactive,
-#nav-bar:not(:-moz-lwtheme):-moz-window-inactive {
-  background-color: -moz-mac-chrome-inactive;
 }
 
 /* ----- BOOKMARK TOOLBAR ----- */
@@ -178,24 +159,6 @@
 %include ../shared/toolbarbutton-icons.inc.css
 %include ../shared/menupanel.inc.css
 
-/* Override OSX-specific toolkit findbar button styles */
-.findbar-button {
-  background-image: none !important;
-  box-shadow: none !important;
-  border: none;
-}
-
-/* On Mac, native buttons keep their full opacity when they become disabled
- * and only the glyph or text on top of them becomes less opaque. */
-:root:not([customizing]) #back-button[disabled="true"] {
-  opacity: 1 !important;
-  /* Disabled toolbar buttons get an opacity of 0.4 which multiplies
-   * their fill-opacity of 0.7. calc() doesn't work here - we'd need
-   * to multiply two unitless numbers and that's invalid in CSS, so
-   * we need to hard code the value for now. */
-  fill-opacity: 0.28;
-}
-
 /* Inactive elements are faded out on OSX */
 .toolbarbutton-1:not(:hover):-moz-window-inactive,
 .bookmark-item:not(:hover):-moz-window-inactive,
@@ -215,6 +178,26 @@
 
 %include ../shared/urlbar-searchbar.inc.css
 
+@media not (prefers-contrast) {
+  :root:not(:-moz-lwtheme) #urlbar:not([focused="true"]) {
+    --urlbar-box-bgcolor: white;
+  }
+  :root[lwt-default-theme-in-dark-mode] #urlbar:not([focused="true"]) {
+    --urlbar-box-bgcolor: var(--lwt-toolbar-field-focus);
+  }
+}
+
+@media (prefers-contrast) {
+  /* The "increase contrast" preference on macOS draws a 1px black line around
+     panels, including the separate search bar. Since the Urlbar is not
+     implemented as a panel, it does not get this outline. This outline rule
+     resembles the system outline, bringing the Urlbar in line with panels and
+     other Mac apps. */
+  #urlbar[open] > #urlbar-background {
+    outline: 1px solid var(--focus-outline-color)
+  }
+}
+
 #urlbar,
 #searchbar {
   font-size: 1.25em;
@@ -232,29 +215,21 @@
   line-height: 1.745em;
 }
 
+/* Move the margin to the parent element to properly position the ::after badge */
+moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left > .menu-iconic-icon {
+  margin-inline: 0;
+}
+moz-input-box > menupopup .context-menu-add-engine > .menu-iconic-left {
+  margin-inline: 0 5px;
+}
+
 %include ../shared/identity-block/identity-block.inc.css
 %include ../shared/notification-icons.inc.css
 %include ../shared/addon-notification.inc.css
 
-#pageAction-urlbar-shareURL,
-#pageAction-panel-shareURL {
-  list-style-image: url("chrome://browser/skin/share.svg");
-}
-
 /* Address bar results view */
 
 %include ../shared/urlbarView.inc.css
-
-:root {
-  --urlbar-popup-url-color: hsl(210, 77%, 47%);
-  --urlbar-popup-action-color: hsl(178, 100%, 28%);
-}
-
-.urlbarView:not(:-moz-lwtheme),
-#PopupSearchAutoComplete:not(:-moz-lwtheme) {
-  /* Set custom disabled text color since native graytext is too faint on macOS 10.14+. */
-  --panel-disabled-color: #737373;
-}
 
 /* ----- AUTOCOMPLETE ----- */
 
@@ -266,34 +241,17 @@
 
 #BMB_bookmarksPopup[side="top"],
 #BMB_bookmarksPopup[side="bottom"] {
-  margin-inline: -26px;
+  margin-inline: -17px;
 }
 
 #BMB_bookmarksPopup[side="left"],
 #BMB_bookmarksPopup[side="right"] {
-  margin-block: -26px;
+  margin-block: -17px;
 }
 
 /* Bookmarking panel */
 
 %include ../shared/places/editBookmarkPanel.inc.css
-
-#editBookmarkPanelRows > vbox > html|input,
-#editBookmarkPanelRows > vbox > hbox > html|input {
-  appearance: none;
-  background-color: var(--arrowpanel-field-background);
-  color: inherit;
-  border-radius: 2px;
-  border: 1px solid var(--panel-separator-color) !important;
-  margin: 0;
-  padding: 3px 6px;
-}
-
-#editBookmarkPanelRows > vbox > html|input:focus,
-#editBookmarkPanelRows > vbox > hbox > html|input:focus {
-  border-color: -moz-mac-focusring !important;
-  box-shadow: var(--focus-ring-box-shadow);
-}
 
 /* The following elements come from editBookmarkPanel.inc.xhtml. Styling that's
    specific to the editBookmarkPanel should be in browser.css. Styling that
@@ -322,7 +280,7 @@
   min-height: 24px;
   height: 24px;
   color: inherit;
-  list-style-image: url("chrome://browser/skin/add.svg");
+  list-style-image: url("chrome://global/skin/icons/plus.svg");
 }
 
 #editBMPanel_newFolderButton:hover {
@@ -340,29 +298,6 @@
 #editBMPanel_newFolderButton .button-text {
   -moz-box-flex: 1; /* push the button icon to the start side */
   text-align: start;
-}
-
-#editBMPanel_folderMenuList {
-  margin: 0;
-  min-height: 22px;
-  padding-block: 2px 1px;
-  padding-inline: 8px 4px;
-}
-
-#editBMPanel_folderMenuList:-moz-focusring {
-  box-shadow: var(--focus-ring-box-shadow);
-}
-
-#editBMPanel_folderMenuList::part(dropmarker) {
-  appearance: none;
-  -moz-context-properties: fill, fill-opacity;
-  fill: currentColor;
-  fill-opacity: 0.8;
-  list-style-image: url("chrome://global/skin/icons/arrow-dropdown-12.svg");
-  display: -moz-box;
-  -moz-box-align: center;
-  padding-inline-end: 4px;
-  width: 7px;
 }
 
 /**** folder tree and tag selector ****/
@@ -405,38 +340,6 @@
   position: relative;
 }
 
-/**** expanders ****/
-
-#editBookmarkPanel .expander-up,
-#editBookmarkPanel .expander-down {
-  appearance: none; /* override button.css */
-  -moz-context-properties: fill, fill-opacity;
-  fill: currentColor;
-  fill-opacity: 0.8;
-  margin: 0;
-  margin-inline-start: 4px;
-  min-width: 27px;
-  min-height: 22px;
-}
-
-#editBookmarkPanel .expander-up > .button-box > .button-icon,
-#editBookmarkPanel .expander-down > .button-box > .button-icon {
-  margin: 1px 0 0;
-}
-
-#editBookmarkPanel .expander-up > .button-box > .button-text,
-#editBookmarkPanel .expander-down > .button-box > .button-text {
-  display: none;
-}
-
-#editBookmarkPanel .expander-up {
-  list-style-image: url("chrome://global/skin/icons/arrow-up-12.svg");
-}
-
-#editBookmarkPanel .expander-down {
-  list-style-image: url("chrome://global/skin/icons/arrow-dropdown-12.svg");
-}
-
 /* ----- SIDEBAR ELEMENTS ----- */
 
 %include ../shared/sidebar.inc.css
@@ -451,25 +354,17 @@
   --sidebar-background-color: -moz-mac-source-list;
 }
 
-/* Give the sidebar a vibrant appearance. Only do this when no lwtheme is
- * in use, because vibrant appearance values only work if there is no
- * background-color rendered behind the element, and we have :root:-moz-lwtheme
- * rules which set appearance: none and an opaque background color on the
- * root element. That background color would interfere with the vibrancy.
- * See bug 1594132 for fixing this. */
-#sidebar-box:not(:-moz-lwtheme) {
+/* Give the sidebar a vibrant appearance. Only do this when no lwtheme sidebar
+ * rules are in use. Vibrant appearance values only work if there is no
+ * background-color rendered behind the element. If the active theme has sidebar
+ * rules, we want to show the theme's background-color in the sidebar. */
+#sidebar-box:not([lwt-sidebar]) {
   appearance: auto;
   -moz-default-appearance: -moz-mac-source-list;
   -moz-font-smoothing-background-color: -moz-mac-source-list;
 }
 
 /* ----- CONTENT ----- */
-
-.browserContainer > findbar {
-  /* Use the default background gradient from findBar.css */
-  background-color: transparent;
-  color: -moz-DialogText;
-}
 
 .openintabs-menuitem {
   list-style-image: none;
@@ -517,34 +412,6 @@
 .tabbrowser-tab[visuallyselected=true] {
   /* overriding tabbox.css */
   text-shadow: inherit;
-}
-
-:is(.keyboard-focused-tab, .tabbrowser-tab:focus:not([aria-activedescendant])) > .tab-stack > .tab-content > .tab-label-container:not([pinned]),
-:is(.keyboard-focused-tab, .tabbrowser-tab:focus:not([aria-activedescendant])) > .tab-stack > .tab-content > .tab-icon-image[pinned],
-:is(.keyboard-focused-tab, .tabbrowser-tab:focus:not([aria-activedescendant])) > .tab-stack > .tab-content > .tab-throbber[pinned] {
-  box-shadow: var(--focus-ring-box-shadow);
-}
-
-#TabsToolbar > .toolbar-items {
-  padding-top: var(--space-above-tabbar);
-}
-
-#TabsToolbar:not(:-moz-lwtheme) {
-  color: #333;
-}
-
-:root:is([inFullscreen], [tabsintitlebar]) #TabsToolbar:not(:-moz-lwtheme) {
-  appearance: auto;
-  -moz-default-appearance: -moz-mac-vibrant-titlebar-dark;
-  -moz-font-smoothing-background-color: -moz-mac-vibrant-titlebar-dark;
-  background-color: #232323;
-  color: hsl(240, 9%, 98%);
-  text-shadow: none;
-}
-
-.tabbrowser-tab[multiselected]:not(:-moz-lwtheme),
-.tabbrowser-tab[visuallyselected=true]:not(:-moz-lwtheme) {
-  -moz-font-smoothing-background-color: var(--toolbar-bgcolor);
 }
 
 #tabbrowser-tabs {
@@ -628,14 +495,8 @@
   margin-top: -14px;
 }
 
-%include ../shared/contextmenu.inc.css
-
-#context-navigation > .menuitem-iconic {
-  padding-inline: 0;
-}
-
 .cui-widget-panelview[id^=PanelUI-webext-] {
-  border-radius: 3.5px;
+  border-radius: var(--arrowpanel-border-radius);
 }
 
 .webextension-popup-browser,

@@ -61,6 +61,22 @@ static Maybe<uint8_t> GetBytesPerBlock(dom::GPUTextureFormat format) {
       return Some<uint8_t>(16u);
     case dom::GPUTextureFormat::Depth32float:
       return Some<uint8_t>(4u);
+    case dom::GPUTextureFormat::Bc1_rgba_unorm:
+    case dom::GPUTextureFormat::Bc1_rgba_unorm_srgb:
+    case dom::GPUTextureFormat::Bc4_r_unorm:
+    case dom::GPUTextureFormat::Bc4_r_snorm:
+      return Some<uint8_t>(8u);
+    case dom::GPUTextureFormat::Bc2_rgba_unorm:
+    case dom::GPUTextureFormat::Bc2_rgba_unorm_srgb:
+    case dom::GPUTextureFormat::Bc3_rgba_unorm:
+    case dom::GPUTextureFormat::Bc3_rgba_unorm_srgb:
+    case dom::GPUTextureFormat::Bc5_rg_unorm:
+    case dom::GPUTextureFormat::Bc5_rg_snorm:
+    case dom::GPUTextureFormat::Bc6h_rgb_ufloat:
+    case dom::GPUTextureFormat::Bc6h_rgb_float:
+    case dom::GPUTextureFormat::Bc7_rgba_unorm:
+    case dom::GPUTextureFormat::Bc7_rgba_unorm_srgb:
+      return Some<uint8_t>(16u);
     case dom::GPUTextureFormat::Depth24plus:
     case dom::GPUTextureFormat::Depth24plus_stencil8:
     case dom::GPUTextureFormat::EndGuard_:

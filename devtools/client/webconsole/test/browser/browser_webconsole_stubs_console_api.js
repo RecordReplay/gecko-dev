@@ -5,7 +5,7 @@
 
 const {
   STUBS_UPDATE_ENV,
-  createResourceWatcherForTab,
+  createCommandsForTab,
   getStubFile,
   getCleanedPacket,
   getSerializedPacket,
@@ -40,10 +40,13 @@ add_task(async function() {
 
   let failed = false;
   for (const [key, packet] of generatedStubs) {
-    const packetStr = getSerializedPacket(packet, { sortKeys: true });
+    const packetStr = getSerializedPacket(packet, {
+      sortKeys: true,
+      replaceActorIds: true,
+    });
     const existingPacketStr = getSerializedPacket(
       existingStubs.rawPackets.get(key),
-      { sortKeys: true }
+      { sortKeys: true, replaceActorIds: true }
     );
 
     is(packetStr, existingPacketStr, `"${key}" packet has expected value`);
@@ -55,15 +58,15 @@ add_task(async function() {
   } else {
     ok(true, "Stubs are up to date");
   }
-
-  await closeTabAndToolbox().catch(() => {});
 });
 
 async function generateConsoleApiStubs() {
   const stubs = new Map();
 
   const tab = await addTab(TEST_URI);
-  const resourceWatcher = await createResourceWatcherForTab(tab);
+  const commands = await createCommandsForTab(tab);
+  await commands.targetCommand.startListening();
+  const resourceCommand = commands.resourceCommand;
 
   // The resource-watcher only supports a single call to watch/unwatch per
   // instance, so we attach a unique watch callback, which will forward the
@@ -75,8 +78,8 @@ async function generateConsoleApiStubs() {
       handleConsoleMessage(resource);
     }
   };
-  await resourceWatcher.watchResources(
-    [resourceWatcher.TYPES.CONSOLE_MESSAGE],
+  await resourceCommand.watchResources(
+    [resourceCommand.TYPES.CONSOLE_MESSAGE],
     {
       onAvailable: onConsoleMessage,
     }
@@ -111,9 +114,11 @@ async function generateConsoleApiStubs() {
     await received;
   }
 
-  resourceWatcher.unwatchResources([resourceWatcher.TYPES.CONSOLE_MESSAGE], {
+  resourceCommand.unwatchResources([resourceCommand.TYPES.CONSOLE_MESSAGE], {
     onAvailable: onConsoleMessage,
   });
+
+  await commands.destroy();
 
   return stubs;
 }

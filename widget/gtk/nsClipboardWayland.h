@@ -134,7 +134,8 @@ class nsRetrievalContextWayland : public nsRetrievalContext {
 
   void ClearDragAndDropDataOffer();
 
-  void TransferFastTrackClipboard(int aClipboardRequestNumber,
+  void TransferFastTrackClipboard(ClipboardDataType aDataType,
+                                  int aClipboardRequestNumber,
                                   GtkSelectionData* aSelectionData);
 
   virtual ~nsRetrievalContextWayland() override;

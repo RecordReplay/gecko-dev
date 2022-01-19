@@ -1296,7 +1296,7 @@ add_task(async function testExtensionControlledProxyConfig() {
 
   async function openProxyPanel() {
     let panel = await openAndLoadSubDialog(PANEL_URL);
-    let closingPromise = waitForEvent(
+    let closingPromise = BrowserTestUtils.waitForEvent(
       panel.document.getElementById("ConnectionsDialog"),
       "dialogclosing"
     );
@@ -1404,5 +1404,47 @@ add_task(async function testExtensionControlledProxyConfig() {
 
   await extension.unload();
 
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
+});
+
+// Test that the newtab menu selection is correct when loading about:preferences
+add_task(async function testMenuSyncFromPrefs() {
+  const DEFAULT_NEWTAB = "about:newtab";
+
+  await openPreferencesViaOpenPreferencesAPI("paneHome", { leaveOpen: true });
+  is(
+    gBrowser.currentURI.spec,
+    "about:preferences#home",
+    "#home should be in the URI for about:preferences"
+  );
+
+  let doc = gBrowser.contentDocument;
+  let newTabMenuList = doc.getElementById("newTabMode");
+  // The new tab page is set to the default.
+  is(AboutNewTab.newTabURL, DEFAULT_NEWTAB, "new tab is set to default");
+
+  is(newTabMenuList.value, "0", "New tab menulist is set to the default");
+
+  newTabMenuList.value = "1";
+  newTabMenuList.dispatchEvent(new Event("command"));
+  is(newTabMenuList.value, "1", "New tab menulist is set to blank");
+
+  gBrowser.reloadTab(gBrowser.selectedTab);
+
+  await TestUtils.waitForCondition(
+    () => gBrowser.contentDocument.getElementById("newTabMode"),
+    "wait until element exists in new contentDoc"
+  );
+
+  is(
+    gBrowser.contentDocument.getElementById("newTabMode").value,
+    "1",
+    "New tab menulist is still set to blank"
+  );
+
+  // Cleanup
+  newTabMenuList.value = "0";
+  newTabMenuList.dispatchEvent(new Event("command"));
+  is(AboutNewTab.newTabURL, DEFAULT_NEWTAB, "new tab is set to default");
   BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });

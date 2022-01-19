@@ -81,10 +81,14 @@ class DebugTargetInfo extends PureComponent {
     const { debugTargetData, L10N } = this.props;
     const { name, version } = debugTargetData.runtimeInfo;
     const { connectionType } = debugTargetData;
+    const brandShorterName = Services.strings
+      .createBundle("chrome://branding/locale/brand.properties")
+      .GetStringFromName("brandShorterName");
 
     return connectionType === CONNECTION_TYPES.THIS_FIREFOX
       ? L10N.getFormatStr(
-          "toolbox.debugTargetInfo.runtimeLabel.thisFirefox",
+          "toolbox.debugTargetInfo.runtimeLabel.thisRuntime",
+          brandShorterName,
           version
         )
       : L10N.getFormatStr(
@@ -315,7 +319,8 @@ class DebugTargetInfo extends PureComponent {
         className: "qa-reload-button",
         icon: "chrome://browser/skin/reload.svg",
         l10nId: "toolbox.debugTargetInfo.reload",
-        onClick: () => this.props.toolbox.target.reload(),
+        onClick: () =>
+          this.props.toolbox.commands.targetCommand.reloadTopLevelTarget(),
       })
     );
 

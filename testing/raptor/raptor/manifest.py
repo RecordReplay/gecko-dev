@@ -38,60 +38,10 @@ playback_settings = [
     "playback_recordings",
 ]
 
-whitelist_live_site_tests = [
-    "booking-sf",
-    "discord",
-    "expedia",
-    "fashionbeans",
-    "google-accounts",
-    "imdb-firefox",
-    "medium-article",
-    "nytimes",
-    "people-article",
-    "raptor-youtube-playback",
-    "youtube-playback",
-    "reddit-thread",
-    "rumble-fox",
-    "stackoverflow-question",
-    "urbandictionary-define",
-    "wikia-marvel",
-]
-
 
 def filter_app(tests, values):
     for test in tests:
         if values["app"] in test["apps"]:
-            yield test
-
-
-def filter_live_sites(tests, values):
-    # if a test uses live sites only allow it to run if running locally or on try
-    # this prevents inadvertently submitting live site data to perfherder
-    for test in tests:
-        if test.get("use_live_sites", "false") == "true":
-            # can run with live sites when running locally
-            if values["run_local"] is True:
-                yield test
-            # can run with live sites if running on try
-            elif "hg.mozilla.org/try" in os.environ.get("GECKO_HEAD_REPOSITORY", "n/a"):
-                yield test
-
-            # can run with live sites when white-listed
-            # pylint --py3k: W1639
-            elif list(
-                filter(
-                    lambda name: test["name"].startswith(name),
-                    whitelist_live_site_tests,
-                )
-            ):
-                yield test
-
-            else:
-                LOG.warning(
-                    "%s is not allowed to run with use_live_sites" % test["name"]
-                )
-        else:
-            # not using live-sites so go ahead
             yield test
 
 
@@ -100,7 +50,7 @@ def get_browser_test_list(browser_app, run_local):
     test_manifest = TestManifest([raptor_ini], strict=False)
     info = {"app": browser_app, "run_local": run_local}
     return test_manifest.active_tests(
-        exists=False, disabled=False, filters=[filter_app, filter_live_sites], **info
+        exists=False, disabled=False, filters=[filter_app], **info
     )
 
 
@@ -219,6 +169,9 @@ def write_test_settings_json(args, test_details, oskey):
     # write test settings json file with test details that the control
     # server will provide for the web ext
     test_url = transform_platform(test_details["test_url"], oskey)
+    # this is needed for raptor browsertime to pick up the replaced
+    # {platform} argument for motionmark tests
+    test_details["test_url"] = test_url
 
     test_settings = {
         "raptor-options": {
@@ -315,6 +268,10 @@ def write_test_settings_json(args, test_details, oskey):
                 "gecko_profile_threads": ",".join(set(threads)),
             }
         )
+
+        features = test_details.get("gecko_profile_features")
+        if features:
+            test_settings["raptor-options"]["gecko_profile_features"] = features
 
     if test_details.get("newtab_per_cycle", None) is not None:
         test_settings["raptor-options"]["newtab_per_cycle"] = bool(
@@ -446,17 +403,27 @@ def get_raptor_test_list(args, oskey):
                 threads = list(
                     filter(None, next_test.get("gecko_profile_threads", "").split(","))
                 )
-                threads.extend(args.gecko_profile_threads)
+                threads.extend(args.gecko_profile_threads.split(","))
+                if (
+                    "gecko_profile_extra_threads" in args
+                    and args.gecko_profile_extra_threads is not None
+                ):
+                    threads.extend(getattr(args, "gecko_profile_extra_threads", []))
                 next_test["gecko_profile_threads"] = ",".join(threads)
-                LOG.info(
-                    "gecko-profiling extra threads %s" % args.gecko_profile_threads
-                )
+                LOG.info("gecko-profiling threads %s" % args.gecko_profile_threads)
+            if (
+                "gecko_profile_features" in args
+                and args.gecko_profile_features is not None
+            ):
+                next_test["gecko_profile_features"] = args.gecko_profile_features
+                LOG.info("gecko-profiling features %s" % args.gecko_profile_features)
 
         else:
-            # if the gecko profiler is not enabled, ignore all of it's settings
+            # if the gecko profiler is not enabled, ignore all of its settings
             next_test.pop("gecko_profile_entries", None)
             next_test.pop("gecko_profile_interval", None)
             next_test.pop("gecko_profile_threads", None)
+            next_test.pop("gecko_profile_features", None)
 
         if args.debug_mode is True:
             next_test["debug_mode"] = True
@@ -607,6 +574,10 @@ def get_raptor_test_list(args, oskey):
         if next_test.get("subtest_lower_is_better") is not None:
             next_test["subtest_lower_is_better"] = bool_from_str(
                 next_test.get("subtest_lower_is_better")
+            )
+        if next_test.get("accept_zero_vismet", None) is not None:
+            next_test["accept_zero_vismet"] = bool_from_str(
+                next_test.get("accept_zero_vismet")
             )
 
     # write out .json test setting files for the control server to read and send to web ext

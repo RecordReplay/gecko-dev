@@ -49,6 +49,7 @@
 #include "vm/JSAtom.h"
 #include "vm/JSContext.h"
 #include "vm/Realm.h"
+#include "vm/WellKnownAtom.h"  // js_*_str
 
 using mozilla::AsciiAlphanumericToNumber;
 using mozilla::AssertedCast;
@@ -78,6 +79,12 @@ static const ReservedWordInfo reservedWords[] = {
   {js_##word##_str, js::frontend::type},
     FOR_EACH_JAVASCRIPT_RESERVED_WORD(RESERVED_WORD_INFO)
 #undef RESERVED_WORD_INFO
+};
+
+enum class ReservedWordsIndex : size_t {
+#define ENTRY_(_1, NAME, _3) NAME,
+  FOR_EACH_JAVASCRIPT_RESERVED_WORD(ENTRY_)
+#undef ENTRY_
 };
 
 // Returns a ReservedWordInfo for the specified characters, or nullptr if the
@@ -129,34 +136,17 @@ MOZ_ALWAYS_INLINE const ReservedWordInfo* FindReservedWord<Utf8Unit>(
   return FindReservedWord(Utf8AsUnsignedChars(units), length);
 }
 
-template <typename CharT>
 static const ReservedWordInfo* FindReservedWord(
-    const CharT* chars, size_t length,
-    js::frontend::NameVisibility* visibility) {
-  if (length > 0 && chars[0] == '#') {
-    *visibility = js::frontend::NameVisibility::Private;
-    return nullptr;
+    const js::frontend::TaggedParserAtomIndex atom) {
+  switch (atom.rawData()) {
+#define CASE_(_1, NAME, _3)                                           \
+  case js::frontend::TaggedParserAtomIndex::WellKnownRawData::NAME(): \
+    return &reservedWords[size_t(ReservedWordsIndex::NAME)];
+    FOR_EACH_JAVASCRIPT_RESERVED_WORD(CASE_)
+#undef CASE_
   }
-  *visibility = js::frontend::NameVisibility::Public;
-  return FindReservedWord(chars, length);
-}
 
-static const ReservedWordInfo* FindReservedWord(
-    JSLinearString* str, js::frontend::NameVisibility* visibility) {
-  JS::AutoCheckCannotGC nogc;
-  if (str->hasLatin1Chars()) {
-    return FindReservedWord(str->latin1Chars(nogc), str->length(), visibility);
-  }
-  return FindReservedWord(str->twoByteChars(nogc), str->length(), visibility);
-}
-
-static const ReservedWordInfo* FindReservedWord(
-    const js::frontend::ParserAtomEntry* atom,
-    js::frontend::NameVisibility* visibility) {
-  if (atom->hasLatin1Chars()) {
-    return FindReservedWord(atom->latin1Chars(), atom->length(), visibility);
-  }
-  return FindReservedWord(atom->twoByteChars(), atom->length(), visibility);
+  return nullptr;
 }
 
 static uint32_t GetSingleCodePoint(const char16_t** p, const char16_t* end) {
@@ -210,12 +200,6 @@ bool IsIdentifier(JSLinearString* str) {
   }
   return IsIdentifier(str->twoByteChars(nogc), str->length());
 }
-bool IsIdentifier(const ParserAtom* atom) {
-  MOZ_ASSERT(atom);
-  return atom->hasLatin1Chars()
-             ? IsIdentifier(atom->latin1Chars(), atom->length())
-             : IsIdentifier(atom->twoByteChars(), atom->length());
-}
 
 bool IsIdentifierNameOrPrivateName(JSLinearString* str) {
   JS::AutoCheckCannotGC nogc;
@@ -224,12 +208,6 @@ bool IsIdentifierNameOrPrivateName(JSLinearString* str) {
     return IsIdentifierNameOrPrivateName(str->latin1Chars(nogc), str->length());
   }
   return IsIdentifierNameOrPrivateName(str->twoByteChars(nogc), str->length());
-}
-bool IsIdentifierNameOrPrivateName(const ParserAtom* atom) {
-  if (atom->hasLatin1Chars()) {
-    return IsIdentifierNameOrPrivateName(atom->latin1Chars(), atom->length());
-  }
-  return IsIdentifierNameOrPrivateName(atom->twoByteChars(), atom->length());
 }
 
 bool IsIdentifier(const Latin1Char* chars, size_t length) {
@@ -249,6 +227,13 @@ bool IsIdentifier(const Latin1Char* chars, size_t length) {
   }
 
   return true;
+}
+
+bool IsIdentifierASCII(char c) { return unicode::IsIdentifierStartASCII(c); }
+
+bool IsIdentifierASCII(char c1, char c2) {
+  return unicode::IsIdentifierStartASCII(c1) &&
+         unicode::IsIdentifierPartASCII(c2);
 }
 
 bool IsIdentifierNameOrPrivateName(const Latin1Char* chars, size_t length) {
@@ -324,36 +309,24 @@ bool IsIdentifierNameOrPrivateName(const char16_t* chars, size_t length) {
   return true;
 }
 
-bool IsKeyword(const ParserAtom* atom) {
-  NameVisibility visibility;
-  if (const ReservedWordInfo* rw = FindReservedWord(atom, &visibility)) {
-    return TokenKindIsKeyword(rw->tokentype);
-  }
-
-  return false;
-}
-bool IsKeyword(JSLinearString* str) {
-  NameVisibility visibility;
-  if (const ReservedWordInfo* rw = FindReservedWord(str, &visibility)) {
+bool IsKeyword(TaggedParserAtomIndex atom) {
+  if (const ReservedWordInfo* rw = FindReservedWord(atom)) {
     return TokenKindIsKeyword(rw->tokentype);
   }
 
   return false;
 }
 
-TokenKind ReservedWordTokenKind(const ParserName* name) {
-  NameVisibility visibility;
-  if (const ReservedWordInfo* rw = FindReservedWord(name, &visibility)) {
+TokenKind ReservedWordTokenKind(TaggedParserAtomIndex name) {
+  if (const ReservedWordInfo* rw = FindReservedWord(name)) {
     return rw->tokentype;
   }
 
-  return visibility == NameVisibility::Private ? TokenKind::PrivateName
-                                               : TokenKind::Name;
+  return TokenKind::Limit;
 }
 
-const char* ReservedWordToCharZ(const ParserName* name) {
-  NameVisibility visibility;
-  if (const ReservedWordInfo* rw = FindReservedWord(name, &visibility)) {
+const char* ReservedWordToCharZ(TaggedParserAtomIndex name) {
+  if (const ReservedWordInfo* rw = FindReservedWord(name)) {
     return ReservedWordToCharZ(rw->tokentype);
   }
 
@@ -374,19 +347,19 @@ const char* ReservedWordToCharZ(TokenKind tt) {
   return nullptr;
 }
 
-const ParserName* TokenStreamAnyChars::reservedWordToPropertyName(
+TaggedParserAtomIndex TokenStreamAnyChars::reservedWordToPropertyName(
     TokenKind tt) const {
   MOZ_ASSERT(tt != TokenKind::Name);
   switch (tt) {
 #define EMIT_CASE(word, name, type) \
   case type:                        \
-    return cx->parserNames().name;
+    return TaggedParserAtomIndex::WellKnown::name();
     FOR_EACH_JAVASCRIPT_RESERVED_WORD(EMIT_CASE)
 #undef EMIT_CASE
     default:
       MOZ_ASSERT_UNREACHABLE("Not a reserved word TokenKind.");
   }
-  return nullptr;
+  return TaggedParserAtomIndex::null();
 }
 
 SourceCoords::SourceCoords(JSContext* cx, uint32_t initialLineNumber,
@@ -646,16 +619,7 @@ void TokenStreamAnyChars::reportErrorNoOffsetVA(unsigned errorNumber,
   ReportCompileErrorLatin1(cx, std::move(metadata), nullptr, errorNumber, args);
 }
 
-// Use the fastest available getc.
-#if defined(HAVE_GETC_UNLOCKED)
-#  define fast_getc getc_unlocked
-#elif defined(HAVE__GETC_NOLOCK)
-#  define fast_getc _getc_nolock
-#else
-#  define fast_getc getc
-#endif
-
-MOZ_MUST_USE MOZ_ALWAYS_INLINE bool
+[[nodiscard]] MOZ_ALWAYS_INLINE bool
 TokenStreamAnyChars::internalUpdateLineInfoForEOL(uint32_t lineStartOffset) {
   prevLinebase = linebase;
   linebase = lineStartOffset;
@@ -1172,7 +1136,7 @@ TokenStreamChars<Utf8Unit, AnyCharsAccess>::badStructurallyValidCodePoint(
 }
 
 template <class AnyCharsAccess>
-MOZ_MUST_USE bool
+[[nodiscard]] bool
 TokenStreamChars<Utf8Unit, AnyCharsAccess>::getNonAsciiCodePointDontNormalize(
     Utf8Unit lead, char32_t* codePoint) {
   auto onBadLeadUnit = [this, &lead]() { this->badLeadUnit(lead); };
@@ -1945,7 +1909,7 @@ bool GeneralTokenStreamChars<Unit, AnyCharsAccess>::matchUnicodeEscapeIdent(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool
+[[nodiscard]] bool
 TokenStreamSpecific<Unit, AnyCharsAccess>::matchIdentifierStart(
     IdentifierEscapes* sawEscape) {
   int32_t unit = getCodeUnit();
@@ -2001,7 +1965,7 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getDirectives(
   return res;
 }
 
-MOZ_MUST_USE bool TokenStreamCharsShared::copyCharBufferTo(
+[[nodiscard]] bool TokenStreamCharsShared::copyCharBufferTo(
     JSContext* cx, UniquePtr<char16_t[], JS::FreePolicy>* destination) {
   size_t length = charBuffer.length();
 
@@ -2016,7 +1980,7 @@ MOZ_MUST_USE bool TokenStreamCharsShared::copyCharBufferTo(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::getDirective(
+[[nodiscard]] bool TokenStreamSpecific<Unit, AnyCharsAccess>::getDirective(
     bool isMultiline, bool shouldWarnDeprecated, const char* directive,
     uint8_t directiveLength, const char* errorMsgPragma,
     UniquePtr<char16_t[], JS::FreePolicy>* destination) {
@@ -2237,7 +2201,7 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::putIdentInCharBuffer(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::identifierName(
+[[nodiscard]] bool TokenStreamSpecific<Unit, AnyCharsAccess>::identifierName(
     TokenStart start, const Unit* identStart, IdentifierEscapes escaping,
     Modifier modifier, NameVisibility visibility, TokenKind* out) {
   // Run the bad-token code for every path out of this function except the
@@ -2285,7 +2249,7 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::identifierName(
     }
   }
 
-  const ParserAtom* atom = nullptr;
+  TaggedParserAtomIndex atom;
   if (MOZ_UNLIKELY(escaping == IdentifierEscapes::SawUnicodeEscape)) {
     // Identifiers containing Unicode escapes have to be converted into
     // tokenbuf before atomizing.
@@ -2317,10 +2281,10 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::identifierName(
 
   noteBadToken.release();
   if (visibility == NameVisibility::Private) {
-    newPrivateNameToken(atom->asName(), start, modifier, out);
+    newPrivateNameToken(atom, start, modifier, out);
     return true;
   }
-  newNameToken(atom->asName(), start, modifier, out);
+  newNameToken(atom, start, modifier, out);
   return true;
 }
 
@@ -2449,7 +2413,7 @@ void SourceUnits<Utf8Unit>::consumeRestOfSingleLineComment() {
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE MOZ_ALWAYS_INLINE bool
+[[nodiscard]] MOZ_ALWAYS_INLINE bool
 TokenStreamSpecific<Unit, AnyCharsAccess>::matchInteger(
     IsIntegerUnit isIntegerUnit, int32_t* nextUnit) {
   int32_t unit = getCodeUnit();
@@ -2461,7 +2425,7 @@ TokenStreamSpecific<Unit, AnyCharsAccess>::matchInteger(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE MOZ_ALWAYS_INLINE bool
+[[nodiscard]] MOZ_ALWAYS_INLINE bool
 TokenStreamSpecific<Unit, AnyCharsAccess>::matchIntegerAfterFirstDigit(
     IsIntegerUnit isIntegerUnit, int32_t* nextUnit) {
   int32_t unit;
@@ -2489,7 +2453,7 @@ TokenStreamSpecific<Unit, AnyCharsAccess>::matchIntegerAfterFirstDigit(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::decimalNumber(
+[[nodiscard]] bool TokenStreamSpecific<Unit, AnyCharsAccess>::decimalNumber(
     int32_t unit, TokenStart start, const Unit* numStart, Modifier modifier,
     TokenKind* out) {
   // Run the bad-token code for every path out of this function except the
@@ -2592,7 +2556,7 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::decimalNumber(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::regexpLiteral(
+[[nodiscard]] bool TokenStreamSpecific<Unit, AnyCharsAccess>::regexpLiteral(
     TokenStart start, TokenKind* out) {
   MOZ_ASSERT(this->sourceUnits.previousCodeUnit() == Unit('/'));
   this->charBuffer.clear();
@@ -2685,7 +2649,9 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::regexpLiteral(
   while (true) {
     uint8_t flag;
     unit = getCodeUnit();
-    if (unit == 'g') {
+    if (unit == 'd') {
+      flag = RegExpFlag::HasIndices;
+    } else if (unit == 'g') {
       flag = RegExpFlag::Global;
     } else if (unit == 'i') {
       flag = RegExpFlag::IgnoreCase;
@@ -2719,7 +2685,7 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::regexpLiteral(
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::bigIntLiteral(
+[[nodiscard]] bool TokenStreamSpecific<Unit, AnyCharsAccess>::bigIntLiteral(
     TokenStart start, Modifier modifier, TokenKind* out) {
   MOZ_ASSERT(this->sourceUnits.previousCodeUnit() == toUnit('n'));
   MOZ_ASSERT(this->sourceUnits.offset() > start.offset());
@@ -2775,7 +2741,7 @@ void GeneralTokenStreamChars<Unit,
 }
 
 template <typename Unit, class AnyCharsAccess>
-MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::getTokenInternal(
+[[nodiscard]] bool TokenStreamSpecific<Unit, AnyCharsAccess>::getTokenInternal(
     TokenKind* const ttp, const Modifier modifier) {
   // Assume we'll fail: success cases will overwrite this.
 #ifdef DEBUG
@@ -2983,11 +2949,15 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::getTokenInternal(
           return badToken();
         }
       } else if (IsAsciiDigit(unit)) {
-        // Octal integer literals are not permitted in strict mode code.
-        if (!strictModeError(JSMSG_DEPRECATED_OCTAL)) {
+        // Reject octal literals that appear in strict mode code.
+        if (!strictModeError(JSMSG_DEPRECATED_OCTAL_LITERAL)) {
           return badToken();
         }
-        anyCharsAccess().flags.sawDeprecatedOctal = true;
+
+        // The above test doesn't catch a few edge cases; see
+        // |GeneralParser::maybeParseDirective|.  Record the violation so that
+        // that function can handle them.
+        anyCharsAccess().setSawDeprecatedOctalLiteral();
 
         radix = 8;
         // one past the '0'
@@ -3164,10 +3134,6 @@ MOZ_MUST_USE bool TokenStreamSpecific<Unit, AnyCharsAccess>::getTokenInternal(
       case '|':
         if (matchCodeUnit('|')) {
           simpleKind = matchCodeUnit('=') ? TokenKind::OrAssign : TokenKind::Or;
-#ifdef ENABLE_PIPELINE_OPERATOR
-        } else if (matchCodeUnit('>')) {
-          simpleKind = TokenKind::Pipeline;
-#endif
         } else {
           simpleKind =
               matchCodeUnit('=') ? TokenKind::BitOrAssign : TokenKind::BitOr;
@@ -3644,6 +3610,38 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getStringOrTemplateToken(
 
         default: {
           if (!IsAsciiOctal(unit)) {
+            // \8 or \9 in an untagged template literal is a syntax error,
+            // reported in GeneralParser::noSubstitutionUntaggedTemplate.
+            //
+            // Tagged template literals, however, may contain \8 and \9.  The
+            // "cooked" representation of such a part will be |undefined|, and
+            // the "raw" representation will contain the literal characters.
+            //
+            //   function f(parts) {
+            //     assertEq(parts[0], undefined);
+            //     assertEq(parts.raw[0], "\\8");
+            //     return "composed";
+            //   }
+            //   assertEq(f`\8`, "composed");
+            if (unit == '8' || unit == '9') {
+              TokenStreamAnyChars& anyChars = anyCharsAccess();
+              if (parsingTemplate) {
+                anyChars.setInvalidTemplateEscape(
+                    this->sourceUnits.offset() - 2,
+                    InvalidEscapeType::EightOrNine);
+                continue;
+              }
+
+              // \8 and \9 are forbidden in string literals in strict mode code.
+              if (!strictModeError(JSMSG_DEPRECATED_EIGHT_OR_NINE_ESCAPE)) {
+                return false;
+              }
+
+              // The above test doesn't catch a few edge cases; see
+              // |GeneralParser::maybeParseDirective|.  Record the violation so
+              // that that function can handle them.
+              anyChars.setSawDeprecatedEightOrNineEscape();
+            }
             break;
           }
 
@@ -3656,7 +3654,7 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getStringOrTemplateToken(
             return false;
           }
 
-          // Strict mode code allows only \0, then a non-digit.
+          // Strict mode code allows only \0 followed by a non-digit.
           if (val != 0 || IsAsciiDigit(unit)) {
             TokenStreamAnyChars& anyChars = anyCharsAccess();
             if (parsingTemplate) {
@@ -3664,10 +3662,15 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getStringOrTemplateToken(
                                                 InvalidEscapeType::Octal);
               continue;
             }
-            if (!strictModeError(JSMSG_DEPRECATED_OCTAL)) {
+
+            if (!strictModeError(JSMSG_DEPRECATED_OCTAL_ESCAPE)) {
               return false;
             }
-            anyChars.flags.sawDeprecatedOctal = true;
+
+            // The above test doesn't catch a few edge cases; see
+            // |GeneralParser::maybeParseDirective|.  Record the violation so
+            // that that function can handle them.
+            anyChars.setSawDeprecatedOctalEscape();
           }
 
           if (IsAsciiOctal(unit)) {
@@ -3731,7 +3734,7 @@ bool TokenStreamSpecific<Unit, AnyCharsAccess>::getStringOrTemplateToken(
     }
   }
 
-  const ParserAtom* atom = drainCharBufferIntoAtom();
+  TaggedParserAtomIndex atom = drainCharBufferIntoAtom();
   if (!atom) {
     return false;
   }
@@ -3821,30 +3824,3 @@ template class TokenStreamSpecific<
 }  // namespace frontend
 
 }  // namespace js
-
-JS_FRIEND_API int js_fgets(char* buf, int size, FILE* file) {
-  int n, i, c;
-  bool crflag;
-
-  n = size - 1;
-  if (n < 0) {
-    return -1;
-  }
-
-  crflag = false;
-  for (i = 0; i < n && (c = fast_getc(file)) != EOF; i++) {
-    buf[i] = c;
-    if (c == '\n') {  // any \n ends a line
-      i++;            // keep the \n; we know there is room for \0
-      break;
-    }
-    if (crflag) {  // \r not followed by \n ends line at the \r
-      ungetc(c, file);
-      break;  // and overwrite c in buf with \0
-    }
-    crflag = (c == '\r');
-  }
-
-  buf[i] = '\0';
-  return i;
-}

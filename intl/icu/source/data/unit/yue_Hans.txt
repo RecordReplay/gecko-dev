@@ -1,8 +1,8 @@
 ﻿// © 2016 and later: Unicode, Inc. and others.
-// License & terms of use: http://www.unicode.org/copyright.html#License
+// License & terms of use: http://www.unicode.org/copyright.html
+// Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 yue_Hans{
     %%Parent{"root"}
-    Version{"37"}
     durationUnits{
         hm{"h:mm"}
         hms{"h:mm:ss"}
@@ -89,14 +89,56 @@ yue_Hans{
             }
         }
         compound{
+            1024p1{"二进制千{0}"}
+            1024p2{"二进制兆{0}"}
+            1024p3{"二进制吉{0}"}
+            1024p4{"二进制太{0}"}
+            1024p5{"二进制拍{0}"}
+            1024p6{"二进制艾{0}"}
+            1024p7{"二进制泽{0}"}
+            1024p8{"二进制尧{0}"}
+            10p-1{"分{0}"}
+            10p-12{"皮{0}"}
+            10p-15{"飞{0}"}
+            10p-18{"埃{0}"}
+            10p-2{"厘{0}"}
+            10p-21{"仄{0}"}
+            10p-24{"么{0}"}
+            10p-3{"毫{0}"}
+            10p-6{"微{0}"}
+            10p-9{"纳{0}"}
+            10p1{"十{0}"}
+            10p12{"太{0}"}
+            10p15{"拍{0}"}
+            10p18{"艾{0}"}
+            10p2{"百{0}"}
+            10p21{"泽{0}"}
+            10p24{"尧{0}"}
+            10p3{"千{0}"}
+            10p6{"兆{0}"}
+            10p9{"吉{0}"}
             per{"每 {1} {0}"}
+            power2{
+                other{
+                    _{
+                        _{"平方{0}"}
+                    }
+                }
+            }
+            power3{
+                other{
+                    _{
+                        _{"立方{0}"}
+                    }
+                }
+            }
         }
         concentr{
             karat{
                 dnam{"克拉"}
                 other{"{0} 克拉"}
             }
-            milligram-per-deciliter{
+            milligram-ofglucose-per-deciliter{
                 dnam{"毫克/公合"}
                 other{"{0} 毫克/公合"}
             }
@@ -338,6 +380,10 @@ yue_Hans{
             }
         }
         graphics{
+            dot{
+                dnam{"圆点"}
+                other{"{0} 个圆点"}
+            }
             dot-per-centimeter{
                 dnam{"每厘米点数"}
                 other{"{0} 点/厘米"}
@@ -380,6 +426,10 @@ yue_Hans{
             decimeter{
                 dnam{"公寸"}
                 other{"{0} 公寸"}
+            }
+            earth-radius{
+                dnam{"地球半径"}
+                other{"{0} 地球半径"}
             }
             fathom{
                 dnam{"英寻"}
@@ -459,6 +509,14 @@ yue_Hans{
             }
         }
         light{
+            candela{
+                dnam{"坎德拉"}
+                other{"{0} 坎德拉"}
+            }
+            lumen{
+                dnam{"流明"}
+                other{"{0} 流明"}
+            }
             lux{
                 dnam{"勒克斯"}
                 other{"{0} 勒克斯"}
@@ -480,6 +538,10 @@ yue_Hans{
             earth-mass{
                 dnam{"地球质量"}
                 other{"{0} 地球质量"}
+            }
+            grain{
+                dnam{"喱"}
+                other{"{0}格令"}
             }
             gram{
                 dnam{"克"}
@@ -703,6 +765,22 @@ yue_Hans{
                 dnam{"公合"}
                 other{"{0} 公合"}
             }
+            dessert-spoon{
+                dnam{"甜品匙"}
+                other{"{0}甜品匙"}
+            }
+            dessert-spoon-imperial{
+                dnam{"英制甜品匙"}
+                other{"英制甜品匙{0}匙"}
+            }
+            dram{
+                dnam{"英制液量打兰"}
+                other{"{0}英制液量打兰"}
+            }
+            drop{
+                dnam{"滴"}
+                other{"{0}滴"}
+            }
             fluid-ounce{
                 dnam{"液盎司"}
                 other{"{0} 液盎司"}
@@ -725,6 +803,10 @@ yue_Hans{
                 dnam{"公石"}
                 other{"{0} 公石"}
             }
+            jigger{
+                dnam{"量酒杯"}
+                other{"量酒器{0}杯"}
+            }
             liter{
                 dnam{"公升"}
                 other{"{0} 公升"}
@@ -738,6 +820,10 @@ yue_Hans{
                 dnam{"毫升"}
                 other{"{0} 毫升"}
             }
+            pinch{
+                dnam{"小撮"}
+                other{"{0} 小撮"}
+            }
             pint{
                 dnam{"品脱"}
                 other{"{0} 品脱"}
@@ -749,6 +835,10 @@ yue_Hans{
             quart{
                 dnam{"夸脱"}
                 other{"{0} 夸脱"}
+            }
+            quart-imperial{
+                dnam{"英制夸脱"}
+                other{"{0} 英制夸脱"}
             }
             tablespoon{
                 dnam{"汤匙"}
@@ -813,7 +903,49 @@ yue_Hans{
             }
         }
         compound{
+            1024p1{"二进制千{0}"}
+            1024p2{"二进制兆{0}"}
+            1024p3{"二进制吉{0}"}
+            1024p4{"二进制太{0}"}
+            1024p5{"二进制拍{0}"}
+            1024p6{"二进制艾{0}"}
+            1024p7{"二进制泽{0}"}
+            1024p8{"二进制尧{0}"}
+            10p-1{"分{0}"}
+            10p-12{"皮{0}"}
+            10p-15{"飞{0}"}
+            10p-18{"埃{0}"}
+            10p-2{"厘{0}"}
+            10p-21{"仄{0}"}
+            10p-24{"么{0}"}
+            10p-3{"毫{0}"}
+            10p-6{"微{0}"}
+            10p-9{"纳{0}"}
+            10p1{"十{0}"}
+            10p12{"太{0}"}
+            10p15{"拍{0}"}
+            10p18{"艾{0}"}
+            10p2{"百{0}"}
+            10p21{"泽{0}"}
+            10p24{"尧{0}"}
+            10p3{"千{0}"}
+            10p6{"兆{0}"}
+            10p9{"吉{0}"}
             per{"{0}/{1}"}
+            power2{
+                other{
+                    _{
+                        _{"平方{0}"}
+                    }
+                }
+            }
+            power3{
+                other{
+                    _{
+                        _{"立方{0}"}
+                    }
+                }
+            }
         }
         concentr{
             karat{
@@ -1000,7 +1132,7 @@ yue_Hans{
                 other{"{0} 公尺"}
             }
             micrometer{
-                other{"{0}µm"}
+                other{"{0}μm"}
             }
             mile{
                 other{"{0}英里"}
@@ -1046,7 +1178,7 @@ yue_Hans{
                 other{"{0}t"}
             }
             microgram{
-                other{"{0}µg"}
+                other{"{0}μg"}
             }
             milligram{
                 other{"{0}mg"}
@@ -1282,14 +1414,56 @@ yue_Hans{
             }
         }
         compound{
+            1024p1{"二进制千{0}"}
+            1024p2{"二进制兆{0}"}
+            1024p3{"二进制吉{0}"}
+            1024p4{"二进制太{0}"}
+            1024p5{"二进制拍{0}"}
+            1024p6{"二进制艾{0}"}
+            1024p7{"二进制泽{0}"}
+            1024p8{"二进制尧{0}"}
+            10p-1{"分{0}"}
+            10p-12{"皮{0}"}
+            10p-15{"飞{0}"}
+            10p-18{"埃{0}"}
+            10p-2{"厘{0}"}
+            10p-21{"仄{0}"}
+            10p-24{"么{0}"}
+            10p-3{"毫{0}"}
+            10p-6{"微{0}"}
+            10p-9{"纳{0}"}
+            10p1{"十{0}"}
+            10p12{"太{0}"}
+            10p15{"拍{0}"}
+            10p18{"艾{0}"}
+            10p2{"百{0}"}
+            10p21{"泽{0}"}
+            10p24{"尧{0}"}
+            10p3{"千{0}"}
+            10p6{"兆{0}"}
+            10p9{"吉{0}"}
             per{"{0}/{1}"}
+            power2{
+                other{
+                    _{
+                        _{"平方{0}"}
+                    }
+                }
+            }
+            power3{
+                other{
+                    _{
+                        _{"立方{0}"}
+                    }
+                }
+            }
         }
         concentr{
             karat{
                 dnam{"克拉"}
                 other{"{0} 克拉"}
             }
-            milligram-per-deciliter{
+            milligram-ofglucose-per-deciliter{
                 dnam{"毫克/公合"}
                 other{"{0} 毫克/公合"}
             }
@@ -1531,6 +1705,10 @@ yue_Hans{
             }
         }
         graphics{
+            dot{
+                dnam{"圆点"}
+                other{"{0} 个圆点"}
+            }
             dot-per-centimeter{
                 dnam{"每厘米点数"}
                 other{"{0} 点/厘米"}
@@ -1573,6 +1751,10 @@ yue_Hans{
             decimeter{
                 dnam{"公寸"}
                 other{"{0} 公寸"}
+            }
+            earth-radius{
+                dnam{"地球半径"}
+                other{"{0} 地球半径"}
             }
             fathom{
                 dnam{"fm"}
@@ -1652,6 +1834,14 @@ yue_Hans{
             }
         }
         light{
+            candela{
+                dnam{"坎德拉"}
+                other{"{0} 坎德拉"}
+            }
+            lumen{
+                dnam{"流明"}
+                other{"{0} 流明"}
+            }
             lux{
                 dnam{"勒克斯"}
                 other{"{0} 勒克斯"}
@@ -1673,6 +1863,10 @@ yue_Hans{
             earth-mass{
                 dnam{"地球质量"}
                 other{"{0} 地球质量"}
+            }
+            grain{
+                dnam{"喱"}
+                other{"{0} 喱"}
             }
             gram{
                 dnam{"克"}
@@ -1896,6 +2090,22 @@ yue_Hans{
                 dnam{"公合"}
                 other{"{0} 公合"}
             }
+            dessert-spoon{
+                dnam{"甜品匙"}
+                other{"{0}甜品匙"}
+            }
+            dessert-spoon-imperial{
+                dnam{"英制甜品匙"}
+                other{"{0}英制甜品匙"}
+            }
+            dram{
+                dnam{"英制液量打兰"}
+                other{"{0}英制液量打兰"}
+            }
+            drop{
+                dnam{"滴"}
+                other{"{0}滴"}
+            }
             fluid-ounce{
                 dnam{"液盎司"}
                 other{"{0} 液盎司"}
@@ -1918,6 +2128,10 @@ yue_Hans{
                 dnam{"公石"}
                 other{"{0} 公石"}
             }
+            jigger{
+                dnam{"量酒杯"}
+                other{"量酒器{0}杯"}
+            }
             liter{
                 dnam{"公升"}
                 other{"{0} 升"}
@@ -1931,6 +2145,10 @@ yue_Hans{
                 dnam{"毫升"}
                 other{"{0} 毫升"}
             }
+            pinch{
+                dnam{"小撮"}
+                other{"{0} 小撮"}
+            }
             pint{
                 dnam{"品脱"}
                 other{"{0} 品脱"}
@@ -1942,6 +2160,10 @@ yue_Hans{
             quart{
                 dnam{"夸脱"}
                 other{"{0} 夸脱"}
+            }
+            quart-imperial{
+                dnam{"英制夸脱"}
+                other{"{0} 英制夸脱"}
             }
             tablespoon{
                 dnam{"汤匙"}

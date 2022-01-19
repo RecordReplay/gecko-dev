@@ -120,7 +120,7 @@ void FormData::Append(const nsAString& aName, Blob& aBlob,
     return;
   }
 
-  AddNameBlobOrNullPair(aName, file);
+  AddNameBlobPair(aName, file);
 }
 
 void FormData::Append(const nsAString& aName, Directory* aDirectory) {
@@ -165,15 +165,15 @@ bool FormData::Has(const nsAString& aName) {
   return false;
 }
 
-nsresult FormData::AddNameBlobOrNullPair(const nsAString& aName, Blob* aBlob) {
-  RefPtr<File> file;
+nsresult FormData::AddNameBlobPair(const nsAString& aName, Blob* aBlob) {
+  MOZ_ASSERT(aBlob);
 
-  if (!aBlob) {
-    FormDataTuple* data = mFormData.AppendElement();
-    SetNameValuePair(data, aName, u""_ns, true /* aWasNullBlob */);
-    return NS_OK;
+  nsAutoString usvName(aName);
+  if (!NormalizeUSVString(usvName)) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
 
+  RefPtr<File> file;
   ErrorResult rv;
   file = GetOrCreateFileCalledBlob(*aBlob, rv);
   if (NS_WARN_IF(rv.Failed())) {
@@ -181,7 +181,7 @@ nsresult FormData::AddNameBlobOrNullPair(const nsAString& aName, Blob* aBlob) {
   }
 
   FormDataTuple* data = mFormData.AppendElement();
-  SetNameFilePair(data, aName, file);
+  SetNameFilePair(data, usvName, file);
   return NS_OK;
 }
 
@@ -189,8 +189,13 @@ nsresult FormData::AddNameDirectoryPair(const nsAString& aName,
                                         Directory* aDirectory) {
   MOZ_ASSERT(aDirectory);
 
+  nsAutoString usvName(aName);
+  if (!NormalizeUSVString(usvName)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   FormDataTuple* data = mFormData.AppendElement();
-  SetNameDirectoryPair(data, aName, aDirectory);
+  SetNameDirectoryPair(data, usvName, aDirectory);
   return NS_OK;
 }
 
@@ -254,10 +259,9 @@ const OwningBlobOrDirectoryOrUSVString& FormData::GetValueAtIndex(
 }
 
 void FormData::SetNameValuePair(FormDataTuple* aData, const nsAString& aName,
-                                const nsAString& aValue, bool aWasNullBlob) {
+                                const nsAString& aValue) {
   MOZ_ASSERT(aData);
   aData->name = aName;
-  aData->wasNullBlob = aWasNullBlob;
   aData->value.SetAsUSVString() = aValue;
 }
 
@@ -267,7 +271,6 @@ void FormData::SetNameFilePair(FormDataTuple* aData, const nsAString& aName,
   MOZ_ASSERT(aFile);
 
   aData->name = aName;
-  aData->wasNullBlob = false;
   aData->value.SetAsBlob() = aFile;
 }
 
@@ -278,7 +281,6 @@ void FormData::SetNameDirectoryPair(FormDataTuple* aData,
   MOZ_ASSERT(aDirectory);
 
   aData->name = aName;
-  aData->wasNullBlob = false;
   aData->value.SetAsDirectory() = aDirectory;
 }
 
@@ -301,9 +303,7 @@ already_AddRefed<FormData> FormData::Constructor(
 
     // Step 9. Return a shallow clone of entry list.
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-form-data-set
-    if (StaticPrefs::dom_formdata_event_enabled()) {
-      formData = formData->Clone();
-    }
+    formData = formData->Clone();
   }
 
   return formData.forget();
@@ -336,15 +336,12 @@ nsresult FormData::CopySubmissionDataTo(
     HTMLFormSubmission* aFormSubmission) const {
   MOZ_ASSERT(aFormSubmission, "Must have FormSubmission!");
   for (size_t i = 0; i < mFormData.Length(); ++i) {
-    if (mFormData[i].wasNullBlob) {
-      MOZ_ASSERT(mFormData[i].value.IsUSVString());
-      aFormSubmission->AddNameBlobOrNullPair(mFormData[i].name, nullptr);
-    } else if (mFormData[i].value.IsUSVString()) {
+    if (mFormData[i].value.IsUSVString()) {
       aFormSubmission->AddNameValuePair(mFormData[i].name,
                                         mFormData[i].value.GetAsUSVString());
     } else if (mFormData[i].value.IsBlob()) {
-      aFormSubmission->AddNameBlobOrNullPair(mFormData[i].name,
-                                             mFormData[i].value.GetAsBlob());
+      aFormSubmission->AddNameBlobPair(mFormData[i].name,
+                                       mFormData[i].value.GetAsBlob());
     } else {
       MOZ_ASSERT(mFormData[i].value.IsDirectory());
       aFormSubmission->AddNameDirectoryPair(

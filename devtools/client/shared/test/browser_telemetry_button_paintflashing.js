@@ -18,8 +18,10 @@ add_task(async function() {
 
   await pushPref("devtools.command-button-paintflashing.enabled", true);
 
-  const target = await TargetFactory.forTab(gBrowser.selectedTab);
-  const toolbox = await gDevTools.showToolbox(target, "inspector");
+  const tab = gBrowser.selectedTab;
+  const toolbox = await gDevTools.showToolboxForTab(tab, {
+    toolId: "inspector",
+  });
   info("inspector opened");
 
   info("testing the paintflashing button");
@@ -36,7 +38,7 @@ async function testButton(toolbox) {
   ok(button, "Captain, we have the button");
 
   await delayedClicks(toolbox, button, 4);
-  await toolbox.target.client.waitForRequestsToSettle();
+  await toolbox.commands.client.waitForRequestsToSettle();
   checkResults();
 }
 

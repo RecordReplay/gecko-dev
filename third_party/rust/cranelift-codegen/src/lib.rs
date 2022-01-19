@@ -97,6 +97,7 @@ mod inst_predicates;
 mod iterators;
 mod legalizer;
 mod licm;
+mod log;
 mod nan_canonicalization;
 mod partition_slice;
 mod postopt;
@@ -121,5 +122,4 @@ mod souper_harvest;
 
 pub use crate::result::{CodegenError, CodegenResult};
 
-/// Version number of this crate.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+include!(concat!(env!("OUT_DIR"), "/version.rs"));

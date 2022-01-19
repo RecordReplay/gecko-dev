@@ -17,7 +17,7 @@ use rayon::ThreadPool;
 use webrender::api::units::{BlobDirtyRect, BlobToDeviceTranslation, DeviceIntRect};
 use webrender::api::*;
 
-use euclid::Rect;
+use euclid::{Box2D, Rect};
 use std;
 use std::collections::btree_map::BTreeMap;
 use std::collections::hash_map;
@@ -273,6 +273,7 @@ impl BlobWriter {
     }
 }
 
+// TODO: replace with euclid::Box2D
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Ord, PartialOrd)]
 #[repr(C)]
 /// A two-points representation of a rectangle.
@@ -325,6 +326,23 @@ impl<T> From<&Rect<i32, T>> for Box2d {
             y1: rect.min_y(),
             x2: rect.max_x(),
             y2: rect.max_y(),
+        }
+    }
+}
+
+impl<T> From<Box2D<i32, T>> for Box2d {
+    fn from(rect: Box2D<i32, T>) -> Box2d {
+        (&rect).into()
+    }
+}
+
+impl<T> From<&Box2D<i32, T>> for Box2d {
+    fn from(rect: &Box2D<i32, T>) -> Box2d {
+        Box2d {
+            x1: rect.min.x,
+            y1: rect.min.y,
+            x2: rect.max.x,
+            y2: rect.max.y,
         }
     }
 }
@@ -569,7 +587,7 @@ impl AsyncBlobImageRasterizer for Moz2dBlobRasterizer {
             .map(|params| {
                 let command = &self.blob_commands[&params.request.key];
                 let blob = Arc::clone(&command.data);
-                assert!(params.descriptor.rect.size.width > 0 && params.descriptor.rect.size.height > 0);
+                assert!(!params.descriptor.rect.is_empty());
 
                 Job {
                     request: params.request,
@@ -628,8 +646,7 @@ fn autoreleasepool<T, F: FnOnce() -> T>(f: F) -> T {
 
 fn rasterize_blob(job: Job) -> (BlobImageRequest, BlobImageResult) {
     let descriptor = job.descriptor;
-    let buf_size =
-        (descriptor.rect.size.width * descriptor.rect.size.height * descriptor.format.bytes_per_pixel()) as usize;
+    let buf_size = (descriptor.rect.area() * descriptor.format.bytes_per_pixel()) as usize;
 
     let mut output = vec![0u8; buf_size];
 
@@ -637,7 +654,7 @@ fn rasterize_blob(job: Job) -> (BlobImageRequest, BlobImageResult) {
         DirtyRect::Partial(rect) => Some(rect),
         DirtyRect::All => None,
     };
-    assert!(descriptor.rect.size.width > 0 && descriptor.rect.size.height > 0);
+    assert!(!descriptor.rect.is_empty());
 
     let result = autoreleasepool(|| {
         unsafe {
@@ -654,8 +671,8 @@ fn rasterize_blob(job: Job) -> (BlobImageRequest, BlobImageResult) {
                 // We want the dirty rect local to the tile rather than the whole image.
                 // TODO(nical): move that up and avoid recomupting the tile bounds in the callback
                 let dirty_rect = job.dirty_rect.to_subrect_of(&descriptor.rect);
-                let tx: BlobToDeviceTranslation = (-descriptor.rect.origin.to_vector()).into();
-                let rasterized_rect = tx.transform_rect(&dirty_rect);
+                let tx: BlobToDeviceTranslation = (-descriptor.rect.min.to_vector()).into();
+                let rasterized_rect = tx.transform_box(&dirty_rect);
 
                 Ok(RasterizedBlobImage {
                     rasterized_rect,
@@ -705,10 +722,10 @@ impl BlobImageHandler for Moz2dBlobImageHandler {
                 let command = e.get_mut();
                 let dirty_rect = if let DirtyRect::Partial(rect) = *dirty_rect {
                     Box2d {
-                        x1: rect.min_x(),
-                        y1: rect.min_y(),
-                        x2: rect.max_x(),
-                        y2: rect.max_y(),
+                        x1: rect.min.x,
+                        y1: rect.min.y,
+                        x2: rect.max.x,
+                        y2: rect.max.y,
                     }
                 } else {
                     Box2d {
@@ -853,10 +870,10 @@ impl Moz2dBlobImageHandler {
                         if !unsafe { HasFontData(instance.font_key) } {
                             let template = resources.get_font_data(instance.font_key);
                             match template {
-                                &FontTemplate::Raw(ref data, ref index) => unsafe {
+                                FontTemplate::Raw(ref data, ref index) => unsafe {
                                     AddFontData(instance.font_key, data.as_ptr(), data.len(), *index, data);
                                 },
-                                &FontTemplate::Native(ref handle) => {
+                                FontTemplate::Native(ref handle) => {
                                     process_native_font_handle(instance.font_key, handle);
                                 }
                             }

@@ -55,6 +55,7 @@ protections-panel-content-blocking-fingerprinters-label = Fingerprinters
 ##   "Allowed" for categories detected but not blocked in the current page, and
 ##   "None Detected" for categories not detected in the current page.
 ##   These strings are used in the header labels of each of these sections.
+
 protections-panel-blocking-label = Blocked
 protections-panel-not-blocking-label = Allowed
 protections-panel-not-found-label = None Detected
@@ -87,6 +88,11 @@ protections-panel-cryptominers = Cryptominers use your system’s computing powe
 protections-panel-fingerprinters = Fingerprinters collect settings from your browser and computer to create a profile of you. Using this digital fingerprint, they can track you across different websites.
 protections-panel-tracking-content = Websites may load external ads, videos, and other content with tracking code. Blocking tracking content can help sites load faster, but some buttons, forms, and login fields might not work.
 protections-panel-social-media-trackers = Social networks place trackers on other websites to follow what you do, see, and watch online. This allows social media companies to learn more about you beyond what you share on your social media profiles.
+
+protections-panel-description-shim-allowed = Some trackers marked below have been partially unblocked on this page because you interacted with them.
+protections-panel-description-shim-allowed-learn-more = Learn more
+protections-panel-shim-allowed-indicator =
+  .tooltiptext = Tracker partially unblocked
 
 protections-panel-content-blocking-manage-settings =
   .label = Manage Protection Settings

@@ -3,28 +3,33 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/ArrayUtils.h"
+#include "GfxInfo.h"
 
+#include "gfxConfig.h"
+#include "GfxDriverInfo.h"
+#include "gfxWindowsPlatform.h"
+#include "jsapi.h"
+#include "nsExceptionHandler.h"
+#include "nsPrintfCString.h"
+#include "nsUnicharUtils.h"
+#include "prenv.h"
+#include "prprf.h"
+#include "xpcpublic.h"
+
+#include "mozilla/Components.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
+#include "mozilla/gfx/Logging.h"
+#include "mozilla/SSE.h"
+#include "mozilla/ArrayUtils.h"
+#include "mozilla/WindowsProcessMitigations.h"
+
+#include <intrin.h>
 #include <windows.h>
 #include <devguid.h>   // for GUID_DEVCLASS_BATTERY
 #include <setupapi.h>  // for SetupDi*
 #include <winioctl.h>  // for IOCTL_*
 #include <batclass.h>  // for BATTERY_*
-#include "gfxConfig.h"
-#include "gfxWindowsPlatform.h"
-#include "GfxInfo.h"
-#include "nsUnicharUtils.h"
-#include "prenv.h"
-#include "prprf.h"
-#include "GfxDriverInfo.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/gfx/DeviceManagerDx.h"
-#include "mozilla/gfx/Logging.h"
-#include "mozilla/SSE.h"
-#include "nsExceptionHandler.h"
-#include "nsPrintfCString.h"
-#include "jsapi.h"
-#include <intrin.h>
 
 #define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
 
@@ -36,12 +41,11 @@ using namespace mozilla::widget;
 NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfoDebug)
 #endif
 
-GfxInfo::GfxInfo()
-    : mWindowsVersion(0),
-      mWindowsBuildNumber(0),
-      mActiveGPUIndex(0),
-      mHasDualGPU(false),
-      mHasBattery(false) {}
+static void AssertNotWin32kLockdown() {
+  // Check that we are not in Win32k lockdown
+  MOZ_DIAGNOSTIC_ASSERT(!IsWin32kLockedDown(),
+                        "Invalid Windows GfxInfo API with Win32k lockdown");
+}
 
 /* GetD2DEnabled and GetDwriteEnabled shouldn't be called until after
  * gfxPlatform initialization has occurred because they depend on it for
@@ -74,11 +78,15 @@ GfxInfo::GetDWriteVersion(nsAString& aDwriteVersion) {
 
 NS_IMETHODIMP
 GfxInfo::GetHasBattery(bool* aHasBattery) {
+  AssertNotWin32kLockdown();
+
   *aHasBattery = mHasBattery;
   return NS_OK;
 }
 
 int32_t GfxInfo::GetMaxRefreshRate(bool* aMixed) {
+  AssertNotWin32kLockdown();
+
   int32_t maxRefreshRate = -1;
   if (aMixed) {
     *aMixed = false;
@@ -168,6 +176,9 @@ NS_IMETHODIMP
 GfxInfo::GetDesktopEnvironment(nsAString& aDesktopEnvironment) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
+
+NS_IMETHODIMP
+GfxInfo::GetTestType(nsAString& aTestType) { return NS_ERROR_NOT_IMPLEMENTED; }
 
 static nsresult GetKeyValue(const WCHAR* keyLocation, const WCHAR* keyName,
                             uint32_t& destValue, int type) {
@@ -446,6 +457,14 @@ static bool HasBattery() {
 #define DEVICE_KEY_PREFIX L"\\Registry\\Machine\\"
 nsresult GfxInfo::Init() {
   nsresult rv = GfxInfoBase::Init();
+
+  // If we are locked down in a content process, we can't call any of the
+  // Win32k APIs below. Any method that accesses members of this class should
+  // assert that it's not used in content
+  if (IsWin32kLockedDown()) {
+    return rv;
+  }
+
   mHasBattery = HasBattery();
 
   DISPLAY_DEVICEW displayDevice;
@@ -866,35 +885,7 @@ nsresult GfxInfo::Init() {
   }
 
   // Get monitor information
-  for (int deviceIndex = 0;; deviceIndex++) {
-    DISPLAY_DEVICEA device;
-    device.cb = sizeof(device);
-    if (!::EnumDisplayDevicesA(nullptr, deviceIndex, &device, 0)) {
-      break;
-    }
-
-    if (!(device.StateFlags & DISPLAY_DEVICE_ACTIVE)) {
-      continue;
-    }
-
-    DEVMODEA mode;
-    mode.dmSize = sizeof(mode);
-    mode.dmDriverExtra = 0;
-    if (!::EnumDisplaySettingsA(device.DeviceName, ENUM_CURRENT_SETTINGS,
-                                &mode)) {
-      continue;
-    }
-
-    DisplayInfo displayInfo;
-
-    displayInfo.mScreenWidth = mode.dmPelsWidth;
-    displayInfo.mScreenHeight = mode.dmPelsHeight;
-    displayInfo.mRefreshRate = mode.dmDisplayFrequency;
-    displayInfo.mIsPseudoDisplay =
-        !!(device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER);
-
-    mDisplayInfo.AppendElement(displayInfo);
-  }
+  RefreshMonitors();
 
   const char* spoofedDriverVersionString =
       PR_GetEnv("MOZ_GFX_SPOOF_DRIVER_VERSION");
@@ -919,18 +910,63 @@ nsresult GfxInfo::Init() {
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription(nsAString& aAdapterDescription) {
+  AssertNotWin32kLockdown();
+
   aAdapterDescription = mDeviceString[mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription2(nsAString& aAdapterDescription) {
+  AssertNotWin32kLockdown();
+
   aAdapterDescription = mDeviceString[1 - mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
+GfxInfo::RefreshMonitors() {
+  AssertNotWin32kLockdown();
+
+  mDisplayInfo.Clear();
+
+  for (int deviceIndex = 0;; deviceIndex++) {
+    DISPLAY_DEVICEW device;
+    device.cb = sizeof(device);
+    if (!::EnumDisplayDevicesW(nullptr, deviceIndex, &device, 0)) {
+      break;
+    }
+
+    if (!(device.StateFlags & DISPLAY_DEVICE_ACTIVE)) {
+      continue;
+    }
+
+    DEVMODEW mode;
+    mode.dmSize = sizeof(mode);
+    mode.dmDriverExtra = 0;
+    if (!::EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS,
+                                &mode)) {
+      continue;
+    }
+
+    DisplayInfo displayInfo;
+
+    displayInfo.mScreenWidth = mode.dmPelsWidth;
+    displayInfo.mScreenHeight = mode.dmPelsHeight;
+    displayInfo.mRefreshRate = mode.dmDisplayFrequency;
+    displayInfo.mIsPseudoDisplay =
+        !!(device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER);
+    displayInfo.mDeviceString = device.DeviceString;
+
+    mDisplayInfo.AppendElement(displayInfo);
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 GfxInfo::GetAdapterRAM(uint32_t* aAdapterRAM) {
+  AssertNotWin32kLockdown();
+
   uint32_t result = 0;
   if (NS_FAILED(GetKeyValue(mDeviceKey[mActiveGPUIndex].get(),
                             L"HardwareInformation.qwMemorySize", result,
@@ -948,6 +984,8 @@ GfxInfo::GetAdapterRAM(uint32_t* aAdapterRAM) {
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM2(uint32_t* aAdapterRAM) {
+  AssertNotWin32kLockdown();
+
   uint32_t result = 0;
   if (mHasDualGPU) {
     if (NS_FAILED(GetKeyValue(mDeviceKey[1 - mActiveGPUIndex].get(),
@@ -967,6 +1005,8 @@ GfxInfo::GetAdapterRAM2(uint32_t* aAdapterRAM) {
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver(nsAString& aAdapterDriver) {
+  AssertNotWin32kLockdown();
+
   if (NS_FAILED(GetKeyValue(mDeviceKey[mActiveGPUIndex].get(),
                             L"InstalledDisplayDrivers", aAdapterDriver,
                             REG_MULTI_SZ)))
@@ -976,6 +1016,8 @@ GfxInfo::GetAdapterDriver(nsAString& aAdapterDriver) {
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver2(nsAString& aAdapterDriver) {
+  AssertNotWin32kLockdown();
+
   if (!mHasDualGPU) {
     aAdapterDriver.Truncate();
   } else if (NS_FAILED(GetKeyValue(mDeviceKey[1 - mActiveGPUIndex].get(),
@@ -994,12 +1036,16 @@ GfxInfo::GetAdapterDriverVendor(nsAString& aAdapterDriverVendor) {
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion(nsAString& aAdapterDriverVersion) {
+  AssertNotWin32kLockdown();
+
   aAdapterDriverVersion = mDriverVersion[mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate(nsAString& aAdapterDriverDate) {
+  AssertNotWin32kLockdown();
+
   aAdapterDriverDate = mDriverDate[mActiveGPUIndex];
   return NS_OK;
 }
@@ -1012,48 +1058,64 @@ GfxInfo::GetAdapterDriverVendor2(nsAString& aAdapterDriverVendor) {
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion2(nsAString& aAdapterDriverVersion) {
+  AssertNotWin32kLockdown();
+
   aAdapterDriverVersion = mDriverVersion[1 - mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate2(nsAString& aAdapterDriverDate) {
+  AssertNotWin32kLockdown();
+
   aAdapterDriverDate = mDriverDate[1 - mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID(nsAString& aAdapterVendorID) {
+  AssertNotWin32kLockdown();
+
   aAdapterVendorID = mAdapterVendorID[mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID2(nsAString& aAdapterVendorID) {
+  AssertNotWin32kLockdown();
+
   aAdapterVendorID = mAdapterVendorID[1 - mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID(nsAString& aAdapterDeviceID) {
+  AssertNotWin32kLockdown();
+
   aAdapterDeviceID = mAdapterDeviceID[mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID2(nsAString& aAdapterDeviceID) {
+  AssertNotWin32kLockdown();
+
   aAdapterDeviceID = mAdapterDeviceID[1 - mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID(nsAString& aAdapterSubsysID) {
+  AssertNotWin32kLockdown();
+
   aAdapterSubsysID = mAdapterSubsysID[mActiveGPUIndex];
   return NS_OK;
 }
 
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID2(nsAString& aAdapterSubsysID) {
+  AssertNotWin32kLockdown();
+
   aAdapterSubsysID = mAdapterSubsysID[1 - mActiveGPUIndex];
   return NS_OK;
 }
@@ -1068,11 +1130,14 @@ GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active) {
 
 NS_IMETHODIMP
 GfxInfo::GetDisplayInfo(nsTArray<nsString>& aDisplayInfo) {
+  AssertNotWin32kLockdown();
+
   for (auto displayInfo : mDisplayInfo) {
     nsString value;
-    value.AppendPrintf("%dx%d@%dHz %s", displayInfo.mScreenWidth,
+    value.AppendPrintf("%dx%d@%dHz %s %s", displayInfo.mScreenWidth,
                        displayInfo.mScreenHeight, displayInfo.mRefreshRate,
-                       displayInfo.mIsPseudoDisplay ? "Pseudo Display" : "");
+                       displayInfo.mIsPseudoDisplay ? "Pseudo Display :" : ":",
+                       NS_ConvertUTF16toUTF8(displayInfo.mDeviceString).get());
 
     aDisplayInfo.AppendElement(value);
   }
@@ -1082,6 +1147,8 @@ GfxInfo::GetDisplayInfo(nsTArray<nsString>& aDisplayInfo) {
 
 NS_IMETHODIMP
 GfxInfo::GetDisplayWidth(nsTArray<uint32_t>& aDisplayWidth) {
+  AssertNotWin32kLockdown();
+
   for (auto displayInfo : mDisplayInfo) {
     aDisplayWidth.AppendElement((uint32_t)displayInfo.mScreenWidth);
   }
@@ -1090,6 +1157,8 @@ GfxInfo::GetDisplayWidth(nsTArray<uint32_t>& aDisplayWidth) {
 
 NS_IMETHODIMP
 GfxInfo::GetDisplayHeight(nsTArray<uint32_t>& aDisplayHeight) {
+  AssertNotWin32kLockdown();
+
   for (auto displayInfo : mDisplayInfo) {
     aDisplayHeight.AppendElement((uint32_t)displayInfo.mScreenHeight);
   }
@@ -1118,6 +1187,8 @@ static void CheckForCiscoVPN() {
 }
 
 void GfxInfo::AddCrashReportAnnotations() {
+  AssertNotWin32kLockdown();
+
   CheckForCiscoVPN();
 
   if (mHasDriverVersionMismatch) {
@@ -1638,14 +1709,6 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         DRIVER_BETWEEN_INCLUSIVE, V(8, 17, 12, 5730), V(8, 17, 12, 6901),
         "FEATURE_FAILURE_BUG_1137716", "Nvidia driver > 8.17.12.6901");
 
-    /* Bug 1153381: WebGL issues with D3D11 ANGLE on Intel. These may be fixed
-     * by an ANGLE update. */
-    APPEND_TO_DRIVER_BLOCKLIST2(
-        OperatingSystem::Windows, DeviceFamily::IntelGMAX4500HD,
-        nsIGfxInfo::FEATURE_DIRECT3D_11_ANGLE,
-        nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_LESS_THAN,
-        GfxDriverInfo::allDriverVersions, "FEATURE_FAILURE_BUG_1153381");
-
     /* Bug 1336710: Crash in rx::Blit9::initialize. */
     APPEND_TO_DRIVER_BLOCKLIST2(
         OperatingSystem::WindowsXP, DeviceFamily::IntelGMAX4500HD,
@@ -1666,6 +1729,15 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
                                 nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
                                 DRIVER_BUILD_ID_LESS_THAN_OR_EQUAL, 1749,
                                 "FEATURE_FAILURE_INTEL_W7_D3D9_LAYERS");
+
+    /* Bug 1717519/1717911: Crashes while drawing with swgl.
+     * Reproducible but not investigated yet.*/
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+        OperatingSystem::Windows, DeviceFamily::IntelAll,
+        nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS,
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_BETWEEN_INCLUSIVE,
+        V(8, 15, 10, 2125), V(8, 15, 10, 2141), "FEATURE_FAILURE_BUG_1717911",
+        "Intel driver > 8.15.10.2141");
 
 #if defined(_M_X64)
     if (DetectBrokenAVX()) {
@@ -1718,14 +1790,6 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_LESS_THAN,
         GfxDriverInfo::allDriverVersions, "FEATURE_FAILURE_BUG_1359416");
 
-    // bug 1419264
-    APPEND_TO_DRIVER_BLOCKLIST_RANGE(
-        OperatingSystem::Windows7, DeviceFamily::NvidiaAll,
-        nsIGfxInfo::FEATURE_ADVANCED_LAYERS,
-        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_BETWEEN_INCLUSIVE,
-        V(23, 21, 13, 8569), V(23, 21, 13, 9135), "FEATURE_FAILURE_BUG_1419264",
-        "Windows 10");
-
     // Bug 1447141, for causing device creation crashes.
     APPEND_TO_DRIVER_BLOCKLIST2(
         OperatingSystem::Windows7, DeviceFamily::Bug1447141,
@@ -1763,14 +1827,6 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER
-
-    // Block some specific Nvidia cards for being too low-powered.
-    APPEND_TO_DRIVER_BLOCKLIST2(
-        OperatingSystem::Windows, DeviceFamily::NvidiaBlockWebRender,
-        nsIGfxInfo::FEATURE_WEBRENDER, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
-        DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions,
-        "FEATURE_UNQUALIFIED_WEBRENDER_NVIDIA_BLOCKED");
-
     // Block 8.56.1.15/16
     APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::AtiAll,
                                 nsIGfxInfo::FEATURE_WEBRENDER,
@@ -1783,16 +1839,9 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
     APPEND_TO_DRIVER_BLOCKLIST2_EXT(
         OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
         DesktopEnvironment::All, WindowProtocol::All, DriverVendor::All,
-        DeviceFamily::AmdR600, nsIGfxInfo::FEATURE_WEBRENDER,
+        DeviceFamily::AtiAll, nsIGfxInfo::FEATURE_WEBRENDER,
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
-        V(0, 0, 0, 0), "FEATURE_ROLLOUT_AMD_R600");
-
-    APPEND_TO_DRIVER_BLOCKLIST2_EXT(
-        OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
-        DesktopEnvironment::All, WindowProtocol::All, DriverVendor::All,
-        DeviceFamily::AtiRolloutWebRender, nsIGfxInfo::FEATURE_WEBRENDER,
-        nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
-        V(0, 0, 0, 0), "FEATURE_ROLLOUT_DESKTOP_AMD");
+        V(0, 0, 0, 0), "FEATURE_ROLLOUT_AMD");
 
     APPEND_TO_DRIVER_BLOCKLIST2_EXT(
         OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
@@ -1808,11 +1857,18 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
         V(0, 0, 0, 0), "FEATURE_ROLLOUT_INTEL");
 
+    APPEND_TO_DRIVER_BLOCKLIST2_EXT(
+        OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
+        DesktopEnvironment::All, WindowProtocol::All, DriverVendor::All,
+        DeviceFamily::QualcommAll, nsIGfxInfo::FEATURE_WEBRENDER,
+        nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
+        V(0, 0, 0, 0), "FEATURE_ROLLOUT_QUALCOMM");
+
     ////////////////////////////////////
     // FEATURE_WEBRENDER_COMPOSITOR
 
 #ifndef EARLY_BETA_OR_EARLIER
-    // See also bug 161687
+    // See also bug 1616874
     APPEND_TO_DRIVER_BLOCKLIST2(
         OperatingSystem::Windows, DeviceFamily::IntelAll,
         nsIGfxInfo::FEATURE_WEBRENDER_COMPOSITOR,
@@ -1846,18 +1902,11 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER_SOFTWARE - ALLOWLIST
-#ifdef EARLY_BETA_OR_EARLIER
-#  if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || \
-      defined(__i386) || defined(__amd64__)
-    APPEND_TO_DRIVER_BLOCKLIST2_EXT(
-        OperatingSystem::Windows, ScreenSizeStatus::SmallAndMedium,
-        BatteryStatus::All, DesktopEnvironment::All, WindowProtocol::All,
-        DriverVendor::All, DeviceFamily::All,
-        nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
-        nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
-        V(0, 0, 0, 0), "FEATURE_ROLLOUT_NIGHTLY_SOFTWARE_WR_S_M_SCRN");
-#  endif
-#endif
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::All,
+                                nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
+                                nsIGfxInfo::FEATURE_ALLOW_ALWAYS,
+                                DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0),
+                                "FEATURE_ROLLOUT_SOFTWARE_WR");
   }
   return *sDriverInfo;
 }
@@ -1866,6 +1915,8 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     int32_t aFeature, int32_t* aStatus, nsAString& aSuggestedDriverVersion,
     const nsTArray<GfxDriverInfo>& aDriverInfo, nsACString& aFailureId,
     OperatingSystem* aOS /* = nullptr */) {
+  AssertNotWin32kLockdown();
+
   NS_ENSURE_ARG_POINTER(aStatus);
   aSuggestedDriverVersion.SetIsVoid(true);
   OperatingSystem os = WindowsVersionToOperatingSystem(mWindowsVersion);
@@ -1968,6 +2019,8 @@ nsresult GfxInfo::GetFeatureStatusImpl(
 }
 
 nsresult GfxInfo::FindMonitors(JSContext* aCx, JS::HandleObject aOutArray) {
+  AssertNotWin32kLockdown();
+
   int deviceCount = 0;
   for (auto displayInfo : mDisplayInfo) {
     JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
@@ -2017,7 +2070,7 @@ void GfxInfo::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj) {
     JS_SetProperty(aCx, obj, "textureSharing", val);
 
     bool blocklisted = false;
-    if (nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo()) {
+    if (nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service()) {
       int32_t status;
       nsCString discardFailureId;
       if (SUCCEEDED(

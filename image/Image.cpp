@@ -12,11 +12,13 @@
 #include "nsContentUtils.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Rect.h"
+#include "mozilla/gfx/SourceSurfaceRawData.h"
 #include "mozilla/Services.h"
 #include "mozilla/SizeOfState.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Tuple.h"  // for Tie
 #include "mozilla/layers/SharedSurfacesChild.h"
+#include "SourceSurfaceBlobImage.h"
 
 namespace mozilla {
 namespace image {
@@ -157,14 +159,15 @@ void ImageResource::SetCurrentImage(layers::ImageContainer* aContainer,
 
 ImgDrawResult ImageResource::GetImageContainerImpl(
     layers::LayerManager* aManager, const gfx::IntSize& aSize,
-    const Maybe<SVGImageContext>& aSVGContext, uint32_t aFlags,
+    const Maybe<SVGImageContext>& aSVGContext,
+    const Maybe<ImageIntRegion>& aRegion, uint32_t aFlags,
     layers::ImageContainer** aOutContainer) {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aManager);
-  MOZ_ASSERT(
-      (aFlags & ~(FLAG_SYNC_DECODE | FLAG_SYNC_DECODE_IF_FAST |
-                  FLAG_ASYNC_NOTIFY | FLAG_HIGH_QUALITY_SCALING)) == FLAG_NONE,
-      "Unsupported flag passed to GetImageContainer");
+  MOZ_ASSERT((aFlags &
+              ~(FLAG_SYNC_DECODE | FLAG_SYNC_DECODE_IF_FAST | FLAG_RECORD_BLOB |
+                FLAG_ASYNC_NOTIFY | FLAG_HIGH_QUALITY_SCALING)) == FLAG_NONE,
+             "Unsupported flag passed to GetImageContainer");
 
   ImgDrawResult drawResult;
   gfx::IntSize size;
@@ -187,7 +190,7 @@ ImgDrawResult ImageResource::GetImageContainerImpl(
   for (; i >= 0; --i) {
     entry = &mImageContainers[i];
     if (size == entry->mSize && flags == entry->mFlags &&
-        aSVGContext == entry->mSVGContext) {
+        aSVGContext == entry->mSVGContext && aRegion == entry->mRegion) {
       // Lack of a container is handled below.
       container = RefPtr<layers::ImageContainer>(entry->mContainer);
       break;
@@ -219,6 +222,7 @@ ImgDrawResult ImageResource::GetImageContainerImpl(
     }
   }
 
+  AutoProfilerImagePaintMarker PROFILER_RAII(this);
 #ifdef DEBUG
   NotifyDrawingObservers();
 #endif
@@ -226,7 +230,7 @@ ImgDrawResult ImageResource::GetImageContainerImpl(
   gfx::IntSize bestSize;
   RefPtr<gfx::SourceSurface> surface;
   Tie(drawResult, bestSize, surface) = GetFrameInternal(
-      size, aSVGContext, FRAME_CURRENT, aFlags | FLAG_ASYNC_NOTIFY);
+      size, aSVGContext, aRegion, FRAME_CURRENT, aFlags | FLAG_ASYNC_NOTIFY);
 
   // The requested size might be refused by the surface cache (i.e. due to
   // factor-of-2 mode). In that case we don't want to create an entry for this
@@ -253,7 +257,7 @@ ImgDrawResult ImageResource::GetImageContainerImpl(
     for (; i >= 0; --i) {
       entry = &mImageContainers[i];
       if (bestSize == entry->mSize && flags == entry->mFlags &&
-          aSVGContext == entry->mSVGContext) {
+          aSVGContext == entry->mSVGContext && aRegion == entry->mRegion) {
         container = RefPtr<layers::ImageContainer>(entry->mContainer);
         if (container) {
           switch (entry->mLastDrawResult) {
@@ -289,8 +293,8 @@ ImgDrawResult ImageResource::GetImageContainerImpl(
     if (i >= 0) {
       entry->mContainer = container;
     } else {
-      entry = mImageContainers.AppendElement(
-          ImageContainerEntry(bestSize, aSVGContext, container.get(), flags));
+      entry = mImageContainers.AppendElement(ImageContainerEntry(
+          bestSize, aSVGContext, aRegion, container.get(), flags));
     }
   }
 
@@ -308,10 +312,32 @@ bool ImageResource::UpdateImageContainer(
     ImageContainerEntry& entry = mImageContainers[i];
     RefPtr<layers::ImageContainer> container(entry.mContainer);
     if (container) {
+      // Blob recordings should just be marked as dirty. We will regenerate the
+      // recording when the display list update comes around.
+      if (entry.mFlags & FLAG_RECORD_BLOB) {
+        AutoTArray<layers::ImageContainer::OwningImage, 1> images;
+        container->GetCurrentImages(&images);
+        if (images.IsEmpty()) {
+          MOZ_ASSERT_UNREACHABLE("Empty container!");
+          continue;
+        }
+
+        RefPtr<gfx::SourceSurface> surface =
+            images[0].mImage->GetAsSourceSurface();
+        if (!surface || surface->GetType() != gfx::SurfaceType::BLOB_IMAGE) {
+          MOZ_ASSERT_UNREACHABLE("No/wrong surface in container!");
+          continue;
+        }
+
+        static_cast<SourceSurfaceBlobImage*>(surface.get())->MarkDirty();
+        continue;
+      }
+
       gfx::IntSize bestSize;
       RefPtr<gfx::SourceSurface> surface;
-      Tie(entry.mLastDrawResult, bestSize, surface) = GetFrameInternal(
-          entry.mSize, entry.mSVGContext, FRAME_CURRENT, entry.mFlags);
+      Tie(entry.mLastDrawResult, bestSize, surface) =
+          GetFrameInternal(entry.mSize, entry.mSVGContext, entry.mRegion,
+                           FRAME_CURRENT, entry.mFlags);
 
       // It is possible that this is a factor-of-2 substitution. Since we
       // managed to convert the weak reference into a strong reference, that
@@ -330,6 +356,78 @@ bool ImageResource::UpdateImageContainer(
   }
 
   return !mImageContainers.IsEmpty();
+}
+
+void ImageResource::CollectSizeOfSurfaces(
+    nsTArray<SurfaceMemoryCounter>& aCounters,
+    MallocSizeOf aMallocSizeOf) const {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  for (const auto& entry : mImageContainers) {
+    RefPtr<layers::ImageContainer> container(entry.mContainer);
+    if (!container) {
+      continue;
+    }
+
+    AutoTArray<layers::ImageContainer::OwningImage, 1> images;
+    container->GetCurrentImages(&images);
+    if (images.IsEmpty()) {
+      continue;
+    }
+
+    RefPtr<gfx::SourceSurface> surface = images[0].mImage->GetAsSourceSurface();
+    if (!surface) {
+      MOZ_ASSERT_UNREACHABLE("No surface in container!");
+      continue;
+    }
+
+    // The surface might be wrapping another.
+    bool isMappedSurface = surface->GetType() == gfx::SurfaceType::DATA_MAPPED;
+    const gfx::SourceSurface* actualSurface =
+        isMappedSurface
+            ? static_cast<gfx::SourceSurfaceMappedData*>(surface.get())
+                  ->GetScopedSurface()
+            : surface.get();
+
+    // Check if the surface is already in the report. Ignore if so.
+    bool found = false;
+    for (const auto& counter : aCounters) {
+      if (counter.Surface() == actualSurface) {
+        found = true;
+        break;
+      }
+    }
+    if (found) {
+      continue;
+    }
+
+    // The surface isn't in the report, so it isn't stored in SurfaceCache. We
+    // need to add our own entry here so that it will be included in the memory
+    // report.
+    gfx::SourceSurface::SizeOfInfo info;
+    surface->SizeOfExcludingThis(aMallocSizeOf, info);
+
+    uint32_t heapBytes = aMallocSizeOf(actualSurface);
+    if (isMappedSurface) {
+      heapBytes += aMallocSizeOf(surface.get());
+    }
+
+    SurfaceKey key = ContainerSurfaceKey(surface->GetSize(), entry.mSVGContext,
+                                         ToSurfaceFlags(entry.mFlags));
+    SurfaceMemoryCounter counter(key, actualSurface, /* aIsLocked */ false,
+                                 /* aCannotSubstitute */ false,
+                                 /* aIsFactor2 */ false, /* aFinished */ true,
+                                 SurfaceMemoryCounterType::CONTAINER);
+
+    counter.Values().SetDecodedHeap(info.mHeapBytes + heapBytes);
+    counter.Values().SetDecodedNonHeap(info.mNonHeapBytes);
+    counter.Values().SetDecodedUnknown(info.mUnknownBytes);
+    counter.Values().SetExternalHandles(info.mExternalHandles);
+    counter.Values().SetExternalId(info.mExternalId);
+    counter.Values().SetSurfaceTypes(info.mTypes);
+
+    aCounters.AppendElement(counter);
+  }
 }
 
 void ImageResource::ReleaseImageContainer() {

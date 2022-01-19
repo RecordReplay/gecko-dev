@@ -174,11 +174,13 @@ class TlsExtensionTest13
     // Convert the version encoding for DTLS, if needed.
     if (variant_ == ssl_variant_datagram) {
       switch (version) {
-#ifdef DTLS_1_3_DRAFT_VERSION
         case SSL_LIBRARY_VERSION_TLS_1_3:
+#ifdef DTLS_1_3_DRAFT_VERSION
           version = 0x7f00 | DTLS_1_3_DRAFT_VERSION;
-          break;
+#else
+          version = SSL_LIBRARY_VERSION_DTLS_1_3_WIRE;
 #endif
+          break;
         case SSL_LIBRARY_VERSION_TLS_1_2:
           version = SSL_LIBRARY_VERSION_DTLS_1_2_WIRE;
           break;
@@ -324,6 +326,27 @@ TEST_P(TlsExtensionTestGeneric, AlpnMismatch) {
   server_->EnableAlpn(server_alpn, sizeof(server_alpn));
 
   ClientHelloErrorTest(nullptr, kTlsAlertNoApplicationProtocol);
+}
+
+TEST_P(TlsExtensionTestGeneric, AlpnDisabledServer) {
+  const uint8_t client_alpn[] = {0x01, 0x61};
+  client_->EnableAlpn(client_alpn, sizeof(client_alpn));
+  server_->EnableAlpn(nullptr, 0);
+
+  ClientHelloErrorTest(nullptr, kTlsAlertUnsupportedExtension);
+}
+
+TEST_P(TlsConnectGeneric, AlpnDisabled) {
+  server_->EnableAlpn(nullptr, 0);
+  Connect();
+
+  SSLNextProtoState state;
+  uint8_t buf[255] = {0};
+  unsigned int buf_len = 3;
+  EXPECT_EQ(SECSuccess, SSL_GetNextProto(client_->ssl_fd(), &state, buf,
+                                         &buf_len, sizeof(buf)));
+  EXPECT_EQ(SSL_NEXT_PROTO_NO_SUPPORT, state);
+  EXPECT_EQ(0U, buf_len);
 }
 
 // Many of these tests fail in TLS 1.3 because the extension is encrypted, which
@@ -1098,30 +1121,26 @@ TEST_P(TlsExtensionTest13, HrrThenRemoveSupportedGroups) {
                               SSL_ERROR_MISSING_SUPPORTED_GROUPS_EXTENSION);
 }
 
-#ifdef NSS_ENABLE_DRAFT_HPKE
-TEST_P(TlsExtensionTest13, HrrThenRemoveEch) {
-  if (variant_ == ssl_variant_datagram) {
-    // ECH not supported in DTLS.
-    GTEST_SKIP();
-  }
-
-  EnsureTlsSetup();
-  SetupEch(client_, server_);
-  ExpectAlert(server_, kTlsAlertIllegalParameter);
-  HrrThenRemoveExtensionsTest(ssl_tls13_encrypted_client_hello_xtn,
-                              SSL_ERROR_ILLEGAL_PARAMETER_ALERT,
-                              SSL_ERROR_BAD_2ND_CLIENT_HELLO);
-}
-#endif
-
 TEST_P(TlsExtensionTest13, EmptyVersionList) {
-  static const uint8_t ext[] = {0x00, 0x00};
-  ConnectWithBogusVersionList(ext, sizeof(ext));
+  static const uint8_t kExt[] = {0x00, 0x00};
+  ConnectWithBogusVersionList(kExt, sizeof(kExt));
 }
 
 TEST_P(TlsExtensionTest13, OddVersionList) {
-  static const uint8_t ext[] = {0x00, 0x01, 0x00};
-  ConnectWithBogusVersionList(ext, sizeof(ext));
+  static const uint8_t kExt[] = {0x00, 0x01, 0x00};
+  ConnectWithBogusVersionList(kExt, sizeof(kExt));
+}
+
+// Use the stream version number for TLS 1.3 (0x0304) in DTLS.
+TEST_F(TlsConnectDatagram13, TlsVersionInDtls) {
+  static const uint8_t kExt[] = {0x02, 0x03, 0x04};
+
+  DataBuffer versions_buf(kExt, sizeof(kExt));
+  MakeTlsFilter<TlsExtensionReplacer>(client_, ssl_tls13_supported_versions_xtn,
+                                      versions_buf);
+  ConnectExpectAlert(server_, kTlsAlertProtocolVersion);
+  client_->CheckErrorCode(SSL_ERROR_PROTOCOL_VERSION_ALERT);
+  server_->CheckErrorCode(SSL_ERROR_UNSUPPORTED_VERSION);
 }
 
 // TODO: this only tests extensions in server messages.  The client can extend

@@ -6,10 +6,13 @@
 #ifndef WidgetUtilsGtk_h__
 #define WidgetUtilsGtk_h__
 
-#include <stdint.h>
+#include "nsString.h"
+#include "nsTArray.h"
 
-namespace mozilla {
-namespace widget {
+#include <stdint.h>
+#include <gdk/gdk.h>
+
+namespace mozilla::widget {
 
 class WidgetUtilsGTK {
  public:
@@ -19,8 +22,15 @@ class WidgetUtilsGTK {
 
 bool IsMainWindowTransparent();
 
-}  // namespace widget
+bool GdkIsWaylandDisplay(GdkDisplay* display);
+bool GdkIsX11Display(GdkDisplay* display);
 
-}  // namespace mozilla
+bool GdkIsWaylandDisplay();
+bool GdkIsX11Display();
+
+// Parse text/uri-list
+nsTArray<nsCString> ParseTextURIList(const nsACString& data);
+
+}  // namespace mozilla::widget
 
 #endif  // WidgetUtilsGtk_h__

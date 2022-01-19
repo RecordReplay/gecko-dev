@@ -46,6 +46,18 @@ dictionary ProfilerMarkerOptions {
   // See ProfilingCategoryList.h for the complete list of valid values.
   // Using an unrecognized value will set the category to "Other".
   ByteString category = "JavaScript";
+
+  // Inner window ID to use for the marker. If the global object is a window,
+  // the inner window id of the marker will be set automatically.
+  // If a marker that relates to a specific window is added from a JS module,
+  // setting the inner window id will allow the profiler to show which window
+  // the marker applies to.
+  unsigned long long innerWindowId = 0;
+};
+
+dictionary InteractionData {
+  unsigned long interactionCount = 0;
+  unsigned long interactionTimeInMilliseconds = 0;
 };
 
 /**
@@ -186,9 +198,20 @@ namespace ChromeUtils {
 #endif // NIGHTLY_BUILD
 
   /**
-   * Clears the stylesheet cache.
+   * Clears the stylesheet cache by baseDomain. This includes associated
+   * state-partitioned cache.
    */
-  void clearStyleSheetCache(optional Principal? principal = null);
+  void clearStyleSheetCacheByBaseDomain(UTF8String baseDomain);
+
+  /**
+   * Clears the stylesheet cache by principal.
+   */
+  void clearStyleSheetCacheByPrincipal(Principal principal);
+
+  /**
+   * Clears the entire stylesheet cache.
+   */
+  void clearStyleSheetCache();
 
   /**
    * If the profiler is currently running and recording the current thread,
@@ -253,6 +276,19 @@ partial namespace ChromeUtils {
   createOriginAttributesFromOrigin(DOMString origin);
 
   /**
+   * Returns an OriginAttributesDictionary with values from the origin |suffix|
+   * and unspecified attributes added and assigned default values.
+   *
+   * @param suffix            The origin suffix to create from.
+   * @returns                 An OriginAttributesDictionary with values from
+   *                          the origin suffix and unspecified attributes
+   *                          added and assigned default values.
+   */
+  [Throws]
+  OriginAttributesDictionary
+  CreateOriginAttributesFromOriginSuffix(DOMString suffix);
+
+  /**
    * Returns an OriginAttributesDictionary that is a copy of |originAttrs| with
    * unspecified attributes added and assigned default values.
    *
@@ -270,6 +306,15 @@ partial namespace ChromeUtils {
   boolean
   isOriginAttributesEqual(optional OriginAttributesDictionary aA = {},
                           optional OriginAttributesDictionary aB = {});
+
+  /**
+   * Returns the base domain portion of a given partitionKey.
+   * Returns the empty string for an empty partitionKey.
+   * Throws for invalid partition keys.
+   */
+  [Throws]
+  DOMString
+  getBaseDomainFromPartitionKey(DOMString partitionKey);
 
   /**
    * Loads and compiles the script at the given URL and returns an object
@@ -517,6 +562,16 @@ partial namespace ChromeUtils {
    */
   [Throws, ChromeOnly]
   sequence<nsIDOMProcessParent> getAllDOMProcesses();
+
+  /**
+   * Returns a record of user interaction data. Currently only typing,
+   * but will include scrolling and potentially other metrics.
+   *
+   * Valid keys: "Typing"
+   */
+  [Throws, ChromeOnly]
+  record<DOMString, InteractionData> consumeInteractionData();
+  
 };
 
 /*
@@ -532,7 +587,6 @@ enum WebIDLProcType {
  "webLargeAllocation",
  "withCoopCoep",
  "browser",
- "plugin",
  "ipdlUnitTest",
  "gmpPlugin",
  "gpu",
@@ -749,7 +803,15 @@ dictionary OriginAttributesPatternDictionary {
   unsigned long privateBrowsingId;
   DOMString firstPartyDomain;
   DOMString geckoViewSessionContextId;
+  // partitionKey takes precedence over partitionKeyPattern.
   DOMString partitionKey;
+  PartitionKeyPatternDictionary partitionKeyPattern;
+};
+
+dictionary PartitionKeyPatternDictionary {
+  DOMString scheme;
+  DOMString baseDomain;
+  long port;
 };
 
 dictionary CompileScriptOptionsDictionary {

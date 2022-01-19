@@ -4,6 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "RemoteBackbuffer.h"
+#include "GeckoProfiler.h"
+#include "nsThreadUtils.h"
 #include "mozilla/Span.h"
 #include <algorithm>
 #include <type_traits>
@@ -256,8 +258,29 @@ class PresentableSharedImage {
                  WS_EX_LAYERED);
 
       BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-      SIZE winSize = {mSharedImage.GetWidth(), mSharedImage.GetHeight()};
       POINT srcPos = {0, 0};
+      RECT clientRect = {};
+      if (!::GetClientRect(aWindowHandle, &clientRect)) {
+        return false;
+      }
+      MOZ_ASSERT(clientRect.left == 0);
+      MOZ_ASSERT(clientRect.top == 0);
+      int32_t width = clientRect.right;
+      int32_t height = clientRect.bottom;
+      SIZE winSize = {width, height};
+      // Window resize could cause the client area to be different than
+      // mSharedImage's size. If the client area doesn't match,
+      // PresentToWindow() returns false without calling UpdateLayeredWindow().
+      // Another call to UpdateLayeredWindow() will follow shortly, since the
+      // resize will eventually force the backbuffer to repaint itself again.
+      // When client area is larger than mSharedImage's size,
+      // UpdateLayeredWindow() draws the window completely invisible. But it
+      // does not return false.
+      if (width != mSharedImage.GetWidth() ||
+          height != mSharedImage.GetHeight()) {
+        return false;
+      }
+
       return !!::UpdateLayeredWindow(
           topLevelWindow, nullptr /*paletteDC*/, nullptr /*newPos*/, &winSize,
           mDeviceContext, &srcPos, 0 /*colorKey*/, &bf, ULW_ALPHA);
@@ -327,16 +350,16 @@ Provider::Provider()
       mResponseReadyEvent(nullptr),
       mSharedDataPtr(nullptr),
       mStopServiceThread(false),
-      mServiceThread(),
+      mServiceThread(nullptr),
       mBackbuffer() {}
 
 Provider::~Provider() {
   mBackbuffer.reset();
 
-  if (mServiceThread.joinable()) {
+  if (mServiceThread) {
     mStopServiceThread = true;
     MOZ_ALWAYS_TRUE(::SetEvent(mRequestReadyEvent));
-    mServiceThread.join();
+    MOZ_ALWAYS_TRUE(PR_JoinThread(mServiceThread) == PR_SUCCESS);
   }
 
   if (mSharedDataPtr) {
@@ -396,7 +419,17 @@ bool Provider::Initialize(HWND aWindowHandle, DWORD aTargetProcessId,
 
   mStopServiceThread = false;
 
-  mServiceThread = std::thread([this] { this->ThreadMain(); });
+  // Use a raw NSPR OS-level thread here instead of nsThread because we are
+  // performing low-level synchronization across processes using Win32 Events,
+  // and nsThread is designed around an incompatible "in-process task queue"
+  // model
+  mServiceThread = PR_CreateThread(
+      PR_USER_THREAD, [](void* p) { static_cast<Provider*>(p)->ThreadMain(); },
+      this, PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD,
+      0 /*default stack size*/);
+  if (!mServiceThread) {
+    return false;
+  }
 
   mTransparencyMode = aTransparencyMode;
 
@@ -435,6 +468,9 @@ void Provider::UpdateTransparencyMode(nsTransparencyMode aTransparencyMode) {
 }
 
 void Provider::ThreadMain() {
+  AUTO_PROFILER_REGISTER_THREAD("RemoteBackbuffer");
+  NS_SetCurrentThreadName("RemoteBackbuffer");
+
   while (true) {
     MOZ_ALWAYS_TRUE(::WaitForSingleObject(mRequestReadyEvent, INFINITE) ==
                     WAIT_OBJECT_0);

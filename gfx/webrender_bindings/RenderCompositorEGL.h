@@ -17,9 +17,9 @@ namespace wr {
 class RenderCompositorEGL : public RenderCompositor {
  public:
   static UniquePtr<RenderCompositor> Create(
-      RefPtr<widget::CompositorWidget> aWidget, nsACString& aError);
+      const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError);
 
-  explicit RenderCompositorEGL(RefPtr<widget::CompositorWidget> aWidget);
+  explicit RenderCompositorEGL(const RefPtr<widget::CompositorWidget>& aWidget);
   virtual ~RenderCompositorEGL();
 
   bool BeginFrame() override;
@@ -35,8 +35,6 @@ class RenderCompositorEGL : public RenderCompositor {
   bool UseANGLE() const override { return false; }
 
   LayoutDeviceIntSize GetBufferSize() override;
-
-  CompositorCapabilities GetCompositorCapabilities() override;
 
   // Interface for partial present
   bool UsePartialPresent() override;

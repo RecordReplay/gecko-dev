@@ -3,8 +3,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+interface URI;
 interface nsIDocShell;
 interface nsISecureBrowserUI;
+interface nsIPrintSettings;
 interface nsIWebProgress;
 
 interface mixin LoadContextMixin {
@@ -42,6 +44,15 @@ enum DisplayMode {
 };
 
 /**
+ * CSS prefers-color-scheme values.
+ */
+enum PrefersColorSchemeOverride {
+  "none",
+  "light",
+  "dark",
+};
+
+/**
  * Allowed overrides of platform/pref default behaviour for touch events.
  */
 enum TouchEventsOverride {
@@ -55,6 +66,8 @@ interface BrowsingContext {
   static BrowsingContext? get(unsigned long long aId);
 
   static BrowsingContext? getFromWindow(WindowProxy window);
+
+  static BrowsingContext? getCurrentTopByBrowserId(unsigned long long aId);
 
   sequence<BrowsingContext> getAllBrowsingContextsInSubtree();
 
@@ -90,11 +103,15 @@ interface BrowsingContext {
 
   readonly attribute boolean ancestorsAreCurrent;
 
-  [SetterThrows] attribute [TreatNullAs=EmptyString] DOMString customPlatform;
+  [SetterThrows] attribute [LegacyNullToEmptyString] DOMString customPlatform;
 
-  [SetterThrows] attribute [TreatNullAs=EmptyString] DOMString customUserAgent;
+  [SetterThrows] attribute [LegacyNullToEmptyString] DOMString customUserAgent;
 
   readonly attribute DOMString embedderElementType;
+
+  readonly attribute boolean createdDynamically;
+
+  readonly attribute boolean isInBFCache;
 
   /**
    * The sandbox flags on the browsing context. These reflect the value of the
@@ -119,6 +136,13 @@ interface BrowsingContext {
   [SetterThrows] attribute float fullZoom;
 
   [SetterThrows] attribute float textZoom;
+
+  // Override the dots-per-CSS-pixel scaling factor in this BrowsingContext
+  // and all of its descendants. May only be set on the top BC, and should
+  // only be set from the parent process.
+  //
+  // A value of 0.0 causes us to use the global default scaling factor.
+  [SetterThrows] attribute float overrideDPPX;
 
   [SetterThrows] attribute boolean suspendMediaWhenInactive;
 
@@ -145,6 +169,15 @@ interface BrowsingContext {
   // debugging this browsing context.
   [SetterThrows] attribute boolean watchedByDevTools;
 
+  // Enable some service workers testing features, for DevTools.
+  [SetterThrows] attribute boolean serviceWorkersTestingEnabled;
+
+  // Enable media query medium override, for DevTools.
+  [SetterThrows] attribute DOMString mediumOverride;
+
+  // Color-scheme simulation, for DevTools.
+  [SetterThrows] attribute PrefersColorSchemeOverride prefersColorSchemeOverride;
+
   /**
    * A unique identifier for the browser element that is hosting this
    * BrowsingContext tree. Every BrowsingContext in the element's tree will
@@ -161,7 +194,23 @@ interface BrowsingContext {
    * This allows chrome to override the default choice of whether touch events
    * are available in a specific BrowsingContext and its descendents.
    */
-  [SetterThrows] attribute TouchEventsOverride touchEventsOverride;
+  readonly attribute TouchEventsOverride touchEventsOverride;
+
+  /**
+   * Partially determines whether script execution is allowed in this
+   * BrowsingContext. Script execution will be permitted only if this
+   * attribute is true and script execution is allowed in the parent
+   * WindowContext.
+   *
+   * May only be set in the parent process.
+   */
+  [SetterThrows] attribute boolean allowJavascript;
+
+  /*
+   * Default load flags (as defined in nsIRequest) that will be set on all
+   * requests made by this BrowsingContext.
+   */
+  [SetterThrows] attribute long defaultLoadFlags;
 
   /**
    * The nsID of the browsing context in the session history.
@@ -173,6 +222,8 @@ interface BrowsingContext {
 
   // Resets the location change rate limit. Used for testing.
   void resetLocationChangeRateLimit();
+
+  readonly attribute long childOffset;
 };
 
 BrowsingContext includes LoadContextMixin;
@@ -226,12 +277,23 @@ interface CanonicalBrowsingContext : BrowsingContext {
   [Throws]
   void loadURI(DOMString aURI, optional LoadURIOptions aOptions = {});
 
+   /**
+    * Print the current document.
+    *
+    * @param aOuterWindowID the ID of the outer window to print
+    * @param aPrintSettings print settings to use; printSilent can be
+    *                       set to prevent prompting.
+    * @return A Promise that resolves once printing is finished.
+    */
+  [Throws]
+  Promise<void> print(nsIPrintSettings aPrintSettings);
+
   /**
    * These methods implement the nsIWebNavigation methods of the same names
    */
-  void goBack(optional long aCancelContentJSEpoch, optional boolean aRequireUserInteraction = false);
-  void goForward(optional long aCancelContentJSEpoch, optional boolean aRequireUserInteraction  = false);
-  void goToIndex(long aIndex, optional long aCancelContentJSEpoch);
+  void goBack(optional long aCancelContentJSEpoch, optional boolean aRequireUserInteraction = false, optional boolean aUserActivation = false);
+  void goForward(optional long aCancelContentJSEpoch, optional boolean aRequireUserInteraction  = false, optional boolean aUserActivation = false);
+  void goToIndex(long aIndex, optional long aCancelContentJSEpoch, optional boolean aUserActivation = false);
   void reload(unsigned long aReloadFlags);
   void stop(unsigned long aStopFlags);
 
@@ -240,6 +302,20 @@ interface CanonicalBrowsingContext : BrowsingContext {
   readonly attribute MediaController? mediaController;
 
   void resetScalingZoom();
+
+  // The current URI loaded in this BrowsingContext according to nsDocShell.
+  // This may not match the current window global's document URI in some cases.
+  readonly attribute URI? currentURI;
+
+  void clearRestoreState();
+
+  /**
+   * This allows chrome to override the default choice of whether touch events
+   * are available in a specific BrowsingContext and its descendents.
+   */
+  [SetterThrows] inherit attribute TouchEventsOverride touchEventsOverride;
+
+  readonly attribute boolean isReplaced;
 };
 
 [Exposed=Window, ChromeOnly]

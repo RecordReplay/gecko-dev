@@ -40,8 +40,9 @@ static bool GetLockFileName(const char* nameToken, const char16_t* installPath,
   mozilla::UniquePtr<wchar_t, CoTaskMemFreeDeleter> programDataPathUnique(
       programDataPath);
 
-  filePath = nsPrintfCString("%S\\%s\\%s-%S", programDataPath, MOZ_APP_VENDOR,
-                             nameToken, pathHash.get());
+  filePath = nsPrintfCString(
+      "%s\\%s\\%s-%s", NS_ConvertUTF16toUTF8(programDataPath).get(),
+      MOZ_APP_VENDOR, nameToken, NS_ConvertUTF16toUTF8(pathHash.get()).get());
 
 #else
   // On POSIX platforms the base path is /tmp/[vendor][nameToken]-[pathHash].
@@ -56,7 +57,9 @@ static bool GetLockFileName(const char* nameToken, const char16_t* installPath,
 MultiInstLockHandle OpenMultiInstanceLock(const char* nameToken,
                                           const char16_t* installPath) {
   nsCString filePath;
-  GetLockFileName(nameToken, installPath, filePath);
+  if (!GetLockFileName(nameToken, installPath, filePath)) {
+    return MULTI_INSTANCE_LOCK_HANDLE_ERROR;
+  }
 
   // Open a file handle with full privileges and sharing, and then attempt to
   // take a shared (nonexclusive, read-only) lock on it.
@@ -65,7 +68,7 @@ MultiInstLockHandle OpenMultiInstanceLock(const char* nameToken,
       ::CreateFileW(PromiseFlatString(NS_ConvertUTF8toUTF16(filePath)).get(),
                     GENERIC_READ | GENERIC_WRITE,
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    nullptr, OPEN_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+                    nullptr, OPEN_ALWAYS, 0, nullptr);
   if (h != INVALID_HANDLE_VALUE) {
     // The LockFileEx functions always require an OVERLAPPED structure even
     // though we did not open the lock file for overlapped I/O.
@@ -108,8 +111,6 @@ void ReleaseMultiInstanceLock(MultiInstLockHandle lock) {
 #ifdef XP_WIN
     OVERLAPPED o = {0};
     ::UnlockFileEx(lock, 0, 1, 0, &o);
-    // We've used FILE_FLAG_DELETE_ON_CLOSE, so if we are the last instance
-    // with a handle on the lock file, closing it here will delete it.
     ::CloseHandle(lock);
 
 #else

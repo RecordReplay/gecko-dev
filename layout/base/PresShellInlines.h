@@ -7,6 +7,7 @@
 #ifndef mozilla_PresShellInlines_h
 #define mozilla_PresShellInlines_h
 
+#include "nsDocShell.h"
 #include "GeckoProfiler.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/dom/Document.h"
@@ -22,28 +23,31 @@ void PresShell::SetNeedLayoutFlush() {
     }
   }
 
-#ifdef MOZ_GECKO_PROFILER
   if (!mReflowCause) {
     mReflowCause = profiler_capture_backtrace();
   }
-#endif
 
   mLayoutTelemetry.IncReqsPerFlush(FlushType::Layout);
 }
 
 void PresShell::SetNeedStyleFlush() {
   mNeedStyleFlush = true;
+  PROFILER_MARKER_UNTYPED(
+      "SetNeedStyleFlush", LAYOUT,
+      MarkerOptions(MarkerStack::Capture(StackCaptureOptions::NonNative),
+                    mPresContext ? MarkerInnerWindowIdFromDocShell(
+                                       mPresContext->GetDocShell())
+                                 : MarkerInnerWindowId::NoId()));
+
   if (dom::Document* doc = mDocument->GetDisplayDocument()) {
     if (PresShell* presShell = doc->GetPresShell()) {
       presShell->mNeedStyleFlush = true;
     }
   }
 
-#ifdef MOZ_GECKO_PROFILER
   if (!mStyleCause) {
     mStyleCause = profiler_capture_backtrace();
   }
-#endif
 
   mLayoutTelemetry.IncReqsPerFlush(FlushType::Layout);
 }

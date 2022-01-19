@@ -31,8 +31,6 @@ class OpenSUSEBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         "libXt-devel",
         "libproxy-devel",
         "libuuid-devel",
-        "yasm",
-        "gtk2-devel",
         "clang-devel",
         "patterns-gnome-devel_gnome",
     ]
@@ -70,8 +68,8 @@ class OpenSUSEBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         self.ensure_mobile_android_packages(artifact_mode=True)
 
     def install_mercurial(self):
-        self.run_as_root(["pip", "install", "--upgrade", "pip"])
-        self.run_as_root(["pip", "install", "--upgrade", "Mercurial"])
+        self(["pip", "install", "--upgrade", "pip", "--user"])
+        self(["pip", "install", "--upgrade", "Mercurial", "--user"])
 
     def ensure_clang_static_analysis_package(self, state_dir, checkout_root):
         from mozboot import static_analysis
@@ -113,8 +111,8 @@ class OpenSUSEBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         self.zypper_update
 
     def upgrade_mercurial(self, current):
-        self.run_as_root(["pip3", "install", "--upgrade", "pip"])
-        self.run_as_root(["pip3", "install", "--upgrade", "Mercurial"])
+        self(["pip3", "install", "--upgrade", "pip", "--user"])
+        self(["pip3", "install", "--upgrade", "Mercurial", "--user"])
 
     def ensure_nasm_packages(self, state_dir, checkout_root):
         self.zypper_install("nasm")

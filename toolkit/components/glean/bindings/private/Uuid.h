@@ -8,9 +8,9 @@
 #define mozilla_glean_GleanUuid_h
 
 #include "mozilla/Maybe.h"
+#include "mozilla/Result.h"
 #include "nsIGleanMetrics.h"
 #include "nsString.h"
-#include "mozilla/glean/fog_ffi_generated.h"
 
 namespace mozilla::glean {
 
@@ -25,12 +25,12 @@ class UuidMetric {
    *
    * @param aValue The UUID to set the metric to.
    */
-  void Set(const nsACString& aValue) const { fog_uuid_set(mId, &aValue); }
+  void Set(const nsACString& aValue) const;
 
   /*
    * Generate a new random UUID and set the metric to it.
    */
-  void GenerateAndSet() const { fog_uuid_generate_and_set(mId); }
+  void GenerateAndSet() const;
 
   /**
    * **Test-only API**
@@ -49,15 +49,8 @@ class UuidMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<nsCString> TestGetValue(
-      const nsACString& aPingName = nsCString()) const {
-    if (!fog_uuid_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    nsCString ret;
-    fog_uuid_test_get_value(mId, &aPingName, &ret);
-    return Some(ret);
-  }
+  Result<Maybe<nsCString>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;

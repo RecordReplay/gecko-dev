@@ -102,10 +102,10 @@ def mozharness_test_on_docker(config, job, taskdesc):
 
     artifacts = [
         # (artifact name prefix, in-image path)
-        ("public/logs/", "{workdir}/workspace/logs/".format(**run)),
+        ("public/logs", "{workdir}/workspace/logs/".format(**run)),
         ("public/test", "{workdir}/artifacts/".format(**run)),
         (
-            "public/test_info/",
+            "public/test_info",
             "{workdir}/workspace/build/blobber_upload_dir/".format(**run),
         ),
     ]
@@ -156,6 +156,10 @@ def mozharness_test_on_docker(config, job, taskdesc):
             and "headless" not in job["label"]
         ):
             env.update({"NEED_COMPIZ": "true"})
+
+    # Set MOZ_ENABLE_WAYLAND env variables to enable Wayland backend.
+    if "wayland" in job["label"]:
+        env["MOZ_ENABLE_WAYLAND"] = "1"
 
     if mozharness.get("mochitest-flavor"):
         env["MOCHITEST_FLAVOR"] = mozharness["mochitest-flavor"]
@@ -322,6 +326,7 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
     elif is_bitbar:
         env.update(
             {
+                "LANG": "en_US.UTF-8",
                 "MOZHARNESS_CONFIG": " ".join(mozharness["config"]),
                 "MOZHARNESS_SCRIPT": mozharness["script"],
                 "MOZHARNESS_URL": {
@@ -369,7 +374,7 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
     elif is_bitbar:
         py_binary = "python3" if py_3 else "python"
         mh_command = ["bash", "./{}".format(bitbar_script)]
-    elif is_macosx and "macosx1014-64" in test["test-platform"]:
+    elif is_macosx:
         py_binary = "/usr/local/bin/{}".format("python3" if py_3 else "python2")
         mh_command = [
             py_binary,
@@ -377,7 +382,7 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
             "mozharness/scripts/" + mozharness["script"],
         ]
     else:
-        # is_linux or is_macosx
+        # is_linux
         py_binary = "/usr/bin/{}".format("python3" if py_3 else "python2")
         mh_command = [
             # Using /usr/bin/python2.7 rather than python2.7 because

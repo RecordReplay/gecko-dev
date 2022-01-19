@@ -1,7 +1,7 @@
 ﻿// © 2016 and later: Unicode, Inc. and others.
-// License & terms of use: http://www.unicode.org/copyright.html#License
+// License & terms of use: http://www.unicode.org/copyright.html
+// Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 lt{
-    Version{"37"}
     durationUnits{
         hm{"hh:mm"}
         hms{"hh:mm:ss"}
@@ -139,7 +139,79 @@ lt{
             }
         }
         compound{
+            1024p1{"kibi{0}"}
+            1024p2{"mebi{0}"}
+            1024p3{"gibi{0}"}
+            1024p4{"tebi{0}"}
+            1024p5{"pebi{0}"}
+            1024p6{"exbi{0}"}
+            1024p7{"zebi{0}"}
+            1024p8{"yobe{0}"}
+            10p-1{"deci{0}"}
+            10p-12{"piko{0}"}
+            10p-15{"femto{0}"}
+            10p-18{"ato{0}"}
+            10p-2{"centi{0}"}
+            10p-21{"zepto{0}"}
+            10p-24{"jokto{0}"}
+            10p-3{"mili{0}"}
+            10p-6{"mikro{0}"}
+            10p-9{"nano{0}"}
+            10p1{"deka{0}"}
+            10p12{"tera{0}"}
+            10p15{"peta{0}"}
+            10p18{"eksa{0}"}
+            10p2{"hekto{0}"}
+            10p21{"zeta{0}"}
+            10p24{"jota{0}"}
+            10p3{"kilo{0}"}
+            10p6{"mega{0}"}
+            10p9{"giga{0}"}
             per{"{0}/{1}"}
+            power2{
+                few{
+                    _{
+                        _{"{0} kvadratu"}
+                    }
+                }
+                many{
+                    _{
+                        _{"{0} kvadratu"}
+                    }
+                }
+                one{
+                    _{
+                        _{"{0} kvadratu"}
+                    }
+                }
+                other{
+                    _{
+                        _{"{0} kvadratu"}
+                    }
+                }
+            }
+            power3{
+                few{
+                    _{
+                        _{"{0} kubu"}
+                    }
+                }
+                many{
+                    _{
+                        _{"{0} kubu"}
+                    }
+                }
+                one{
+                    _{
+                        _{"{0} kubu"}
+                    }
+                }
+                other{
+                    _{
+                        _{"{0} kubu"}
+                    }
+                }
+            }
         }
         concentr{
             karat{
@@ -149,7 +221,7 @@ lt{
                 one{"{0} karatas"}
                 other{"{0} karatų"}
             }
-            milligram-per-deciliter{
+            milligram-ofglucose-per-deciliter{
                 dnam{"miligramai decilitre"}
                 few{"{0} miligramai decilitre"}
                 many{"{0} miligramo decilitre"}
@@ -539,6 +611,13 @@ lt{
             }
         }
         graphics{
+            dot{
+                dnam{"taškas"}
+                few{"{0} taškai"}
+                many{"{0} taško"}
+                one{"{0} taškas"}
+                other{"{0} taškų"}
+            }
             dot-per-centimeter{
                 dnam{"taškai centimetre"}
                 few{"{0} taškai centimetre"}
@@ -607,6 +686,13 @@ lt{
                 many{"{0} decimetro"}
                 one{"{0} decimetras"}
                 other{"{0} decimetrų"}
+            }
+            earth-radius{
+                dnam{"žemės spindulys"}
+                few{"{0} R⊕"}
+                many{"{0} R⊕"}
+                one{"{0} žemės spindulys"}
+                other{"{0} žemės spindulių"}
             }
             fathom{
                 dnam{"fadomai"}
@@ -736,6 +822,20 @@ lt{
             }
         }
         light{
+            candela{
+                dnam{"kandela"}
+                few{"{0} cd"}
+                many{"{0} cd"}
+                one{"{0} kandela"}
+                other{"{0} kandelų"}
+            }
+            lumen{
+                dnam{"liumenas"}
+                few{"{0} lm"}
+                many{"{0} lm"}
+                one{"{0} liumenas"}
+                other{"{0} liumenų"}
+            }
             lux{
                 dnam{"liuksai"}
                 few{"{0} liuksai"}
@@ -764,6 +864,13 @@ lt{
             }
             earth-mass{
                 dnam{"žemės masė"}
+            }
+            grain{
+                dnam{"grūdas"}
+                few{"{0} grūdai"}
+                many{"{0} grūdo"}
+                one{"{0} grūdas"}
+                other{"{0} grūdų"}
             }
             gram{
                 dnam{"gramai"}
@@ -1132,6 +1239,34 @@ lt{
                 one{"{0} decilitras"}
                 other{"{0} decilitrų"}
             }
+            dessert-spoon{
+                dnam{"desertinis šaukštelis"}
+                few{"{0} desertiniai šaukšteliai"}
+                many{"{0} desertinio šaukštelio"}
+                one{"{0} desertinis šaukštelis"}
+                other{"{0} desertinių šaukštelių"}
+            }
+            dessert-spoon-imperial{
+                dnam{"imp. desertinis šaukštelis"}
+                few{"{0} imp. desertiniai šaukšteliai"}
+                many{"{0} imp. desertinio šaukštelio"}
+                one{"{0} imp. desertinis šaukštelis"}
+                other{"{0} imp. desertinių šaukštelių"}
+            }
+            dram{
+                dnam{"skysčio drachma"}
+                few{"{0} skysčio drachmos"}
+                many{"{0} skysčio drachmos"}
+                one{"{0} skysčio drachma"}
+                other{"{0} skysčio drachmų"}
+            }
+            drop{
+                dnam{"lašas"}
+                few{"{0} lašai"}
+                many{"{0} lašo"}
+                one{"{0} lašas"}
+                other{"{0} lašų"}
+            }
             fluid-ounce{
                 dnam{"skysčio uncijos"}
                 few{"{0} skysčio uncijos"}
@@ -1169,6 +1304,13 @@ lt{
                 one{"{0} hektolitras"}
                 other{"{0} hektolitrų"}
             }
+            jigger{
+                dnam{"džigeris"}
+                few{"{0} džigeriai"}
+                many{"{0} džigerio"}
+                one{"{0} džigeris"}
+                other{"{0} džigerio"}
+            }
             liter{
                 dnam{"litrai"}
                 few{"{0} litrai"}
@@ -1191,6 +1333,13 @@ lt{
                 one{"{0} mililitras"}
                 other{"{0} mililitrų"}
             }
+            pinch{
+                dnam{"žiupsnelis"}
+                few{"{0} žiupsneliai"}
+                many{"{0} žiupsnelio"}
+                one{"{0} žiupsnelių"}
+                other{"{0} žiupsnelis"}
+            }
             pint{
                 dnam{"pintos"}
                 few{"{0} pintos"}
@@ -1211,6 +1360,13 @@ lt{
                 many{"{0} kvortos"}
                 one{"{0} kvorta"}
                 other{"{0} kvortų"}
+            }
+            quart-imperial{
+                dnam{"imp. kvorta"}
+                few{"{0} imp. kvortos"}
+                many{"{0} imp. kvortos"}
+                one{"{0} imp. kvorta"}
+                other{"{0} imp. kvortų"}
             }
             tablespoon{
                 dnam{"valgomieji šaukštai"}
@@ -1304,6 +1460,14 @@ lt{
             }
         }
         compound{
+            1024p1{"Ki{0}"}
+            1024p2{"Mi{0}"}
+            1024p3{"Gi{0}"}
+            1024p4{"Ti{0}"}
+            1024p5{"Pi{0}"}
+            1024p6{"Ei{0}"}
+            1024p7{"Zi{0}"}
+            1024p8{"Yi{0}"}
             per{"{0}/{1}"}
         }
         concentr{
@@ -1864,6 +2028,14 @@ lt{
             }
         }
         compound{
+            1024p1{"Ki{0}"}
+            1024p2{"Mi{0}"}
+            1024p3{"Gi{0}"}
+            1024p4{"Ti{0}"}
+            1024p5{"Pi{0}"}
+            1024p6{"Ei{0}"}
+            1024p7{"Zi{0}"}
+            1024p8{"Yi{0}"}
             per{"{0}/{1}"}
         }
         concentr{
@@ -1874,7 +2046,7 @@ lt{
                 one{"{0} kt"}
                 other{"{0} kt"}
             }
-            milligram-per-deciliter{
+            milligram-ofglucose-per-deciliter{
                 dnam{"mg/dl"}
                 few{"{0} mg/dl"}
                 many{"{0} mg/dl"}
@@ -2231,6 +2403,13 @@ lt{
             }
         }
         graphics{
+            dot{
+                dnam{"tšk."}
+                few{"{0} tšk."}
+                many{"{0} tšk."}
+                one{"{0} tšk."}
+                other{"{0} tšk."}
+            }
             dot-per-centimeter{
                 dnam{"taškai centimetre"}
                 few{"{0} tšk./cm"}
@@ -2292,6 +2471,13 @@ lt{
                 one{"{0} dm"}
                 other{"{0} dm"}
             }
+            earth-radius{
+                dnam{"R⊕"}
+                few{"{0} R⊕"}
+                many{"{0} R⊕"}
+                one{"{0} R⊕"}
+                other{"{0} R⊕"}
+            }
             fathom{
                 dnam{"fth"}
                 few{"{0} fth"}
@@ -2346,11 +2532,11 @@ lt{
                 per{"{0}/m"}
             }
             micrometer{
-                dnam{"µm"}
-                few{"{0} µm"}
-                many{"{0} µm"}
-                one{"{0} µm"}
-                other{"{0} µm"}
+                dnam{"μm"}
+                few{"{0} μm"}
+                many{"{0} μm"}
+                one{"{0} μm"}
+                other{"{0} μm"}
             }
             mile{
                 dnam{"mi"}
@@ -2417,6 +2603,20 @@ lt{
             }
         }
         light{
+            candela{
+                dnam{"cd"}
+                few{"{0} cd"}
+                many{"{0} cd"}
+                one{"{0} cd"}
+                other{"{0} cd"}
+            }
+            lumen{
+                dnam{"lm"}
+                few{"{0} lm"}
+                many{"{0} lm"}
+                one{"{0} lm"}
+                other{"{0} lm"}
+            }
             lux{
                 dnam{"lx"}
                 few{"{0} lx"}
@@ -2432,6 +2632,13 @@ lt{
                 many{"{0} ct"}
                 one{"{0} ct"}
                 other{"{0} ct"}
+            }
+            grain{
+                dnam{"grūdas"}
+                few{"{0} grūdai"}
+                many{"{0} grūdo"}
+                one{"{0} grūdas"}
+                other{"{0} grūdų"}
             }
             gram{
                 dnam{"g"}
@@ -2457,11 +2664,11 @@ lt{
                 other{"{0} mt"}
             }
             microgram{
-                dnam{"µg"}
-                few{"{0} µg"}
-                many{"{0} µg"}
-                one{"{0} µg"}
-                other{"{0} µg"}
+                dnam{"μg"}
+                few{"{0} μg"}
+                many{"{0} μg"}
+                one{"{0} μg"}
+                other{"{0} μg"}
             }
             milligram{
                 dnam{"mg"}
@@ -2769,6 +2976,34 @@ lt{
                 one{"{0} dl"}
                 other{"{0} dl"}
             }
+            dessert-spoon{
+                dnam{"des. š."}
+                few{"{0} des. š."}
+                many{"{0} des. š."}
+                one{"{0} des. š."}
+                other{"{0} des. š."}
+            }
+            dessert-spoon-imperial{
+                dnam{"imp. des. š."}
+                few{"{0} imp. des. š."}
+                many{"{0} imp. des. š."}
+                one{"{0} imp. des. š."}
+                other{"{0} imp. des. š."}
+            }
+            dram{
+                dnam{"sk. drach."}
+                few{"{0} sk. drach."}
+                many{"{0} sk. drach."}
+                one{"{0} sk. drach."}
+                other{"{0} sk. drach."}
+            }
+            drop{
+                dnam{"laš."}
+                few{"{0} laš."}
+                many{"{0} laš."}
+                one{"{0} laš."}
+                other{"{0} laš."}
+            }
             fluid-ounce{
                 dnam{"skysčio oz"}
                 few{"{0} skysčio oz"}
@@ -2806,6 +3041,13 @@ lt{
                 one{"{0} hl"}
                 other{"{0} hl"}
             }
+            jigger{
+                dnam{"džigeris"}
+                few{"{0} džigeriai"}
+                many{"{0} džigerio"}
+                one{"{0} džigeris"}
+                other{"{0} džigerio"}
+            }
             liter{
                 dnam{"litrai"}
                 few{"{0} l"}
@@ -2828,6 +3070,13 @@ lt{
                 one{"{0} ml"}
                 other{"{0} ml"}
             }
+            pinch{
+                dnam{"žiupsn."}
+                few{"{0} žiupsn."}
+                many{"{0} žiupsn."}
+                one{"{0} žiupsn."}
+                other{"{0} žiupsn."}
+            }
             pint{
                 dnam{"pintos"}
                 few{"{0} pt"}
@@ -2848,6 +3097,13 @@ lt{
                 many{"{0} kvortos"}
                 one{"{0} kvorta"}
                 other{"{0} kvortų"}
+            }
+            quart-imperial{
+                dnam{"imp. kv."}
+                few{"{0} imp. kv."}
+                many{"{0} imp. kv."}
+                one{"{0} imp. kv."}
+                other{"{0} imp. kv."}
             }
             tablespoon{
                 dnam{"v. š."}

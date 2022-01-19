@@ -7,6 +7,11 @@
 /**
  * The base view implements everything that's common to the toolbar and
  * menu views.
+ *
+ * @param {string} aPlace
+ *   The query string associated with the view.
+ * @param {object} aOptions
+ *   Associated options for the view.
  */
 function PlacesViewBase(aPlace, aOptions = {}) {
   if ("rootElt" in aOptions) {
@@ -116,10 +121,11 @@ PlacesViewBase.prototype = {
   /**
    * Gets the DOM node used for the given places node.
    *
-   * @param aPlacesNode
+   * @param {object} aPlacesNode
    *        a places result node.
-   * @param aAllowMissing
+   * @param {boolean} aAllowMissing
    *        whether the node may be missing
+   * @returns {object|null} The associated DOM node.
    * @throws if there is no DOM node set for aPlacesNode.
    */
   _getDOMNodeForPlacesNode: function PVB__getDOMNodeForPlacesNode(
@@ -174,14 +180,16 @@ PlacesViewBase.prototype = {
     return selectedNode ? [selectedNode] : [];
   },
 
+  get singleClickOpens() {
+    return true;
+  },
+
   get removableSelectionRanges() {
     // On static content the current selectedNode would be the selection's
     // parent node. We don't want to allow removing a node when the
     // selection is not explicit.
-    if (
-      document.popupNode &&
-      (document.popupNode == "menupopup" || !document.popupNode._placesNode)
-    ) {
+    let popupNode = PlacesUIUtils.lastContextMenuTriggerNode;
+    if (popupNode && (popupNode == "menupopup" || !popupNode._placesNode)) {
       return [];
     }
 
@@ -212,11 +220,11 @@ PlacesViewBase.prototype = {
 
     let selectedNode = this.selectedNode;
     if (selectedNode) {
-      let popup = document.popupNode;
+      let popupNode = PlacesUIUtils.lastContextMenuTriggerNode;
       if (
-        !popup._placesNode ||
-        popup._placesNode == this._resultNode ||
-        popup._placesNode.itemId == -1 ||
+        !popupNode._placesNode ||
+        popupNode._placesNode == this._resultNode ||
+        popupNode._placesNode.itemId == -1 ||
         !selectedNode.parent
       ) {
         // If a static menuitem is selected, or if the root node is selected,
@@ -260,6 +268,9 @@ PlacesViewBase.prototype = {
     );
     existingOtherBookmarksItem?.remove();
 
+    let manageBookmarksMenu = aPopup.querySelector(
+      "#placesContext_showAllBookmarks"
+    );
     // Add the View menu for the Bookmarks Toolbar and "Show Other Bookmarks" menu item
     // if the click originated from the Bookmarks Toolbar.
     if (gBookmarksToolbar2h2020) {
@@ -267,13 +278,16 @@ PlacesViewBase.prototype = {
       existingSubmenu?.remove();
       let bookmarksToolbar = document.getElementById("PersonalToolbar");
       if (bookmarksToolbar?.contains(aPopup.triggerNode)) {
+        manageBookmarksMenu.removeAttribute("hidden");
+
         let menu = BookmarkingUI.buildBookmarksToolbarSubmenu(bookmarksToolbar);
-        aPopup.appendChild(menu);
+        aPopup.insertBefore(menu, manageBookmarksMenu);
 
         if (
           aPopup.triggerNode.id === "OtherBookmarks" ||
           aPopup.triggerNode.id === "PlacesChevron" ||
-          aPopup.triggerNode.id === "PlacesToolbarItems"
+          aPopup.triggerNode.id === "PlacesToolbarItems" ||
+          aPopup.triggerNode.parentNode.id === "PlacesToolbarItems"
         ) {
           let otherBookmarksMenuItem = BookmarkingUI.buildShowOtherBookmarksMenuItem();
 
@@ -284,7 +298,11 @@ PlacesViewBase.prototype = {
             );
           }
         }
+      } else {
+        manageBookmarksMenu.setAttribute("hidden", "true");
       }
+    } else {
+      manageBookmarksMenu.setAttribute("hidden", "true");
     }
 
     return this.controller.buildContextMenu(aPopup);
@@ -355,13 +373,6 @@ PlacesViewBase.prototype = {
   },
 
   _removeChild: function PVB__removeChild(aChild) {
-    // If document.popupNode pointed to this child, null it out,
-    // otherwise controller's command-updating may rely on the removed
-    // item still being "selected".
-    if (document.popupNode == aChild) {
-      document.popupNode = null;
-    }
-
     aChild.remove();
   },
 
@@ -666,7 +677,7 @@ PlacesViewBase.prototype = {
    * This method may be overridden by classes that extend this base class.
    *
    * @param  {Element} elt
-   * @return {Boolean}
+   * @returns {boolean}
    */
   _isPopupOpen(elt) {
     return !!elt.parentNode.open;
@@ -722,7 +733,7 @@ PlacesViewBase.prototype = {
 
   /**
    * Adds an "Open All in Tabs" menuitem to the bottom of the popup.
-   * @param aPopup
+   * @param {object} aPopup
    *        a Places popup.
    */
   _mayAddCommandsItems: function PVB__mayAddCommandsItems(aPopup) {
@@ -790,10 +801,6 @@ PlacesViewBase.prototype = {
         "oncommand",
         "PlacesUIUtils.openMultipleLinksInTabs(this.parentNode._placesNode, event, " +
           "PlacesUIUtils.getViewForNode(this));"
-      );
-      aPopup._endOptOpenAllInTabs.setAttribute(
-        "onclick",
-        "checkForMiddleClick(this, event); event.stopPropagation();"
       );
       aPopup._endOptOpenAllInTabs.setAttribute(
         "label",
@@ -1572,10 +1579,14 @@ PlacesToolbar.prototype = {
 
   /**
    * This function returns information about where to drop when dragging over
-   * the toolbar.  The returned object has the following properties:
-   * - ip: the insertion point for the bookmarks service.
-   * - beforeIndex: child index to drop before, for the drop indicator.
-   * - folderElt: the folder to drop into, if applicable.
+   * the toolbar.
+   *
+   * @param {object} aEvent
+   *   The associated event.
+   * @returns {object}
+   *   - ip: the insertion point for the bookmarks service.
+   *   - beforeIndex: child index to drop before, for the drop indicator.
+   *   - folderElt: the folder to drop into, if applicable.
    */
   _getDropPoint: function PT__getDropPoint(aEvent) {
     if (!PlacesUtils.nodeIsFolder(this._resultNode)) {
@@ -1997,6 +2008,13 @@ PlacesToolbar.prototype = {
 /**
  * View for Places menus.  This object should be created during the first
  * popupshowing that's dispatched on the menu.
+ *
+ * @param {object} aPopupShowingEvent
+ *   The event associated with opening the menu.
+ * @param {string} aPlace
+ *   The query associated with the view on the menu.
+ * @param {object} aOptions
+ *   Options associated with the view.
  */
 function PlacesMenu(aPopupShowingEvent, aPlace, aOptions) {
   this._rootElt = aPopupShowingEvent.target; // <menupopup>

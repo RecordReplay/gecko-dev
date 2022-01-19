@@ -78,6 +78,9 @@ class ICState {
   Mode mode() const { return Mode(mode_); }
   size_t numOptimizedStubs() const { return numOptimizedStubs_; }
   bool hasFailures() const { return (numFailures_ != 0); }
+  bool newStubIsFirstStub() const {
+    return (mode() == Mode::Specialized && numOptimizedStubs() == 0);
+  }
 
   MOZ_ALWAYS_INLINE bool canAttachStub() const {
     // Note: we cannot assert that numOptimizedStubs_ <= MaxOptimizedStubs
@@ -113,6 +116,11 @@ class ICState {
 
   void reset() {
     setMode(Mode::Specialized);
+#ifdef DEBUG
+    if (JitOptions.forceMegamorphicICs) {
+      setMode(Mode::Megamorphic);
+    }
+#endif
     trialInliningState_ = uint32_t(TrialInliningState::Initial);
     usedByTranspiler_ = false;
     numOptimizedStubs_ = 0;

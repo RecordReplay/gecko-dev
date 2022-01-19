@@ -94,10 +94,12 @@ nsHtml5Parser::SetCommand(eParserCommands aParserCommand) {
 }
 
 void nsHtml5Parser::SetDocumentCharset(NotNull<const Encoding*> aEncoding,
-                                       int32_t aCharsetSource) {
+                                       int32_t aCharsetSource,
+                                       bool aChannelHadCharset) {
   MOZ_ASSERT(!mExecutor->HasStarted(), "Document charset set too late.");
   MOZ_ASSERT(GetStreamParser(), "Setting charset on a script-only parser.");
-  GetStreamParser()->SetDocumentCharset(aEncoding, aCharsetSource);
+  GetStreamParser()->SetDocumentCharset(aEncoding, aCharsetSource,
+                                        aChannelHadCharset);
   mExecutor->SetDocumentCharsetAndSource(aEncoding, aCharsetSource);
 }
 
@@ -460,6 +462,8 @@ nsresult nsHtml5Parser::Parse(const nsAString& aSourceBuffer, void* aKey,
 
 NS_IMETHODIMP
 nsHtml5Parser::Terminate() {
+  // Prevent a second call to DidBuildModel via document.close()
+  mDocumentClosed = true;
   // We should only call DidBuildModel once, so don't do anything if this is
   // the second time that Terminate has been called.
   if (mExecutor->IsComplete()) {

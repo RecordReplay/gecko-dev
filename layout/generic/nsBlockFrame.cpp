@@ -24,6 +24,7 @@
 #include "mozilla/UniquePtr.h"
 
 #include "nsCOMPtr.h"
+#include "nsCSSRendering.h"
 #include "nsAbsoluteContainingBlock.h"
 #include "nsBlockReflowContext.h"
 #include "BlockReflowInput.h"
@@ -219,15 +220,21 @@ static nsRect GetLineTextArea(nsLineBox* aLine,
  * our high contrast theme.
  */
 static Maybe<nscolor> GetBackplateColor(nsIFrame* aFrame) {
+  nsPresContext* pc = aFrame->PresContext();
   for (nsIFrame* frame = aFrame; frame; frame = frame->GetParent()) {
     if (frame->IsThemed()) {
       return Nothing();
     }
-    auto* bg = frame->StyleBackground();
-    if (bg->IsTransparent(frame)) {
+    auto* style = frame->Style();
+    if (style->StyleBackground()->IsTransparent(style)) {
       continue;
     }
-    nscolor backgroundColor = bg->BackgroundColor(frame);
+    bool drawImage = false, drawColor = false;
+    nscolor backgroundColor = nsCSSRendering::DetermineBackgroundColor(
+        pc, style, frame, drawImage, drawColor);
+    if (!drawColor && !drawImage) {
+      continue;
+    }
     if (NS_GET_A(backgroundColor) != 0) {
       // NOTE: We intentionally disregard the alpha channel here for the purpose
       // of the backplate, in order to guarantee contrast.
@@ -568,12 +575,12 @@ nscoord nsBlockFrame::GetLogicalBaseline(WritingMode aWM) const {
 bool nsBlockFrame::GetNaturalBaselineBOffset(
     mozilla::WritingMode aWM, BaselineSharingGroup aBaselineGroup,
     nscoord* aBaseline) const {
-  if (aBaselineGroup == BaselineSharingGroup::First) {
-    return nsLayoutUtils::GetFirstLineBaseline(aWM, this, aBaseline);
-  }
-
   if (StyleDisplay()->IsContainLayout()) {
     return false;
+  }
+
+  if (aBaselineGroup == BaselineSharingGroup::First) {
+    return nsLayoutUtils::GetFirstLineBaseline(aWM, this, aBaseline);
   }
 
   for (ConstReverseLineIterator line = LinesRBegin(), line_end = LinesREnd();
@@ -1025,9 +1032,7 @@ static LogicalSize CalculateContainingBlockSizeForAbsolutes(
 
   LogicalSize cbSize(aFrameSize);
   // Containing block is relative to the padding edge
-  const LogicalMargin& border =
-      LogicalMargin(aWM, aReflowInput.ComputedPhysicalBorderPadding() -
-                             aReflowInput.ComputedPhysicalPadding());
+  const LogicalMargin border = aReflowInput.ComputedLogicalBorder(aWM);
   cbSize.ISize(aWM) -= border.IStartEnd(aWM);
   cbSize.BSize(aWM) -= border.BStartEnd(aWM);
 
@@ -1532,9 +1537,9 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     }
   }
 
-  nsRect areaBounds = nsRect(0, 0, aMetrics.Width(), aMetrics.Height());
-  ComputeOverflowAreas(areaBounds, reflowInput->mStyleDisplay,
-                       blockEndEdgeOfChildren, aMetrics.mOverflowAreas);
+  aMetrics.SetOverflowAreasToDesiredBounds();
+  ComputeOverflowAreas(aMetrics.mOverflowAreas, blockEndEdgeOfChildren,
+                       reflowInput->mStyleDisplay);
   // Factor overflow container child bounds into the overflow area
   aMetrics.mOverflowAreas.UnionWith(ocBounds);
   // Factor pushed float child bounds into the overflow area
@@ -1888,10 +1893,11 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
   if (NS_UNCONSTRAINEDSIZE != aReflowInput.ComputedBSize()) {
     // Note: We don't use blockEndEdgeOfChildren because it includes the
     // previous margin.
-    nscoord contentBSize = aState.mBCoord + nonCarriedOutBDirMargin;
-    finalSize.BSize(wm) =
-        ComputeFinalBSize(aReflowInput, aState.mReflowStatus, contentBSize,
-                          borderPadding, aState.mConsumedBSize);
+    const nscoord contentBSizeWithBStartBP =
+        aState.mBCoord + nonCarriedOutBDirMargin;
+    finalSize.BSize(wm) = ComputeFinalBSize(
+        aReflowInput, aState.mReflowStatus, contentBSizeWithBStartBP,
+        borderPadding, aState.mConsumedBSize);
 
     // If the content block-size is larger than the effective computed
     // block-size, we extend the block-size to contain all the content.
@@ -1899,10 +1905,11 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
     if (aReflowInput.mFlags.mIsBSizeSetByAspectRatio &&
         ShouldApplyAutomaticMinimumOnBlockAxis(wm, aReflowInput.mStyleDisplay,
                                                aReflowInput.mStylePosition)) {
-      // Note: finalSize.BSize(wm) includes border + padding, so we have to
-      // compare it with contentBSize + border + padding.
-      finalSize.BSize(wm) = std::max(
-          finalSize.BSize(wm), contentBSize + borderPadding.BStartEnd(wm));
+      // Note: finalSize.BSize(wm) is the border-box size, so we compare it with
+      // the content's block-size plus our border and padding..
+      finalSize.BSize(wm) =
+          std::max(finalSize.BSize(wm),
+                   contentBSizeWithBStartBP + borderPadding.BEnd(wm));
     }
 
     // Don't carry out a block-end margin when our BSize is fixed.
@@ -1931,6 +1938,10 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
     aMetrics.mCarriedOutBEndMargin.Zero();
     autoBSize += borderPadding.BStartEnd(wm);
     finalSize.BSize(wm) = autoBSize;
+  } else if (aState.mReflowStatus.IsInlineBreakBefore()) {
+    // Our parent is expected to push this frame to the next page/column so what
+    // size we set here doesn't really matter.
+    finalSize.BSize(wm) = aReflowInput.AvailableBSize();
   } else if (aState.mReflowStatus.IsComplete()) {
     nscoord contentBSize = blockEndEdgeOfChildren - borderPadding.BStart(wm);
     nscoord lineClampedContentBSize =
@@ -1947,9 +1958,14 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
                      bSize > aReflowInput.AvailableBSize() &&
                      aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE)) {
       // Applying `min-size` made us overflow our available size.
-      // Clamp it and report that we're Incomplete.
+      // Clamp it and report that we're Incomplete, or BreakBefore if we have
+      // 'break-inside: avoid' that is applicable.
       bSize = aReflowInput.AvailableBSize();
-      aState.mReflowStatus.SetIncomplete();
+      if (ShouldAvoidBreakInside(aReflowInput)) {
+        aState.mReflowStatus.SetInlineLineBreakBeforeAndReset();
+      } else {
+        aState.mReflowStatus.SetIncomplete();
+      }
     }
     finalSize.BSize(wm) = bSize;
   } else {
@@ -2044,21 +2060,35 @@ void nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
 #endif
 }
 
-static void ConsiderBlockEndEdgeOfChildren(const WritingMode aWritingMode,
-                                           nscoord aBEndEdgeOfChildren,
-                                           OverflowAreas& aOverflowAreas,
-                                           const nsStyleDisplay* aDisplay) {
+void nsBlockFrame::ConsiderBlockEndEdgeOfChildren(
+    OverflowAreas& aOverflowAreas, nscoord aBEndEdgeOfChildren,
+    const nsStyleDisplay* aDisplay) const {
+  const auto wm = GetWritingMode();
+
   // Factor in the block-end edge of the children.  Child frames will be added
   // to the overflow area as we iterate through the lines, but their margins
   // won't, so we need to account for block-end margins here.
   // REVIEW: For now, we do this for both visual and scrollable area,
   // although when we make scrollable overflow area not be a subset of
   // visual, we can change this.
+
+  if (Style()->GetPseudoType() == PseudoStyleType::scrolledContent) {
+    // If we are a scrolled inner frame, add our block-end padding to our
+    // children's block-end edge.
+    //
+    // Note: aBEndEdgeOfChildren already includes our own block-start padding
+    // because it is relative to our block-start edge of our border-box, which
+    // is the same as our padding-box here.
+    MOZ_ASSERT(GetLogicalUsedBorderAndPadding(wm) == GetLogicalUsedPadding(wm),
+               "A scrolled inner frame shouldn't have any border!");
+    aBEndEdgeOfChildren += GetLogicalUsedPadding(wm).BEnd(wm);
+  }
+
   // XXX Currently, overflow areas are stored as physical rects, so we have
   // to handle writing modes explicitly here. If we change overflow rects
   // to be stored logically, this can be simplified again.
-  if (aWritingMode.IsVertical()) {
-    if (aWritingMode.IsVerticalLR()) {
+  if (wm.IsVertical()) {
+    if (wm.IsVerticalLR()) {
       for (const auto otype : AllOverflowTypes()) {
         if (!(aDisplay->IsContainLayout() &&
               otype == OverflowType::Scrollable)) {
@@ -2091,14 +2121,11 @@ static void ConsiderBlockEndEdgeOfChildren(const WritingMode aWritingMode,
   }
 }
 
-void nsBlockFrame::ComputeOverflowAreas(const nsRect& aBounds,
-                                        const nsStyleDisplay* aDisplay,
+void nsBlockFrame::ComputeOverflowAreas(OverflowAreas& aOverflowAreas,
                                         nscoord aBEndEdgeOfChildren,
-                                        OverflowAreas& aOverflowAreas) {
-  // Compute the overflow areas of our children
+                                        const nsStyleDisplay* aDisplay) const {
   // XXX_perf: This can be done incrementally.  It is currently one of
   // the things that makes incremental reflow O(N^2).
-  OverflowAreas areas(aBounds, aBounds);
   if (ShouldApplyOverflowClipping(aDisplay) != PhysicalAxes::Both) {
     for (const auto& line : Lines()) {
       if (aDisplay->IsContainLayout()) {
@@ -2111,9 +2138,9 @@ void nsBlockFrame::ComputeOverflowAreas(const nsRect& aBounds,
         nsRect childVisualRect = line.InkOverflowRect();
         OverflowAreas childVisualArea =
             OverflowAreas(childVisualRect, nsRect());
-        areas.UnionWith(childVisualArea);
+        aOverflowAreas.UnionWith(childVisualArea);
       } else {
-        areas.UnionWith(line.GetOverflowAreas());
+        aOverflowAreas.UnionWith(line.GetOverflowAreas());
       }
     }
 
@@ -2123,20 +2150,18 @@ void nsBlockFrame::ComputeOverflowAreas(const nsRect& aBounds,
     // factor it in anyway (it can't hurt if it was already done).
     // XXXldb Can we just fix GetOverflowArea instead?
     if (nsIFrame* outsideMarker = GetOutsideMarker()) {
-      areas.UnionAllWith(outsideMarker->GetRect());
+      aOverflowAreas.UnionAllWith(outsideMarker->GetRect());
     }
 
-    ConsiderBlockEndEdgeOfChildren(GetWritingMode(), aBEndEdgeOfChildren, areas,
+    ConsiderBlockEndEdgeOfChildren(aOverflowAreas, aBEndEdgeOfChildren,
                                    aDisplay);
   }
 
 #ifdef NOISY_OVERFLOW_AREAS
   printf("%s: InkOverflowArea=%s, ScrollableOverflowArea=%s\n", ListTag().get(),
-         ToString(areas.InkOverflow()).c_str(),
-         ToString(areas.ScrollableOverflow()).c_str());
+         ToString(aOverflowAreas.InkOverflow()).c_str(),
+         ToString(aOverflowAreas.ScrollableOverflow()).c_str());
 #endif
-
-  aOverflowAreas = areas;
 }
 
 void nsBlockFrame::UnionChildOverflow(OverflowAreas& aOverflowAreas) {
@@ -2176,8 +2201,8 @@ bool nsBlockFrame::ComputeCustomOverflow(OverflowAreas& aOverflowAreas) {
   nscoord blockEndEdgeOfChildren =
       GetProperty(BlockEndEdgeOfChildrenProperty(), &found);
   if (found) {
-    ConsiderBlockEndEdgeOfChildren(GetWritingMode(), blockEndEdgeOfChildren,
-                                   aOverflowAreas, StyleDisplay());
+    ConsiderBlockEndEdgeOfChildren(aOverflowAreas, blockEndEdgeOfChildren,
+                                   StyleDisplay());
   }
 
   // Line cursor invariants depend on the overflow areas of the lines, so
@@ -3375,27 +3400,19 @@ static inline bool IsNonAutoNonZeroBSize(const StyleSize& aCoord) {
   // return false here, so we treat them like 'auto' pending a real
   // implementation. (See bug 1126420.)
   //
-  // FIXME (bug 567039, bug 527285)
-  // This isn't correct for the 'fill' value, which should more
-  // likely (but not necessarily, depending on the available space)
-  // be returning true.
-  if (aCoord.IsAuto() || aCoord.IsExtremumLength()) {
+  // FIXME (bug 567039, bug 527285) This isn't correct for the 'fill' value,
+  // which should more likely (but not necessarily, depending on the available
+  // space) be returning true.
+  if (aCoord.BehavesLikeInitialValueOnBlockAxis()) {
     return false;
   }
-  if (aCoord.IsLengthPercentage()) {
-    // If we evaluate the length/percent/calc at a percentage basis of
-    // both nscoord_MAX and 0, and it's zero both ways, then it's a zero
-    // length, percent, or combination thereof.  Test > 0 so we clamp
-    // negative calc() results to 0.
-    return aCoord.AsLengthPercentage().Resolve(nscoord_MAX) > 0 ||
-           aCoord.AsLengthPercentage().Resolve(0) > 0;
-  }
-  MOZ_ASSERT(false, "unexpected unit for height or min-height");
-  return true;
-}
-
-static bool BehavesLikeInitialValueOnBlockAxis(const StyleSize& aCoord) {
-  return aCoord.IsAuto() || aCoord.IsExtremumLength();
+  MOZ_ASSERT(aCoord.IsLengthPercentage());
+  // If we evaluate the length/percent/calc at a percentage basis of
+  // both nscoord_MAX and 0, and it's zero both ways, then it's a zero
+  // length, percent, or combination thereof.  Test > 0 so we clamp
+  // negative calc() results to 0.
+  return aCoord.AsLengthPercentage().Resolve(nscoord_MAX) > 0 ||
+         aCoord.AsLengthPercentage().Resolve(0) > 0;
 }
 
 /* virtual */
@@ -3419,7 +3436,7 @@ bool nsBlockFrame::IsSelfEmpty() {
   // FIXME: Handle the case that both inline and block sizes are auto.
   // https://github.com/w3c/csswg-drafts/issues/5060.
   // Note: block-size could be zero or auto/intrinsic keywords here.
-  if (BehavesLikeInitialValueOnBlockAxis(position->BSize(wm)) &&
+  if (position->BSize(wm).BehavesLikeInitialValueOnBlockAxis() &&
       position->mAspectRatio.HasFiniteRatio()) {
     return false;
   }
@@ -6458,7 +6475,7 @@ static bool FindLineFor(nsIFrame* aChild, const nsFrameList& aFrameList,
 void nsBlockFrame::StealFrame(nsIFrame* aChild) {
   MOZ_ASSERT(aChild->GetParent() == this);
 
-  if (aChild->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW) && aChild->IsFloating()) {
+  if (aChild->IsFloating()) {
     RemoveFloat(aChild);
     return;
   }
@@ -6741,10 +6758,14 @@ void nsBlockFrame::ReflowPushedFloats(BlockReflowInput& aState,
       continue;
     }
 
-    // Always call FlowAndPlaceFloat; we might need to place this float
-    // if didn't belong to this block the last time it was reflowed.
-    aState.FlowAndPlaceFloat(f);
-    ConsiderChildOverflow(aOverflowAreas, f);
+    // Always call FlowAndPlaceFloat; we might need to place this float if it
+    // didn't belong to this block the last time it was reflowed.  Note that if
+    // the float doesn't get placed, we don't consider its overflow areas.
+    // (Not-getting-placed means it didn't fit and we pushed it instead of
+    // placing it, and its position could be stale.)
+    if (aState.FlowAndPlaceFloat(f)) {
+      ConsiderChildOverflow(aOverflowAreas, f);
+    }
 
     nsIFrame* next = !prev ? mFloats.FirstChild() : prev->GetNextSibling();
     if (next == f) {
@@ -7217,8 +7238,7 @@ nsLineBox* nsBlockFrame::GetFirstLineContaining(nscoord y) {
 /* virtual */
 void nsBlockFrame::ChildIsDirty(nsIFrame* aChild) {
   // See if the child is absolutely positioned
-  if (aChild->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW) &&
-      aChild->IsAbsolutelyPositioned()) {
+  if (aChild->IsAbsolutelyPositioned()) {
     // do nothing
   } else if (aChild == GetOutsideMarker()) {
     // The ::marker lives in the first line, unless the first line has
@@ -7384,6 +7404,11 @@ void nsBlockFrame::SetMarkerFrameForListItem(nsIFrame* aMarkerFrame) {
     SetProperty(InsideMarkerProperty(), aMarkerFrame);
     AddStateBits(NS_BLOCK_FRAME_HAS_INSIDE_MARKER);
   } else {
+    if (nsBlockFrame* marker = do_QueryFrame(aMarkerFrame)) {
+      // An outside ::marker needs to be an independent formatting context
+      // to avoid being influenced by the float manager etc.
+      marker->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
+    }
     SetProperty(OutsideMarkerProperty(),
                 new (PresShell()) nsFrameList(aMarkerFrame, aMarkerFrame));
     AddStateBits(NS_BLOCK_FRAME_HAS_OUTSIDE_MARKER);
@@ -7396,8 +7421,9 @@ bool nsBlockFrame::MarkerIsEmpty() const {
                "should only care when we have an outside ::marker");
   nsIFrame* marker = GetMarker();
   const nsStyleList* list = marker->StyleList();
-  return list->mCounterStyle.IsNone() && !list->GetListStyleImage() &&
-         marker->StyleContent()->ContentCount() == 0;
+  return marker->StyleContent()->mContent.IsNone() ||
+         (list->mCounterStyle.IsNone() && list->mListStyleImage.IsNone() &&
+          marker->StyleContent()->ContentCount() == 0);
 }
 
 void nsBlockFrame::ReflowOutsideMarker(nsIFrame* aMarkerFrame,
@@ -7413,7 +7439,7 @@ void nsBlockFrame::ReflowOutsideMarker(nsIFrame* aMarkerFrame,
   availSize.BSize(markerWM) = NS_UNCONSTRAINEDSIZE;
 
   ReflowInput reflowInput(aState.mPresContext, ri, aMarkerFrame, availSize,
-                          Nothing(), {}, {ComputeSizeFlag::ShrinkWrap});
+                          Nothing(), {}, {}, {ComputeSizeFlag::ShrinkWrap});
   nsReflowStatus status;
   aMarkerFrame->Reflow(aState.mPresContext, aMetrics, reflowInput, status);
 

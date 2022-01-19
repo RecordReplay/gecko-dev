@@ -5,6 +5,7 @@
 @namespace html url("http://www.w3.org/1999/xhtml");
 
 %include ../shared/browser.inc.css
+%include ../shared/browser-custom-colors.inc.css
 %filter substitution
 %define glassShadowColor hsla(240,5%,5%,0.3)
 
@@ -14,46 +15,23 @@
   --toolbar-non-lwt-bgimage: linear-gradient(rgba(255,255,255,.15), rgba(255,255,255,.15));
 
   --toolbarbutton-vertical-text-padding: calc(var(--toolbarbutton-inner-padding) - 1px);
-  --toolbarbutton-border-radius: 2px;
+  --toolbarbutton-border-radius: 4px;
   --toolbarbutton-icon-fill-opacity: 1;
 
   --panel-separator-color: ThreeDLightShadow;
-  --arrowpanel-dimmed: hsla(0,0%,80%,.35);
-  --arrowpanel-dimmed-further: hsla(0,0%,80%,.5);
-  --arrowpanel-dimmed-even-further: hsla(0,0%,80%,.8);
-
-  --urlbar-separator-color: ThreeDLightShadow;
 
   --chrome-content-separator-color: ThreeDShadow;
-}
-
-#navigator-toolbox {
   --tabs-border-color: threedshadow;
-}
-
-#tabbrowser-tabs {
-  --tab-line-color: highlight;
 }
 
 @media (-moz-windows-default-theme) {
   :root {
-    --toolbar-non-lwt-bgcolor: #f9f9fa;
     --toolbar-non-lwt-textcolor: #0c0c0d;
     --toolbar-non-lwt-bgimage: none;
-
-    --toolbarbutton-icon-fill-opacity: .7;
 
     --panel-separator-color: hsla(210,4%,10%,.14);
 
     --chrome-content-separator-color: #e1e1e2;
-  }
-
-  #navigator-toolbox {
-    --tabs-border-color: rgba(0,0,0,.3);
-  }
-
-  #tabbrowser-tabs {
-    --tab-line-color: #0a84ff;
   }
 }
 
@@ -65,14 +43,6 @@
 
 :root[lwt-popup-brighttext] {
   --panel-separator-color: rgba(249,249,250,.1);
-
-  --arrowpanel-dimmed: rgba(249,249,250,.1);
-  --arrowpanel-dimmed-further: rgba(249,249,250,.15);
-  --arrowpanel-dimmed-even-further: rgba(249,249,250,.2);
-}
-
-#navigator-toolbox:-moz-lwtheme {
-  --tabs-border-color: rgba(0,0,0,.3);
 }
 
 #menubar-items {
@@ -109,21 +79,16 @@
       height: calc(var(--tab-min-height) - var(--tabs-navbar-shadow-size));
     }
     :root[tabsintitlebar][sizemode="normal"] #toolbar-menubar[autohide="true"] {
-      height: calc(var(--tab-min-height) + var(--space-above-tabbar) - var(--tabs-navbar-shadow-size));
+      height: calc(var(--tab-min-height) - var(--tabs-navbar-shadow-size));
     }
   }
-}
-
-:root[sizemode="normal"][chromehidden~="menubar"] #TabsToolbar > .toolbar-items,
-:root[sizemode="normal"] #toolbar-menubar[autohide="true"][inactive] + #TabsToolbar > .toolbar-items {
-  padding-top: var(--space-above-tabbar);
 }
 
 /* Add 4px extra margin on top of the tabs toolbar on Windows 7. */
 @media (-moz-os-version: windows-win7) {
   :root[sizemode="normal"][chromehidden~="menubar"] #TabsToolbar > .toolbar-items,
   :root[sizemode="normal"] #toolbar-menubar[autohide="true"][inactive] + #TabsToolbar > .toolbar-items {
-    padding-top: calc(var(--space-above-tabbar) + 4px);
+    padding-top: 4px;
   }
 }
 
@@ -139,54 +104,18 @@
   color: var(--toolbar-color);
 }
 
-/*
- * Windows 7 draws the chrome background color as the tab background
- * instead of in the tabs toolbar.
- */
+/* Add a fog for background tabs to be visible on Windows 7 glass window background */
 @media (-moz-os-version: windows-win7) {
   @media (-moz-windows-default-theme) {
-    #navigator-toolbox:not(:-moz-lwtheme) {
-      --tabs-border-color: @glassShadowColor@;
-    }
-
     #TabsToolbar:not(:-moz-lwtheme) {
-      color: hsl(240,9%,98%);
-    }
-
-    /* Always show full-height tab separators on tabs with borders. */
-    .tabbrowser-tab:not(:-moz-lwtheme)::before,
-    .tabbrowser-tab:not(:-moz-lwtheme)::after {
-      border-image: none !important;
-    }
-
-    /* Show border on tabs with background colors and
-     * show the tabs toolbar background color inside tabs. */
-    .tabbrowser-tab:not(:-moz-lwtheme) {
-      background-color: hsl(235,33%,19%) !important;
-      border-top: 1px solid var(--tabs-border-color);
-      background-clip: padding-box;
-    }
-
-    /* The top border on top of the tab background is replaced
-     * by the slightly transparent outside tabs-border-color. */
-    .tab-background:not(:-moz-lwtheme) {
-      border-top-style: none !important;
-    }
-
-    /* The border at the end of the tab strip is replaced
-     * by the slightly transparent outside tabs-border-color. */
-    .tabbrowser-tab[last-visible-tab]:not(:-moz-lwtheme) {
-      border-inline-end: 1px solid var(--tabs-border-color);
-    }
-
-    .tabbrowser-tab[last-visible-tab]:not(:-moz-lwtheme)::after {
-      display: none !important;
+      background-image: radial-gradient(ellipse at bottom, rgba(255,255,255,0.8), rgba(255,255,255,0.5) 80%, transparent);
     }
   }
 }
 
 @media (-moz-windows-compositor: 0),
-       (-moz-windows-default-theme: 0) {
+       (-moz-windows-default-theme: 0),
+       (-moz-os-version: windows-win8) {
   /* Please keep the menu text colors in this media block in sync with
    * compacttheme.css, minus the :not(:-moz-lwtheme) condition - see Bug 1165718.
    */
@@ -518,6 +447,15 @@ menuitem.bookmark-item {
 
 %include ../shared/urlbar-searchbar.inc.css
 
+@media not (prefers-contrast) {
+  :root:not(:-moz-lwtheme) #urlbar:not([focused="true"]) {
+    --urlbar-box-bgcolor: white;
+  }
+  :root[lwt-default-theme-in-dark-mode] #urlbar:not([focused="true"]) {
+    --urlbar-box-bgcolor: var(--lwt-toolbar-field-focus);
+  }
+}
+
 #urlbar,
 #searchbar {
   font-size: 1.15em;
@@ -536,11 +474,6 @@ menuitem.bookmark-item {
   }
 }
 
-#pageAction-urlbar-shareURL,
-#pageAction-panel-shareURL {
-  list-style-image: url("chrome://browser/skin/share.svg");
-}
-
 %include ../shared/identity-block/identity-block.inc.css
 %include ../shared/notification-icons.inc.css
 %include ../shared/addon-notification.inc.css
@@ -549,25 +482,9 @@ menuitem.bookmark-item {
 
 %include ../shared/urlbarView.inc.css
 
-:root {
-  --urlbar-popup-url-color: hsl(210, 77%, 47%);
-  --urlbar-popup-action-color: hsl(178, 100%, 28%);
-}
-
 @media (-moz-windows-default-theme: 0) {
   :root:not(:-moz-lwtheme) {
-    --urlbar-popup-url-color: -moz-nativehyperlinktext;
     --urlbar-popup-action-color: -moz-nativehyperlinktext;
-
-    --urlbarView-button-text: buttontext;
-    --urlbarView-button-background: buttonface;
-    --urlbarView-button-background-hover: buttonface;
-    --urlbarView-button-background-active: buttonface;
-    --urlbarView-button-border: threedshadow;
-    --urlbarView-primary-button-text: highlighttext;
-    --urlbarView-primary-button-background: highlight;
-    --urlbarView-primary-button-background-hover: highlight;
-    --urlbarView-primary-button-background-active: highlight;
   }
 }
 
@@ -606,13 +523,6 @@ menuitem.bookmark-item {
   :root[privatebrowsingmode=temporary] #tabbrowser-tabpanels {
     background-color: -moz-default-background-color;
   }
-}
-
-/* tabbrowser-tab focus ring */
-.keyboard-focused-tab > .tab-stack > .tab-content,
-.tabbrowser-tab:focus:not([aria-activedescendant]) > .tab-stack > .tab-content {
-  outline: 1px dotted;
-  outline-offset: -6px;
 }
 
 /* All tabs menupopup */
@@ -752,56 +662,101 @@ panel[touchmode] .PanelUI-subView #appMenu-zoom-controls > .subviewbutton-iconic
   margin-top: -4px;
 }
 
+@media (-moz-windows-non-native-menus) {
+  /* :not([hidden]) to avoid the display: flex unhiding the item. */
+  #context-navigation:not([hidden]) {
+    /* The Windows 10 version of the navigation area needs the scrollbox's
+       background color, not the builtin "menu" color. */
+    background-color: inherit;
+    padding: 0 0 4px;
+    /* Use modern flex box so we can use percentage widths to redistribute
+     * spacing manually. */
+    display: flex;
+    flex-direction: row;
+    /* We want the first and last icons to align with the text items which
+     * have 1em inline padding, and for icons to be centered within their
+     * hover state, so each icon of 16px needs 1em padding on both sides:
+     */
+    --menuitem-min-width: calc(2em + 16px);
+    /* The total width of the container should then be at least 4 times that: */
+    min-width: calc(4 * var(--menuitem-min-width));
+  }
+
+  #context-navigation > .menuitem-iconic {
+    flex: 1 0 auto;
+  }
+
+  #context-navigation > .menuitem-iconic[_moz-menuactive="true"] {
+    /* We only show hover state on the icons. This ensures there is no
+     * dead space between icons, but the visible hover state is only
+     * around the icons, and all the icons' hover states match each other.
+     */
+    background-color: transparent;
+  }
+
+  #context-navigation > .menuitem-iconic > .menu-iconic-left {
+    margin: 0;
+    padding: 0;
+  }
+
+  /* override styles from shared/contextmenu.inc.css */
+  #context-navigation > .menuitem-iconic > .menu-iconic-left > .menu-iconic-icon {
+    width: var(--menuitem-min-width);
+    height: 32px;
+    padding: 8px 1em;
+    margin: 0;
+  }
+  #context-navigation > .menuitem-iconic[_moz-menuactive="true"]:not([disabled="true"]) > .menu-iconic-left > .menu-iconic-icon {
+    background-color: var(--menuitem-hover-background-color);
+  }
+  #context-navigation > .menuitem-iconic[_moz-menuactive="true"][disabled="true"] > .menu-iconic-left > .menu-iconic-icon {
+    background-color: var(--menuitem-disabled-hover-background-color);
+  }
+
+  /* If the menu is wider than the icons strictly need, the <menuitem> elements
+   * will stretch to pick up the extra space. In that case, the outer icons
+   * should align to the start/end of their containing <menuitem>: */
+  #context-navigation > .menuitem-iconic:first-child {
+    -moz-box-pack: start;
+  }
+
+  #context-navigation > .menuitem-iconic:last-child {
+    -moz-box-pack: end;
+  }
+
+  #context-navigation > .menuitem-iconic:last-child,
+  #context-navigation > .menuitem-iconic:first-child {
+    flex-grow: 0;
+    /* The first and last items start off as 16px + 2em, like the other ones.
+     * 100% is the width of the parent, which will be at least 4 * the width of
+     * an individual item (16px + 2em)
+     * So 100% - 4 item widths gets us the remaining available space if
+     * #context-navigation is wider than that.
+     * Then divide by 6 to get the 1/6 of that extra space, and add this space
+     * to the width of the first/last items.
+     * This ensures that the 3 visual gaps between the 4 icons are all the same
+     * size, with each 1/3 of the available space evenly distributed between
+     * the 2 items on either side of the gap.
+     */
+    width: calc(var(--menuitem-min-width) + calc(100% - 4 * var(--menuitem-min-width)) / 6);
+  }
+
+
+  /* Other menu separators don't extend all the way to the menu edges, but the
+     one below the navigation buttons in the content context menu should. */
+  #context-sep-navigation {
+    margin-top: 0;
+    margin-inline: 0;
+  }
+}
+
 %include browser-aero.css
 
-@media (-moz-os-version: windows-win7) {
-  .cui-widget-panelview[id^=PanelUI-webext-] {
-    border-radius: 4px;
-  }
+.cui-widget-panelview[id^=PanelUI-webext-] {
+  border-radius: var(--arrowpanel-border-radius);
 }
 
 .webextension-popup-browser,
 .webextension-popup-stack {
   border-radius: inherit;
-}
-
-.contentSelectDropdown-ingroup > .menu-iconic-text {
-  padding-inline-start: 20px;
-}
-
-#ContentSelectDropdown > menupopup > menucaption,
-#ContentSelectDropdown > menupopup > menuitem {
-  padding: 0 6px;
-  border-width: 0;
-}
-
-#ContentSelectDropdown > menupopup {
-  font: -moz-list;
-}
-
-#ContentSelectDropdown > menupopup > menucaption > .menu-iconic-text,
-#ContentSelectDropdown > menupopup > menuitem > .menu-iconic-text {
-  /* Padding should follow the 4/12 ratio, where 12px is the default font-size
-     with 4px being the preferred padding size. */
-  padding-block: .3333em;
-}
-
-#ContentSelectDropdown > menupopup > menucaption > .menu-iconic-text {
-  font-weight: bold;
-}
-
-#ContentSelectDropdown > menupopup > menuitem[_moz-menuactive="true"][disabled="true"] {
-  color: GrayText;
-  background-color: unset;
-}
-
-#ContentSelectDropdown > menupopup > menucaption[disabled="true"] {
-  color: GrayText;
-}
-
-#ContentSelectDropdown > .isOpenedViaTouch > menucaption > .menu-iconic-text,
-#ContentSelectDropdown > .isOpenedViaTouch > menuitem > .menu-iconic-text {
-  /* Touch padding should follow the 11/12 ratio, where 12px is the default
-     font-size with 11px being the preferred padding size. */
-  padding-block: .9167em;
 }

@@ -55,25 +55,19 @@ class Preset extends PureComponent {
       labelText = "Custom";
     }
     return label(
-      { className: "perf-presets-label" },
-      div(
-        { className: "perf-presets-input-container" },
-        input({
-          className: "perf-presets-input",
-          type: "radio",
-          name: "presets",
-          value: presetName,
-          checked: selected,
-          onChange: this.onChange,
-        })
-      ),
-      div(
-        { className: "perf-presets-text" },
-        div({ className: "pref-preset-text-label" }, labelText),
-        description
-          ? div({ className: "perf-presets-description" }, description)
-          : null
-      )
+      { className: "perf-toggle-label" },
+      input({
+        className: "perf-presets-radio-button",
+        type: "radio",
+        name: "presets",
+        value: presetName,
+        checked: selected,
+        onChange: this.onChange,
+      }),
+      div({ className: "perf-toggle-text-label" }, labelText),
+      description
+        ? div({ className: "perf-toggle-description" }, description)
+        : null
     );
   }
 }

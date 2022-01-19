@@ -22,7 +22,7 @@ class PresShell;
 
 namespace a11y {
 
-class Accessible;
+class LocalAccessible;
 class DocAccessible;
 class xpcAccessibleDocument;
 class DocAccessibleParent;
@@ -52,15 +52,19 @@ class DocManager : public nsIWebProgressListener,
    * Search through all document accessibles for an accessible with the given
    * unique id.
    */
-  Accessible* FindAccessibleInCache(nsINode* aNode) const;
+  LocalAccessible* FindAccessibleInCache(nsINode* aNode) const;
 
   /**
    * Called by document accessible when it gets shutdown.
+   * @param aAllowServiceShutdown true to shut down nsAccessibilityService
+   *        if it is no longer required, false to prevent it.
    */
   void NotifyOfDocumentShutdown(DocAccessible* aDocument,
-                                dom::Document* aDOMDocument);
+                                dom::Document* aDOMDocument,
+                                bool aAllowServiceShutdown = true);
 
-  void RemoveFromXPCDocumentCache(DocAccessible* aDocument);
+  void RemoveFromXPCDocumentCache(DocAccessible* aDocument,
+                                  bool aAllowServiceShutdown = true);
 
   /**
    * Return XPCOM accessible document.

@@ -13,7 +13,6 @@ import { CustomizeMenu } from "content-src/components/CustomizeMenu/CustomizeMen
 import React from "react";
 import { Search } from "content-src/components/Search/Search";
 import { Sections } from "content-src/components/Sections/Sections";
-import { CSSTransition } from "react-transition-group";
 
 export const PrefsButton = ({ onClick, icon }) => (
   <div className="prefs-button">
@@ -23,14 +22,6 @@ export const PrefsButton = ({ onClick, icon }) => (
       data-l10n-id="newtab-settings-button"
     />
   </div>
-);
-
-export const PersonalizeButton = ({ onClick }) => (
-  <button
-    className="personalize-button"
-    onClick={onClick}
-    data-l10n-id="newtab-personalize-button-label"
-  />
 );
 
 // Returns a function will not be continuously triggered when called. The
@@ -189,8 +180,8 @@ export class BaseContent extends React.PureComponent {
       !pocketEnabled &&
       filteredSections.filter(section => section.enabled).length === 0;
     const searchHandoffEnabled = prefs["improvesearch.handoffToAwesomebar"];
-    const customizationMenuEnabled = prefs["customizationMenu.enabled"];
-    const newNewtabExperienceEnabled = prefs["newNewtabExperience.enabled"];
+    const { customizationMenuEnabled, newNewtabExperienceEnabled } =
+      prefs.featureConfig || {};
     const canShowCustomizationMenu =
       customizationMenuEnabled || newNewtabExperienceEnabled;
     const showCustomizationMenu =
@@ -198,7 +189,6 @@ export class BaseContent extends React.PureComponent {
     const enabledSections = {
       topSitesEnabled: prefs["feeds.topsites"],
       pocketEnabled: prefs["feeds.section.topstories"],
-      snippetsEnabled: prefs["feeds.snippets"],
       highlightsEnabled: prefs["feeds.section.highlights"],
       showSponsoredTopSitesEnabled: prefs.showSponsoredTopSites,
       showSponsoredPocketEnabled: prefs.showSponsored,
@@ -222,33 +212,31 @@ export class BaseContent extends React.PureComponent {
       .filter(v => v)
       .join(" ");
 
+    const hasSnippet =
+      prefs["feeds.snippets"] &&
+      this.props.adminContent &&
+      this.props.adminContent.message &&
+      this.props.adminContent.message.id;
+
     return (
       <div>
         {canShowCustomizationMenu ? (
-          <span>
-            <PersonalizeButton onClick={this.openCustomizationMenu} />
-            <CSSTransition
-              timeout={0}
-              classNames="customize-animate"
-              in={showCustomizationMenu}
-              appear={true}
-            >
-              <CustomizeMenu
-                onClose={this.closeCustomizationMenu}
-                openPreferences={this.openPreferences}
-                setPref={this.setPref}
-                enabledSections={enabledSections}
-                pocketRegion={pocketRegion}
-                mayHaveSponsoredTopSites={mayHaveSponsoredTopSites}
-              />
-            </CSSTransition>
-          </span>
+          <CustomizeMenu
+            onClose={this.closeCustomizationMenu}
+            onOpen={this.openCustomizationMenu}
+            openPreferences={this.openPreferences}
+            setPref={this.setPref}
+            enabledSections={enabledSections}
+            pocketRegion={pocketRegion}
+            mayHaveSponsoredTopSites={mayHaveSponsoredTopSites}
+            showing={showCustomizationMenu}
+          />
         ) : (
           <PrefsButton onClick={this.openPreferences} icon={prefsButtonIcon} />
         )}
         {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions*/}
         <div className={outerClassName} onClick={this.closeCustomizationMenu}>
-          <main>
+          <main className={hasSnippet ? "has-snippet" : ""}>
             {prefs.showSearch && (
               <div className="non-collapsible-section">
                 <ErrorBoundary>

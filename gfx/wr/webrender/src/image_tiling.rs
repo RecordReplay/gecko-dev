@@ -21,13 +21,13 @@ pub fn simplify_repeated_primitive(
 ) {
     let stride = *stretch_size + *tile_spacing;
 
-    if stride.width >= prim_rect.size.width {
+    if stride.width >= prim_rect.width() {
         tile_spacing.width = 0.0;
-        prim_rect.size.width = f32::min(prim_rect.size.width, stretch_size.width);
+        prim_rect.max.x = f32::min(prim_rect.min.x + stretch_size.width, prim_rect.max.x);
     }
-    if stride.height >= prim_rect.size.height {
+    if stride.height >= prim_rect.height() {
         tile_spacing.height = 0.0;
-        prim_rect.size.height = f32::min(prim_rect.size.height, stretch_size.height);
+        prim_rect.max.y = f32::min(prim_rect.min.y + stretch_size.height, prim_rect.max.y);
     }
 }
 
@@ -93,9 +93,6 @@ pub fn repetitions(
     visible_rect: &LayoutRect,
     stride: LayoutSize,
 ) -> RepetitionIterator {
-    assert!(stride.width > 0.0);
-    assert!(stride.height > 0.0);
-
     let visible_rect = match prim_rect.intersection(&visible_rect) {
         Some(rect) => rect,
         None => {
@@ -112,23 +109,26 @@ pub fn repetitions(
         }
     };
 
-    let nx = if visible_rect.origin.x > prim_rect.origin.x {
-        f32::floor((visible_rect.origin.x - prim_rect.origin.x) / stride.width)
+    assert!(stride.width > 0.0);
+    assert!(stride.height > 0.0);
+
+    let nx = if visible_rect.min.x > prim_rect.min.x {
+        f32::floor((visible_rect.min.x - prim_rect.min.x) / stride.width)
     } else {
         0.0
     };
 
-    let ny = if visible_rect.origin.y > prim_rect.origin.y {
-        f32::floor((visible_rect.origin.y - prim_rect.origin.y) / stride.height)
+    let ny = if visible_rect.min.y > prim_rect.min.y {
+        f32::floor((visible_rect.min.y - prim_rect.min.y) / stride.height)
     } else {
         0.0
     };
 
-    let x0 = prim_rect.origin.x + nx * stride.width;
-    let y0 = prim_rect.origin.y + ny * stride.height;
+    let x0 = prim_rect.min.x + nx * stride.width;
+    let y0 = prim_rect.min.y + ny * stride.height;
 
-    let x_most = visible_rect.max_x();
-    let y_most = visible_rect.max_y();
+    let x_most = visible_rect.max.x;
+    let y_most = visible_rect.max.y;
 
     let x_count = f32::ceil((x_most - x0) / stride.width) as i32;
     let y_count = f32::ceil((y_most - y0) / stride.height) as i32;
@@ -199,33 +199,34 @@ impl Iterator for TileIterator {
 
         let tile_offset = self.current_tile;
 
-        let mut segment_rect = LayoutRect {
-            origin: LayoutPoint::new(
+        let mut segment_rect = LayoutRect::from_origin_and_size(
+            LayoutPoint::new(
                 self.x.layout_tiling_origin + tile_offset.x as f32 * self.regular_tile_size.width,
                 self.y.layout_tiling_origin + tile_offset.y as f32 * self.regular_tile_size.height,
             ),
-            size: self.regular_tile_size,
-        };
+            self.regular_tile_size,
+        );
 
         let mut edge_flags = EdgeAaSegmentMask::empty();
 
         if tile_offset.x == self.x.image_tiles.start {
             edge_flags |= EdgeAaSegmentMask::LEFT;
-            segment_rect.size.width = self.x.first_tile_layout_size;
-            segment_rect.origin.x = self.x.layout_prim_start;
+            segment_rect.min.x = self.x.layout_prim_start;
+            // TODO(nical) we may not need to do this.
+            segment_rect.max.x = segment_rect.min.x + self.x.first_tile_layout_size;
         }
         if tile_offset.x == self.x.image_tiles.end - 1 {
             edge_flags |= EdgeAaSegmentMask::RIGHT;
-            segment_rect.size.width = self.x.last_tile_layout_size;
+            segment_rect.max.x = segment_rect.min.x + self.x.last_tile_layout_size;
         }
 
         if tile_offset.y == self.y.image_tiles.start {
-            segment_rect.size.height = self.y.first_tile_layout_size;
-            segment_rect.origin.y = self.y.layout_prim_start;
+            segment_rect.min.y = self.y.layout_prim_start;
+            segment_rect.max.y = segment_rect.min.y + self.y.first_tile_layout_size;
             edge_flags |= EdgeAaSegmentMask::TOP;
         }
         if tile_offset.y == self.y.image_tiles.end - 1 {
-            segment_rect.size.height = self.y.last_tile_layout_size;
+            segment_rect.max.y = segment_rect.min.y + self.y.last_tile_layout_size;
             edge_flags |= EdgeAaSegmentMask::BOTTOM;
         }
 
@@ -288,7 +289,7 @@ pub fn tiles(
                     first_tile_layout_size: 0.0,
                     last_tile_layout_size: 0.0,
                     layout_tiling_origin: 0.0,
-                    layout_prim_start: prim_rect.origin.x,
+                    layout_prim_start: prim_rect.min.x,
                 },
                 y: TileIteratorExtent {
                     tile_range: 0..0,
@@ -296,7 +297,7 @@ pub fn tiles(
                     first_tile_layout_size: 0.0,
                     last_tile_layout_size: 0.0,
                     layout_tiling_origin: 0.0,
-                    layout_prim_start: prim_rect.origin.y,
+                    layout_prim_start: prim_rect.min.y,
                 },
                 regular_tile_size: LayoutSize::zero(),
             }
@@ -305,8 +306,8 @@ pub fn tiles(
 
     // Size of regular tiles in layout space.
     let layout_tile_size = LayoutSize::new(
-        device_tile_size as f32 / image_rect.size.width as f32 * prim_rect.size.width,
-        device_tile_size as f32 / image_rect.size.height as f32 * prim_rect.size.height,
+        device_tile_size as f32 / image_rect.width() as f32 * prim_rect.width(),
+        device_tile_size as f32 / image_rect.height() as f32 * prim_rect.height(),
     );
 
     // The decomposition logic is exactly the same on each axis so we reduce
@@ -315,7 +316,7 @@ pub fn tiles(
     let x_extent = tiles_1d(
         layout_tile_size.width,
         visible_rect.x_range(),
-        prim_rect.min_x(),
+        prim_rect.min.x,
         image_rect.x_range(),
         device_tile_size,
     );
@@ -323,7 +324,7 @@ pub fn tiles(
     let y_extent = tiles_1d(
         layout_tile_size.height,
         visible_rect.y_range(),
-        prim_rect.min_y(),
+        prim_rect.min.y,
         image_rect.y_range(),
         device_tile_size,
     );
@@ -503,16 +504,16 @@ pub fn compute_tile_rect(
     tile: TileOffset,
 ) -> DeviceIntRect {
     let regular_tile_size = regular_tile_size as i32;
-    DeviceIntRect {
-        origin: point2(
+    DeviceIntRect::from_origin_and_size(
+        point2(
             compute_tile_origin_1d(image_rect.x_range(), regular_tile_size, tile.x as i32),
             compute_tile_origin_1d(image_rect.y_range(), regular_tile_size, tile.y as i32),
         ),
-        size: size2(
+        size2(
             compute_tile_size_1d(image_rect.x_range(), regular_tile_size, tile.x as i32),
             compute_tile_size_1d(image_rect.y_range(), regular_tile_size, tile.y as i32),
         ),
-    }
+    )
 }
 
 fn compute_tile_origin_1d(
@@ -572,8 +573,8 @@ pub fn compute_tile_range(
     let y_range = tile_range_1d(&visible_area.y_range(), tile_size);
 
     TileRange {
-        origin: point2(x_range.start, y_range.start),
-        size: size2(x_range.end - x_range.start, y_range.end - y_range.start),
+        min: point2(x_range.start, y_range.start),
+        max: point2(x_range.end, y_range.end),
     }
 }
 
@@ -600,10 +601,10 @@ pub fn compute_valid_tiles_if_bounds_change(
         }
     };
 
-    let left = prev_rect.min_x() != new_rect.min_x();
-    let right = prev_rect.max_x() != new_rect.max_x();
-    let top = prev_rect.min_y() != new_rect.min_y();
-    let bottom = prev_rect.max_y() != new_rect.max_y();
+    let left = prev_rect.min.x != new_rect.min.x;
+    let right = prev_rect.max.x != new_rect.max.x;
+    let top = prev_rect.min.y != new_rect.min.y;
+    let bottom = prev_rect.max.y != new_rect.max.y;
 
     if !left && !right && !top && !bottom {
         // Bounds have not changed.
@@ -617,14 +618,14 @@ pub fn compute_valid_tiles_if_bounds_change(
         .cast::<f32>()
         .scale(tw, th);
 
-    let min_x = if left { f32::ceil(tiles.min_x()) } else { f32::floor(tiles.min_x()) };
-    let min_y = if top { f32::ceil(tiles.min_y()) } else { f32::floor(tiles.min_y()) };
-    let max_x = if right { f32::floor(tiles.max_x()) } else { f32::ceil(tiles.max_x()) };
-    let max_y = if bottom { f32::floor(tiles.max_y()) } else { f32::ceil(tiles.max_y()) };
+    let min_x = if left { f32::ceil(tiles.min.x) } else { f32::floor(tiles.min.x) };
+    let min_y = if top { f32::ceil(tiles.min.y) } else { f32::floor(tiles.min.y) };
+    let max_x = if right { f32::floor(tiles.max.x) } else { f32::ceil(tiles.max.x) };
+    let max_y = if bottom { f32::floor(tiles.max.y) } else { f32::ceil(tiles.max.y) };
 
     Some(TileRange {
-        origin: point2(min_x as i32, min_y as i32),
-        size: size2((max_x - min_x) as i32, (max_y - min_y) as i32),
+        min: point2(min_x as i32, min_y as i32),
+        max: point2(max_x as i32, max_y as i32),
     })
 }
 
@@ -654,19 +655,19 @@ mod tests {
             assert!(!seen_tiles.contains(&tile.offset));
             seen_tiles.insert(tile.offset);
             coverage = coverage.union(&tile.rect);
-            assert!(prim_rect.contains_rect(&tile.rect));
+            assert!(prim_rect.contains_box(&tile.rect));
             callback(&tile.rect, tile.offset, tile.edge_flags);
         }
-        assert!(prim_rect.contains_rect(&coverage));
-        assert!(coverage.contains_rect(&visible_rect.intersection(&prim_rect).unwrap_or(LayoutRect::zero())));
+        assert!(prim_rect.contains_box(&coverage));
+        assert!(coverage.contains_box(&visible_rect.intersection(&prim_rect).unwrap_or(LayoutRect::zero())));
     }
 
     #[test]
     fn basic() {
         let mut count = 0;
-        checked_for_each_tile(&rect(0., 0., 1000., 1000.),
-            &rect(75., 75., 400., 400.),
-            &rect(0, 0, 400, 400),
+        checked_for_each_tile(&rect(0., 0., 1000., 1000.).to_box2d(),
+            &rect(75., 75., 400., 400.).to_box2d(),
+            &rect(0, 0, 400, 400).to_box2d(),
             36,
             &mut |_tile_rect, _tile_offset, _tile_flags| {
                 count += 1;
@@ -678,9 +679,9 @@ mod tests {
     #[test]
     fn empty() {
         let mut count = 0;
-        checked_for_each_tile(&rect(0., 0., 74., 74.),
-            &rect(75., 75., 400., 400.),
-            &rect(0, 0, 400, 400),
+        checked_for_each_tile(&rect(0., 0., 74., 74.).to_box2d(),
+            &rect(75., 75., 400., 400.).to_box2d(),
+            &rect(0, 0, 400, 400).to_box2d(),
             36,
             &mut |_tile_rect, _tile_offset, _tile_flags| {
               count += 1;
@@ -795,22 +796,22 @@ mod tests {
     #[test]
     fn smaller_than_tile_size_at_origin() {
         let r = compute_tile_rect(
-            &rect(0, 0, 80, 80),
+            &rect(0, 0, 80, 80).to_box2d(),
             256,
             point2(0, 0),
         );
 
-        assert_eq!(r, rect(0, 0, 80, 80));
+        assert_eq!(r, rect(0, 0, 80, 80).to_box2d());
     }
 
     #[test]
     fn smaller_than_tile_size_with_offset() {
         let r = compute_tile_rect(
-            &rect(20, 20, 80, 80),
+            &rect(20, 20, 80, 80).to_box2d(),
             256,
             point2(0, 0),
         );
 
-        assert_eq!(r, rect(20, 20, 80, 80));
+        assert_eq!(r, rect(20, 20, 80, 80).to_box2d());
     }
 }

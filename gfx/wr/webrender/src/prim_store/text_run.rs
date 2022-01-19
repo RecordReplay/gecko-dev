@@ -3,14 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use api::{ColorF, FontInstanceFlags, GlyphInstance, RasterSpace, Shadow};
-use api::units::{LayoutToWorldTransform, LayoutVector2D, PictureRect};
+use api::units::{LayoutToWorldTransform, LayoutVector2D, RasterPixelScale, DevicePixelScale};
 use crate::scene_building::{CreateShadow, IsVisible};
 use crate::frame_builder::FrameBuildingState;
 use crate::glyph_rasterizer::{FontInstance, FontTransform, GlyphKey, FONT_SIZE_LIMIT};
 use crate::gpu_cache::GpuCache;
 use crate::intern;
 use crate::internal_types::LayoutPrimitiveInfo;
-use crate::picture::{SubpixelMode, SurfaceInfo};
+use crate::picture::SurfaceInfo;
 use crate::prim_store::{PrimitiveOpacity,  PrimitiveScratchBuffer};
 use crate::prim_store::{PrimitiveStore, PrimKeyCommonData, PrimTemplateCommonData};
 use crate::renderer::{MAX_VERTEX_TEXTURE_WIDTH};
@@ -244,9 +244,8 @@ impl TextRunPrimitive {
         surface: &SurfaceInfo,
         spatial_node_index: SpatialNodeIndex,
         transform: &LayoutToWorldTransform,
-        subpixel_mode: &SubpixelMode,
+        mut allow_subpixel: bool,
         raster_space: RasterSpace,
-        prim_rect: PictureRect,
         root_scaling_factor: f32,
         spatial_tree: &SpatialTree,
     ) -> bool {
@@ -263,7 +262,13 @@ impl TextRunPrimitive {
         // to the shader it looks like a change in DPI which it already supports.
         let dps = surface.device_pixel_scale.0 * root_scaling_factor;
         let font_size = specified_font.size.to_f32_px();
-        let mut device_font_size = font_size * dps * raster_scale;
+
+        // Small floating point error can accumulate in the raster * device_pixel scale.
+        // Round that to the nearest 100th of a scale factor to remove this error while
+        // still allowing reasonably accurate scale factors when a pinch-zoom is stopped
+        // at a fractional amount.
+        let quantized_scale = (dps * raster_scale * 100.0).round() / 100.0;
+        let mut device_font_size = font_size * quantized_scale;
 
         // Check there is a valid transform that doesn't exceed the font size limit.
         // Ensure the font is supposed to be rasterized in screen-space.
@@ -320,12 +325,17 @@ impl TextRunPrimitive {
             // shader do the snapping in device pixels.
             self.reference_frame_relative_offset
         } else {
+            // TODO(dp): The SurfaceInfo struct needs to be updated to use RasterPixelScale
+            //           rather than DevicePixelScale, however this is a large chunk of
+            //           work that will be done as a follow up patch.
+            let raster_pixel_scale = RasterPixelScale::new(surface.device_pixel_scale.0);
+
             // There may be an animation, so snap the reference frame relative
             // offset such that it excludes the impact, if any.
             let snap_to_device = SpaceSnapper::new_with_target(
                 surface.raster_spatial_node_index,
                 spatial_node_index,
-                surface.device_pixel_scale,
+                raster_pixel_scale,
                 spatial_tree,
             );
             snap_to_device.snap_point(&self.reference_frame_relative_offset.to_point()).to_vector()
@@ -352,21 +362,6 @@ impl TextRunPrimitive {
             size: device_font_size.into(),
             flags,
             ..specified_font.clone()
-        };
-
-        // If subpixel AA is disabled due to the backing surface the glyphs
-        // are being drawn onto, disable it (unless we are using the
-        // specifial subpixel mode that estimates background color).
-        let mut allow_subpixel = match subpixel_mode {
-            SubpixelMode::Allow => true,
-            SubpixelMode::Deny => false,
-            SubpixelMode::Conditional { allowed_rect, excluded_rects } => {
-                // Conditional mode allows subpixel AA to be enabled for this
-                // text run, so long as it doesn't intersect with any of the
-                // cutout rectangles in the list, and it's inside the allowed rect.
-                allowed_rect.contains_rect(&prim_rect) &&
-                excluded_rects.iter().all(|rect| !rect.intersects(&prim_rect))
-            }
         };
 
         // If we are using special estimated background subpixel blending, then
@@ -398,19 +393,35 @@ impl TextRunPrimitive {
     fn get_raster_space_for_prim(
         &self,
         prim_spatial_node_index: SpatialNodeIndex,
+        low_quality_pinch_zoom: bool,
+        device_pixel_scale: DevicePixelScale,
         spatial_tree: &SpatialTree,
     ) -> RasterSpace {
         let prim_spatial_node = &spatial_tree.spatial_nodes[prim_spatial_node_index.0 as usize];
         if prim_spatial_node.is_ancestor_or_self_zooming {
-            let scale_factors = spatial_tree
-                .get_relative_transform(prim_spatial_node_index, ROOT_SPATIAL_NODE_INDEX)
-                .scale_factors();
+            if low_quality_pinch_zoom {
+                // In low-quality mode, we set the scale to be 1.0. However, the device-pixel
+                // scale selected for the zoom will be taken into account in the caller to this
+                // function when it's converted from local -> device pixels. Since in this mode
+                // the device-pixel scale is constant during the zoom, this gives the desired
+                // performance while also allowing the scale to be adjusted to a new factor at
+                // the end of a pinch-zoom.
+                RasterSpace::Local(1.0)
+            } else {
+                // For high-quality mode, we quantize the exact scale factor as before. However,
+                // we want to _undo_ the effect of the device-pixel scale on the picture cache
+                // tiles (which changes now that they are raster roots). Divide the rounded value
+                // by the device-pixel scale so that the local -> device conversion has no effect.
+                let scale_factors = spatial_tree
+                    .get_relative_transform(prim_spatial_node_index, ROOT_SPATIAL_NODE_INDEX)
+                    .scale_factors();
 
-            // Round the scale up to the nearest power of 2, but don't exceed 8.
-            let scale = scale_factors.0.max(scale_factors.1).min(8.0);
-            let rounded_up = 2.0f32.powf(scale.log2().ceil());
+                // Round the scale up to the nearest power of 2, but don't exceed 8.
+                let scale = scale_factors.0.max(scale_factors.1).min(8.0).max(1.0);
+                let rounded_up = 2.0f32.powf(scale.log2().ceil());
 
-            RasterSpace::Local(rounded_up)
+                RasterSpace::Local(rounded_up / device_pixel_scale.0)
+            }
         } else {
             self.requested_raster_space
         }
@@ -419,14 +430,14 @@ impl TextRunPrimitive {
     pub fn request_resources(
         &mut self,
         prim_offset: LayoutVector2D,
-        prim_rect: PictureRect,
         specified_font: &FontInstance,
         glyphs: &[GlyphInstance],
         transform: &LayoutToWorldTransform,
         surface: &SurfaceInfo,
         spatial_node_index: SpatialNodeIndex,
         root_scaling_factor: f32,
-        subpixel_mode: &SubpixelMode,
+        allow_subpixel: bool,
+        low_quality_pinch_zoom: bool,
         resource_cache: &mut ResourceCache,
         gpu_cache: &mut GpuCache,
         spatial_tree: &SpatialTree,
@@ -434,6 +445,8 @@ impl TextRunPrimitive {
     ) {
         let raster_space = self.get_raster_space_for_prim(
             spatial_node_index,
+            low_quality_pinch_zoom,
+            surface.device_pixel_scale,
             spatial_tree,
         );
 
@@ -442,9 +455,8 @@ impl TextRunPrimitive {
             surface,
             spatial_node_index,
             transform,
-            subpixel_mode,
+            allow_subpixel,
             raster_space,
-            prim_rect,
             root_scaling_factor,
             spatial_tree,
         );

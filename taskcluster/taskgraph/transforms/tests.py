@@ -34,7 +34,7 @@ from voluptuous import (
 
 import taskgraph
 from taskgraph.transforms.base import TransformSequence
-from taskgraph.util.attributes import match_run_on_projects, keymatch
+from taskgraph.util.attributes import keymatch
 from taskgraph.util.keyed_by import evaluate_keyed_by
 from taskgraph.util.templates import merge
 from taskgraph.util.treeherder import split_symbol, join_symbol
@@ -69,24 +69,9 @@ LINUX_WORKER_TYPES = {
 
 # windows worker types keyed by test-platform and virtualization
 WINDOWS_WORKER_TYPES = {
-    "windows7-32": {
-        "virtual": "t-win7-32",
-        "virtual-with-gpu": "t-win7-32-gpu",
-        "hardware": "t-win10-64-1803-hw",
-    },
-    "windows7-32-shippable": {
-        "virtual": "t-win7-32",
-        "virtual-with-gpu": "t-win7-32-gpu",
-        "hardware": "t-win10-64-1803-hw",
-    },
-    "windows7-32-devedition": {  # build only, tests have no value
-        "virtual": "t-win7-32",
-        "virtual-with-gpu": "t-win7-32-gpu",
-        "hardware": "t-win10-64-1803-hw",
-    },
-    "windows7-32-mingwclang": {
-        "virtual": "t-win7-32",
-        "virtual-with-gpu": "t-win7-32-gpu",
+    "windows10-32-mingwclang-qr": {
+        "virtual": "t-win10-64",
+        "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-1803-hw",
     },
     "windows7-32-qr": {
@@ -94,12 +79,32 @@ WINDOWS_WORKER_TYPES = {
         "virtual-with-gpu": "t-win7-32-gpu",
         "hardware": "t-win10-64-1803-hw",
     },
+    "windows7-32-shippable-qr": {
+        "virtual": "t-win7-32",
+        "virtual-with-gpu": "t-win7-32-gpu",
+        "hardware": "t-win10-64-1803-hw",
+    },
+    "windows7-32-devedition-qr": {  # build only, tests have no value
+        "virtual": "t-win7-32",
+        "virtual-with-gpu": "t-win7-32-gpu",
+        "hardware": "t-win10-64-1803-hw",
+    },
+    "windows10-32-qr": {
+        "virtual": "t-win10-64",
+        "virtual-with-gpu": "t-win10-64-gpu-s",
+        "hardware": "t-win10-64-1803-hw",
+    },
+    "windows10-32-shippable-qr": {
+        "virtual": "t-win10-64",
+        "virtual-with-gpu": "t-win10-64-gpu-s",
+        "hardware": "t-win10-64-1803-hw",
+    },
     "windows10-64": {
         "virtual": "t-win10-64",
         "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-1803-hw",
     },
-    "windows10-aarch64": {
+    "windows10-aarch64-qr": {
         "virtual": "t-win64-aarch64-laptop",
         "virtual-with-gpu": "t-win64-aarch64-laptop",
         "hardware": "t-win64-aarch64-laptop",
@@ -124,11 +129,6 @@ WINDOWS_WORKER_TYPES = {
         "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-1803-hw",
     },
-    "windows10-64-asan": {
-        "virtual": "t-win10-64",
-        "virtual-with-gpu": "t-win10-64-gpu-s",
-        "hardware": "t-win10-64-1803-hw",
-    },
     "windows10-64-qr": {
         "virtual": "t-win10-64",
         "virtual-with-gpu": "t-win10-64-gpu-s",
@@ -139,7 +139,17 @@ WINDOWS_WORKER_TYPES = {
         "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-1803-hw",
     },
-    "windows10-64-mingwclang": {
+    "windows10-64-devedition-qr": {
+        "virtual": "t-win10-64",
+        "virtual-with-gpu": "t-win10-64-gpu-s",
+        "hardware": "t-win10-64-1803-hw",
+    },
+    "windows10-64-asan-qr": {
+        "virtual": "t-win10-64",
+        "virtual-with-gpu": "t-win10-64-gpu-s",
+        "hardware": "t-win10-64-1803-hw",
+    },
+    "windows10-64-mingwclang-qr": {
         "virtual": "t-win10-64",
         "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-1803-hw",
@@ -149,17 +159,67 @@ WINDOWS_WORKER_TYPES = {
         "virtual-with-gpu": "t-win10-64-gpu-s",
         "hardware": "t-win10-64-ref-hw",
     },
+    "windows10-32-2004-mingwclang-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-32-2004-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-32-2004-shippable-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-ccov": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-ccov-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-devedition": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-shippable": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-shippable-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-devedition-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-asan-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
+    "windows10-64-2004-mingwclang-qr": {
+        "virtual": "win10-64-2004",
+        "virtual-with-gpu": "win10-64-2004-gpu",
+    },
 }
 
 # os x worker types keyed by test-platform
 MACOSX_WORKER_TYPES = {
     "macosx1014-64": "t-osx-1014",
     "macosx1014-64-power": "t-osx-1014-power",
+    "macosx1015-64": "t-osx-1015-r8",
+    "macosx1100-64": "t-osx-1100-m1",
 }
-
-
-def runs_on_central(task):
-    return match_run_on_projects("mozilla-central", task["run-on-projects"])
 
 
 def gv_e10s_filter(task):
@@ -167,21 +227,30 @@ def gv_e10s_filter(task):
 
 
 def fission_filter(task):
-    return (
-        runs_on_central(task)
-        and task.get("e10s") in (True, "both")
-        and get_mobile_project(task) != "fennec"
-    )
+    return task.get("e10s") in (True, "both")
 
 
 TEST_VARIANTS = {
+    "noqr": {
+        "description": "{description} with no webrender or software webrender",
+        "suffix": "noqr",
+        "merge": {
+            "webrender": False,
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=gfx.webrender.software=false",
+                    "--setpref=layers.acceleration.disabled=true",
+                ],
+            },
+        },
+    },
     "a11y-checks": {
         "description": "{description} with accessibility checks enabled",
         "suffix": "a11y-checks",
         "replace": {
             "run-on-projects": {
                 "by-test-platform": {
-                    "linux.*64(-shippable)?/opt": ["trunk"],
+                    "linux.*64(-shippable)?-qr/opt": ["trunk"],
                     "default": [],
                 },
             },
@@ -215,8 +284,6 @@ TEST_VARIANTS = {
         "filterfn": gv_e10s_filter,
         "suffix": "fis",
         "merge": {
-            # Ensures the default state is to not run anywhere.
-            "fission-run-on-projects": [],
             "mozharness": {
                 "extra-options": [
                     "--enable-fission",
@@ -232,12 +299,9 @@ TEST_VARIANTS = {
             "e10s": True,
         },
         "merge": {
-            # Ensures the default state is to not run anywhere.
-            "fission-run-on-projects": [],
             "mozharness": {
                 "extra-options": [
                     "--setpref=fission.autostart=true",
-                    "--setpref=dom.serviceWorkers.parent_intercept=true",
                 ],
             },
         },
@@ -250,13 +314,27 @@ TEST_VARIANTS = {
             "e10s": True,
         },
         "merge": {
-            # Ensures the default state is to not run anywhere.
-            "fission-run-on-projects": [],
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=fission.autostart=true",
+                    "--enable-xorigin-tests",
+                ],
+            },
+        },
+    },
+    "fission-webgl-ipc": {
+        # TODO: After 2021-05-01, verify this variant is still needed.
+        "description": "{description} with fission and WebGL IPC process enabled",
+        "suffix": "fis-gli",
+        "replace": {
+            "e10s": True,
+        },
+        "merge": {
             "mozharness": {
                 "extra-options": [
                     "--setpref=fission.autostart=true",
                     "--setpref=dom.serviceWorkers.parent_intercept=true",
-                    "--enable-xorigin-tests",
+                    "--setpref=webgl.out-of-process=true",
                 ],
             },
         },
@@ -286,6 +364,20 @@ TEST_VARIANTS = {
             }
         },
     },
+    "wayland": {
+        "description": "{description} with Wayland backend enabled",
+        "suffix": "wayland",
+        "replace": {
+            "run-on-projects": [],
+        },
+        "merge": {
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=widget.wayland.test-workarounds.enabled=true",
+                ],
+            }
+        },
+    },
     "webrender": {
         "description": "{description} with webrender enabled",
         "suffix": "wr",
@@ -305,8 +397,62 @@ TEST_VARIANTS = {
             },
         },
     },
+    "webrender-sw-a11y-checks": {
+        "description": "{description} with software webrender and accessibility checks enabled",
+        "suffix": "swr-a11y-checks",
+        "replace": {
+            "run-on-projects": {
+                "by-test-platform": {
+                    "linux.*64(-shippable)?-qr/opt": ["trunk"],
+                    "default": [],
+                },
+            },
+            "tier": 2,
+        },
+        "merge": {
+            "webrender": True,
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=gfx.webrender.software=true",
+                    "--enable-a11y-checks",
+                ],
+            },
+        },
+    },
+    "webrender-sw-fission": {
+        "description": "{description} with software webrender and fission enabled",
+        "filterfn": fission_filter,
+        "suffix": "swr-fis",
+        "replace": {
+            "e10s": True,
+        },
+        "merge": {
+            "webrender": True,
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=gfx.webrender.software=true",
+                    "--setpref=fission.autostart=true",
+                ],
+            },
+        },
+    },
+    "webrender-sw-wayland": {
+        "description": "{description} with software webrender and Wayland backend enabled",
+        "suffix": "swr-wayland",
+        "replace": {
+            "run-on-projects": [],
+        },
+        "merge": {
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=gfx.webrender.software=true",
+                    "--setpref=widget.wayland.test-workarounds.enabled=true",
+                ],
+            }
+        },
+    },
     "webgl-ipc": {
-        # TODO: After 2021-02-01, verify this variant is still needed.
+        # TODO: After 2021-05-01, verify this variant is still needed.
         "description": "{description} with WebGL IPC process enabled",
         "suffix": "gli",
         "replace": {
@@ -319,6 +465,18 @@ TEST_VARIANTS = {
                 },
             },
         },
+        "merge": {
+            "mozharness": {
+                "extra-options": [
+                    "--setpref=webgl.out-of-process=true",
+                ],
+            },
+        },
+    },
+    "webgl-ipc-profiling": {
+        # TODO: After 2021-05-01, verify this variant is still needed.
+        "description": "{description} with WebGL IPC process enabled",
+        "suffix": "gli",
         "merge": {
             "mozharness": {
                 "extra-options": [
@@ -394,24 +552,20 @@ test_description_schema = Schema(
         # build task's run-on-projects, meaning that tests run only on platforms
         # that are built.
         Optional("run-on-projects"): optionally_keyed_by(
-            "test-platform", "test-name", "variant", Any([text_type], "built-projects")
+            "app",
+            "subtest",
+            "test-platform",
+            "test-name",
+            "variant",
+            Any([text_type], "built-projects"),
         ),
         # When set only run on projects where the build would already be running.
         # This ensures tasks where this is True won't be the cause of the build
         # running on a project it otherwise wouldn't have.
         Optional("built-projects-only"): bool,
-        # Same as `run-on-projects` except it only applies to Fission tasks. Fission
-        # tasks will ignore `run_on_projects` and non-Fission tasks will ignore
-        # `fission-run-on-projects`.
-        Optional("fission-run-on-projects"): optionally_keyed_by(
-            "test-platform", Any([text_type], "built-projects")
-        ),
         # the sheriffing tier for this task (default: set based on test platform)
-        Optional("tier"): optionally_keyed_by("test-platform", Any(int, "default")),
-        # Same as `tier` except it only applies to Fission tasks. Fission tasks
-        # will ignore `tier` and non-Fission tasks will ignore `fission-tier`.
-        Optional("fission-tier"): optionally_keyed_by(
-            "test-platform", Any(int, "default")
+        Optional("tier"): optionally_keyed_by(
+            "test-platform", "variant", "app", "subtest", Any(int, "default")
         ),
         # number of chunks to create for this task.  This can be keyed by test
         # platform by passing a dictionary in the `by-test-platform` key.  If the
@@ -594,6 +748,14 @@ test_description_schema = Schema(
         },
         # Opt-in to Python 3 support
         Optional("python-3"): bool,
+        # Raptor / browsertime specific keys that need to be here to support
+        # using `by-key` after `by-variant`. Ideally these keys should not exist
+        # in the tests.py schema and instead we'd split variants before the raptor
+        # transforms need them. See bug 1700774.
+        Optional("app"): text_type,
+        Optional("subtest"): text_type,
+        # Define if a given task supports artifact builds or not, see bug 1695325.
+        Optional("supports-artifact-builds"): bool,
     }
 )
 
@@ -611,7 +773,9 @@ def handle_keyed_by_mozharness(config, tasks):
     ]
     for task in tasks:
         for field in fields:
-            resolve_keyed_by(task, field, item_name=task["test-name"])
+            resolve_keyed_by(
+                task, field, item_name=task["test-name"], enforce_single_match=False
+            )
         yield task
 
 
@@ -665,6 +829,7 @@ def set_defaults(config, tasks):
         task.setdefault("checkout", False)
         task.setdefault("require-signed-extensions", False)
         task.setdefault("variants", [])
+        task.setdefault("supports-artifact-builds", True)
 
         task["mozharness"].setdefault("extra-options", [])
         task["mozharness"].setdefault("requires-signed-builds", False)
@@ -681,6 +846,7 @@ def resolve_keys(config, tasks):
             task,
             "require-signed-extensions",
             item_name=task["test-name"],
+            enforce_single_match=False,
             **{
                 "release-type": config.params["release_type"],
             }
@@ -785,7 +951,7 @@ def setup_browsertime_flag(config, tasks):
             continue
 
         if task["treeherder-symbol"].startswith("Rap"):
-            # The Rap group is subdivided as Rap{-fenix,-refbrow,-fennec}(...),
+            # The Rap group is subdivided as Rap{-fenix,-refbrow(...),
             # so `taskgraph.util.treeherder.replace_group` isn't appropriate.
             task["treeherder-symbol"] = task["treeherder-symbol"].replace(
                 "Rap", "Btime", 1
@@ -816,7 +982,9 @@ def set_target(config, tasks):
         build_platform = task["build-platform"]
         target = None
         if "target" in task:
-            resolve_keyed_by(task, "target", item_name=task["test-name"])
+            resolve_keyed_by(
+                task, "target", item_name=task["test-name"], enforce_single_match=False
+            )
             target = task["target"]
         if not target:
             if build_platform.startswith("macosx"):
@@ -848,6 +1016,8 @@ def set_treeherder_machine_platform(config, tasks):
         "macosx1014-64/debug": "osx-10-14/debug",
         "macosx1014-64/opt": "osx-10-14/opt",
         "macosx1014-64-shippable/opt": "osx-10-14-shippable/opt",
+        "macosx1100-64/opt": "osx-1100/opt",
+        "macosx1100-64-shippable/opt": "osx-1100-shippable/opt",
         "win64-asan/opt": "windows10-64/asan",
         "win64-aarch64/opt": "windows10-aarch64/opt",
     }
@@ -897,73 +1067,6 @@ def set_treeherder_machine_platform(config, tasks):
 
 
 @transforms.add
-def set_tier(config, tasks):
-    """Set the tier based on policy for all test descriptions that do not
-    specify a tier otherwise."""
-    for task in tasks:
-        if "tier" in task:
-            resolve_keyed_by(task, "tier", item_name=task["test-name"])
-
-        if "fission-tier" in task:
-            resolve_keyed_by(task, "fission-tier", item_name=task["test-name"])
-
-        # only override if not set for the test
-        if "tier" not in task or task["tier"] == "default":
-            if task["test-platform"] in [
-                "linux64/opt",
-                "linux64/debug",
-                "linux64-shippable/opt",
-                "linux64-devedition/opt",
-                "linux64-asan/opt",
-                "linux64-qr/opt",
-                "linux64-qr/debug",
-                "linux64-shippable-qr/opt",
-                "linux1804-64/opt",
-                "linux1804-64/debug",
-                "linux1804-64-shippable/opt",
-                "linux1804-64-devedition/opt",
-                "linux1804-64-qr/opt",
-                "linux1804-64-qr/debug",
-                "linux1804-64-shippable-qr/opt",
-                "linux1804-64-asan/opt",
-                "linux1804-64-tsan/opt",
-                "windows7-32/debug",
-                "windows7-32/opt",
-                "windows7-32-devedition/opt",
-                "windows7-32-shippable/opt",
-                "windows10-aarch64/opt",
-                "windows10-64/debug",
-                "windows10-64/opt",
-                "windows10-64-shippable/opt",
-                "windows10-64-devedition/opt",
-                "windows10-64-asan/opt",
-                "windows10-64-qr/opt",
-                "windows10-64-qr/debug",
-                "windows10-64-shippable-qr/opt",
-                "macosx1014-64/opt",
-                "macosx1014-64/debug",
-                "macosx1014-64-shippable/opt",
-                "macosx1014-64-devedition/opt",
-                "macosx1014-64-devedition-qr/opt",
-                "macosx1014-64-qr/opt",
-                "macosx1014-64-shippable-qr/opt",
-                "macosx1014-64-qr/debug",
-                "android-em-7.0-x86_64-shippable/opt",
-                "android-em-7.0-x86_64/debug",
-                "android-em-7.0-x86_64/opt",
-                "android-em-7.0-x86-shippable/opt",
-                "android-em-7.0-x86_64-shippable-qr/opt",
-                "android-em-7.0-x86_64-qr/debug",
-                "android-em-7.0-x86_64-qr/opt",
-            ]:
-                task["tier"] = 1
-            else:
-                task["tier"] = 2
-
-        yield task
-
-
-@transforms.add
 def set_download_symbols(config, tasks):
     """In general, we download symbols immediately for debug builds, but only
     on demand for everything else. ASAN builds shouldn't download
@@ -973,7 +1076,8 @@ def set_download_symbols(config, tasks):
             task["mozharness"]["download-symbols"] = True
         elif (
             task["build-platform"] == "linux64-asan/opt"
-            or task["build-platform"] == "windows10-64-asan/opt"
+            or task["build-platform"] == "linux64-asan-qr/opt"
+            or task["build-platform"] == "windows10-64-asan-qr/opt"
         ):
             if "download-symbols" in task["mozharness"]:
                 del task["mozharness"]["download-symbols"]
@@ -994,7 +1098,6 @@ def handle_keyed_by(config, tasks):
         "e10s",
         "suite",
         "run-on-projects",
-        "fission-run-on-projects",
         "os-groups",
         "run-as-administrator",
         "workdir",
@@ -1012,6 +1115,7 @@ def handle_keyed_by(config, tasks):
                 field,
                 item_name=task["test-name"],
                 defer=["variant"],
+                enforce_single_match=False,
                 project=config.params["project"],
             )
         yield task
@@ -1035,9 +1139,6 @@ def setup_browsertime(config, tasks):
         if task["suite"] != "raptor" or "--browsertime" not in extra_options:
             yield task
             continue
-
-        # This is appropriate as the browsertime task variants mature.
-        task["tier"] = max(task["tier"], 1)
 
         ts = {
             "by-test-platform": {
@@ -1071,34 +1172,40 @@ def setup_browsertime(config, tasks):
 
         cd_fetches = {
             "android.*": [
-                "linux64-chromedriver-85",
-                "linux64-chromedriver-86",
                 "linux64-chromedriver-87",
+                "linux64-chromedriver-89",
+                "linux64-chromedriver-90",
+                "linux64-chromedriver-91",
             ],
             "linux.*": [
-                "linux64-chromedriver-85",
-                "linux64-chromedriver-86",
                 "linux64-chromedriver-87",
+                "linux64-chromedriver-89",
+                "linux64-chromedriver-90",
+                "linux64-chromedriver-91",
             ],
             "macosx.*": [
-                "mac64-chromedriver-85",
-                "mac64-chromedriver-86",
                 "mac64-chromedriver-87",
+                "mac64-chromedriver-89",
+                "mac64-chromedriver-90",
+                "mac64-chromedriver-91",
             ],
             "windows.*aarch64.*": [
-                "win32-chromedriver-85",
-                "win32-chromedriver-86",
                 "win32-chromedriver-87",
+                "win32-chromedriver-89",
+                "win32-chromedriver-90",
+                "win32-chromedriver-91",
             ],
             "windows.*-32.*": [
-                "win32-chromedriver-85",
-                "win32-chromedriver-86",
                 "win32-chromedriver-87",
+                "win32-chromedriver-89",
+                "win32-chromedriver-90",
+                "win32-chromedriver-91",
             ],
             "windows.*-64.*": [
-                "win32-chromedriver-85",
-                "win32-chromedriver-86",
                 "win32-chromedriver-87",
+                "win32-chromedriver-89",
+                "win32-chromedriver-90",
+                "win32-chromedriver-91",
             ],
         }
 
@@ -1194,7 +1301,7 @@ def get_mobile_project(task):
     if not task["build-platform"].startswith("android"):
         return
 
-    mobile_projects = ("fenix", "fennec", "geckoview", "refbrow", "chrome-m")
+    mobile_projects = ("fenix", "geckoview", "refbrow", "chrome-m")
 
     for name in mobile_projects:
         if name in task["test-name"]:
@@ -1209,7 +1316,7 @@ def get_mobile_project(task):
             if name in target:
                 return name
 
-    return "fennec"
+    return None
 
 
 @transforms.add
@@ -1219,9 +1326,6 @@ def adjust_mobile_e10s(config, tasks):
         if project == "geckoview":
             # Geckoview is always-e10s
             task["e10s"] = True
-        elif project == "fennec":
-            # Fennec is non-e10s
-            task["e10s"] = False
         yield task
 
 
@@ -1234,6 +1338,57 @@ def disable_wpt_timeouts_on_autoland(config, tasks):
             and config.params["project"] == "autoland"
         ):
             task["mozharness"].setdefault("extra-options", []).append("--skip-timeout")
+        yield task
+
+
+@transforms.add
+def split_variants(config, tasks):
+    for task in tasks:
+        variants = task.pop("variants", [])
+
+        yield copy.deepcopy(task)
+
+        for name in variants:
+            variant = TEST_VARIANTS[name]
+
+            if "filterfn" in variant and not variant["filterfn"](task):
+                continue
+
+            taskv = copy.deepcopy(task)
+            taskv["attributes"]["unittest_variant"] = name
+            taskv["description"] = variant["description"].format(**taskv)
+
+            suffix = "-" + variant["suffix"]
+            taskv["test-name"] += suffix
+            taskv["try-name"] += suffix
+
+            group, symbol = split_symbol(taskv["treeherder-symbol"])
+            if group != "?":
+                group += suffix
+            else:
+                symbol += suffix
+            taskv["treeherder-symbol"] = join_symbol(group, symbol)
+
+            taskv.update(variant.get("replace", {}))
+            yield merge(taskv, variant.get("merge", {}))
+
+
+@transforms.add
+def handle_keyed_by_variant(config, tasks):
+    """Resolve fields that can be keyed by platform, etc."""
+    fields = [
+        "run-on-projects",
+        "tier",
+    ]
+    for task in tasks:
+        for field in fields:
+            resolve_keyed_by(
+                task,
+                field,
+                item_name=task["test-name"],
+                enforce_single_match=False,
+                variant=task["attributes"].get("unittest_variant"),
+            )
         yield task
 
 
@@ -1332,85 +1487,116 @@ def handle_run_on_projects(config, tasks):
 
 
 @transforms.add
-def split_variants(config, tasks):
+def handle_tier(config, tasks):
+    """Set the tier based on policy for all test descriptions that do not
+    specify a tier otherwise."""
     for task in tasks:
-        variants = task.pop("variants", [])
-
-        yield copy.deepcopy(task)
-
-        for name in variants:
-            taskv = copy.deepcopy(task)
-            variant = TEST_VARIANTS[name]
-
-            if "filterfn" in variant and not variant["filterfn"](taskv):
-                continue
-
-            taskv["attributes"]["unittest_variant"] = name
-            taskv["description"] = variant["description"].format(**taskv)
-
-            suffix = "-" + variant["suffix"]
-            taskv["test-name"] += suffix
-            taskv["try-name"] += suffix
-
-            group, symbol = split_symbol(taskv["treeherder-symbol"])
-            if group != "?":
-                group += suffix
-            else:
-                symbol += suffix
-            taskv["treeherder-symbol"] = join_symbol(group, symbol)
-
-            taskv.update(variant.get("replace", {}))
-
-            if task["suite"] == "raptor":
-                taskv["tier"] = max(taskv["tier"], 2)
-
-            yield merge(taskv, variant.get("merge", {}))
-
-
-@transforms.add
-def handle_keyed_by_variant(config, tasks):
-    """Resolve fields that can be keyed by platform, etc."""
-    fields = [
-        "run-on-projects",
-    ]
-    for task in tasks:
-        for field in fields:
+        if "tier" in task:
             resolve_keyed_by(
-                task,
-                field,
-                item_name=task["test-name"],
-                variant=task["attributes"].get("unittest_variant"),
+                task, "tier", item_name=task["test-name"], enforce_single_match=False
             )
+
+        # only override if not set for the test
+        if "tier" not in task or task["tier"] == "default":
+            if task["test-platform"] in [
+                "linux64/opt",
+                "linux64/debug",
+                "linux64-shippable/opt",
+                "linux64-devedition/opt",
+                "linux64-asan/opt",
+                "linux64-qr/opt",
+                "linux64-qr/debug",
+                "linux64-shippable-qr/opt",
+                "linux1804-64/opt",
+                "linux1804-64/debug",
+                "linux1804-64-shippable/opt",
+                "linux1804-64-devedition/opt",
+                "linux1804-64-qr/opt",
+                "linux1804-64-qr/debug",
+                "linux1804-64-shippable-qr/opt",
+                "linux1804-64-asan-qr/opt",
+                "linux1804-64-tsan-qr/opt",
+                "windows7-32-qr/debug",
+                "windows7-32-qr/opt",
+                "windows7-32-devedition-qr/opt",
+                "windows7-32-shippable-qr/opt",
+                "windows10-32-qr/debug",
+                "windows10-32-qr/opt",
+                "windows10-32-shippable-qr/opt",
+                "windows10-32-2004-qr/debug",
+                "windows10-32-2004-qr/opt",
+                "windows10-32-2004-shippable-qr/opt",
+                "windows10-aarch64-qr/opt",
+                "windows10-64/debug",
+                "windows10-64/opt",
+                "windows10-64-shippable/opt",
+                "windows10-64-devedition/opt",
+                "windows10-64-qr/opt",
+                "windows10-64-qr/debug",
+                "windows10-64-shippable-qr/opt",
+                "windows10-64-devedition-qr/opt",
+                "windows10-64-asan-qr/opt",
+                "windows10-64-2004-qr/opt",
+                "windows10-64-2004-qr/debug",
+                "windows10-64-2004-shippable-qr/opt",
+                "windows10-64-2004-devedition-qr/opt",
+                "windows10-64-2004-asan-qr/opt",
+                "macosx1014-64/opt",
+                "macosx1014-64/debug",
+                "macosx1014-64-shippable/opt",
+                "macosx1014-64-devedition/opt",
+                "macosx1014-64-devedition-qr/opt",
+                "macosx1014-64-qr/opt",
+                "macosx1014-64-shippable-qr/opt",
+                "macosx1014-64-qr/debug",
+                "macosx1015-64/opt",
+                "macosx1015-64/debug",
+                "macosx1015-64-shippable/opt",
+                "macosx1015-64-devedition/opt",
+                "macosx1015-64-devedition-qr/opt",
+                "macosx1015-64-qr/opt",
+                "macosx1015-64-shippable-qr/opt",
+                "macosx1015-64-qr/debug",
+                "android-em-7.0-x86_64-shippable/opt",
+                "android-em-7.0-x86_64/debug",
+                "android-em-7.0-x86_64/debug-isolated-process",
+                "android-em-7.0-x86_64/opt",
+                "android-em-7.0-x86-shippable/opt",
+                "android-em-7.0-x86_64-shippable-qr/opt",
+                "android-em-7.0-x86_64-qr/debug",
+                "android-em-7.0-x86_64-qr/opt",
+            ]:
+                task["tier"] = 1
+            else:
+                task["tier"] = 2
+
         yield task
 
 
 @transforms.add
-def handle_fission_attributes(config, tasks):
-    """Handle run_on_projects for fission tasks."""
+def apply_raptor_tier_optimization(config, tasks):
     for task in tasks:
-        for attr in ("run-on-projects", "tier"):
-            fission_attr = task.pop("fission-{}".format(attr), None)
+        if task["suite"] != "raptor":
+            yield task
+            continue
 
-            if (
-                task["attributes"].get("unittest_variant")
-                not in ("fission", "geckoview-fission", "fission-xorigin")
-            ) or fission_attr is None:
-                continue
+        if not task["test-platform"].startswith("android-hw"):
+            task["optimization"] = {"skip-unless-expanded": None}
+            if task["tier"] > 1:
+                task["optimization"] = {"skip-unless-backstop": None}
 
-            task[attr] = fission_attr
-
+        if task["attributes"].get("unittest_variant"):
+            task["tier"] = max(task["tier"], 2)
         yield task
 
 
 @transforms.add
 def disable_try_only_platforms(config, tasks):
     """Turns off platforms that should only run on try."""
-    try_only_platforms = ("windows7-32-qr/.*",)
+    try_only_platforms = ()
     for task in tasks:
         if any(re.match(k + "$", task["test-platform"]) for k in try_only_platforms):
             task["run-on-projects"] = []
-            if "fission-run-on-projects" in task:
-                task["fission-run-on-projects"] = []
         yield task
 
 
@@ -1710,11 +1896,34 @@ def set_retry_exit_status(config, tasks):
 @transforms.add
 def set_profile(config, tasks):
     """Set profiling mode for tests."""
-    profile = config.params["try_task_config"].get("gecko-profile", False)
+    ttconfig = config.params["try_task_config"]
+    profile = ttconfig.get("gecko-profile", False)
+    settings = (
+        "gecko-profile-interval",
+        "gecko-profile-entries",
+        "gecko-profile-threads",
+        "gecko-profile-features",
+    )
 
     for task in tasks:
         if profile and task["suite"] in ["talos", "raptor"]:
-            task["mozharness"]["extra-options"].append("--gecko-profile")
+            extras = task["mozharness"]["extra-options"]
+            extras.append("--gecko-profile")
+            for setting in settings:
+                value = ttconfig.get(setting)
+                if value is not None:
+                    # These values can contain spaces (eg the "DOM Worker"
+                    # thread) and the command is constructed in different,
+                    # incompatible ways on different platforms.
+
+                    if task["test-platform"].startswith("win"):
+                        # Double quotes for Windows (single won't work).
+                        extras.append("--" + setting + '="' + str(value) + '"')
+                    else:
+                        # Other platforms keep things as separate values,
+                        # rather than joining with spaces.
+                        extras.append("--" + setting + "=" + str(value))
+
         yield task
 
 
@@ -1751,10 +1960,14 @@ def set_worker_type(config, tasks):
             # This test already has its worker type defined, so just use that (yields below)
             pass
         elif test_platform.startswith("macosx1014-64"):
+            task["worker-type"] = MACOSX_WORKER_TYPES["macosx1014-64"]
+        elif test_platform.startswith("macosx1015-64"):
             if "--power-test" in task["mozharness"]["extra-options"]:
                 task["worker-type"] = MACOSX_WORKER_TYPES["macosx1014-64-power"]
             else:
-                task["worker-type"] = MACOSX_WORKER_TYPES["macosx1014-64"]
+                task["worker-type"] = MACOSX_WORKER_TYPES["macosx1015-64"]
+        elif test_platform.startswith("macosx1100-64"):
+            task["worker-type"] = MACOSX_WORKER_TYPES["macosx1100-64"]
         elif test_platform.startswith("win"):
             # figure out what platform the job needs to run on
             if task["virtualization"] == "hardware":
@@ -1763,8 +1976,10 @@ def set_worker_type(config, tasks):
                     win_worker_type_platform = WINDOWS_WORKER_TYPES[
                         "windows10-64-ref-hw-2017"
                     ]
-                elif test_platform.startswith("windows10-aarch64"):
-                    win_worker_type_platform = WINDOWS_WORKER_TYPES["windows10-aarch64"]
+                elif test_platform.startswith("windows10-aarch64-qr"):
+                    win_worker_type_platform = WINDOWS_WORKER_TYPES[
+                        "windows10-aarch64-qr"
+                    ]
                 else:
                     win_worker_type_platform = WINDOWS_WORKER_TYPES["windows10-64"]
             else:
@@ -1795,7 +2010,7 @@ def set_worker_type(config, tasks):
             if task.get("suite", "") in ["talos", "raptor"] and not task[
                 "build-platform"
             ].startswith("linux64-ccov"):
-                task["worker-type"] = "t-linux-talos"
+                task["worker-type"] = "t-linux-talos-1804"
             else:
                 task["worker-type"] = LINUX_WORKER_TYPES[task["instance-size"]]
         else:
@@ -1872,6 +2087,7 @@ def make_job_description(config, tasks):
                 "build_type": attr_build_type,
                 "test_platform": task["test-platform"],
                 "test_chunk": str(task["this-chunk"]),
+                "supports-artifact-builds": task["supports-artifact-builds"],
                 attr_try_name: try_name,
             }
         )

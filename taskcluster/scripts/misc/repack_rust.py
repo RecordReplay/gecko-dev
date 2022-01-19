@@ -307,7 +307,7 @@ def fetch_manifest(channel="stable", host=None, targets=()):
                 "available": requests.head(url).status_code == 200,
             }
 
-        for pkg in ("cargo", "rustc", "rustfmt-preview"):
+        for pkg in ("cargo", "rustc", "rustfmt-preview", "clippy-preview"):
             manifest["pkg"][pkg] = {
                 "version": "bors",
                 "target": {
@@ -355,7 +355,7 @@ def patch_src(patch, module):
     subprocess.check_call(["patch", "-d", module, "-p1", "-i", patch, "--fuzz=0", "-s"])
 
 
-def build_src(install_dir, host, targets, patch):
+def build_src(install_dir, host, targets, patches):
     install_dir = os.path.abspath(install_dir)
     fetches = os.environ["MOZ_FETCHES_DIR"]
     rust_dir = os.path.join(fetches, "rust")
@@ -370,14 +370,13 @@ def build_src(install_dir, host, targets, patch):
     os.makedirs(install_dir)
 
     # Patch the src (see the --patch flag's description for details)
-    if patch:
-        for p in patch:
-            module, colon, file = p.partition(":")
-            if not colon:
-                module, file = "", p
-            patch_file = os.path.join(patch_dir, file)
-            patch_module = os.path.join(rust_dir, module)
-            patch_src(patch_file, patch_module)
+    for p in patches:
+        module, colon, file = p.partition(":")
+        if not colon:
+            module, file = "", p
+        patch_file = os.path.join(patch_dir, file)
+        patch_module = os.path.join(rust_dir, module)
+        patch_src(patch_file, patch_module)
 
     log("Building Rust...")
 
@@ -394,8 +393,10 @@ def build_src(install_dir, host, targets, patch):
     base_config = textwrap.dedent(
         """
         [build]
+        docs = false
+        sanitizers = true
         extended = true
-        tools = ["analysis", "cargo", "rustfmt", "src"]
+        tools = ["analysis", "cargo", "rustfmt", "clippy", "src"]
 
         [install]
         prefix = "{prefix}"
@@ -456,13 +457,13 @@ def repack(
     channel="stable",
     cargo_channel=None,
     compiler_builtins_hack=False,
-    patch=None,
+    patches=[],
 ):
     install_dir = "rustc"
     if channel == "dev":
-        build_src(install_dir, host, targets, patch)
+        build_src(install_dir, host, targets, patches)
     else:
-        if patch:
+        if patches:
             raise ValueError(
                 'Patch specified, but channel "%s" is not "dev"!'
                 "\nPatches are only for building from source." % channel
@@ -485,6 +486,7 @@ def repack(
         stds = fetch_std(manifest, targets)
         rustsrc = fetch_package(manifest, "rust-src", host)
         rustfmt = fetch_optional(manifest, "rustfmt-preview", host)
+        clippy = fetch_optional(manifest, "clippy-preview", host)
 
         log("Installing packages...")
 
@@ -499,6 +501,8 @@ def repack(
         install(os.path.basename(rustsrc["url"]), install_dir)
         if rustfmt:
             install(os.path.basename(rustfmt["url"]), install_dir)
+        if clippy:
+            install(os.path.basename(clippy["url"]), install_dir)
         for std in stds:
             install(os.path.basename(std["url"]), install_dir)
             pass
@@ -666,12 +670,15 @@ def args():
     )
     parser.add_argument(
         "--patch",
-        nargs="+",
+        dest="patches",
+        action="append",
+        default=[],
         help="apply the given patch file to a dev build."
         " Patch files should be placed in /build/build-rust."
         " Patches can be prefixed with `module-path:` to specify they"
         " apply to that git submodule in the Rust source."
-        " e.g. `src/llvm-project:mypatch.diff` patches rust's llvm.",
+        " e.g. `src/llvm-project:mypatch.diff` patches rust's llvm."
+        " Can be given more than once.",
     )
     parser.add_argument(
         "--cargo-channel",

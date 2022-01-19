@@ -12,9 +12,6 @@
 
 #define READTYPE int32_t
 #include "zlib.h"
-#ifdef MOZ_JAR_BROTLI
-#  include "brotli/decode.h"  // brotli
-#endif
 #include "nsISupportsUtils.h"
 #include "mozilla/MmapFaultHandler.h"
 #include "prio.h"
@@ -448,6 +445,7 @@ nsresult nsZipArchive::Test(const char* aEntryName) {
 //  nsZipArchive::CloseArchive
 //---------------------------------------------
 nsresult nsZipArchive::CloseArchive() {
+  MutexAutoLock lock(mLock);
   if (mFd) {
     mArena.Clear();
     mFd = nullptr;
@@ -469,6 +467,8 @@ nsresult nsZipArchive::CloseArchive() {
 // nsZipArchive::GetItem
 //---------------------------------------------
 nsZipItem* nsZipArchive::GetItem(const char* aEntryName) {
+  MutexAutoLock lock(mLock);
+
   if (aEntryName) {
     uint32_t len = strlen(aEntryName);
     //-- If the request is for a directory, make sure that synthetic entries
@@ -530,7 +530,7 @@ nsresult nsZipArchive::ExtractFile(nsZipItem* item, nsIFile* outFile,
     }
 
     if (aFd && PR_Write(aFd, buf, count) < (READTYPE)count) {
-      rv = NS_ERROR_FILE_DISK_FULL;
+      rv = NS_ERROR_FILE_NO_DEVICE_SPACE;
       break;
     }
   }
@@ -551,6 +551,8 @@ nsresult nsZipArchive::ExtractFile(nsZipItem* item, nsIFile* outFile,
 //---------------------------------------------
 nsresult nsZipArchive::FindInit(const char* aPattern, nsZipFind** aFind) {
   if (!aFind) return NS_ERROR_ILLEGAL_VALUE;
+
+  MutexAutoLock lock(mLock);
 
   // null out param in case an error happens
   *aFind = nullptr;
@@ -601,6 +603,7 @@ nsresult nsZipArchive::FindInit(const char* aPattern, nsZipFind** aFind) {
 nsresult nsZipFind::FindNext(const char** aResult, uint16_t* aNameLen) {
   if (!mArchive || !aResult || !aNameLen) return NS_ERROR_ILLEGAL_VALUE;
 
+  MutexAutoLock lock(mArchive->mLock);
   *aResult = 0;
   *aNameLen = 0;
   MMAP_FAULT_HANDLER_BEGIN_HANDLE(mArchive->GetFD())
@@ -649,6 +652,8 @@ nsZipItem* nsZipArchive::CreateZipItem() {
 //  nsZipArchive::BuildFileList
 //---------------------------------------------
 nsresult nsZipArchive::BuildFileList(PRFileDesc* aFd) {
+  MutexAutoLock lock(mLock);
+
   // Get archive size using end pos
   const uint8_t* buf;
   const uint8_t* startp = mFd->mFileData;
@@ -754,6 +759,8 @@ nsresult nsZipArchive::BuildFileList(PRFileDesc* aFd) {
 //  nsZipArchive::BuildSynthetics
 //---------------------------------------------
 nsresult nsZipArchive::BuildSynthetics() {
+  mLock.AssertCurrentThreadOwns();
+
   if (mBuiltSynthetics) return NS_OK;
   mBuiltSynthetics = true;
 
@@ -1086,12 +1093,7 @@ nsZipCursor::nsZipCursor(nsZipItem* item, nsZipArchive* aZip, uint8_t* aBuf,
     : mItem(item),
       mBuf(aBuf),
       mBufSize(aBufSize),
-      mZs()
-#ifdef MOZ_JAR_BROTLI
-      ,
-      mBrotliState(nullptr)
-#endif
-      ,
+      mZs(),
       mCRC(0),
       mDoCRC(doCRC) {
   if (mItem->Compression() == DEFLATED) {
@@ -1106,12 +1108,6 @@ nsZipCursor::nsZipCursor(nsZipItem* item, nsZipArchive* aZip, uint8_t* aBuf,
   mZs.avail_in = item->Size();
   mZs.next_in = (Bytef*)aZip->GetData(item);
 
-#ifdef MOZ_JAR_BROTLI
-  if (mItem->Compression() == MOZ_JAR_BROTLI) {
-    mBrotliState = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
-  }
-#endif
-
   if (doCRC) mCRC = crc32(0L, Z_NULL, 0);
 }
 
@@ -1119,11 +1115,6 @@ nsZipCursor::~nsZipCursor() {
   if (mItem->Compression() == DEFLATED) {
     inflateEnd(&mZs);
   }
-#ifdef MOZ_JAR_BROTLI
-  if (mItem->Compression() == MOZ_JAR_BROTLI) {
-    BrotliDecoderDestroyInstance(mBrotliState);
-  }
-#endif
 }
 
 uint8_t* nsZipCursor::ReadOrCopy(uint32_t* aBytesRead, bool aCopy) {
@@ -1158,31 +1149,6 @@ uint8_t* nsZipCursor::ReadOrCopy(uint32_t* aBytesRead, bool aCopy) {
       *aBytesRead = mZs.next_out - buf;
       verifyCRC = (zerr == Z_STREAM_END);
       break;
-#ifdef MOZ_JAR_BROTLI
-    case MOZ_JAR_BROTLI: {
-      buf = mBuf;
-      mZs.next_out = buf;
-      /* The brotli library wants size_t, but z_stream only contains
-       * unsigned int for avail_*. So use temporary stack values. */
-      size_t avail_out = mBufSize;
-      size_t avail_in = mZs.avail_in;
-      BrotliDecoderResult result = BrotliDecoderDecompressStream(
-          mBrotliState, &avail_in,
-          const_cast<const unsigned char**>(&mZs.next_in), &avail_out,
-          &mZs.next_out, nullptr);
-      /* We don't need to update avail_out, it's not used outside this
-       * function. */
-      mZs.avail_in = avail_in;
-
-      if (result == BROTLI_DECODER_RESULT_ERROR) {
-        return nullptr;
-      }
-
-      *aBytesRead = mZs.next_out - buf;
-      verifyCRC = (result == BROTLI_DECODER_RESULT_SUCCESS);
-      break;
-    }
-#endif
     default:
       return nullptr;
   }
@@ -1206,9 +1172,6 @@ nsZipItemPtr_base::nsZipItemPtr_base(nsZipArchive* aZip, const char* aEntryName,
 
   uint32_t size = 0;
   bool compressed = (item->Compression() == DEFLATED);
-#ifdef MOZ_JAR_BROTLI
-  compressed |= (item->Compression() == MOZ_JAR_BROTLI);
-#endif
   if (compressed) {
     size = item->RealSize();
     mAutoBuf = MakeUniqueFallible<uint8_t[]>(size);

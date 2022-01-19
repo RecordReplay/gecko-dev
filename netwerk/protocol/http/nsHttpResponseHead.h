@@ -38,23 +38,7 @@ namespace net {
 
 class nsHttpResponseHead {
  public:
-  nsHttpResponseHead()
-      : mVersion(HttpVersion::v1_1),
-        mStatus(200),
-        mContentLength(-1),
-        mHasCacheControl(false),
-        mCacheControlPublic(false),
-        mCacheControlPrivate(false),
-        mCacheControlNoStore(false),
-        mCacheControlNoCache(false),
-        mCacheControlImmutable(false),
-        mCacheControlStaleWhileRevalidateSet(false),
-        mCacheControlStaleWhileRevalidate(0),
-        mCacheControlMaxAgeSet(false),
-        mCacheControlMaxAge(0),
-        mPragmaNoCache(false),
-        mRecursiveMutex("nsHttpResponseHead.mRecursiveMutex"),
-        mInVisitHeaders(false) {}
+  nsHttpResponseHead() = default;
 
   nsHttpResponseHead(const nsHttpResponseHead& aOther);
   nsHttpResponseHead& operator=(const nsHttpResponseHead& aOther);
@@ -82,13 +66,13 @@ class nsHttpResponseHead {
 
   [[nodiscard]] nsresult SetHeader(const nsACString& h, const nsACString& v,
                                    bool m = false);
-  [[nodiscard]] nsresult SetHeader(nsHttpAtom h, const nsACString& v,
+  [[nodiscard]] nsresult SetHeader(const nsHttpAtom& h, const nsACString& v,
                                    bool m = false);
-  [[nodiscard]] nsresult GetHeader(nsHttpAtom h, nsACString& v);
-  void ClearHeader(nsHttpAtom h);
+  [[nodiscard]] nsresult GetHeader(const nsHttpAtom& h, nsACString& v);
+  void ClearHeader(const nsHttpAtom& h);
   void ClearHeaders();
-  bool HasHeaderValue(nsHttpAtom h, const char* v);
-  bool HasHeader(nsHttpAtom h) const;
+  bool HasHeaderValue(const nsHttpAtom& h, const char* v);
+  bool HasHeader(const nsHttpAtom& h) const;
 
   void SetContentType(const nsACString& s);
   void SetContentCharset(const nsACString& s);
@@ -137,7 +121,7 @@ class nsHttpResponseHead {
   bool ExpiresInPast();
 
   // update headers...
-  void UpdateHeaders(nsHttpResponseHead* headers);
+  void UpdateHeaders(nsHttpResponseHead* aOther);
 
   // reset the response head to it's initial state
   void Reset();
@@ -155,7 +139,7 @@ class nsHttpResponseHead {
   // automatically under one lock.
   [[nodiscard]] nsresult VisitHeaders(nsIHttpHeaderVisitor* visitor,
                                       nsHttpHeaderArray::VisitorFilter filter);
-  [[nodiscard]] nsresult GetOriginalHeader(nsHttpAtom aHeader,
+  [[nodiscard]] nsresult GetOriginalHeader(const nsHttpAtom& aHeader,
                                            nsIHttpHeaderVisitor* aVisitor);
 
   bool HasContentType() const;
@@ -163,7 +147,8 @@ class nsHttpResponseHead {
   bool GetContentTypeOptionsHeader(nsACString& aOutput);
 
  private:
-  [[nodiscard]] nsresult SetHeader_locked(nsHttpAtom atom, const nsACString& h,
+  [[nodiscard]] nsresult SetHeader_locked(const nsHttpAtom& atom,
+                                          const nsACString& h,
                                           const nsACString& v, bool m = false);
   void AssignDefaultStatusText();
   void ParseVersion(const char*);
@@ -175,7 +160,7 @@ class nsHttpResponseHead {
                                                 bool originalFromNetHeaders);
 
   // these return failure if the header does not exist.
-  [[nodiscard]] nsresult ParseDateHeader(nsHttpAtom header,
+  [[nodiscard]] nsresult ParseDateHeader(const nsHttpAtom& header,
                                          uint32_t* result) const;
 
   bool ExpiresInPast_locked() const;
@@ -202,29 +187,29 @@ class nsHttpResponseHead {
  private:
   // All members must be copy-constructable and assignable
   nsHttpHeaderArray mHeaders;
-  HttpVersion mVersion;
-  uint16_t mStatus;
+  HttpVersion mVersion{HttpVersion::v1_1};
+  uint16_t mStatus{200};
   nsCString mStatusText;
-  int64_t mContentLength;
+  int64_t mContentLength{-1};
   nsCString mContentType;
   nsCString mContentCharset;
-  bool mHasCacheControl;
-  bool mCacheControlPublic;
-  bool mCacheControlPrivate;
-  bool mCacheControlNoStore;
-  bool mCacheControlNoCache;
-  bool mCacheControlImmutable;
-  bool mCacheControlStaleWhileRevalidateSet;
-  uint32_t mCacheControlStaleWhileRevalidate;
-  bool mCacheControlMaxAgeSet;
-  uint32_t mCacheControlMaxAge;
-  bool mPragmaNoCache;
+  bool mHasCacheControl{false};
+  bool mCacheControlPublic{false};
+  bool mCacheControlPrivate{false};
+  bool mCacheControlNoStore{false};
+  bool mCacheControlNoCache{false};
+  bool mCacheControlImmutable{false};
+  bool mCacheControlStaleWhileRevalidateSet{false};
+  uint32_t mCacheControlStaleWhileRevalidate{0};
+  bool mCacheControlMaxAgeSet{false};
+  uint32_t mCacheControlMaxAge{0};
+  bool mPragmaNoCache{false};
 
   // We are using RecursiveMutex instead of a Mutex because VisitHeader
   // function calls nsIHttpHeaderVisitor::VisitHeader while under lock.
-  mutable RecursiveMutex mRecursiveMutex;
+  mutable RecursiveMutex mRecursiveMutex{"nsHttpResponseHead.mRecursiveMutex"};
   // During VisitHeader we sould not allow cal to SetHeader.
-  bool mInVisitHeaders;
+  bool mInVisitHeaders{false};
 
   friend struct IPC::ParamTraits<nsHttpResponseHead>;
 };

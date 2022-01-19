@@ -11,18 +11,12 @@
 #  include "mozilla/Sprintf.h"
 
 #  include <algorithm>
-
-#  ifdef XP_WIN
-#    include <process.h>
-#    define getpid _getpid
-#  else
-#    include <unistd.h>
-#  endif
 #  include <stdarg.h>
 
 #  include "jsmath.h"
 
 #  include "js/ScalarType.h"  // js::Scalar::Type
+#  include "util/GetPidProvider.h"
 #  include "util/Text.h"
 #  include "vm/JSFunction.h"
 #  include "vm/JSObject.h"
@@ -112,6 +106,9 @@ class MOZ_RAII CacheIROpsJitSpewer {
   }
   void spewWasmValTypeImm(const char* name, wasm::ValType::Kind kind) {
     out_.printf("%s WasmValTypeKind(%u)", name, unsigned(kind));
+  }
+  void spewAllocKindImm(const char* name, gc::AllocKind kind) {
+    out_.printf("%s AllocKind(%u)", name, unsigned(kind));
   }
 
  public:
@@ -246,6 +243,9 @@ class MOZ_RAII CacheIROpsJSONSpewer {
     spewArgImpl(name, "Imm", unsigned(kind));
   }
   void spewWasmValTypeImm(const char* name, wasm::ValType::Kind kind) {
+    spewArgImpl(name, "Imm", unsigned(kind));
+  }
+  void spewAllocKindImm(const char* name, gc::AllocKind kind) {
     spewArgImpl(name, "Imm", unsigned(kind));
   }
 
@@ -406,7 +406,7 @@ void CacheIRSpewer::valueProperty(const char* name, const Value& v) {
     }
 
     if (NativeObject* nobj =
-            object.isNative() ? &object.as<NativeObject>() : nullptr) {
+            object.is<NativeObject>() ? &object.as<NativeObject>() : nullptr) {
       j.beginListProperty("flags");
       {
         if (nobj->isIndexed()) {

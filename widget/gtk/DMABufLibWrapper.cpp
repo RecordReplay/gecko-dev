@@ -10,9 +10,7 @@
 #include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/gfx/gfxVars.h"
-
-#include <gdk/gdk.h>
-#include <gdk/gdkx.h>
+#include "WidgetUtilsGtk.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -24,6 +22,11 @@ namespace widget {
 
 #define GBMLIB_NAME "libgbm.so.1"
 #define DRMLIB_NAME "libdrm.so.2"
+
+// Use static lock to protect dri operation as
+// gbm_dri.c is not thread safe.
+// https://gitlab.freedesktop.org/mesa/mesa/-/issues/4422
+mozilla::StaticMutex nsGbmLib::sDRILock;
 
 void* nsGbmLib::sGbmLibHandle = nullptr;
 void* nsGbmLib::sXf86DrmLibHandle = nullptr;
@@ -63,6 +66,7 @@ bool nsGbmLib::IsAvailable() {
 
 bool nsGbmLib::Load() {
   if (!sGbmLibHandle && !sLibLoaded) {
+    LOGDMABUF(("Loading DMABuf system library %s ...\n", GBMLIB_NAME));
     sLibLoaded = true;
 
     sGbmLibHandle = dlopen(GBMLIB_NAME, RTLD_LAZY | RTLD_LOCAL);
@@ -116,6 +120,12 @@ static void dmabuf_modifiers(void* data,
                              struct zwp_linux_dmabuf_v1* zwp_linux_dmabuf,
                              uint32_t format, uint32_t modifier_hi,
                              uint32_t modifier_lo) {
+  // skip modifiers marked as invalid
+  if (modifier_hi == (DRM_FORMAT_MOD_INVALID >> 32) &&
+      modifier_lo == (DRM_FORMAT_MOD_INVALID & 0xffffffff)) {
+    return;
+  }
+
   auto* device = static_cast<nsDMABufDevice*>(data);
   switch (format) {
     case GBM_FORMAT_ARGB8888:
@@ -163,25 +173,24 @@ nsDMABufDevice::nsDMABufDevice()
     : mXRGBFormat({true, false, GBM_FORMAT_XRGB8888, nullptr, 0}),
       mARGBFormat({true, true, GBM_FORMAT_ARGB8888, nullptr, 0}),
       mGbmDevice(nullptr),
-      mGbmFd(-1) {
-  if (gdk_display_get_default() &&
-      !GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+      mGbmFd(-1),
+      mInitialized(false) {
+  if (GdkIsWaylandDisplay()) {
     wl_display* display = WaylandDisplayGetWLDisplay();
-    mRegistry = (void*)wl_display_get_registry(display);
-    wl_registry_add_listener((wl_registry*)mRegistry, &registry_listener, this);
+    wl_registry* registry = wl_display_get_registry(display);
+    wl_registry_add_listener(registry, &registry_listener, this);
     wl_display_roundtrip(display);
     wl_display_roundtrip(display);
+    wl_registry_destroy(registry);
   }
 }
 
-nsDMABufDevice::~nsDMABufDevice() {
-  if (mRegistry) {
-    wl_registry_destroy((wl_registry*)mRegistry);
-    mRegistry = nullptr;
-  }
-}
+bool nsDMABufDevice::Configure(nsACString& aFailureId) {
+  LOGDMABUF(("nsDMABufDevice::Configure()"));
 
-bool nsDMABufDevice::Configure() {
+  MOZ_ASSERT(!mInitialized);
+  mInitialized = true;
+
   bool isDMABufUsed = (
 #ifdef NIGHTLY_BUILD
       StaticPrefs::widget_dmabuf_textures_enabled() ||
@@ -193,11 +202,13 @@ bool nsDMABufDevice::Configure() {
   if (!isDMABufUsed) {
     // Disabled by user, just quit.
     LOGDMABUF(("IsDMABufEnabled(): Disabled by preferences."));
+    aFailureId = "FEATURE_FAILURE_NO_PREFS_ENABLED";
     return false;
   }
 
   if (!nsGbmLib::IsAvailable()) {
     LOGDMABUF(("nsGbmLib is not available!"));
+    aFailureId = "FEATURE_FAILURE_NO_LIBGBM";
     return false;
   }
 
@@ -205,13 +216,18 @@ bool nsDMABufDevice::Configure() {
   if (drm_render_node.IsEmpty()) {
     drm_render_node.Assign(gfx::gfxVars::DrmRenderDevice());
     if (drm_render_node.IsEmpty()) {
+      LOGDMABUF(("Failed: We're missing DRM render device!\n"));
+      aFailureId = "FEATURE_FAILURE_NO_DRM_RENDER_NODE";
       return false;
     }
   }
 
   mGbmFd = open(drm_render_node.get(), O_RDWR);
   if (mGbmFd < 0) {
-    LOGDMABUF(("Failed to open drm render node %s\n", drm_render_node.get()));
+    const char* error = strerror(errno);
+    LOGDMABUF(("Failed to open drm render node %s error %s\n",
+               drm_render_node.get(), error));
+    aFailureId = "FEATURE_FAILURE_BAD_DRM_RENDER_NODE";
     return false;
   }
 
@@ -219,35 +235,62 @@ bool nsDMABufDevice::Configure() {
   if (!mGbmDevice) {
     LOGDMABUF(
         ("Failed to create drm render device %s\n", drm_render_node.get()));
+    aFailureId = "FEATURE_FAILURE_NO_DRM_RENDER_DEVICE";
     close(mGbmFd);
     mGbmFd = -1;
     return false;
   }
 
-  LOGDMABUF(("GBM device initialized"));
+  LOGDMABUF(("DMABuf is enabled, using drm node %s", drm_render_node.get()));
   return true;
 }
 
 bool nsDMABufDevice::IsDMABufEnabled() {
-  static bool isDMABufEnabled = Configure();
-  return isDMABufEnabled;
+  if (!mInitialized) {
+    MOZ_ASSERT(!XRE_IsParentProcess());
+    nsCString failureId;
+    return Configure(failureId);
+  }
+  return !!mGbmDevice;
 }
 
 #ifdef NIGHTLY_BUILD
 bool nsDMABufDevice::IsDMABufTexturesEnabled() {
-  return gfx::gfxVars::UseEGL() && IsDMABufEnabled() &&
+  return gfx::gfxVars::UseDMABuf() && IsDMABufEnabled() &&
          StaticPrefs::widget_dmabuf_textures_enabled();
 }
 #else
 bool nsDMABufDevice::IsDMABufTexturesEnabled() { return false; }
 #endif
+bool nsDMABufDevice::IsDMABufVideoEnabled() {
+  LOGDMABUF(
+      ("nsDMABufDevice::IsDMABufVideoEnabled: EGL %d DMABufEnabled %d  "
+       "!media_ffmpeg_dmabuf_textures_disabled %d !XRE_IsRDDProcess() %d\n",
+       gfx::gfxVars::UseEGL(), IsDMABufEnabled(),
+       !StaticPrefs::media_ffmpeg_dmabuf_textures_disabled(),
+       !XRE_IsRDDProcess()));
+  return !StaticPrefs::media_ffmpeg_dmabuf_textures_disabled() &&
+         !XRE_IsRDDProcess() && gfx::gfxVars::UseDMABuf() && IsDMABufEnabled();
+}
 bool nsDMABufDevice::IsDMABufVAAPIEnabled() {
-  return gfx::gfxVars::UseEGL() && IsDMABufEnabled() &&
-         StaticPrefs::media_ffmpeg_vaapi_enabled() &&
-         gfx::gfxVars::CanUseHardwareVideoDecoding() && !XRE_IsRDDProcess();
+  LOGDMABUF(
+      ("nsDMABufDevice::IsDMABufVAAPIEnabled: EGL %d DMABufEnabled %d  "
+       "media_ffmpeg_vaapi_enabled %d CanUseHardwareVideoDecoding %d "
+       "!XRE_IsRDDProcess %d\n",
+       gfx::gfxVars::UseEGL(), IsDMABufEnabled(),
+       StaticPrefs::media_ffmpeg_vaapi_enabled(),
+       gfx::gfxVars::CanUseHardwareVideoDecoding(), !XRE_IsRDDProcess()));
+  return StaticPrefs::media_ffmpeg_vaapi_enabled() && !XRE_IsRDDProcess() &&
+         gfx::gfxVars::UseDMABuf() && IsDMABufEnabled() &&
+         gfx::gfxVars::CanUseHardwareVideoDecoding();
 }
 bool nsDMABufDevice::IsDMABufWebGLEnabled() {
-  return gfx::gfxVars::UseEGL() && IsDMABufEnabled() &&
+  LOGDMABUF(
+      ("nsDMABufDevice::IsDMABufWebGLEnabled: EGL %d DMABufEnabled %d  "
+       "widget_dmabuf_webgl_enabled %d\n",
+       gfx::gfxVars::UseEGL(), IsDMABufEnabled(),
+       StaticPrefs::widget_dmabuf_webgl_enabled()));
+  return gfx::gfxVars::UseDMABuf() && IsDMABufEnabled() &&
          StaticPrefs::widget_dmabuf_webgl_enabled();
 }
 

@@ -7,7 +7,9 @@
 #include "DocumentOrShadowRoot.h"
 #include "mozilla/AnimationComparator.h"
 #include "mozilla/EventStateManager.h"
+#include "mozilla/PointerLockManager.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StyleSheet.h"
 #include "mozilla/SVGUtils.h"
 #include "mozilla/dom/AnimatableBinding.h"
 #include "mozilla/dom/Document.h"
@@ -54,7 +56,7 @@ void DocumentOrShadowRoot::AddSizeOfOwnedSheetArrayExcludingThis(
 
 void DocumentOrShadowRoot::AddSizeOfExcludingThis(nsWindowSizes& aSizes) const {
   AddSizeOfOwnedSheetArrayExcludingThis(aSizes, mStyleSheets);
-  aSizes.mDOMOtherSize +=
+  aSizes.mDOMSizes.mDOMOtherSize +=
       mIdentifierMap.SizeOfExcludingThis(aSizes.mState.mMallocSizeOf);
 }
 
@@ -141,7 +143,7 @@ void DocumentOrShadowRoot::SetAdoptedStyleSheets(
       break;
     }
     ++commonPrefix;
-    set.PutEntry(mAdoptedStyleSheets[i]);
+    set.Insert(mAdoptedStyleSheets[i]);
   }
 
   // Try to truncate the sheets to a common prefix.
@@ -217,8 +219,8 @@ void DocumentOrShadowRoot::CloneAdoptedSheetsFrom(
   MOZ_ASSERT(clonedSheetMap);
 
   for (const StyleSheet* sheet : aSource.mAdoptedStyleSheets) {
-    RefPtr<StyleSheet> clone = clonedSheetMap->LookupForAdd(sheet).OrInsert(
-        [&] { return sheet->CloneAdoptedSheet(ownerDoc); });
+    RefPtr<StyleSheet> clone = clonedSheetMap->LookupOrInsertWith(
+        sheet, [&] { return sheet->CloneAdoptedSheet(ownerDoc); });
     MOZ_ASSERT(clone);
     MOZ_DIAGNOSTIC_ASSERT(clone->ConstructorDocumentMatches(ownerDoc));
     DebugOnly<bool> succeeded = list.AppendElement(std::move(clone), fallible);
@@ -300,7 +302,7 @@ Element* DocumentOrShadowRoot::GetRetargetedFocusedElement() {
 
 Element* DocumentOrShadowRoot::GetPointerLockElement() {
   nsCOMPtr<Element> pointerLockedElement =
-      do_QueryReferent(EventStateManager::sPointerLockedElement);
+      PointerLockManager::GetLockedElement();
   if (!pointerLockedElement) {
     return nullptr;
   }
@@ -312,7 +314,7 @@ Element* DocumentOrShadowRoot::GetPointerLockElement() {
              : nullptr;
 }
 
-Element* DocumentOrShadowRoot::GetFullscreenElement() {
+Element* DocumentOrShadowRoot::GetFullscreenElement() const {
   if (!AsNode().IsInComposedDoc()) {
     return nullptr;
   }
@@ -576,22 +578,6 @@ void DocumentOrShadowRoot::ReportEmptyGetElementByIdArg() {
   nsContentUtils::ReportEmptyGetElementByIdArg(AsNode().OwnerDoc());
 }
 
-/**
- * A struct that holds all the information about a radio group.
- */
-struct nsRadioGroupStruct {
-  nsRadioGroupStruct()
-      : mRequiredRadioCount(0), mGroupSuffersFromValueMissing(false) {}
-
-  /**
-   * A strong pointer to the currently selected radio button.
-   */
-  RefPtr<HTMLInputElement> mSelectedRadioButton;
-  nsCOMArray<nsIFormControl> mRadioButtons;
-  uint32_t mRequiredRadioCount;
-  bool mGroupSuffersFromValueMissing;
-};
-
 void DocumentOrShadowRoot::GetAnimations(
     nsTArray<RefPtr<Animation>>& aAnimations) {
   // As with Element::GetAnimations we initially flush style here.
@@ -615,145 +601,6 @@ void DocumentOrShadowRoot::GetAnimations(
   }
 
   aAnimations.Sort(AnimationPtrComparator<RefPtr<Animation>>());
-}
-
-nsresult DocumentOrShadowRoot::WalkRadioGroup(const nsAString& aName,
-                                              nsIRadioVisitor* aVisitor,
-                                              bool aFlushContent) {
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-
-  for (int i = 0; i < radioGroup->mRadioButtons.Count(); i++) {
-    if (!aVisitor->Visit(radioGroup->mRadioButtons[i])) {
-      return NS_OK;
-    }
-  }
-
-  return NS_OK;
-}
-
-void DocumentOrShadowRoot::SetCurrentRadioButton(const nsAString& aName,
-                                                 HTMLInputElement* aRadio) {
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-  radioGroup->mSelectedRadioButton = aRadio;
-}
-
-HTMLInputElement* DocumentOrShadowRoot::GetCurrentRadioButton(
-    const nsAString& aName) {
-  return GetOrCreateRadioGroup(aName)->mSelectedRadioButton;
-}
-
-nsresult DocumentOrShadowRoot::GetNextRadioButton(
-    const nsAString& aName, const bool aPrevious,
-    HTMLInputElement* aFocusedRadio, HTMLInputElement** aRadioOut) {
-  // XXX Can we combine the HTML radio button method impls of
-  //     Document and nsHTMLFormControl?
-  // XXX Why is HTML radio button stuff in Document, as
-  //     opposed to nsHTMLDocument?
-  *aRadioOut = nullptr;
-
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-
-  // Return the radio button relative to the focused radio button.
-  // If no radio is focused, get the radio relative to the selected one.
-  RefPtr<HTMLInputElement> currentRadio;
-  if (aFocusedRadio) {
-    currentRadio = aFocusedRadio;
-  } else {
-    currentRadio = radioGroup->mSelectedRadioButton;
-    if (!currentRadio) {
-      return NS_ERROR_FAILURE;
-    }
-  }
-  int32_t index = radioGroup->mRadioButtons.IndexOf(currentRadio);
-  if (index < 0) {
-    return NS_ERROR_FAILURE;
-  }
-
-  int32_t numRadios = radioGroup->mRadioButtons.Count();
-  RefPtr<HTMLInputElement> radio;
-  do {
-    if (aPrevious) {
-      if (--index < 0) {
-        index = numRadios - 1;
-      }
-    } else if (++index >= numRadios) {
-      index = 0;
-    }
-    NS_ASSERTION(
-        static_cast<nsGenericHTMLFormElement*>(radioGroup->mRadioButtons[index])
-            ->IsHTMLElement(nsGkAtoms::input),
-        "mRadioButtons holding a non-radio button");
-    radio = static_cast<HTMLInputElement*>(radioGroup->mRadioButtons[index]);
-  } while (radio->Disabled() && radio != currentRadio);
-
-  radio.forget(aRadioOut);
-  return NS_OK;
-}
-
-void DocumentOrShadowRoot::AddToRadioGroup(const nsAString& aName,
-                                           HTMLInputElement* aRadio) {
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-  radioGroup->mRadioButtons.AppendObject(aRadio);
-
-  if (aRadio->IsRequired()) {
-    radioGroup->mRequiredRadioCount++;
-  }
-}
-
-void DocumentOrShadowRoot::RemoveFromRadioGroup(const nsAString& aName,
-                                                HTMLInputElement* aRadio) {
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-  radioGroup->mRadioButtons.RemoveObject(aRadio);
-
-  if (aRadio->IsRequired()) {
-    NS_ASSERTION(radioGroup->mRequiredRadioCount != 0,
-                 "mRequiredRadioCount about to wrap below 0!");
-    radioGroup->mRequiredRadioCount--;
-  }
-}
-
-uint32_t DocumentOrShadowRoot::GetRequiredRadioCount(
-    const nsAString& aName) const {
-  nsRadioGroupStruct* radioGroup = GetRadioGroup(aName);
-  return radioGroup ? radioGroup->mRequiredRadioCount : 0;
-}
-
-void DocumentOrShadowRoot::RadioRequiredWillChange(const nsAString& aName,
-                                                   bool aRequiredAdded) {
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-
-  if (aRequiredAdded) {
-    radioGroup->mRequiredRadioCount++;
-  } else {
-    NS_ASSERTION(radioGroup->mRequiredRadioCount != 0,
-                 "mRequiredRadioCount about to wrap below 0!");
-    radioGroup->mRequiredRadioCount--;
-  }
-}
-
-bool DocumentOrShadowRoot::GetValueMissingState(const nsAString& aName) const {
-  nsRadioGroupStruct* radioGroup = GetRadioGroup(aName);
-  return radioGroup && radioGroup->mGroupSuffersFromValueMissing;
-}
-
-void DocumentOrShadowRoot::SetValueMissingState(const nsAString& aName,
-                                                bool aValue) {
-  nsRadioGroupStruct* radioGroup = GetOrCreateRadioGroup(aName);
-  radioGroup->mGroupSuffersFromValueMissing = aValue;
-}
-
-nsRadioGroupStruct* DocumentOrShadowRoot::GetRadioGroup(
-    const nsAString& aName) const {
-  nsRadioGroupStruct* radioGroup = nullptr;
-  mRadioGroups.Get(aName, &radioGroup);
-  return radioGroup;
-}
-
-nsRadioGroupStruct* DocumentOrShadowRoot::GetOrCreateRadioGroup(
-    const nsAString& aName) {
-  return mRadioGroups.LookupForAdd(aName)
-      .OrInsert([]() { return new nsRadioGroupStruct(); })
-      .get();
 }
 
 int32_t DocumentOrShadowRoot::StyleOrderIndexOfSheet(
@@ -809,23 +656,11 @@ void DocumentOrShadowRoot::Traverse(DocumentOrShadowRoot* tmp,
   });
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAdoptedStyleSheets);
 
-  for (auto iter = tmp->mIdentifierMap.ConstIter(); !iter.Done(); iter.Next()) {
+  for (auto iter = tmp->mIdentifierMap.Iter(); !iter.Done(); iter.Next()) {
     iter.Get()->Traverse(&cb);
   }
 
-  for (auto iter = tmp->mRadioGroups.Iter(); !iter.Done(); iter.Next()) {
-    nsRadioGroupStruct* radioGroup = iter.UserData();
-    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(
-        cb, "mRadioGroups entry->mSelectedRadioButton");
-    cb.NoteXPCOMChild(ToSupports(radioGroup->mSelectedRadioButton));
-
-    uint32_t i, count = radioGroup->mRadioButtons.Count();
-    for (i = 0; i < count; ++i) {
-      NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(
-          cb, "mRadioGroups entry->mRadioButtons[i]");
-      cb.NoteXPCOMChild(radioGroup->mRadioButtons[i]);
-    }
-  }
+  RadioGroupManager::Traverse(tmp, cb);
 }
 
 void DocumentOrShadowRoot::UnlinkStyleSheets(
@@ -847,7 +682,7 @@ void DocumentOrShadowRoot::Unlink(DocumentOrShadowRoot* tmp) {
   });
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mAdoptedStyleSheets);
   tmp->mIdentifierMap.Clear();
-  tmp->mRadioGroups.Clear();
+  RadioGroupManager::Unlink(tmp);
 }
 
 }  // namespace mozilla::dom

@@ -48,9 +48,6 @@ with Files("tests/xpcshell/test_UpdateUtils*.js"):
 with Files("AsyncPrefs.jsm"):
     BUG_COMPONENT = ("Core", "Security: Process Sandboxing")
 
-with Files("CharsetMenu.jsm"):
-    BUG_COMPONENT = ("Firefox", "Toolbars and Customization")
-
 with Files("Color.jsm"):
     BUG_COMPONENT = ("Toolkit", "Find Toolbar")
 
@@ -58,7 +55,7 @@ with Files("Console.jsm"):
     BUG_COMPONENT = ("DevTools", "Console")
 
 with Files("DateTimePicker*.jsm"):
-    BUG_COMPONENT = ("Core", "Layout: Form Controls ")
+    BUG_COMPONENT = ("Core", "Layout: Form Controls")
 
 with Files("DeferredTask.jsm"):
     BUG_COMPONENT = ("Toolkit", "Async Tooling")
@@ -98,9 +95,6 @@ with Files("NewTabUtils.jsm"):
 
 with Files("ObjectUtils.jsm"):
     BUG_COMPONENT = ("Toolkit", "Telemetry")
-
-with Files("offlineAppCache.jsm"):
-    BUG_COMPONENT = ("Toolkit", "Preferences")
 
 with Files("PageMenu.jsm"):
     BUG_COMPONENT = ("Firefox", "Menus")
@@ -144,7 +138,6 @@ TESTING_JS_MODULES += [
     "tests/modules/MockDocument.jsm",
     "tests/modules/OSKeyStoreTestUtils.jsm",
     "tests/modules/PromiseTestUtils.jsm",
-    "tests/modules/Task.jsm",
     "tests/xpcshell/RegionTestUtils.jsm",
     "tests/xpcshell/TestIntegration.jsm",
 ]
@@ -160,10 +153,10 @@ EXTRA_JS_MODULES += [
     "AppMenuNotifications.jsm",
     "AsyncPrefs.jsm",
     "BinarySearch.jsm",
+    "BrowserTelemetryUtils.jsm",
     "BrowserUtils.jsm",
     "CanonicalJSON.jsm",
     "CertUtils.jsm",
-    "CharsetMenu.jsm",
     "Color.jsm",
     "Console.jsm",
     "ContentDOMReference.jsm",
@@ -190,11 +183,12 @@ EXTRA_JS_MODULES += [
     "InlineSpellCheckerContent.jsm",
     "Integration.jsm",
     "JSONFile.jsm",
+    "KeywordUtils.jsm",
+    "LayoutUtils.jsm",
     "Log.jsm",
     "NewTabUtils.jsm",
     "NLP.jsm",
     "ObjectUtils.jsm",
-    "offlineAppCache.jsm",
     "OsEnvironment.jsm",
     "OSKeyStore.jsm",
     "PageMenu.jsm",
@@ -202,6 +196,7 @@ EXTRA_JS_MODULES += [
     "PopupNotifications.jsm",
     "Preferences.jsm",
     "PrivateBrowsingUtils.jsm",
+    "ProcessType.jsm",
     "ProfileAge.jsm",
     "Promise-backend.js",
     "Promise.jsm",
@@ -210,6 +205,7 @@ EXTRA_JS_MODULES += [
     "RemotePageAccessManager.jsm",
     "ResetProfile.jsm",
     "ResponsivenessMonitor.jsm",
+    "SelectionUtils.jsm",
     "ServiceRequest.jsm",
     "Services.jsm",
     "ShortcutUtils.jsm",
@@ -274,12 +270,14 @@ for var in (
     "ANDROID_PACKAGE_NAME",
     "MOZ_APP_NAME",
     "MOZ_APP_BASENAME",
+    "MOZ_APP_DISPLAYNAME",
     "MOZ_APP_VERSION",
     "MOZ_APP_VERSION_DISPLAY",
     "MOZ_BING_API_CLIENTID",
     "MOZ_BING_API_KEY",
     "MOZ_GOOGLE_LOCATION_SERVICE_API_KEY",
     "MOZ_GOOGLE_SAFEBROWSING_API_KEY",
+    "MOZ_MACBUNDLE_ID",
     "MOZ_MACBUNDLE_NAME",
     "MOZ_MOZILLA_API_KEY",
     "MOZ_WIDGET_TOOLKIT",
@@ -292,10 +290,13 @@ for var in (
 
 for var in (
     "MOZ_ALLOW_ADDON_SIDELOAD",
+    "MOZ_BACKGROUNDTASKS",
     "MOZ_SYSTEM_NSS",
     "MOZ_UNSIGNED_APP_SCOPE",
     "MOZ_UNSIGNED_SYSTEM_SCOPE",
+    "MOZ_UPDATE_AGENT",
     "MOZ_UPDATER",
+    "MOZ_WEBEXT_WEBIDL_ENABLED",
 ):
     if CONFIG[var]:
         DEFINES[var] = True

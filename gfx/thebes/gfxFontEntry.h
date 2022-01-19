@@ -23,7 +23,7 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/UniquePtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsDebug.h"
 #include "nsHashKeys.h"
 #include "nsISupports.h"
@@ -431,6 +431,8 @@ class gfxFontEntry {
 
   bool HasBoldVariableWeight();
   bool HasItalicVariation();
+  bool HasOpticalSize();
+
   void CheckForVariationAxes();
 
   // Set up the entry's weight/stretch/style ranges according to axes found
@@ -473,9 +475,8 @@ class gfxFontEntry {
   nsTArray<gfxFont*> mFontsUsingSVGGlyphs;
   nsTArray<gfxFontFeature> mFeatureSettings;
   nsTArray<gfxFontVariation> mVariationSettings;
-  mozilla::UniquePtr<nsDataHashtable<nsUint32HashKey, bool>> mSupportedFeatures;
-  mozilla::UniquePtr<nsDataHashtable<nsUint32HashKey, hb_set_t*>>
-      mFeatureInputs;
+  mozilla::UniquePtr<nsTHashMap<nsUint32HashKey, bool>> mSupportedFeatures;
+  mozilla::UniquePtr<nsTHashMap<nsUint32HashKey, hb_set_t*>> mFeatureInputs;
 
   // Color Layer font support
   hb_blob_t* mCOLR = nullptr;
@@ -494,6 +495,15 @@ class gfxFontEntry {
   WeightRange mWeightRange = WeightRange(FontWeight(500));
   StretchRange mStretchRange = StretchRange(FontStretch::Normal());
   SlantStyleRange mStyleRange = SlantStyleRange(FontSlantStyle::Normal());
+
+  // Font metrics overrides (as multiples of used font size); negative values
+  // indicate no override to be applied.
+  float mAscentOverride = -1.0;
+  float mDescentOverride = -1.0;
+  float mLineGapOverride = -1.0;
+
+  // Scaling factor to be applied to the font size.
+  float mSizeAdjust = 1.0;
 
   // For user fonts (only), we need to record whether or not weight/stretch/
   // slant variations should be clamped to the range specified in the entry
@@ -519,7 +529,10 @@ class gfxFontEntry {
     // properties to the variation axes (though they can still be
     // explicitly set using font-variation-settings).
     eNonCSSWeight = (1 << 5),
-    eNonCSSStretch = (1 << 6)
+    eNonCSSStretch = (1 << 6),
+
+    // Whether the font has an 'opsz' axis.
+    eOpticalSize = (1 << 7)
   };
   RangeFlags mRangeFlags = RangeFlags::eNoFlags;
 
@@ -933,6 +946,8 @@ class gfxFontFamily {
       SetBadUnderlineFonts();
     }
   }
+
+  virtual bool IsSingleFaceFamily() const { return false; }
 
   bool IsBadUnderlineFamily() const { return mIsBadUnderlineFamily; }
   bool CheckForFallbackFaces() const { return mCheckForFallbackFaces; }

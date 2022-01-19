@@ -3,8 +3,7 @@ import os
 import traceback
 from collections import defaultdict
 
-from six.moves.urllib.parse import quote, unquote, urljoin
-from six import iteritems
+from urllib.parse import quote, unquote, urljoin
 
 from .constants import content_types
 from .pipes import Pipeline, template
@@ -13,10 +12,7 @@ from .request import Authentication
 from .response import MultipartContent
 from .utils import HTTPException
 
-try:
-    from html import escape
-except ImportError:
-    from cgi import escape
+from html import escape
 
 __all__ = ["file_handler", "python_script_handler",
            "FunctionHandler", "handler", "json_handler",
@@ -482,7 +478,7 @@ class StringHandler(object):
         self.data = data
 
         self.resp_headers = [("Content-Type", content_type)]
-        for k, v in iteritems(headers):
+        for k, v in headers.items():
             self.resp_headers.append((k.replace("_", "-"), v))
 
         self.handler = handler(self.handle_request)

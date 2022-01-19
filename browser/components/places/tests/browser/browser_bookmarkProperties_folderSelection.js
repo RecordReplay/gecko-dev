@@ -10,6 +10,8 @@ let win;
 add_task(async function setup() {
   await PlacesUtils.bookmarks.eraseEverything();
 
+  Services.prefs.clearUserPref("browser.bookmarks.defaultLocation");
+
   win = await BrowserTestUtils.openNewBrowserWindow();
   await BrowserTestUtils.openNewForegroundTab({
     gBrowser: win.gBrowser,
@@ -51,7 +53,7 @@ add_task(async function test_selectChoose() {
   Assert.equal(
     menuList.label,
     PlacesUtils.getString(expectedFolder),
-    "Should have the other bookmarks folder selected by default"
+    "Should have the expected bookmarks folder selected by default"
   );
   Assert.equal(
     menuList.getAttribute("selectedGuid"),
@@ -149,7 +151,7 @@ add_task(async function test_selectBookmarksMenu() {
   EventUtils.synthesizeMouseAtCenter(menuList, {}, win);
   await promisePopup;
 
-  // Click the choose item.
+  // Click the bookmarks menu item.
   EventUtils.synthesizeMouseAtCenter(
     win.document.getElementById("editBMPanel_bmRootItem"),
     {},

@@ -9,12 +9,12 @@
 #include "FormControlAccessible.h"
 #include "HyperTextAccessibleWrap.h"
 #include "mozilla/dom/Element.h"
+#include "AccAttributes.h"
 #include "nsAccUtils.h"
-#include "nsIPersistentProperties2.h"
 #include "Relation.h"
 
 namespace mozilla {
-class TextEditor;
+class EditorBase;
 namespace a11y {
 
 /**
@@ -29,7 +29,7 @@ class HTMLRadioButtonAccessible : public RadioButtonAccessible {
     mStateFlags |= eIgnoreDOMUIEvent;
   }
 
-  // Accessible
+  // LocalAccessible
   virtual uint64_t NativeState() const override;
   virtual void GetPositionAndSizeInternal(int32_t* aPosInSet,
                                           int32_t* aSetSize) override;
@@ -49,7 +49,7 @@ class HTMLButtonAccessible : public HyperTextAccessibleWrap {
 
   HTMLButtonAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // Accessible
+  // LocalAccessible
   virtual mozilla::a11y::role NativeRole() const override;
   virtual uint64_t State() override;
   virtual uint64_t NativeState() const override;
@@ -63,13 +63,13 @@ class HTMLButtonAccessible : public HyperTextAccessibleWrap {
   virtual bool IsWidget() const override;
 
  protected:
-  // Accessible
+  // LocalAccessible
   virtual ENameValueFlag NativeName(nsString& aName) const override;
 };
 
 /**
- * Accessible for HTML input@type="text", input@type="password", textarea and
- * other HTML text controls.
+ * Accessible for HTML input@type="text", input@type="password", textarea
+ * and other HTML text controls.
  */
 class HTMLTextFieldAccessible : public HyperTextAccessibleWrap {
  public:
@@ -81,15 +81,15 @@ class HTMLTextFieldAccessible : public HyperTextAccessibleWrap {
                                        HyperTextAccessibleWrap)
 
   // HyperTextAccessible
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY virtual already_AddRefed<TextEditor> GetEditor()
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY virtual already_AddRefed<EditorBase> GetEditor()
       const override;
 
-  // Accessible
+  // LocalAccessible
   virtual void Value(nsString& aValue) const override;
   virtual void ApplyARIAState(uint64_t* aState) const override;
   virtual mozilla::a11y::role NativeRole() const override;
   virtual uint64_t NativeState() const override;
-  virtual already_AddRefed<nsIPersistentProperties> NativeAttributes() override;
+  virtual already_AddRefed<AccAttributes> NativeAttributes() override;
 
   // ActionAccessible
   virtual uint8_t ActionCount() const override;
@@ -98,12 +98,12 @@ class HTMLTextFieldAccessible : public HyperTextAccessibleWrap {
 
   // Widgets
   virtual bool IsWidget() const override;
-  virtual Accessible* ContainerWidget() const override;
+  virtual LocalAccessible* ContainerWidget() const override;
 
  protected:
   virtual ~HTMLTextFieldAccessible() {}
 
-  // Accessible
+  // LocalAccessible
   virtual ENameValueFlag NativeName(nsString& aName) const override;
 
   /**
@@ -127,10 +127,10 @@ class HTMLFileInputAccessible : public HyperTextAccessibleWrap {
  public:
   HTMLFileInputAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // Accessible
+  // LocalAccessible
   virtual mozilla::a11y::role NativeRole() const override;
   virtual nsresult HandleAccEvent(AccEvent* aAccEvent) override;
-  virtual Accessible* CurrentItem() const override;
+  virtual LocalAccessible* CurrentItem() const override;
 };
 
 /**
@@ -140,10 +140,10 @@ class HTMLSpinnerAccessible final : public HTMLTextFieldAccessible {
  public:
   HTMLSpinnerAccessible(nsIContent* aContent, DocAccessible* aDoc)
       : HTMLTextFieldAccessible(aContent, aDoc) {
-    mStateFlags |= eHasNumericValue;
+    mGenericTypes |= eNumericValue;
   }
 
-  // Accessible
+  // LocalAccessible
   virtual mozilla::a11y::role NativeRole() const override;
   virtual void Value(nsString& aValue) const override;
 
@@ -161,10 +161,10 @@ class HTMLRangeAccessible : public LeafAccessible {
  public:
   HTMLRangeAccessible(nsIContent* aContent, DocAccessible* aDoc)
       : LeafAccessible(aContent, aDoc) {
-    mStateFlags |= eHasNumericValue;
+    mGenericTypes |= eNumericValue;
   }
 
-  // Accessible
+  // LocalAccessible
   virtual void Value(nsString& aValue) const override;
   virtual mozilla::a11y::role NativeRole() const override;
 
@@ -186,12 +186,12 @@ class HTMLGroupboxAccessible : public HyperTextAccessibleWrap {
  public:
   HTMLGroupboxAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // Accessible
+  // LocalAccessible
   virtual mozilla::a11y::role NativeRole() const override;
   virtual Relation RelationByType(RelationType aType) const override;
 
  protected:
-  // Accessible
+  // LocalAccessible
   virtual ENameValueFlag NativeName(nsString& aName) const override;
 
   // HTMLGroupboxAccessible
@@ -205,7 +205,7 @@ class HTMLLegendAccessible : public HyperTextAccessibleWrap {
  public:
   HTMLLegendAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // Accessible
+  // LocalAccessible
   virtual Relation RelationByType(RelationType aType) const override;
 };
 
@@ -216,11 +216,11 @@ class HTMLFigureAccessible : public HyperTextAccessibleWrap {
  public:
   HTMLFigureAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // Accessible
+  // LocalAccessible
   virtual Relation RelationByType(RelationType aType) const override;
 
  protected:
-  // Accessible
+  // LocalAccessible
   virtual ENameValueFlag NativeName(nsString& aName) const override;
 
   // HTMLLegendAccessible
@@ -234,7 +234,7 @@ class HTMLFigcaptionAccessible : public HyperTextAccessibleWrap {
  public:
   HTMLFigcaptionAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // Accessible
+  // LocalAccessible
   virtual Relation RelationByType(RelationType aType) const override;
 };
 
@@ -249,7 +249,7 @@ class HTMLFormAccessible : public HyperTextAccessibleWrap {
   NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLFormAccessible,
                                        HyperTextAccessibleWrap)
 
-  // Accessible
+  // LocalAccessible
   virtual nsAtom* LandmarkRole() const override;
   virtual a11y::role NativeRole() const override;
 
@@ -267,11 +267,12 @@ class HTMLProgressAccessible : public LeafAccessible {
       : LeafAccessible(aContent, aDoc) {
     // Ignore 'ValueChange' DOM event in lieu of @value attribute change
     // notifications.
-    mStateFlags |= eHasNumericValue | eIgnoreDOMUIEvent;
+    mStateFlags |= eIgnoreDOMUIEvent;
+    mGenericTypes |= eNumericValue;
     mType = eProgressType;
   }
 
-  // Accessible
+  // LocalAccessible
   virtual void Value(nsString& aValue) const override;
   virtual mozilla::a11y::role NativeRole() const override;
   virtual uint64_t NativeState() const override;
@@ -291,6 +292,38 @@ class HTMLProgressAccessible : public LeafAccessible {
 };
 
 /**
+ * Accessible for HTML meter element.
+ */
+
+class HTMLMeterAccessible : public LeafAccessible {
+ public:
+  HTMLMeterAccessible(nsIContent* aContent, DocAccessible* aDoc)
+      : LeafAccessible(aContent, aDoc) {
+    // Ignore 'ValueChange' DOM event in lieu of @value attribute change
+    // notifications.
+    mStateFlags |= eIgnoreDOMUIEvent;
+    mGenericTypes |= eNumericValue;
+    mType = eProgressType;
+  }
+
+  // LocalAccessible
+  virtual void Value(nsString& aValue) const override;
+  virtual mozilla::a11y::role NativeRole() const override;
+
+  // Value
+  virtual double MaxValue() const override;
+  virtual double MinValue() const override;
+  virtual double CurValue() const override;
+  virtual bool SetCurValue(double aValue) override;
+
+  // Widgets
+  virtual bool IsWidget() const override;
+
+ protected:
+  virtual ~HTMLMeterAccessible() {}
+};
+
+/**
  * Accessible for HTML date/time inputs.
  */
 template <a11y::role R>
@@ -301,18 +334,16 @@ class HTMLDateTimeAccessible : public AccessibleWrap {
 
   NS_INLINE_DECL_REFCOUNTING_INHERITED(HTMLDateTimeAccessible, AccessibleWrap)
 
-  // Accessible
+  // LocalAccessible
   virtual mozilla::a11y::role NativeRole() const override { return R; }
-  virtual already_AddRefed<nsIPersistentProperties> NativeAttributes()
-      override {
-    nsCOMPtr<nsIPersistentProperties> attributes =
-        AccessibleWrap::NativeAttributes();
+  virtual already_AddRefed<AccAttributes> NativeAttributes() override {
+    RefPtr<AccAttributes> attributes = AccessibleWrap::NativeAttributes();
     // Unfortunately, an nsStaticAtom can't be passed as a
     // template argument, so fetch the type from the DOM.
     nsAutoString type;
     if (mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::type,
                                        type)) {
-      nsAccUtils::SetAccAttr(attributes, nsGkAtoms::textInputType, type);
+      attributes->SetAttribute(nsGkAtoms::textInputType, type);
     }
     return attributes.forget();
   }

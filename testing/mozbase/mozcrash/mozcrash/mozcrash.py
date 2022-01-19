@@ -154,6 +154,7 @@ def log_crashes(
     test=None,
     stackwalk_binary=None,
     dump_save_path=None,
+    quiet=False,
 ):
     """Log crashes using a structured logger"""
     crash_count = 0
@@ -164,9 +165,10 @@ def log_crashes(
         stackwalk_binary=stackwalk_binary,
     ):
         crash_count += 1
-        kwargs = info._asdict()
-        kwargs.pop("extra")
-        logger.crash(process=process, test=test, **kwargs)
+        if not quiet:
+            kwargs = info._asdict()
+            kwargs.pop("extra")
+            logger.crash(process=process, test=test, **kwargs)
     return crash_count
 
 
@@ -181,10 +183,13 @@ ABORT_SIGNATURES = (
     # is automatically filtered out by that pattern.
     "core::ops::function::Fn::call",
     "gkrust_shared::panic_hook",
+    "mozglue_static::panic_hook",
     "intentional_panic",
     "mozalloc_abort",
     "mozalloc_abort(char const* const)",
     "static void Abort(const char *)",
+    "std::sys_common::backtrace::__rust_end_short_backtrace",
+    "rust_begin_unwind",
 )
 
 # Similar to above, but matches if the substring appears anywhere in the
@@ -194,6 +199,7 @@ ABORT_SUBSTRINGS = (
     # std::panicking or core::panic namespaces.
     "_panic_",
     "core::panic::",
+    "core::panicking::",
     "core::result::unwrap_failed",
     "std::panicking::",
 )
@@ -548,6 +554,11 @@ if mozinfo.isWin:
         log = get_logger()
         file_name = os.path.join(dump_directory, str(uuid.uuid4()) + ".dmp")
 
+        if not os.path.exists(dump_directory):
+            # `kernal32.CreateFileW` can fail to create the dmp file if the dump
+            # directory was deleted or doesn't exist (error code 3).
+            os.makedirs(dump_directory)
+
         if mozinfo.info["bits"] != ctypes.sizeof(ctypes.c_voidp) * 8 and utility_path:
             # We're not going to be able to write a minidump with ctypes if our
             # python process was compiled for a different architecture than
@@ -564,10 +575,6 @@ if mozinfo.isWin:
             if not os.path.exists(minidumpwriter):
                 log.error(u"minidumpwriter not found in {}".format(utility_path))
                 return
-
-            if isinstance(file_name, six.string_types):
-                # Convert to a byte string before sending to the shell.
-                file_name = file_name.encode(sys.getfilesystemencoding())
 
             status = subprocess.Popen([minidumpwriter, str(pid), file_name]).wait()
             if status:

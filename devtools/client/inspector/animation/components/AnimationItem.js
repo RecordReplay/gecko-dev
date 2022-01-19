@@ -24,9 +24,9 @@ class AnimationItem extends Component {
     return {
       animation: PropTypes.object.isRequired,
       dispatch: PropTypes.func.isRequired,
-      emitEventForTest: PropTypes.func.isRequired,
       getAnimatedPropertyMap: PropTypes.func.isRequired,
       getNodeFromActor: PropTypes.func.isRequired,
+      isDisplayable: PropTypes.bool.isRequired,
       selectAnimation: PropTypes.func.isRequired,
       selectedAnimation: PropTypes.object.isRequired,
       setHighlightedNode: PropTypes.func.isRequired,
@@ -52,6 +52,7 @@ class AnimationItem extends Component {
 
   shouldComponentUpdate(nextProps, nextState) {
     return (
+      this.props.isDisplayable !== nextProps.isDisplayable ||
       this.state.isSelected !== nextState.isSelected ||
       this.props.animation !== nextProps.animation ||
       this.props.timeScale !== nextProps.timeScale
@@ -69,9 +70,9 @@ class AnimationItem extends Component {
     const {
       animation,
       dispatch,
-      emitEventForTest,
       getAnimatedPropertyMap,
       getNodeFromActor,
+      isDisplayable,
       selectAnimation,
       setHighlightedNode,
       setSelectedNode,
@@ -86,22 +87,24 @@ class AnimationItem extends Component {
           `animation-item ${animation.state.type} ` +
           (isSelected ? "selected" : ""),
       },
-      AnimationTarget({
-        animation,
-        dispatch,
-        emitEventForTest,
-        getNodeFromActor,
-        setHighlightedNode,
-        setSelectedNode,
-      }),
-      SummaryGraph({
-        animation,
-        emitEventForTest,
-        getAnimatedPropertyMap,
-        selectAnimation,
-        simulateAnimation,
-        timeScale,
-      })
+      isDisplayable
+        ? [
+            AnimationTarget({
+              animation,
+              dispatch,
+              getNodeFromActor,
+              setHighlightedNode,
+              setSelectedNode,
+            }),
+            SummaryGraph({
+              animation,
+              getAnimatedPropertyMap,
+              selectAnimation,
+              simulateAnimation,
+              timeScale,
+            }),
+          ]
+        : null
     );
   }
 }

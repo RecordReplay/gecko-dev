@@ -162,7 +162,7 @@ void StorageActivityService::SendActivityInternal(nsIPrincipal* aPrincipal) {
 void StorageActivityService::SendActivityInternal(const nsACString& aOrigin) {
   MOZ_ASSERT(XRE_IsParentProcess());
 
-  mActivities.Put(aOrigin, PR_Now());
+  mActivities.InsertOrUpdate(aOrigin, PR_Now());
   MaybeStartTimer();
 }
 
@@ -259,10 +259,10 @@ StorageActivityService::GetActiveOrigins(PRTime aFrom, PRTime aTo,
     return rv;
   }
 
-  for (auto iter = mActivities.Iter(); !iter.Done(); iter.Next()) {
-    if (iter.UserData() >= aFrom && iter.UserData() <= aTo) {
+  for (const auto& activityEntry : mActivities) {
+    if (activityEntry.GetData() >= aFrom && activityEntry.GetData() <= aTo) {
       RefPtr<BasePrincipal> principal =
-          BasePrincipal::CreateContentPrincipal(iter.Key());
+          BasePrincipal::CreateContentPrincipal(activityEntry.GetKey());
       MOZ_ASSERT(principal);
 
       rv = devices->AppendElement(principal);
@@ -289,7 +289,7 @@ StorageActivityService::MoveOriginInTime(nsIPrincipal* aPrincipal,
     return rv;
   }
 
-  mActivities.Put(origin, aWhen / PR_USEC_PER_SEC);
+  mActivities.InsertOrUpdate(origin, aWhen / PR_USEC_PER_SEC);
   return NS_OK;
 }
 

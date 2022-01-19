@@ -218,6 +218,20 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
         }
 
         /**
+         * Enable the Enteprise Roots feature.
+         *
+         * When Enabled, GeckoView will fetch the third-party root certificates added to the
+         * Android OS CA store and will use them internally.
+         *
+         * @param enabled whether to enable this feature or not
+         * @return The builder instance
+         */
+        public @NonNull Builder enterpiseRootsEnabled(final boolean enabled) {
+            getSettings().setEnterpriseRootsEnabled(enabled);
+            return this;
+        }
+
+        /**
          * Set whether or not font inflation for non mobile-friendly pages should be enabled. The
          * default value of this setting is <code>false</code>.
          *
@@ -280,7 +294,7 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
         /**
          * Set whether login forms should be filled automatically if only one
          * viable candidate is provided via
-         * {@link Autocomplete.LoginStorageDelegate#onLoginFetch onLoginFetch}.
+         * {@link Autocomplete.StorageDelegate#onLoginFetch onLoginFetch}.
          *
          * @param enabled A flag determining whether login autofill should be
          *                enabled.
@@ -446,6 +460,18 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
             getSettings().mForceUserScalable.set(flag);
             return this;
         }
+
+        /**
+         * Sets whether and where insecure (non-HTTPS) connections are allowed.
+         *
+         * @param level One of the {@link GeckoRuntimeSettings#ALLOW_ALL HttpsOnlyMode} constants.
+         *
+         * @return This Builder instance.
+         */
+        public @NonNull Builder allowInsecureConnections(final @HttpsOnlyMode int level) {
+            getSettings().setAllowInsecureConnections(level);
+            return this;
+        }
     }
 
     private GeckoRuntime mRuntime;
@@ -472,6 +498,8 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
         "geckoview.console.enabled", false);
     /* package */ final Pref<Integer> mFontSizeFactor = new Pref<>(
         "font.size.systemFontScale", 100);
+    /* package */ final Pref<Boolean> mEnterpriseRootsEnabled = new Pref<>(
+            "security.enterprise_roots.enabled", false);
     /* package */ final Pref<Integer> mFontInflationMinTwips = new Pref<>(
         "font.size.inflation.minTwips", 0);
     /* package */ final Pref<Boolean> mInputAutoZoom = new Pref<>(
@@ -494,9 +522,16 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
             "browser.ui.zoom.force-user-scalable", false);
     /* package */ final Pref<Boolean> mAutofillLogins = new Pref<Boolean>(
         "signon.autofillForms", true);
+    /* package */ final Pref<Boolean> mHttpsOnly = new Pref<Boolean>(
+        "dom.security.https_only_mode", false);
+    /* package */ final Pref<Boolean> mHttpsOnlyPrivateMode = new Pref<Boolean>(
+        "dom.security.https_only_mode_pbm", false);
+    /* package */ final Pref<Integer> mProcessCount = new Pref<>(
+            "dom.ipc.processCount", 2);
 
     /* package */ int mPreferredColorScheme = COLOR_SCHEME_SYSTEM;
 
+    /* package */ boolean mForceEnableAccessibility;
     /* package */ boolean mDebugPause;
     /* package */ boolean mUseMaxScreenDepth;
     /* package */ float mDisplayDensityOverride = -1.0f;
@@ -551,6 +586,7 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
         mContentBlocking = new ContentBlocking.Settings(
                 this /* parent */, settings.mContentBlocking);
 
+        mForceEnableAccessibility = settings.mForceEnableAccessibility;
         mDebugPause = settings.mDebugPause;
         mUseMaxScreenDepth = settings.mUseMaxScreenDepth;
         mDisplayDensityOverride = settings.mDisplayDensityOverride;
@@ -670,6 +706,29 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
     }
 
     /**
+     * Gets whether accessibility is force enabled or not.
+     *
+     * @return true if accessibility is force enabled.
+     */
+    public boolean getForceEnableAccessibility() {
+        return mForceEnableAccessibility;
+    }
+
+    /**
+     * Sets whether accessibility is force enabled or not.
+     *
+     * Useful when testing accessibility.
+     *
+     * @param value whether accessibility is force enabled or not
+     * @return this GeckoRuntimeSettings instance.
+     */
+    public @NonNull GeckoRuntimeSettings setForceEnableAccessibility(final boolean value) {
+        mForceEnableAccessibility = value;
+        SessionAccessibility.setForceEnabled(value);
+        return this;
+    }
+
+    /**
      * Gets whether the compositor should use the maximum screen depth when rendering.
      *
      * @return True if the maximum screen depth should be used.
@@ -747,19 +806,19 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
     }
 
     private String computeAcceptLanguages() {
-        ArrayList<String> locales = new ArrayList<String>();
+        final ArrayList<String> locales = new ArrayList<String>();
 
         // Explicitly-set app prefs come first:
         if (mRequestedLocales != null) {
-            for (String locale : mRequestedLocales) {
+            for (final String locale : mRequestedLocales) {
                 locales.add(locale.toLowerCase(Locale.ROOT));
             }
         }
         // OS prefs come second:
-        for (String locale : getDefaultLocales()) {
-            locale = locale.toLowerCase(Locale.ROOT);
-            if (!locales.contains(locale)) {
-                locales.add(locale);
+        for (final String locale : getDefaultLocales()) {
+            final String localeLowerCase = locale.toLowerCase(Locale.ROOT);
+            if (!locales.contains(localeLowerCase)) {
+                locales.add(localeLowerCase);
             }
         }
 
@@ -769,13 +828,13 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
     private static String[] getDefaultLocales() {
         if (VERSION.SDK_INT >= 24) {
             final LocaleList localeList = LocaleList.getDefault();
-            String[] locales = new String[localeList.size()];
+            final String[] locales = new String[localeList.size()];
             for (int i = 0; i < localeList.size(); i++) {
                 locales[i] = localeList.get(i).toLanguageTag();
             }
             return locales;
         }
-        String[] locales = new String[1];
+        final String[] locales = new String[1];
         final Locale locale = Locale.getDefault();
         if (VERSION.SDK_INT >= 21) {
             locales[0] = locale.toLanguageTag();
@@ -897,6 +956,29 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
             throw new IllegalStateException("Not allowed when automatic font size adjustment is enabled");
         }
         return setFontSizeFactorInternal(fontSizeFactor);
+    }
+
+    /*
+     * Enable the Enteprise Roots feature.
+     *
+     * When Enabled, GeckoView will fetch the third-party root certificates added to the
+     * Android OS CA store and will use them internally.
+     *
+     * @param enabled whether to enable this feature or not
+     * @return This GeckoRuntimeSettings instance
+     */
+    public @NonNull GeckoRuntimeSettings setEnterpriseRootsEnabled(final boolean enabled) {
+        mEnterpriseRootsEnabled.commit(enabled);
+        return this;
+    }
+
+    /**
+     * Gets whether the Enteprise Roots feature is enabled or not.
+     *
+     * @return true if the feature is enabled, false otherwise.
+     */
+    public boolean getEnterpriseRootsEnabled() {
+        return mEnterpriseRootsEnabled.get();
     }
 
     private final static float DEFAULT_FONT_SIZE_FACTOR = 1f;
@@ -1124,7 +1206,7 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
     /**
      * Set whether login forms should be filled automatically if only one
      * viable candidate is provided via
-     * {@link Autocomplete.LoginStorageDelegate#onLoginFetch onLoginFetch}.
+     * {@link Autocomplete.StorageDelegate#onLoginFetch onLoginFetch}.
      *
      * @param enabled A flag determining whether login autofill should be
      *                enabled.
@@ -1136,12 +1218,75 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
         return this;
     }
 
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef({ALLOW_ALL,
+             HTTPS_ONLY_PRIVATE,
+             HTTPS_ONLY})
+    /* package */ @interface HttpsOnlyMode {}
+
+    /** Allow all insecure connections */
+    public static final int ALLOW_ALL = 0;
+    /** Allow insecure connections in normal browsing, but only HTTPS in private browsing. */
+    public static final int HTTPS_ONLY_PRIVATE = 1;
+    /** Only allow HTTPS connections. */
+    public static final int HTTPS_ONLY = 2;
+
+    /**
+     * Get whether and where insecure (non-HTTPS) connections are allowed.
+     *
+     * @return One of the {@link GeckoRuntimeSettings#ALLOW_ALL HttpsOnlyMode} constants.
+     */
+    public @HttpsOnlyMode int getAllowInsecureConnections() {
+        final boolean httpsOnly = mHttpsOnly.get();
+        final boolean httpsOnlyPrivate = mHttpsOnlyPrivateMode.get();
+        if (httpsOnly) {
+            return HTTPS_ONLY;
+        } else if (httpsOnlyPrivate) {
+            return HTTPS_ONLY_PRIVATE;
+        }
+        return ALLOW_ALL;
+    }
+
+    /**
+     * Set whether and where insecure (non-HTTPS) connections are allowed.
+     *
+     * @param level One of the {@link GeckoRuntimeSettings#ALLOW_ALL HttpsOnlyMode} constants.
+     *
+     * @return This GeckoRuntimeSettings instance.
+     */
+    public @NonNull GeckoRuntimeSettings setAllowInsecureConnections(final @HttpsOnlyMode int level) {
+        switch (level) {
+            case ALLOW_ALL:
+                mHttpsOnly.commit(false);
+                mHttpsOnlyPrivateMode.commit(false);
+                break;
+            case HTTPS_ONLY_PRIVATE:
+                mHttpsOnly.commit(false);
+                mHttpsOnlyPrivateMode.commit(true);
+                break;
+            case HTTPS_ONLY:
+                mHttpsOnly.commit(true);
+                mHttpsOnlyPrivateMode.commit(false);
+                break;
+            default:
+                throw new IllegalArgumentException("Invalid setting for setAllowInsecureConnections");
+        }
+        return this;
+    }
+
+    // For internal use only
+    /* protected */ @NonNull GeckoRuntimeSettings setProcessCount(final int processCount) {
+        mProcessCount.commit(processCount);
+        return this;
+    }
+
     @Override // Parcelable
     public void writeToParcel(final Parcel out, final int flags) {
         super.writeToParcel(out, flags);
 
         out.writeStringArray(mArgs);
         mExtras.writeToParcel(out, flags);
+        ParcelableUtils.writeBoolean(out, mForceEnableAccessibility);
         ParcelableUtils.writeBoolean(out, mDebugPause);
         ParcelableUtils.writeBoolean(out, mUseMaxScreenDepth);
         out.writeFloat(mDisplayDensityOverride);
@@ -1160,6 +1305,7 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
 
         mArgs = source.createStringArray();
         mExtras.readFromParcel(source);
+        mForceEnableAccessibility = ParcelableUtils.readBoolean(source);
         mDebugPause = ParcelableUtils.readBoolean(source);
         mUseMaxScreenDepth = ParcelableUtils.readBoolean(source);
         mDisplayDensityOverride = source.readFloat();
@@ -1175,7 +1321,7 @@ public final class GeckoRuntimeSettings extends RuntimeSettings {
                         (Class<? extends Service>) Class.forName(crashHandlerName);
 
                 mCrashHandler = handler;
-            } catch (ClassNotFoundException e) {
+            } catch (final ClassNotFoundException e) {
             }
         }
 

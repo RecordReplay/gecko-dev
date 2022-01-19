@@ -6,11 +6,6 @@
 
 ChromeUtils.defineModuleGetter(
   this,
-  "AppConstants",
-  "resource://gre/modules/AppConstants.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
   "Downloads",
   "resource://gre/modules/Downloads.jsm"
 );
@@ -921,12 +916,19 @@ this.downloads = class extends ExtensionAPI {
           return Downloads.getPreferredDownloadsDirectory()
             .then(downloadsDir => createTarget(downloadsDir))
             .then(target => {
+              let uri = Services.io.newURI(options.url);
+              let cookieJarSettings = Cc[
+                "@mozilla.org/cookieJarSettings;1"
+              ].createInstance(Ci.nsICookieJarSettings);
+              cookieJarSettings.initWithURI(uri, options.incognito);
+
               const source = {
                 url: options.url,
                 isPrivate: options.incognito,
                 // Use the extension's principal to allow extensions to observe
                 // their own downloads via the webRequest API.
                 loadingPrincipal: context.principal,
+                cookieJarSettings,
               };
 
               // blob:-URLs can only be loaded by the principal with which they

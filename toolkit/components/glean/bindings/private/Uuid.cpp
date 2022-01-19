@@ -6,11 +6,58 @@
 
 #include "mozilla/glean/bindings/Uuid.h"
 
-#include "nsString.h"
+#include "Common.h"
+#include "jsapi.h"
 #include "mozilla/Components.h"
+#include "mozilla/ResultVariant.h"
+#include "mozilla/glean/bindings/ScalarGIFFTMap.h"
+#include "mozilla/glean/fog_ffi_generated.h"
 #include "nsIClassInfoImpl.h"
+#include "nsString.h"
 
 namespace mozilla::glean {
+
+namespace impl {
+
+void UuidMetric::Set(const nsACString& aValue) const {
+  auto scalarId = ScalarIdForMetric(mId);
+  if (scalarId) {
+    Telemetry::ScalarSet(scalarId.extract(), NS_ConvertUTF8toUTF16(aValue));
+  }
+#ifndef MOZ_GLEAN_ANDROID
+  fog_uuid_set(mId, &aValue);
+#endif
+}
+
+void UuidMetric::GenerateAndSet() const {
+  // We don't have the generated value to mirror to the scalar,
+  // so calling this function on a mirrored metric is likely an error.
+  (void)NS_WARN_IF(ScalarIdForMetric(mId).isSome());
+#ifndef MOZ_GLEAN_ANDROID
+  fog_uuid_generate_and_set(mId);
+#endif
+}
+
+Result<Maybe<nsCString>, nsCString> UuidMetric::TestGetValue(
+    const nsACString& aPingName) const {
+#ifdef MOZ_GLEAN_ANDROID
+  Unused << mId;
+  return Maybe<nsCString>();
+#else
+  nsCString err;
+  if (fog_uuid_test_get_error(mId, &aPingName, &err)) {
+    return Err(err);
+  }
+  if (!fog_uuid_test_has_value(mId, &aPingName)) {
+    return Maybe<nsCString>();
+  }
+  nsCString ret;
+  fog_uuid_test_get_value(mId, &aPingName, &ret);
+  return Some(ret);
+#endif
+}
+
+}  // namespace impl
 
 NS_IMPL_CLASSINFO(GleanUuid, nullptr, 0, {0})
 NS_IMPL_ISUPPORTS_CI(GleanUuid, nsIGleanUuid)
@@ -31,10 +78,17 @@ NS_IMETHODIMP
 GleanUuid::TestGetValue(const nsACString& aStorageName, JSContext* aCx,
                         JS::MutableHandleValue aResult) {
   auto result = mUuid.TestGetValue(aStorageName);
-  if (result.isNothing()) {
+  if (result.isErr()) {
+    aResult.set(JS::UndefinedValue());
+    LogToBrowserConsole(nsIScriptError::errorFlag,
+                        NS_ConvertUTF8toUTF16(result.unwrapErr()));
+    return NS_ERROR_LOSS_OF_SIGNIFICANT_DATA;
+  }
+  auto optresult = result.unwrap();
+  if (optresult.isNothing()) {
     aResult.set(JS::UndefinedValue());
   } else {
-    const NS_ConvertUTF8toUTF16 str(result.value());
+    const NS_ConvertUTF8toUTF16 str(optresult.value());
     aResult.set(
         JS::StringValue(JS_NewUCStringCopyN(aCx, str.Data(), str.Length())));
   }

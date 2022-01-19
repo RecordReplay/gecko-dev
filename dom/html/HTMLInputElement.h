@@ -200,7 +200,8 @@ class HTMLInputElement final : public TextControlElement,
 
   virtual EventStates IntrinsicState() const override;
 
- public:
+  void SetLastValueChangeWasInteractive(bool);
+
   // TextControlElement
   virtual nsresult SetValueChanged(bool aValueChanged) override;
   virtual bool IsSingleLineTextControl() const override;
@@ -224,13 +225,10 @@ class HTMLInputElement final : public TextControlElement,
   MOZ_CAN_RUN_SCRIPT virtual void UnbindFromFrame(
       nsTextControlFrame* aFrame) override;
   MOZ_CAN_RUN_SCRIPT virtual nsresult CreateEditor() override;
-  virtual void UpdateOverlayTextVisibility(bool aNotify) override;
   virtual void SetPreviewValue(const nsAString& aValue) override;
   virtual void GetPreviewValue(nsAString& aValue) override;
   virtual void EnablePreview() override;
   virtual bool IsPreviewEnabled() override;
-  virtual bool GetPlaceholderVisibility() override;
-  virtual bool GetPreviewVisibility() override;
   virtual void InitializeKeyboardEventListeners() override;
   virtual void OnValueChanged(ValueChangeKind) override;
   virtual void GetValueFromSetRangeText(nsAString& aValue) override;
@@ -326,7 +324,7 @@ class HTMLInputElement final : public TextControlElement,
   void MaybeUpdateAllValidityStates(bool aNotify) {
     // If you need to add new type which supports validationMessage, you should
     // add test cases into test_MozEditableElement_setUserInput.html.
-    if (mType == NS_FORM_INPUT_EMAIL) {
+    if (mType == FormControlType::InputEmail) {
       UpdateAllValidityStates(aNotify);
     }
   }
@@ -980,7 +978,7 @@ class HTMLInputElement final : public TextControlElement,
    * Visit the group of radio buttons this radio belongs to
    * @param aVisitor the visitor to visit with
    */
-  nsresult VisitGroup(nsIRadioVisitor* aVisitor, bool aFlushContent);
+  nsresult VisitGroup(nsIRadioVisitor* aVisitor);
 
   /**
    * Do all the work that |SetChecked| does (radio button handling, etc.), but
@@ -1081,7 +1079,7 @@ class HTMLInputElement final : public TextControlElement,
    * Manages the internal data storage across type changes.
    */
   MOZ_CAN_RUN_SCRIPT
-  void HandleTypeChange(uint8_t aNewType, bool aNotify);
+  void HandleTypeChange(FormControlType aNewType, bool aNotify);
 
   enum class ForValueGetter { No, Yes };
 
@@ -1365,13 +1363,13 @@ class HTMLInputElement final : public TextControlElement,
   /**
    * Returns if the current type is an experimental mobile type.
    */
-  static bool IsExperimentalMobileType(uint8_t aType);
+  static bool IsExperimentalMobileType(FormControlType);
 
   /*
    * Returns if the current type is one of the date/time input types: date,
    * time, month, week and datetime-local.
    */
-  static bool IsDateTimeInputType(uint8_t aType);
+  static bool IsDateTimeInputType(FormControlType);
 
   /**
    * Returns whether getting `.value` as a string should sanitize the value.
@@ -1569,26 +1567,44 @@ class HTMLInputElement final : public TextControlElement,
    * Returns true if selection methods can be called on element
    */
   bool SupportsTextSelection() const {
-    return mType == NS_FORM_INPUT_TEXT || mType == NS_FORM_INPUT_SEARCH ||
-           mType == NS_FORM_INPUT_URL || mType == NS_FORM_INPUT_TEL ||
-           mType == NS_FORM_INPUT_PASSWORD;
+    switch (mType) {
+      case FormControlType::InputText:
+      case FormControlType::InputSearch:
+      case FormControlType::InputUrl:
+      case FormControlType::InputTel:
+      case FormControlType::InputPassword:
+        return true;
+      default:
+        return false;
+    }
   }
 
-  static bool MayFireChangeOnBlur(uint8_t aType) {
-    return IsSingleLineTextControl(false, aType) ||
-           aType == NS_FORM_INPUT_RANGE || aType == NS_FORM_INPUT_NUMBER ||
-           aType == NS_FORM_INPUT_TIME || aType == NS_FORM_INPUT_DATE;
+  static bool CreatesDateTimeWidget(FormControlType aType) {
+    return aType == FormControlType::InputDate ||
+           aType == FormControlType::InputTime ||
+           (aType == FormControlType::InputDatetimeLocal &&
+            StaticPrefs::dom_forms_datetime_local_widget());
   }
+
+  bool CreatesDateTimeWidget() const { return CreatesDateTimeWidget(mType); }
+
+  static bool MayFireChangeOnBlur(FormControlType aType) {
+    return IsSingleLineTextControl(false, aType) ||
+           CreatesDateTimeWidget(aType) ||
+           aType == FormControlType::InputRange ||
+           aType == FormControlType::InputNumber;
+  }
+
+  /**
+   * Fire an event when the password input field is removed from the DOM tree.
+   * This is now only used by the password manager.
+   */
+  void MaybeFireInputPasswordRemoved();
 
   /**
    * Checks if aDateTimeInputType should be supported.
    */
-  static bool IsDateTimeTypeSupported(uint8_t aDateTimeInputType);
-
-  static bool CreatesDateTimeWidget(uint8_t aType) {
-    return aType == NS_FORM_INPUT_TIME || aType == NS_FORM_INPUT_DATE;
-  }
-  bool CreatesDateTimeWidget() const { return CreatesDateTimeWidget(mType); }
+  static bool IsDateTimeTypeSupported(FormControlType);
 
   struct nsFilePickerFilter {
     nsFilePickerFilter() : mFilterMask(0) {}
@@ -1633,7 +1649,7 @@ class HTMLInputElement final : public TextControlElement,
 
    private:
     nsCOMPtr<nsIFilePicker> mFilePicker;
-    RefPtr<HTMLInputElement> mInput;
+    const RefPtr<HTMLInputElement> mInput;
   };
 };
 

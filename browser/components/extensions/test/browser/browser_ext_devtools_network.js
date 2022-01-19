@@ -99,6 +99,7 @@ function devtools_page() {
       );
     }
   });
+  browser.test.sendMessage("devtools-page-loaded");
 }
 
 let extData = {
@@ -156,6 +157,9 @@ add_task(async function test_devtools_network_on_navigated() {
 
   await openToolboxForTab(tab);
 
+  info("Wait the devtools page load");
+  await extension.awaitMessage("devtools-page-loaded");
+
   extension.sendMessage("navigate");
   await extension.awaitMessage("tabUpdated");
   let eventCount = await extension.awaitMessage("onNavigatedFired");
@@ -191,7 +195,10 @@ add_task(async function test_devtools_network_get_har() {
   await extension.awaitMessage("ready");
 
   // Open the Toolbox
-  const { toolbox } = await openToolboxForTab(tab);
+  const toolbox = await openToolboxForTab(tab);
+
+  info("Wait the devtools page load");
+  await extension.awaitMessage("devtools-page-loaded");
 
   // Get HAR, it should be empty since no data collected yet.
   const getHAREmptyPromise = extension.awaitMessage("getHAR-result");
@@ -241,7 +248,10 @@ add_task(async function test_devtools_network_on_request_finished() {
   await extension.awaitMessage("ready");
 
   // Open the Toolbox
-  const { toolbox } = await openToolboxForTab(tab);
+  const toolbox = await openToolboxForTab(tab);
+
+  info("Wait the devtools page load");
+  await extension.awaitMessage("devtools-page-loaded");
 
   // Wait the extension to subscribe the onRequestFinished listener.
   await extension.sendMessage("addOnRequestFinishedListener");

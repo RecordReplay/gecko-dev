@@ -1,11 +1,16 @@
 // This binary shouldn't be under /src, but under /tests, but that is
 // currently not possible (https://github.com/rust-lang/cargo/issues/4356)
 use minidump_writer_linux::linux_ptrace_dumper::{LinuxPtraceDumper, AT_SYSINFO_EHDR};
-use minidump_writer_linux::{linux_ptrace_dumper, Result, LINUX_GATE_LIBRARY_NAME};
+use minidump_writer_linux::{linux_ptrace_dumper, LINUX_GATE_LIBRARY_NAME};
 use nix::sys::mman::{mmap, MapFlags, ProtFlags};
 use nix::unistd::getppid;
 use std::convert::TryInto;
 use std::env;
+use std::error;
+use std::result;
+
+type Error = Box<dyn error::Error + std::marker::Send + std::marker::Sync>;
+pub type Result<T> = result::Result<T, Error>;
 
 macro_rules! test {
     ($x:expr, $errmsg:expr) => {
@@ -26,12 +31,12 @@ fn test_setup() -> Result<()> {
 fn test_thread_list() -> Result<()> {
     let ppid = getppid();
     let dumper = linux_ptrace_dumper::LinuxPtraceDumper::new(ppid.as_raw())?;
-    test!(dumper.threads.len() >= 1, "No threads")?;
+    test!(!dumper.threads.is_empty(), "No threads")?;
     test!(
         dumper
             .threads
             .iter()
-            .filter(|&x| x == &ppid.as_raw())
+            .filter(|x| x.tid == ppid.as_raw())
             .count()
             == 1,
         "Thread found multiple times"
@@ -128,7 +133,7 @@ fn test_linux_gate_mapping_id() -> Result<()> {
             break;
         }
     }
-    test!(found_linux_gate == true, "found no linux_gate")?;
+    test!(found_linux_gate, "found no linux_gate")?;
     Ok(())
 }
 
@@ -158,7 +163,7 @@ fn test_mappings_include_linux_gate() -> Result<()> {
             break;
         }
     }
-    test!(found_linux_gate == true, "found no linux_gate")?;
+    test!(found_linux_gate, "found no linux_gate")?;
     Ok(())
 }
 
@@ -178,6 +183,23 @@ fn spawn_and_wait(num: usize) -> Result<()> {
     }
 }
 
+fn spawn_name_wait(num: usize) -> Result<()> {
+    // One less than the requested amount, as the main thread counts as well
+    for id in 1..num {
+        std::thread::Builder::new()
+            .name(format!("thread_{}", id))
+            .spawn(|| {
+                println!("1");
+                loop {
+                    std::thread::park();
+                }
+            })?;
+    }
+    println!("1");
+    loop {
+        std::thread::park();
+    }
+}
 fn spawn_mmap_wait() -> Result<()> {
     let page_size = nix::unistd::sysconf(nix::unistd::SysconfVar::PAGE_SIZE).unwrap();
     let memory_size = page_size.unwrap() as usize;
@@ -228,14 +250,17 @@ fn main() -> Result<()> {
             "spawn_alloc_wait" => spawn_alloc_wait(),
             _ => Err("Len 1: Unknown test option".into()),
         },
-        2 => {
-            if args[0] == "spawn_and_wait" {
+        2 => match args[0].as_ref() {
+            "spawn_and_wait" => {
                 let num_of_threads: usize = args[1].parse().unwrap();
                 spawn_and_wait(num_of_threads)
-            } else {
-                Err(format!("Len 2: Unknown test option: {}", args[0]).into())
             }
-        }
+            "spawn_name_wait" => {
+                let num_of_threads: usize = args[1].parse().unwrap();
+                spawn_name_wait(num_of_threads)
+            }
+            _ => Err(format!("Len 2: Unknown test option: {}", args[0]).into()),
+        },
         3 => {
             if args[0] == "find_mappings" {
                 let addr1: usize = args[1].parse().unwrap();

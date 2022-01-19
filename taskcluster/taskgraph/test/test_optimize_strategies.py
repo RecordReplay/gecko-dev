@@ -11,7 +11,7 @@ import pytest
 from mozunit import main
 
 from taskgraph.optimize import project, registry
-from taskgraph.optimize.strategies import SkipUnlessSchedules
+from taskgraph.optimize.strategies import IndexSearch, SkipUnlessSchedules
 from taskgraph.optimize.backstop import SkipUnlessBackstop, SkipUnlessPushInterval
 from taskgraph.optimize.bugbug import (
     BugBugPushSchedules,
@@ -47,7 +47,7 @@ def params():
 
 def generate_tasks(*tasks):
     for i, task in enumerate(tasks):
-        task.setdefault("label", "task-{}".format(i))
+        task.setdefault("label", "task-{}-label".format(i))
         task.setdefault("kind", "test")
         task.setdefault("task", {})
         task.setdefault("attributes", {})
@@ -130,7 +130,7 @@ def idfn(param):
             SkipUnlessDebug(),
             default_tasks,
             None,
-            ["task-0", "task-1", "task-2"],
+            ["task-0-label", "task-1-label", "task-2-label"],
         ),
         # disperse with no supplied importance
         pytest.param(
@@ -144,28 +144,64 @@ def idfn(param):
             DisperseGroups(),
             disperse_tasks,
             {"bar/test.ini": "low"},
-            ["task-0", "task-2"],
+            ["task-0-label", "task-2-label"],
         ),
         # disperse with medium importance
         pytest.param(
             DisperseGroups(),
             disperse_tasks,
             {"bar/test.ini": "medium"},
-            ["task-0", "task-1", "task-2"],
+            ["task-0-label", "task-1-label", "task-2-label"],
         ),
         # disperse with high importance
         pytest.param(
             DisperseGroups(),
             disperse_tasks,
             {"bar/test.ini": "high"},
-            ["task-0", "task-1", "task-2", "task-3"],
+            ["task-0-label", "task-1-label", "task-2-label", "task-3-label"],
         ),
     ],
     ids=idfn,
 )
-def test_optimization_strategy(responses, params, opt, tasks, arg, expected):
+def test_optimization_strategy_remove(params, opt, tasks, arg, expected):
     labels = [t.label for t in tasks if not opt.should_remove_task(t, params, arg)]
     assert sorted(labels) == sorted(expected)
+
+
+@pytest.mark.parametrize(
+    "state,expires,expected",
+    (
+        ("completed", "2021-06-06T14:53:16.937Z", False),
+        ("completed", "2021-06-08T14:53:16.937Z", "abc"),
+        ("exception", "2021-06-08T14:53:16.937Z", False),
+        ("failed", "2021-06-08T14:53:16.937Z", False),
+    ),
+)
+def test_index_search(responses, params, state, expires, expected):
+    taskid = "abc"
+    index_path = "foo.bar.latest"
+    responses.add(
+        responses.GET,
+        f"https://firefox-ci-tc.services.mozilla.com/api/index/v1/task/{index_path}",
+        json={"taskId": taskid},
+        status=200,
+    )
+
+    responses.add(
+        responses.GET,
+        f"https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/{taskid}/status",
+        json={
+            "status": {
+                "state": state,
+                "expires": expires,
+            }
+        },
+        status=200,
+    )
+
+    opt = IndexSearch()
+    deadline = "2021-06-07T19:03:20.482Z"
+    assert opt.should_replace_task({}, params, deadline, (index_path,)) == expected
 
 
 @pytest.mark.parametrize(
@@ -180,100 +216,100 @@ def test_optimization_strategy(responses, params, opt, tasks, arg, expected):
         # only tasks without test manifests selected
         pytest.param(
             (0.1,),
-            {"tasks": {"task-1": 0.9, "task-2": 0.1, "task-3": 0.5}},
-            ["task-2"],
+            {"tasks": {"task-1-label": 0.9, "task-2-label": 0.1, "task-3-label": 0.5}},
+            ["task-2-label"],
         ),
         # tasks which are unknown to bugbug are selected
         pytest.param(
             (0.1,),
             {
-                "tasks": {"task-1": 0.9, "task-3": 0.5},
-                "known_tasks": ["task-1", "task-3", "task-4"],
+                "tasks": {"task-1-label": 0.9, "task-3-label": 0.5},
+                "known_tasks": ["task-1-label", "task-3-label", "task-4-label"],
             },
-            ["task-2"],
+            ["task-2-label"],
         ),
         # tasks containing groups selected
         pytest.param(
             (0.1,),
             {"groups": {"foo/test.ini": 0.4}},
-            ["task-0"],
+            ["task-0-label"],
         ),
         # tasks matching "tasks" or "groups" selected
         pytest.param(
             (0.1,),
             {
-                "tasks": {"task-2": 0.2},
+                "tasks": {"task-2-label": 0.2},
                 "groups": {"foo/test.ini": 0.25, "bar/test.ini": 0.75},
             },
-            ["task-0", "task-1", "task-2"],
+            ["task-0-label", "task-1-label", "task-2-label"],
         ),
         # tasks matching "tasks" or "groups" selected, when they exceed the confidence threshold
         pytest.param(
             (0.5,),
             {
-                "tasks": {"task-2": 0.2, "task-4": 0.5},
+                "tasks": {"task-2-label": 0.2, "task-4-label": 0.5},
                 "groups": {"foo/test.ini": 0.65, "bar/test.ini": 0.25},
             },
-            ["task-0", "task-4"],
+            ["task-0-label", "task-4-label"],
         ),
         # tasks matching "reduced_tasks" are selected, when they exceed the confidence threshold
         pytest.param(
             (0.7, True, True),
             {
-                "tasks": {"task-2": 0.7, "task-4": 0.7},
-                "reduced_tasks": {"task-4": 0.7},
+                "tasks": {"task-2-label": 0.7, "task-4-label": 0.7},
+                "reduced_tasks": {"task-4-label": 0.7},
                 "groups": {"foo/test.ini": 0.75, "bar/test.ini": 0.25},
             },
-            ["task-4"],
+            ["task-4-label"],
         ),
         # tasks matching "groups" selected, only on specific platforms.
         pytest.param(
             (0.1, False, False, None, 1, True),
             {
-                "tasks": {"task-2": 0.2},
+                "tasks": {"task-2-label": 0.2},
                 "groups": {"foo/test.ini": 0.25, "bar/test.ini": 0.75},
                 "config_groups": {
-                    "foo/test.ini": ["task-1", "task-0"],
-                    "bar/test.ini": ["task-0"],
+                    "foo/test.ini": ["task-1-label", "task-0-label"],
+                    "bar/test.ini": ["task-0-label"],
                 },
             },
-            ["task-0", "task-2"],
+            ["task-0-label", "task-2-label"],
         ),
         pytest.param(
             (0.1, False, False, None, 1, True),
             {
-                "tasks": {"task-2": 0.2},
+                "tasks": {"task-2-label": 0.2},
                 "groups": {"foo/test.ini": 0.25, "bar/test.ini": 0.75},
                 "config_groups": {
-                    "foo/test.ini": ["task-1", "task-0"],
-                    "bar/test.ini": ["task-1"],
+                    "foo/test.ini": ["task-1-label", "task-0-label"],
+                    "bar/test.ini": ["task-1-label"],
                 },
             },
-            ["task-0", "task-1", "task-2"],
+            ["task-0-label", "task-1-label", "task-2-label"],
         ),
         pytest.param(
             (0.1, False, False, None, 1, True),
             {
-                "tasks": {"task-2": 0.2},
+                "tasks": {"task-2-label": 0.2},
                 "groups": {"foo/test.ini": 0.25, "bar/test.ini": 0.75},
                 "config_groups": {
-                    "foo/test.ini": ["task-1"],
-                    "bar/test.ini": ["task-0"],
+                    "foo/test.ini": ["task-1-label"],
+                    "bar/test.ini": ["task-0-label"],
                 },
             },
-            ["task-0", "task-2"],
+            ["task-0-label", "task-2-label"],
         ),
         pytest.param(
             (0.1, False, False, None, 1, True),
             {
-                "tasks": {"task-2": 0.2},
+                "tasks": {"task-2-label": 0.2},
                 "groups": {"foo/test.ini": 0.25, "bar/test.ini": 0.75},
                 "config_groups": {
-                    "foo/test.ini": ["task-1"],
-                    "bar/test.ini": ["task-3"],
+                    "foo/test.ini": ["task-1-label"],
+                    "bar/test.ini": ["task-3-label"],
                 },
             },
-            ["task-2"],
+            ["task-2-label"],
         ),
     ],
     ids=idfn,
@@ -310,10 +346,10 @@ def test_bugbug_multiple_pushes(responses, params):
         responses.GET,
         BUGBUG_BASE_URL + "/push/{}/c9/schedules".format(params["branch"]),
         json={
-            "tasks": {"task-2": 0.2, "task-4": 0.5},
+            "tasks": {"task-2-label": 0.2, "task-4-label": 0.5},
             "groups": {"foo/test.ini": 0.2, "bar/test.ini": 0.25},
             "config_groups": {"foo/test.ini": ["linux-*"], "bar/test.ini": ["task-*"]},
-            "known_tasks": ["task-4"],
+            "known_tasks": ["task-4-label"],
         },
         status=200,
     )
@@ -325,13 +361,13 @@ def test_bugbug_multiple_pushes(responses, params):
         responses.GET,
         BUGBUG_BASE_URL + "/push/{branch}/{head_rev}/schedules".format(**params),
         json={
-            "tasks": {"task-2": 0.2, "task-4": 0.2},
+            "tasks": {"task-2-label": 0.2, "task-4-label": 0.2},
             "groups": {"foo/test.ini": 0.65, "bar/test.ini": 0.25},
             "config_groups": {
                 "foo/test.ini": ["task-*"],
                 "bar/test.ini": ["windows-*"],
             },
-            "known_tasks": ["task-1", "task-3"],
+            "known_tasks": ["task-1-label", "task-3-label"],
         },
         status=200,
     )
@@ -342,19 +378,21 @@ def test_bugbug_multiple_pushes(responses, params):
     labels = [
         t.label for t in default_tasks if not opt.should_remove_task(t, params, {})
     ]
-    assert sorted(labels) == sorted(["task-0", "task-2", "task-4"])
+    assert sorted(labels) == sorted(["task-0-label", "task-2-label", "task-4-label"])
 
     opt = BugBugPushSchedules(0.3, False, False, False, 2, True)
     labels = [
         t.label for t in default_tasks if not opt.should_remove_task(t, params, {})
     ]
-    assert sorted(labels) == sorted(["task-0", "task-2", "task-4"])
+    assert sorted(labels) == sorted(["task-0-label", "task-2-label", "task-4-label"])
 
     opt = BugBugPushSchedules(0.2, False, False, False, 2, True)
     labels = [
         t.label for t in default_tasks if not opt.should_remove_task(t, params, {})
     ]
-    assert sorted(labels) == sorted(["task-0", "task-1", "task-2", "task-4"])
+    assert sorted(labels) == sorted(
+        ["task-0-label", "task-1-label", "task-2-label", "task-4-label"]
+    )
 
 
 def test_bugbug_timeout(monkeypatch, responses, params):
@@ -475,8 +513,8 @@ def test_project_autoland_test(monkeypatch, responses, params):
 
     def fake_bugbug_should_remove_task(self, task, params, importance):
         if self.num_pushes > 1:
-            return task.label == "task-4"
-        return task.label in ("task-2", "task-3", "task-4")
+            return task.label == "task-4-label"
+        return task.label in ("task-2-label", "task-3-label", "task-4-label")
 
     monkeypatch.setattr(
         BugBugPushSchedules, "should_remove_task", fake_bugbug_should_remove_task
@@ -497,14 +535,14 @@ def test_project_autoland_test(monkeypatch, responses, params):
     scheduled = {
         t.label for t in default_tasks if not opt.should_remove_task(t, params, {})
     }
-    assert scheduled == {"task-0", "task-1", "task-2", "task-3"}
+    assert scheduled == {"task-0-label", "task-1-label", "task-2-label", "task-3-label"}
 
     # On regular pushes, more things are optimized.
     params["pushlog_id"] = 11
     scheduled = {
         t.label for t in default_tasks if not opt.should_remove_task(t, params, {})
     }
-    assert scheduled == {"task-0", "task-1"}
+    assert scheduled == {"task-0-label", "task-1-label"}
 
 
 if __name__ == "__main__":

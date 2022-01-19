@@ -16,10 +16,12 @@ import mozfile
 import mozpack.path as mozpath
 
 from mozbuild.base import MozbuildObject
+from mozbuild.vendor.rewrite_mozbuild import (
+    add_file_to_moz_build_file,
+    remove_file_from_moz_build_file,
+)
 
-DEFAULT_EXCLUDE_FILES = [
-    ".git*",
-]
+DEFAULT_EXCLUDE_FILES = [".git*"]
 
 
 class VendorManifest(MozbuildObject):
@@ -30,49 +32,59 @@ class VendorManifest(MozbuildObject):
 
         self.source_host = self.get_source_host()
 
-        commit, timestamp = self.source_host.upstream_commit(revision)
+        # Check that updatebot key is available for libraries with existing
+        # moz.yaml files but missing updatebot information
+        if "updatebot" in self.manifest:
+            ref_type = self.manifest["updatebot"]["tracking"]
+            if ref_type == "tag":
+                ref, timestamp = self.source_host.upstream_tag(revision)
+            else:
+                ref, timestamp = self.source_host.upstream_commit(revision)
+        else:
+            ref_type = "commit"
+            ref, timestamp = self.source_host.upstream_commit(revision)
+
         self.log(
             logging.INFO,
             "vendor",
-            {"commit": commit, "timestamp": timestamp},
-            "Latest commit is {commit} from {timestamp}",
+            {"ref_type": ref_type, "ref": ref, "timestamp": timestamp},
+            "Latest {ref_type} is {ref} from {timestamp}",
         )
 
-        if self.manifest["origin"]["revision"] == commit:
+        if self.manifest["origin"]["revision"] == ref:
             self.log(
                 logging.INFO,
                 "vendor",
-                {},
-                "Latest upstream commit matches commit in-tree. Returning.",
+                {"ref_type": ref_type},
+                "Latest upstream {ref_type} matches {ref_type} in-tree. Returning.",
             )
             return
         elif check_for_update:
-            print("%s %s" % (commit, timestamp))
+            print("%s %s" % (ref, timestamp))
             return
 
-        self.fetch_and_unpack(commit)
+        self.fetch_and_unpack(ref)
 
         self.log(logging.INFO, "vendor", {}, "Removing unnecessary files.")
         self.clean_upstream()
 
         self.log(logging.INFO, "vendor", {}, "Updating moz.yaml.")
-        self.update_yaml(yaml_file, commit, timestamp)
+        self.update_yaml(yaml_file, ref, timestamp)
 
         self.log(logging.INFO, "vendor", {}, "Updating files")
-        self.update_files(commit, yaml_file)
+        self.update_files(ref, yaml_file)
 
         self.log(
-            logging.INFO,
-            "vendor",
-            {},
-            "Registering changes with version control.",
+            logging.INFO, "vendor", {}, "Registering changes with version control."
         )
         self.repository.add_remove_files(
             self.manifest["vendoring"]["vendor-directory"], os.path.dirname(yaml_file)
         )
 
         self.log(logging.INFO, "vendor", {}, "Updating moz.build files")
-        self.update_moz_build(yaml_file)
+        self.update_moz_build(
+            self.manifest["vendoring"]["vendor-directory"], os.path.dirname(yaml_file)
+        )
 
         self.log(
             logging.INFO,
@@ -141,8 +153,11 @@ class VendorManifest(MozbuildObject):
             )
             tar.extractall(vendor_dir)
 
+            has_prefix = all(map(lambda name: name.startswith(prefix), tar.getnames()))
+            tar.close()
+
             # GitLab puts everything properly down a directory; move it up.
-            if all(map(lambda name: name.startswith(prefix), tar.getnames())):
+            if has_prefix:
                 tardir = mozpath.join(vendor_dir, prefix)
                 mozfile.copy_contents(tardir, vendor_dir)
                 mozfile.remove(tardir)
@@ -151,7 +166,9 @@ class VendorManifest(MozbuildObject):
         """Remove files we don't want to import."""
         to_exclude = []
         vendor_dir = self.manifest["vendoring"]["vendor-directory"]
-        for pattern in self.manifest["vendoring"]["exclude"] + DEFAULT_EXCLUDE_FILES:
+        for pattern in (
+            self.manifest["vendoring"].get("exclude", []) + DEFAULT_EXCLUDE_FILES
+        ):
             if "*" in pattern:
                 to_exclude.extend(glob.iglob(mozpath.join(vendor_dir, pattern)))
             else:
@@ -256,19 +273,13 @@ class VendorManifest(MozbuildObject):
                     {"script": script, "run_dir": run_dir},
                     "Performing run-script action script: {script} working dir: {run_dir}",
                 )
-                self.run_process(
-                    args=[script],
-                    cwd=run_dir,
-                    log_name=script,
-                )
+                self.run_process(args=[script], cwd=run_dir, log_name=script)
             else:
                 assert False, "Unknown action supplied (how did this pass validation?)"
 
-    def update_moz_build(self, yaml_file):
-        def load_file_into_list(path):
-            from runpy import run_path
-
-            return run_path(path)["sources"]
+    def update_moz_build(self, vendoring_dir, moz_yaml_dir):
+        if vendoring_dir == moz_yaml_dir:
+            vendoring_dir = moz_yaml_dir = None
 
         source_suffixes = [".cc", ".c", ".cpp", ".h", ".hpp", ".S", ".asm"]
 
@@ -279,11 +290,6 @@ class VendorManifest(MozbuildObject):
         files_added = [
             f for f in files_added if any([f.endswith(s) for s in source_suffixes])
         ]
-        map_added_file_to_mozbuild = {
-            f: None
-            for f in files_added
-            if any([f.endswith(s) for s in source_suffixes])
-        }
 
         self.log(
             logging.DEBUG,
@@ -292,122 +298,30 @@ class VendorManifest(MozbuildObject):
             "Found {added} files added and {removed} files removed.",
         )
 
-        # Identify all the autovendored_sources.mozbuild files for this library,
-        # which are required for Updatebot.
-        moz_build_filenames = []
-        for root, dirs, files in os.walk(os.path.dirname(yaml_file), topdown=False):
-            if "autovendored_sources.mozbuild" in files:
-                moz_build_filenames.append(
-                    mozpath.join(root, "autovendored_sources.mozbuild")
-                )
-
-        # For each of the files, look for any removed files, and omit them if found.
-        # At the same time, identify the correct moz.build file for any files added
-        # by looking for the first moz.build match. Because we traverse bottom-up this
-        # will be the best match.  (Until we find a library where it isn't and we
-        # refactor.)
-        def is_file_removed(l):
-            l = l.strip(",'\" \n\r")
-            for f in files_removed:
-                if l.endswith(f):
-                    return True
-            return False
-
         should_abort = False
-
-        for filename in moz_build_filenames:
-            # Process deletions
-            # Additions may not always go into the autovendored_sources.mozbuild file, but
-            # it's kind of the best we can reasonably attempt to automate. However deletions
-            # in the more complicated moz.build file we can easily address.
-            files_to_check = [
-                filename,
-                filename.replace("autovendored_sources.mozbuild", "moz.build"),
-            ]
-            for deletion_filename in files_to_check:
-                with open(deletion_filename, "r") as f:
-                    moz_build_contents = f.readlines()
-
-                new_moz_build_contents = [
-                    l for l in moz_build_contents if not is_file_removed(l)
-                ]
-
-                if len(new_moz_build_contents) != len(moz_build_contents):
-                    self.log(
-                        logging.INFO,
-                        "vendor",
-                        {
-                            "filename": deletion_filename,
-                            "lines": (
-                                len(moz_build_contents) - len(new_moz_build_contents)
-                            ),
-                        },
-                        "Rewriting {filename} to remove {lines} lines.",
-                    )
-                    with open(deletion_filename, "w") as f:
-                        f.write("".join(new_moz_build_contents))
-
-            # See if this autovendored_sources file is a good fit for any of the files added
-            for added_file in files_added:
-                if map_added_file_to_mozbuild[added_file]:
-                    continue
-                dirname_of_added_file = os.path.dirname(added_file)
-
-                if any([l for l in moz_build_contents if dirname_of_added_file in l]):
-                    map_added_file_to_mozbuild[added_file] = filename
-
-        # Now go through all the additions and add them in the correct place
-        # in the correct autovendored_sources.mozbuild file
-        for added_file, moz_build_filename in map_added_file_to_mozbuild.items():
-            if not moz_build_filename:
-                should_abort = True
+        for f in files_added:
+            try:
+                add_file_to_moz_build_file(f, moz_yaml_dir, vendoring_dir)
+            except Exception:
                 self.log(
                     logging.ERROR,
                     "vendor",
-                    {"file": added_file},
-                    "Could not identify the autovendored_sources.mozbuild file to add {file} to.",
+                    {},
+                    "Could not add %s to the appropriate moz.build file" % f,
                 )
-                continue
+                should_abort = True
 
-            # Load the sources variable as a python variable
-            sources_file_contents = load_file_into_list(moz_build_filename)
-
-            # Find a full matching path within the list - we're going to use this to
-            # figure out the full path prefix we need
-            prefix = None
-            dirname_of_added_file = os.path.dirname(added_file)
-            for l in sources_file_contents:
-                if dirname_of_added_file in l:
-                    # Grab the prefix and suffix
-                    prefix = l[: l.index(dirname_of_added_file)]
-                    break
-            if not prefix:
+        for f in files_removed:
+            try:
+                remove_file_from_moz_build_file(f, moz_yaml_dir, vendoring_dir)
+            except Exception:
                 self.log(
                     logging.ERROR,
                     "vendor",
-                    {"build_file": moz_build_filename, "added_file": added_file},
-                    "Could not find a valid prefix in {build_file} for {added_file}.",
+                    {},
+                    "Could not remove %s from the appropriate moz.build file" % f,
                 )
                 should_abort = True
-                continue
-
-            # Get just the filenames, add our added file, sort it
-            sources_file_contents.append(prefix + added_file)
-            sources_file_contents = sorted(sources_file_contents)
-
-            # Write out the new file, tacking on the declaration and closing bracket
-            self.log(
-                logging.INFO,
-                "vendor",
-                {"build_file": moz_build_filename, "added_file": added_file},
-                "Updating {build_file} to add {added_file}.",
-            )
-            with open(moz_build_filename, "w") as f:
-                f.write("sources = [\n")
-                for l in sources_file_contents:
-                    newline = "'" + l + "',\n"
-                    f.write(newline)
-                f.write("]\n")
 
         if should_abort:
             self.log(

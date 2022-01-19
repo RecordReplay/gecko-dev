@@ -7,7 +7,7 @@
 #include "mozilla/gfx/gfxConfigManager.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "gfxConfig.h"
@@ -38,6 +38,10 @@ void gfxConfigManager::Init() {
       StaticPrefs::layers_gpu_process_allow_software_AtStartup();
   mWrPartialPresent =
       StaticPrefs::gfx_webrender_max_partial_present_rects_AtStartup() > 0;
+  EmplaceUserPref(StaticPrefs::GetPrefName_gfx_webrender_program_binary_disk(),
+                  mWrShaderCache);
+  mWrOptimizedShaders =
+      StaticPrefs::gfx_webrender_use_optimized_shaders_AtStartup();
 #ifdef XP_WIN
   mWrForceAngle = StaticPrefs::gfx_webrender_force_angle_AtStartup();
   mWrForceAngleNoGPUProcess = StaticPrefs::
@@ -66,9 +70,12 @@ void gfxConfigManager::Init() {
 #ifdef NIGHTLY_BUILD
   mIsNightly = true;
 #endif
+#ifdef EARLY_BETA_OR_EARLIER
+  mIsEarlyBetaOrEarlier = true;
+#endif
   mSafeMode = gfxPlatform::InSafeMode();
 
-  mGfxInfo = services::GetGfxInfo();
+  mGfxInfo = components::GfxInfo::Service();
 
   mFeatureWr = &gfxConfig::GetFeature(Feature::WEBRENDER);
   mFeatureWrQualified = &gfxConfig::GetFeature(Feature::WEBRENDER_QUALIFIED);
@@ -76,11 +83,16 @@ void gfxConfigManager::Init() {
   mFeatureWrAngle = &gfxConfig::GetFeature(Feature::WEBRENDER_ANGLE);
   mFeatureWrDComp = &gfxConfig::GetFeature(Feature::WEBRENDER_DCOMP_PRESENT);
   mFeatureWrPartial = &gfxConfig::GetFeature(Feature::WEBRENDER_PARTIAL);
+  mFeatureWrShaderCache =
+      &gfxConfig::GetFeature(Feature::WEBRENDER_SHADER_CACHE);
+  mFeatureWrOptimizedShaders =
+      &gfxConfig::GetFeature(Feature::WEBRENDER_OPTIMIZED_SHADERS);
   mFeatureWrSoftware = &gfxConfig::GetFeature(Feature::WEBRENDER_SOFTWARE);
 
   mFeatureHwCompositing = &gfxConfig::GetFeature(Feature::HW_COMPOSITING);
 #ifdef XP_WIN
   mFeatureD3D11HwAngle = &gfxConfig::GetFeature(Feature::D3D11_HW_ANGLE);
+  mFeatureD3D11Compositing = &gfxConfig::GetFeature(Feature::D3D11_COMPOSITING);
 #endif
   mFeatureGPUProcess = &gfxConfig::GetFeature(Feature::GPU_PROCESS);
 }
@@ -121,15 +133,17 @@ void gfxConfigManager::ConfigureWebRenderSoftware() {
   // (hardware). See bug 1656811.
   if (mWrSoftwareForceEnabled) {
     mFeatureWrSoftware->UserForceEnable("Force enabled by pref");
-  } else if (mWrForceEnabled || mWrEnvForceEnabled) {
-    mFeatureWrSoftware->UserDisable(
-        "User force-enabled full WR",
-        "FEATURE_FAILURE_USER_FORCE_ENABLED_FULL_WR"_ns);
   } else if (mWrForceDisabled || mWrEnvForceDisabled) {
     // If the user set the pref to force-disable, let's do that. This
     // will override all the other enabling prefs
     mFeatureWrSoftware->UserDisable("User force-disabled WR",
                                     "FEATURE_FAILURE_USER_FORCE_DISABLED"_ns);
+  } else if (gfxPlatform::DoesFissionForceWebRender()) {
+    mFeatureWrSoftware->UserForceEnable("Force enabled by fission");
+  }
+
+  if (!mHasWrSoftwareBlocklist) {
+    return;
   }
 
   nsCString failureId;
@@ -196,29 +210,6 @@ void gfxConfigManager::ConfigureWebRenderQualified() {
                                    "Not controlled by rollout", failureId);
       break;
   }
-
-  if (!mIsNightly) {
-    // Disable WebRender if we don't have DirectComposition
-    nsAutoString adapterVendorID;
-    mGfxInfo->GetAdapterVendorID(adapterVendorID);
-    if (adapterVendorID == u"0x8086") {
-      bool mixed;
-      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
-      if (maxRefreshRate > 75) {
-        mFeatureWrQualified->Disable(FeatureStatus::Blocked,
-                                     "Monitor refresh rate too high",
-                                     "REFRESH_RATE_TOO_HIGH"_ns);
-      }
-    } else if (adapterVendorID == u"0x10de") {
-      bool mixed = false;
-      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
-      if (maxRefreshRate > 60 && mixed) {
-        mFeatureWrQualified->Disable(FeatureStatus::Blocked,
-                                     "Monitor refresh rate too high/mixed",
-                                     "NVIDIA_REFRESH_RATE_MIXED"_ns);
-      }
-    }
-  }
 }
 
 void gfxConfigManager::ConfigureWebRender() {
@@ -229,6 +220,8 @@ void gfxConfigManager::ConfigureWebRender() {
   MOZ_ASSERT(mFeatureWrAngle);
   MOZ_ASSERT(mFeatureWrDComp);
   MOZ_ASSERT(mFeatureWrPartial);
+  MOZ_ASSERT(mFeatureWrShaderCache);
+  MOZ_ASSERT(mFeatureWrOptimizedShaders);
   MOZ_ASSERT(mFeatureWrSoftware);
   MOZ_ASSERT(mFeatureHwCompositing);
   MOZ_ASSERT(mFeatureGPUProcess);
@@ -272,8 +265,6 @@ void gfxConfigManager::ConfigureWebRender() {
                             "FEATURE_FAILURE_USER_FORCE_ENABLED_SW_WR"_ns);
   } else if (mWrEnvForceEnabled) {
     mFeatureWr->UserForceEnable("Force enabled by envvar");
-  } else if (mWrForceEnabled) {
-    mFeatureWr->UserForceEnable("Force enabled by pref");
   } else if (mWrForceDisabled || mWrEnvForceDisabled) {
     // If the user set the pref to force-disable, let's do that. This
     // will override all the other enabling prefs
@@ -281,6 +272,8 @@ void gfxConfigManager::ConfigureWebRender() {
     // gfx.webrender.all.qualified).
     mFeatureWr->UserDisable("User force-disabled WR",
                             "FEATURE_FAILURE_USER_FORCE_DISABLED"_ns);
+  } else if (mWrForceEnabled) {
+    mFeatureWr->UserForceEnable("Force enabled by pref");
   }
 
   if (!mFeatureWrQualified->IsEnabled()) {
@@ -384,6 +377,22 @@ void gfxConfigManager::ConfigureWebRender() {
                              "FEATURE_FAILURE_DCOMP_NOT_WIN10"_ns);
   }
 
+  if (!mIsNightly) {
+    // Disable DirectComposition for NVIDIA users with high/mixed refresh rate
+    // monitors due to rendering artifacts.
+    nsAutoString adapterVendorID;
+    mGfxInfo->GetAdapterVendorID(adapterVendorID);
+    if (adapterVendorID == u"0x10de") {
+      bool mixed = false;
+      int32_t maxRefreshRate = mGfxInfo->GetMaxRefreshRate(&mixed);
+      if (maxRefreshRate > 60 && mixed) {
+        mFeatureWrDComp->Disable(FeatureStatus::Blocked,
+                                 "Monitor refresh rate too high/mixed",
+                                 "NVIDIA_REFRESH_RATE_MIXED"_ns);
+      }
+    }
+  }
+
   mFeatureWrDComp->MaybeSetFailed(
       mFeatureWr->IsEnabled(), FeatureStatus::Unavailable, "Requires WebRender",
       "FEATURE_FAILURE_DCOMP_NOT_WR"_ns);
@@ -402,7 +411,44 @@ void gfxConfigManager::ConfigureWebRender() {
   if (mWrPartialPresent) {
     if (mFeatureWr->IsEnabled() || mFeatureWrSoftware->IsEnabled()) {
       mFeatureWrPartial->EnableByDefault();
+
+      nsString adapter;
+      mGfxInfo->GetAdapterDeviceID(adapter);
+      // Block partial present on some devices due to rendering issues.
+      // On Mali-Txxx due to bug 1680087 and bug 1707815.
+      // On Adreno 3xx GPUs due to bug 1695771.
+      if (adapter.Find("Mali-T", /*ignoreCase*/ true) >= 0 ||
+          adapter.Find("Adreno (TM) 3", /*ignoreCase*/ true) >= 0) {
+        mFeatureWrPartial->Disable(
+            FeatureStatus::Blocked, "Partial present blocked",
+            "FEATURE_FAILURE_PARTIAL_PRESENT_BLOCKED"_ns);
+      }
     }
+  }
+
+  mFeatureWrShaderCache->SetDefaultFromPref(
+      StaticPrefs::GetPrefName_gfx_webrender_program_binary_disk(), true,
+      StaticPrefs::GetPrefDefault_gfx_webrender_program_binary_disk(),
+      mWrShaderCache);
+  ConfigureFromBlocklist(nsIGfxInfo::FEATURE_WEBRENDER_SHADER_CACHE,
+                         mFeatureWrShaderCache);
+  if (!mFeatureWr->IsEnabled()) {
+    mFeatureWrShaderCache->ForceDisable(FeatureStatus::Unavailable,
+                                        "WebRender disabled",
+                                        "FEATURE_FAILURE_WR_DISABLED"_ns);
+  }
+
+  mFeatureWrOptimizedShaders->EnableByDefault();
+  if (!mWrOptimizedShaders) {
+    mFeatureWrOptimizedShaders->UserDisable("User disabled via pref",
+                                            "FEATURE_FAILURE_PREF_DISABLED"_ns);
+  }
+  ConfigureFromBlocklist(nsIGfxInfo::FEATURE_WEBRENDER_OPTIMIZED_SHADERS,
+                         mFeatureWrOptimizedShaders);
+  if (!mFeatureWr->IsEnabled()) {
+    mFeatureWrOptimizedShaders->ForceDisable(FeatureStatus::Unavailable,
+                                             "WebRender disabled",
+                                             "FEATURE_FAILURE_WR_DISABLED"_ns);
   }
 }
 

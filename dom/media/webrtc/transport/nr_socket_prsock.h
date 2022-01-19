@@ -110,12 +110,12 @@ class NrSocketBase {
   // the nr_socket APIs
   virtual int create(nr_transport_addr* addr) = 0;
   virtual int sendto(const void* msg, size_t len, int flags,
-                     nr_transport_addr* to) = 0;
+                     const nr_transport_addr* to) = 0;
   virtual int recvfrom(void* buf, size_t maxlen, size_t* len, int flags,
                        nr_transport_addr* from) = 0;
   virtual int getaddr(nr_transport_addr* addrp) = 0;
   virtual void close() = 0;
-  virtual int connect(nr_transport_addr* addr) = 0;
+  virtual int connect(const nr_transport_addr* addr) = 0;
   virtual int write(const void* msg, size_t len, size_t* written) = 0;
   virtual int read(void* buf, size_t maxlen, size_t* len) = 0;
   virtual int listen(int backlog) = 0;
@@ -161,7 +161,10 @@ class NrSocket : public NrSocketBase, public nsASocketHandler {
   virtual uint64_t ByteCountReceived() override { return 0; }
 
   // nsISupports methods
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING_WITH_DESTROY(NrSocket, Destroy(),
+                                                     override);
+  virtual void Destroy() { delete this; }
 
   // Implementations of the async_event APIs
   virtual int async_wait(int how, NR_async_cb cb, void* cb_arg, char* function,
@@ -172,12 +175,12 @@ class NrSocket : public NrSocketBase, public nsASocketHandler {
   virtual int create(nr_transport_addr* addr)
       override;  // (really init, but it's called create)
   virtual int sendto(const void* msg, size_t len, int flags,
-                     nr_transport_addr* to) override;
+                     const nr_transport_addr* to) override;
   virtual int recvfrom(void* buf, size_t maxlen, size_t* len, int flags,
                        nr_transport_addr* from) override;
   virtual int getaddr(nr_transport_addr* addrp) override;
   virtual void close() override;
-  virtual int connect(nr_transport_addr* addr) override;
+  virtual int connect(const nr_transport_addr* addr) override;
   virtual int write(const void* msg, size_t len, size_t* written) override;
   virtual int read(void* buf, size_t maxlen, size_t* len) override;
   virtual int listen(int backlog) override;
@@ -250,12 +253,12 @@ class NrUdpSocketIpc : public NrSocketIpc {
   // Implementations of the NrSocketBase APIs
   virtual int create(nr_transport_addr* addr) override;
   virtual int sendto(const void* msg, size_t len, int flags,
-                     nr_transport_addr* to) override;
+                     const nr_transport_addr* to) override;
   virtual int recvfrom(void* buf, size_t maxlen, size_t* len, int flags,
                        nr_transport_addr* from) override;
   virtual int getaddr(nr_transport_addr* addrp) override;
   virtual void close() override;
-  virtual int connect(nr_transport_addr* addr) override;
+  virtual int connect(const nr_transport_addr* addr) override;
   virtual int write(const void* msg, size_t len, size_t* written) override;
   virtual int read(void* buf, size_t maxlen, size_t* len) override;
   virtual int listen(int backlog) override;
@@ -263,6 +266,7 @@ class NrUdpSocketIpc : public NrSocketIpc {
 
  private:
   virtual ~NrUdpSocketIpc();
+  virtual void Destroy();
 
   DISALLOW_COPY_ASSIGN(NrUdpSocketIpc);
 
@@ -274,8 +278,7 @@ class NrUdpSocketIpc : public NrSocketIpc {
   void sendto_i(const net::NetAddr& addr, UniquePtr<MediaPacket> buf);
   void close_i();
 #if defined(MOZILLA_INTERNAL_API) && !defined(MOZILLA_XPCOMRT_API)
-  static void destroy_i(dom::UDPSocketChild* aChild,
-                        const nsCOMPtr<nsIEventTarget>& aStsThread);
+  void destroy_i();
 #endif
   // STS thread executor
   void recv_callback_s(RefPtr<nr_udp_message> msg);
@@ -311,7 +314,7 @@ int nr_netaddr_to_transport_addr(const net::NetAddr* netaddr,
 int nr_praddr_to_transport_addr(const PRNetAddr* praddr,
                                 nr_transport_addr* addr, int protocol,
                                 int keep);
-int nr_transport_addr_get_addrstring_and_port(nr_transport_addr* addr,
+int nr_transport_addr_get_addrstring_and_port(const nr_transport_addr* addr,
                                               nsACString* host, int32_t* port);
 }  // namespace mozilla
 #endif

@@ -116,8 +116,18 @@ var PrintUtils = {
     return true;
   },
 
+  /**
+   * This call exists in a separate method so it can be easily overridden where
+   * `gBrowser` doesn't exist (e.g. Thunderbird).
+   *
+   * @see getTabDialogBox in tabbrowser.js
+   */
+  getTabDialogBox(sourceBrowser) {
+    return gBrowser.getTabDialogBox(sourceBrowser);
+  },
+
   getPreviewBrowser(sourceBrowser) {
-    let dialogBox = gBrowser.getTabDialogBox(sourceBrowser);
+    let dialogBox = this.getTabDialogBox(sourceBrowser);
     for (let dialog of dialogBox.getTabDialogManager()._dialogs) {
       let browser = dialog._box.querySelector(".printPreviewBrowser");
       if (browser) {
@@ -143,65 +153,14 @@ var PrintUtils = {
     }
   },
 
-  createPreviewBrowsers(aBrowsingContext, aDialogBrowser) {
-    let _createPreviewBrowser = previewType => {
-      // When we're not previewing the selection we want to make
-      // sure that the top-level browser is being printed.
-      let browsingContext =
-        previewType == "selection"
-          ? aBrowsingContext
-          : aBrowsingContext.top.embedderElement.browsingContext;
-      let browser = gBrowser.createBrowser({
-        remoteType: browsingContext.currentRemoteType,
-        userContextId: browsingContext.originAttributes.userContextId,
-        initialBrowsingContextGroupId: browsingContext.group.id,
-        skipLoad: true,
-        initiallyActive: true,
-      });
-      browser.addEventListener("DOMWindowClose", function(e) {
-        // Ignore close events from printing, see the code creating browsers in
-        // printUtils.js and nsDocumentViewer::OnDonePrinting.
-        //
-        // When we print with the new print UI we don't bother creating a new
-        // <browser> element, so the close event gets dispatched to us.
-        //
-        // Ignoring it is harmless (and doesn't cause correctness issues, because
-        // the preview document can't run script anyways).
-        e.preventDefault();
-        e.stopPropagation();
-      });
-      browser.addEventListener("contextmenu", function(e) {
-        e.preventDefault();
-      });
-      browser.classList.add("printPreviewBrowser");
-      browser.setAttribute("flex", "1");
-      browser.setAttribute("printpreview", "true");
-      browser.setAttribute("previewtype", previewType);
-      document.l10n.setAttributes(browser, "printui-preview-label");
-      return browser;
-    };
-
-    let previewStack = document.importNode(
-      document.getElementById("printPreviewStackTemplate").content,
-      true
-    ).firstElementChild;
-
-    let previewBrowser = _createPreviewBrowser("primary");
-    previewStack.append(previewBrowser);
-    let selectionPreviewBrowser;
-    if (aBrowsingContext.currentRemoteType) {
-      selectionPreviewBrowser = _createPreviewBrowser("selection");
-      previewStack.append(selectionPreviewBrowser);
-    }
-
-    // show the toolbar after we go into print preview mode so
-    // that we can initialize the toolbar with total num pages
-    let previewPagination = document.createElement("printpreview-pagination");
-    previewPagination.classList.add("printPreviewNavigation");
-    previewStack.append(previewPagination);
-
-    aDialogBrowser.parentElement.prepend(previewStack);
-    return { previewBrowser, selectionPreviewBrowser };
+  /**
+   * This call exists in a separate method so it can be easily overridden where
+   * `gBrowser` doesn't exist (e.g. Thunderbird).
+   *
+   * @see createBrowser in tabbrowser.js
+   */
+  createBrowser(params) {
+    return gBrowser.createBrowser(params);
   },
 
   /**
@@ -223,23 +182,13 @@ var PrintUtils = {
    * @return promise resolving when the dialog is open, rejected if the preview
    *         fails.
    */
-  async _openTabModalPrint(
+  _openTabModalPrint(
     aBrowsingContext,
-    aExistingPreviewBrowser,
+    aOpenWindowInfo,
     aPrintInitiationTime,
     aPrintSelectionOnly,
     aPrintFrameOnly
   ) {
-    let hasSelection = aPrintSelectionOnly;
-    if (!aPrintSelectionOnly) {
-      let sourceActor = aBrowsingContext.currentWindowGlobal.getActor(
-        "PrintingSelection"
-      );
-      hasSelection = await sourceActor.sendQuery(
-        "PrintingSelection:HasSelection"
-      );
-    }
-
     let sourceBrowser = aBrowsingContext.top.embedderElement;
     let previewBrowser = this.getPreviewBrowser(sourceBrowser);
     if (previewBrowser) {
@@ -248,33 +197,40 @@ var PrintUtils = {
       // XXX This can be racy can't it? getPreviewBrowser looks at browser that
       // we set up after opening the dialog. But I guess worst case we just
       // open two dialogs so...
-      if (aExistingPreviewBrowser) {
-        aExistingPreviewBrowser.remove();
-      }
-      return Promise.reject();
+      return { promise: Promise.reject(), browser: null };
     }
 
-    // Create a preview browser.
+    // Create the print preview dialog.
     let args = PromptUtils.objectToPropBag({
-      previewBrowser: aExistingPreviewBrowser,
       printSelectionOnly: !!aPrintSelectionOnly,
-      hasSelection,
+      isArticle: sourceBrowser.isArticle,
       printFrameOnly: !!aPrintFrameOnly,
     });
-    let dialogBox = gBrowser.getTabDialogBox(sourceBrowser);
-    return dialogBox.open(
-      `chrome://global/content/print.html?browsingContextId=${aBrowsingContext.id}&printInitiationTime=${aPrintInitiationTime}`,
+    let dialogBox = this.getTabDialogBox(sourceBrowser);
+    let { closedPromise, dialog } = dialogBox.open(
+      `chrome://global/content/print.html?printInitiationTime=${aPrintInitiationTime}`,
       { features: "resizable=no", sizeTo: "available" },
       args
     );
+    let settingsBrowser = dialog._frame;
+    let printPreview = new PrintPreview({
+      sourceBrowsingContext: aBrowsingContext,
+      settingsBrowser,
+      topBrowsingContext: aBrowsingContext.top,
+      activeBrowsingContext: aBrowsingContext,
+      openWindowInfo: aOpenWindowInfo,
+      printFrameOnly: aPrintFrameOnly,
+    });
+    // This will create the source browser in connectedCallback() if we sent
+    // openWindowInfo. Otherwise the browser will be null.
+    settingsBrowser.parentElement.insertBefore(printPreview, settingsBrowser);
+    return { promise: closedPromise, browser: printPreview.sourceBrowser };
   },
 
   /**
    * Initialize a print, this will open the tab modal UI if it is enabled or
    * defer to the native dialog/silent print.
    *
-   * @param aTrigger What triggered the print, in string format, for telemetry
-   *        purposes.
    * @param aBrowsingContext
    *        The BrowsingContext of the window to print.
    *        Note that the browsing context could belong to a subframe of the
@@ -288,46 +244,12 @@ var PrintUtils = {
    *                              the given browsing context.
    *        {printFrameOnly}      Whether to print the selected frame.
    */
-  startPrintWindow(aTrigger, aBrowsingContext, aOptions) {
+  startPrintWindow(aBrowsingContext, aOptions) {
     const printInitiationTime = Date.now();
     let openWindowInfo, printSelectionOnly, printFrameOnly;
     if (aOptions) {
       ({ openWindowInfo, printSelectionOnly, printFrameOnly } = aOptions);
     }
-
-    // When we have a non-null openWindowInfo, we only want to record
-    // telemetry if we're triggered by window.print() itself, otherwise it's an
-    // internal print (like the one we do when we actually print from the
-    // preview dialog, etc.), and that'd cause us to overcount.
-    if (!openWindowInfo || openWindowInfo.isForWindowDotPrint) {
-      Services.telemetry.keyedScalarAdd("printing.trigger", aTrigger, 1);
-    }
-
-    let browser = null;
-    if (openWindowInfo) {
-      browser = document.createXULElement("browser");
-      browser.openWindowInfo = openWindowInfo;
-      browser.setAttribute("type", "content");
-      let remoteType = aBrowsingContext.currentRemoteType;
-      if (remoteType) {
-        browser.setAttribute("remoteType", remoteType);
-        browser.setAttribute("remote", "true");
-      }
-      // When the print process finishes, we get closed by
-      // nsDocumentViewer::OnDonePrinting, or by the print preview code.
-      //
-      // When that happens, we should remove us from the DOM if connected.
-      browser.addEventListener("DOMWindowClose", function(e) {
-        if (browser.isConnected) {
-          browser.remove();
-        }
-        e.stopPropagation();
-        e.preventDefault();
-      });
-      browser.style.visibility = "collapse";
-      document.documentElement.appendChild(browser);
-    }
-
     if (
       PRINT_TAB_MODAL &&
       !PRINT_ALWAYS_SILENT &&
@@ -343,17 +265,26 @@ var PrintUtils = {
       ) {
         browsingContext = focusedBc;
       }
-      this._openTabModalPrint(
+      let { promise, browser } = this._openTabModalPrint(
         browsingContext,
-        browser,
+        openWindowInfo,
         printInitiationTime,
         printSelectionOnly,
         printFrameOnly
-      ).catch(() => {});
+      );
+      promise.catch(e => {
+        Cu.reportError(e);
+      });
       return browser;
     }
 
-    if (browser) {
+    if (openWindowInfo) {
+      let printPreview = new PrintPreview({
+        sourceBrowsingContext: aBrowsingContext,
+        openWindowInfo,
+      });
+      let browser = printPreview.createPreviewBrowser("source");
+      document.documentElement.append(browser);
       // Legacy print dialog or silent printing, the content process will print
       // in this <browser>.
       return browser;
@@ -374,8 +305,7 @@ var PrintUtils = {
    *        Optional print settings for the print operation
    */
   printWindow(aBrowsingContext, aPrintSettings) {
-    let windowID = aBrowsingContext.currentWindowGlobal.outerWindowId;
-    let topBrowser = aBrowsingContext.top.embedderElement;
+    let wg = aBrowsingContext.currentWindowGlobal;
 
     const printPreviewIsOpen = !!document.getElementById(
       "print-preview-toolbar"
@@ -392,18 +322,18 @@ var PrintUtils = {
 
     // Set the title so that the print dialog can pick it up and
     // use it to generate the filename for save-to-PDF.
-    printSettings.title = this._originalTitle || topBrowser.contentTitle;
+    printSettings.title = this._originalTitle || wg.documentTitle;
 
     if (this._shouldSimplify) {
       // The generated document for simplified print preview has "about:blank"
       // as its URL. We need to set docURL here so that the print header/footer
       // can be given the original document's URL.
-      printSettings.docURL = this._originalURL || topBrowser.currentURI.spec;
+      printSettings.docURL = this._originalURL || wg.documentURI;
     }
 
     // At some point we should handle the Promise that this returns (report
     // rejection to telemetry?)
-    let promise = topBrowser.print(windowID, printSettings);
+    let promise = aBrowsingContext.print(printSettings);
 
     if (printPreviewIsOpen) {
       if (this._shouldSimplify) {
@@ -421,8 +351,6 @@ var PrintUtils = {
   /**
    * Initializes print preview.
    *
-   * @param aTrigger Optionaly, if it's an external call, what triggered the
-   *                 print, in string format, for telemetry purposes.
    * @param aListenerObj
    *        An object that defines the following functions:
    *
@@ -464,11 +392,7 @@ var PrintUtils = {
    *        dialog is opened here in PrintUtils, and then we listen for update
    *        messages from the child. Bug 1558588 is about removing this.
    */
-  printPreview(aTrigger, aListenerObj) {
-    if (aTrigger) {
-      Services.telemetry.keyedScalarAdd("printing.trigger", aTrigger, 1);
-    }
-
+  printPreview(aListenerObj) {
     if (PRINT_TAB_MODAL) {
       let browsingContext = gBrowser.selectedBrowser.browsingContext;
       let focusedBc = Services.focus.focusedContentBrowsingContext;
@@ -482,7 +406,7 @@ var PrintUtils = {
         browsingContext,
         /* aExistingPreviewBrowser = */ undefined,
         Date.now()
-      );
+      ).promise;
     }
 
     // If we already have a toolbar someone is calling printPreview() to get us
@@ -933,6 +857,9 @@ var PrintUtils = {
   },
 
   readerModeReady(sourceBrowser) {
+    if (PRINT_TAB_MODAL) {
+      return;
+    }
     let ppBrowser = this._listener.getSimplifiedPrintPreviewBrowser();
     this.sendEnterPrintPreviewToChild(ppBrowser, sourceBrowser, true, true);
   },
@@ -1071,3 +998,241 @@ var PrintUtils = {
     }
   },
 };
+
+class PrintPreview extends MozElements.BaseControl {
+  constructor({
+    sourceBrowsingContext,
+    settingsBrowser,
+    topBrowsingContext,
+    activeBrowsingContext,
+    openWindowInfo,
+    printFrameOnly,
+  }) {
+    super();
+    this.sourceBrowsingContext = sourceBrowsingContext;
+    this.settingsBrowser = settingsBrowser;
+    this.topBrowsingContext = topBrowsingContext;
+    this.activeBrowsingContext = activeBrowsingContext;
+    this.openWindowInfo = openWindowInfo;
+    this.printFrameOnly = printFrameOnly;
+
+    this.printSelectionOnly = false;
+    this.simplifyPage = false;
+    this.sourceBrowser = null;
+    this.selectionBrowser = null;
+    this.simplifiedBrowser = null;
+    this.lastPreviewBrowser = null;
+  }
+
+  connectedCallback() {
+    if (this.childElementCount > 0) {
+      return;
+    }
+    this.setAttribute("flex", "1");
+    this.append(
+      MozXULElement.parseXULToFragment(`
+        <stack class="previewStack" rendering="true" flex="1" previewtype="primary">
+          <vbox class="previewRendering" flex="1">
+            <h1 class="print-pending-label" data-l10n-id="printui-loading"></h1>
+          </vbox>
+          <html:printpreview-pagination class="printPreviewNavigation"></html:printpreview-pagination>
+        </stack>
+    `)
+    );
+    this.stack = this.firstElementChild;
+    this.paginator = this.querySelector("printpreview-pagination");
+
+    if (this.openWindowInfo) {
+      // For window.print() we need a browser right away for the contents to be
+      // cloned into, create it now.
+      this.createPreviewBrowser("source");
+    }
+  }
+
+  disconnectedCallback() {
+    this.exitPrintPreview();
+  }
+
+  getSourceBrowsingContext() {
+    if (this.openWindowInfo) {
+      // If openWindowInfo is set this was for window.print() and the source
+      // contents have already been cloned into the preview browser.
+      return this.sourceBrowser.browsingContext;
+    }
+    return this.sourceBrowsingContext;
+  }
+
+  get canPrintSelectionOnly() {
+    return !!this.sourceBrowsingContext.currentRemoteType;
+  }
+
+  get currentBrowsingContext() {
+    return this.lastPreviewBrowser.browsingContext;
+  }
+
+  exitPrintPreview() {
+    this.sourceBrowser?.frameLoader?.exitPrintPreview();
+    this.simplifiedBrowser?.frameLoader?.exitPrintPreview();
+    this.selectionBrowser?.frameLoader?.exitPrintPreview();
+
+    this.textContent = "";
+  }
+
+  async printPreview(settings, { sourceVersion, sourceURI }) {
+    this.stack.setAttribute("rendering", true);
+
+    let result = await this._printPreview(settings, {
+      sourceVersion,
+      sourceURI,
+    });
+
+    let browser = this.lastPreviewBrowser;
+    this.stack.setAttribute("previewtype", browser.getAttribute("previewtype"));
+    browser.setAttribute("sheet-count", result.sheetCount);
+    // The view resets to the top of the document on update bug 1686737.
+    browser.setAttribute("current-page", 1);
+    this.paginator.observePreviewBrowser(browser);
+    await document.l10n.translateElements([browser]);
+
+    this.stack.removeAttribute("rendering");
+
+    return result;
+  }
+
+  async _printPreview(settings, { sourceVersion, sourceURI }) {
+    let printSelectionOnly =
+      sourceVersion == "selection" && this.canPrintSelectionOnly;
+    let simplifyPage = sourceVersion == "simplified";
+    let selectionTypeBrowser;
+    let previewBrowser;
+
+    // Select the existing preview browser elements, these could be null.
+    if (printSelectionOnly) {
+      selectionTypeBrowser = this.selectionBrowser;
+      previewBrowser = this.selectionBrowser;
+    } else {
+      selectionTypeBrowser = this.sourceBrowser;
+      previewBrowser = simplifyPage
+        ? this.simplifiedBrowser
+        : this.sourceBrowser;
+    }
+
+    settings.docURL = sourceURI;
+
+    if (previewBrowser) {
+      this.lastPreviewBrowser = previewBrowser;
+      if (this.openWindowInfo) {
+        // We only want to use openWindowInfo for the window.print() browser,
+        // we can get rid of it now.
+        this.openWindowInfo = null;
+      }
+      // This browser has been rendered already, just update it.
+      return previewBrowser.frameLoader.printPreview(settings, null);
+    }
+
+    if (!selectionTypeBrowser) {
+      // Need to create a non-simplified browser.
+      selectionTypeBrowser = this.createPreviewBrowser(
+        simplifyPage ? "source" : sourceVersion
+      );
+      let browsingContext =
+        printSelectionOnly || this.printFrameOnly
+          ? this.activeBrowsingContext
+          : this.topBrowsingContext;
+      let result = await selectionTypeBrowser.frameLoader.printPreview(
+        settings,
+        browsingContext
+      );
+      // If this isn't simplified then we're done.
+      if (!simplifyPage) {
+        this.lastPreviewBrowser = selectionTypeBrowser;
+        return result;
+      }
+    }
+
+    // We have the base selection/primary browser but need to simplify.
+    previewBrowser = this.createPreviewBrowser(sourceVersion);
+    await previewBrowser.browsingContext.currentWindowGlobal
+      .getActor("Printing")
+      .sendQuery("Printing:Preview:ParseDocument", {
+        URL: sourceURI,
+        windowID:
+          selectionTypeBrowser.browsingContext.currentWindowGlobal
+            .outerWindowId,
+      });
+
+    // We've parsed a simplified version into the preview browser. Convert that to
+    // a print preview as usual.
+    this.lastPreviewBrowser = previewBrowser;
+    return previewBrowser.frameLoader.printPreview(
+      settings,
+      previewBrowser.browsingContext
+    );
+  }
+
+  createPreviewBrowser(sourceVersion) {
+    let browser = document.createXULElement("browser");
+    let browsingContext =
+      sourceVersion == "selection" ||
+      this.printFrameOnly ||
+      (sourceVersion == "source" && this.openWindowInfo)
+        ? this.sourceBrowsingContext
+        : this.sourceBrowsingContext.top;
+    if (sourceVersion == "source" && this.openWindowInfo) {
+      browser.openWindowInfo = this.openWindowInfo;
+    } else {
+      let userContextId = browsingContext.originAttributes.userContextId;
+      if (userContextId) {
+        browser.setAttribute("usercontextid", userContextId);
+      }
+      browser.setAttribute(
+        "initialBrowsingContextGroupId",
+        browsingContext.group.id
+      );
+    }
+    browser.setAttribute("type", "content");
+    let remoteType = browsingContext.currentRemoteType;
+    if (remoteType) {
+      browser.setAttribute("remoteType", remoteType);
+      browser.setAttribute("remote", "true");
+    }
+    // When the print process finishes, we get closed by
+    // nsDocumentViewer::OnDonePrinting, or by the print preview code.
+    //
+    // When that happens, we should remove us from the DOM if connected.
+    browser.addEventListener("DOMWindowClose", function(e) {
+      if (this.isConnected) {
+        this.remove();
+      }
+      e.stopPropagation();
+      e.preventDefault();
+    });
+
+    if (this.settingsBrowser) {
+      browser.addEventListener("contextmenu", function(e) {
+        e.preventDefault();
+      });
+
+      browser.setAttribute("previewtype", sourceVersion);
+      browser.classList.add("printPreviewBrowser");
+      browser.setAttribute("flex", "1");
+      browser.setAttribute("printpreview", "true");
+      browser.setAttribute("nodefaultsrc", "true");
+      document.l10n.setAttributes(browser, "printui-preview-label");
+
+      this.stack.insertBefore(browser, this.paginator);
+
+      if (sourceVersion == "source") {
+        this.sourceBrowser = browser;
+      } else if (sourceVersion == "selection") {
+        this.selectionBrowser = browser;
+      } else if (sourceVersion == "simplified") {
+        this.simplifiedBrowser = browser;
+      }
+    } else {
+      browser.style.visibility = "collapse";
+    }
+    return browser;
+  }
+}
+customElements.define("print-preview", PrintPreview);

@@ -12,6 +12,7 @@
 #include "nsMemory.h"
 #include "prinrval.h"
 #include "mozilla/Logging.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/SpinEventLoopUntil.h"
@@ -322,6 +323,7 @@ nsThreadPool::Run() {
       current->SetRunningEventDelay(delay, TimeStamp::Now());
 
       LogRunnable::Run log(event);
+      AUTO_PROFILE_FOLLOWING_RUNNABLE(event);
       event->Run();
       // To cover the event's destructor code in the LogRunnable span
       event = nullptr;

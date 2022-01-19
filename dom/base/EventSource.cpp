@@ -7,6 +7,7 @@
 #include "mozilla/dom/EventSource.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Components.h"
 #include "mozilla/DataMutex.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/LoadInfo.h"
@@ -20,6 +21,7 @@
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/dom/EventSourceEventService.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIThreadRetargetableStreamListener.h"
@@ -359,7 +361,8 @@ class EventSourceImpl final : public nsIObserver,
 NS_IMPL_ISUPPORTS(EventSourceImpl, nsIObserver, nsIStreamListener,
                   nsIRequestObserver, nsIChannelEventSink,
                   nsIInterfaceRequestor, nsISupportsWeakReference,
-                  nsIEventTarget, nsIThreadRetargetableStreamListener)
+                  nsIEventTarget, nsIThreadRetargetableStreamListener,
+                  nsITimerCallback)
 
 EventSourceImpl::EventSourceImpl(EventSource* aEventSource,
                                  nsICookieJarSettings* aCookieJarSettings)
@@ -1282,7 +1285,7 @@ nsresult EventSourceImpl::PrintErrorOnConsole(
   AssertIsOnMainThread();
   MOZ_ASSERT(!mIsShutDown);
   nsCOMPtr<nsIStringBundleService> bundleService =
-      mozilla::services::GetStringBundleService();
+      mozilla::components::StringBundle::Service();
   NS_ENSURE_STATE(bundleService);
 
   nsCOMPtr<nsIStringBundle> strBundle;

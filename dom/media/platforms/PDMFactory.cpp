@@ -30,7 +30,6 @@
 #include "mozilla/RemoteDecoderModule.h"
 #include "mozilla/SharedThreadPool.h"
 #include "mozilla/StaticPrefs_media.h"
-#include "mozilla/StaticPtr.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/TaskQueue.h"
 #include "mozilla/gfx/gfxVars.h"
@@ -61,27 +60,21 @@
 
 namespace mozilla {
 
+#define PDM_INIT_LOG(msg, ...) \
+  MOZ_LOG(sPDMLog, LogLevel::Debug, ("PDMInitializer, " msg, ##__VA_ARGS__))
+
 extern already_AddRefed<PlatformDecoderModule> CreateNullDecoderModule();
 
-class PDMFactoryImpl final {
+class PDMInitializer final {
  public:
-  PDMFactoryImpl() {
-    if (XRE_IsGPUProcess()) {
-      InitGpuPDMs();
-    } else if (XRE_IsRDDProcess()) {
-      InitRddPDMs();
-    } else if (XRE_IsContentProcess()) {
-      InitContentPDMs();
-    } else {
-      MOZ_DIAGNOSTIC_ASSERT(
-          XRE_IsParentProcess(),
-          "PDMFactory is only usable in the Parent/GPU/RDD/Content process");
-      InitDefaultPDMs();
-    }
-  }
+  // This function should only be executed ONCE per process.
+  static void InitPDMs();
+
+  // Return true if we've finished PDMs initialization.
+  static bool HasInitializedPDMs();
 
  private:
-  void InitGpuPDMs() {
+  static void InitGpuPDMs() {
 #ifdef XP_WIN
     if (!IsWin7AndPre2000Compatible()) {
       WMFDecoderModule::Init();
@@ -89,7 +82,7 @@ class PDMFactoryImpl final {
 #endif
   }
 
-  void InitRddPDMs() {
+  static void InitRddPDMs() {
 #ifdef XP_WIN
     if (!IsWin7AndPre2000Compatible()) {
       WMFDecoderModule::Init();
@@ -108,7 +101,7 @@ class PDMFactoryImpl final {
 #endif
   }
 
-  void InitContentPDMs() {
+  static void InitContentPDMs() {
 #ifdef XP_WIN
     if (!IsWin7AndPre2000Compatible()) {
       WMFDecoderModule::Init();
@@ -129,7 +122,7 @@ class PDMFactoryImpl final {
     RemoteDecoderManagerChild::Init();
   }
 
-  void InitDefaultPDMs() {
+  static void InitDefaultPDMs() {
 #ifdef XP_WIN
     if (!IsWin7AndPre2000Compatible()) {
       WMFDecoderModule::Init();
@@ -148,10 +141,43 @@ class PDMFactoryImpl final {
     FFmpegRuntimeLinker::Init();
 #endif
   }
+
+  static bool sHasInitializedPDMs;
+  static StaticMutex sMonitor;
 };
 
-StaticAutoPtr<PDMFactoryImpl> PDMFactory::sInstance;
-StaticMutex PDMFactory::sMonitor;
+bool PDMInitializer::sHasInitializedPDMs = false;
+StaticMutex PDMInitializer::sMonitor;
+
+/* static */
+void PDMInitializer::InitPDMs() {
+  StaticMutexAutoLock mon(sMonitor);
+  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!sHasInitializedPDMs);
+  if (XRE_IsGPUProcess()) {
+    PDM_INIT_LOG("Init PDMs in GPU process");
+    InitGpuPDMs();
+  } else if (XRE_IsRDDProcess()) {
+    PDM_INIT_LOG("Init PDMs in RDD process");
+    InitRddPDMs();
+  } else if (XRE_IsContentProcess()) {
+    PDM_INIT_LOG("Init PDMs in Content process");
+    InitContentPDMs();
+  } else {
+    MOZ_DIAGNOSTIC_ASSERT(
+        XRE_IsParentProcess(),
+        "PDMFactory is only usable in the Parent/GPU/RDD/Content process");
+    PDM_INIT_LOG("Init PDMs in Chrome process");
+    InitDefaultPDMs();
+  }
+  sHasInitializedPDMs = true;
+}
+
+/* static */
+bool PDMInitializer::HasInitializedPDMs() {
+  StaticMutexAutoLock mon(sMonitor);
+  return sHasInitializedPDMs;
+}
 
 class SupportChecker {
  public:
@@ -234,33 +260,25 @@ PDMFactory::~PDMFactory() = default;
 
 /* static */
 void PDMFactory::EnsureInit() {
-  {
-    StaticMutexAutoLock mon(sMonitor);
-    if (sInstance) {
-      // Quick exit if we already have an instance.
-      return;
-    }
+  if (PDMInitializer::HasInitializedPDMs()) {
+    return;
   }
-
   auto initalization = []() {
     MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
-    StaticMutexAutoLock mon(sMonitor);
-    if (!sInstance) {
+    if (!PDMInitializer::HasInitializedPDMs()) {
       // Ensure that all system variables are initialized.
       gfx::gfxVars::Initialize();
       // Prime the preferences system from the main thread.
       Unused << BrowserTabsRemoteAutostart();
-      // On the main thread and holding the lock -> Create instance.
-      sInstance = new PDMFactoryImpl();
-      ClearOnShutdown(&sInstance);
+      PDMInitializer::InitPDMs();
     }
   };
+  // If on the main thread, then initialize PDMs. Otherwise, do a sync-dispatch
+  // to main thread.
   if (NS_IsMainThread()) {
     initalization();
     return;
   }
-
-  // Not on the main thread -> Sync-dispatch creation to main thread.
   nsCOMPtr<nsIEventTarget> mainTarget = GetMainThreadEventTarget();
   nsCOMPtr<nsIRunnable> runnable = NS_NewRunnableFunction(
       "PDMFactory::EnsureInit", std::move(initalization));
@@ -284,7 +302,8 @@ RefPtr<PlatformDecoderModule::CreateDecoderPromise> PDMFactory::CreateDecoder(
 
 RefPtr<PlatformDecoderModule::CreateDecoderPromise>
 PDMFactory::CheckAndMaybeCreateDecoder(CreateDecoderParamsForAsync&& aParams,
-                                       uint32_t aIndex) {
+                                       uint32_t aIndex,
+                                       Maybe<MediaResult> aEarlierError) {
   uint32_t i = aIndex;
   auto params = SupportDecoderParams(aParams);
   for (; i < mCurrentPDMs.Length(); i++) {
@@ -303,9 +322,13 @@ PDMFactory::CheckAndMaybeCreateDecoder(CreateDecoderParamsForAsync&& aParams,
                     const MediaResult& aError) mutable {
                   // Try the next PDM.
                   return self->CheckAndMaybeCreateDecoder(std::move(params),
-                                                          i + 1);
+                                                          i + 1, Some(aError));
                 });
     return p;
+  }
+  if (aEarlierError) {
+    return PlatformDecoderModule::CreateDecoderPromise::CreateAndReject(
+        std::move(*aEarlierError), __func__);
   }
   return PlatformDecoderModule::CreateDecoderPromise::CreateAndReject(
       MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
@@ -376,13 +399,12 @@ PDMFactory::CreateDecoderWithPDM(PlatformDecoderModule* aPDM,
   return aPDM->AsyncCreateDecoder(aParams);
 }
 
-bool PDMFactory::SupportsMimeType(
-    const nsACString& aMimeType, DecoderDoctorDiagnostics* aDiagnostics) const {
+bool PDMFactory::SupportsMimeType(const nsACString& aMimeType) const {
   UniquePtr<TrackInfo> trackInfo = CreateTrackInfoWithMIMEType(aMimeType);
   if (!trackInfo) {
     return false;
   }
-  return Supports(SupportDecoderParams(*trackInfo), aDiagnostics);
+  return Supports(SupportDecoderParams(*trackInfo), nullptr);
 }
 
 bool PDMFactory::Supports(const SupportDecoderParams& aParams,
@@ -427,6 +449,26 @@ void PDMFactory::CreateGpuPDMs() {
 #endif
 }
 
+#if defined(MOZ_FFMPEG)
+static DecoderDoctorDiagnostics::Flags GetFailureFlagBasedOnFFmpegStatus(
+    const FFmpegRuntimeLinker::LinkStatus& aStatus) {
+  switch (aStatus) {
+    case FFmpegRuntimeLinker::LinkStatus_INVALID_FFMPEG_CANDIDATE:
+    case FFmpegRuntimeLinker::LinkStatus_UNUSABLE_LIBAV57:
+    case FFmpegRuntimeLinker::LinkStatus_INVALID_LIBAV_CANDIDATE:
+    case FFmpegRuntimeLinker::LinkStatus_OBSOLETE_FFMPEG:
+    case FFmpegRuntimeLinker::LinkStatus_OBSOLETE_LIBAV:
+    case FFmpegRuntimeLinker::LinkStatus_INVALID_CANDIDATE:
+      return DecoderDoctorDiagnostics::Flags::LibAVCodecUnsupported;
+    default:
+      MOZ_DIAGNOSTIC_ASSERT(
+          aStatus == FFmpegRuntimeLinker::LinkStatus_NOT_FOUND,
+          "Only call this method when linker fails.");
+      return DecoderDoctorDiagnostics::Flags::FFmpegNotFound;
+  }
+}
+#endif
+
 void PDMFactory::CreateRddPDMs() {
 #ifdef XP_WIN
   if (StaticPrefs::media_wmf_enabled() &&
@@ -449,9 +491,8 @@ void PDMFactory::CreateRddPDMs() {
   if (StaticPrefs::media_ffmpeg_enabled() &&
       StaticPrefs::media_rdd_ffmpeg_enabled() &&
       !CreateAndStartupPDM<FFmpegRuntimeLinker>()) {
-    mFailureFlags += DecoderDoctorDiagnostics::Flags::FFmpegFailedToLoad;
-  } else {
-    mFailureFlags -= DecoderDoctorDiagnostics::Flags::FFmpegFailedToLoad;
+    mFailureFlags += GetFailureFlagBasedOnFFmpegStatus(
+        FFmpegRuntimeLinker::LinkStatusCode());
   }
 #endif
   CreateAndStartupPDM<AgnosticDecoderModule>();
@@ -468,8 +509,7 @@ void PDMFactory::CreateContentPDMs() {
 
 #ifdef XP_WIN
   if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
-    RefPtr<WMFDecoderModule> m = MakeAndAddRef<WMFDecoderModule>();
-    if (!StartupPDM(m.forget())) {
+    if (!CreateAndStartupPDM<WMFDecoderModule>()) {
       mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
     }
   } else if (StaticPrefs::media_decoder_doctor_wmf_disabled_is_failure()) {
@@ -493,7 +533,8 @@ void PDMFactory::CreateContentPDMs() {
 #ifdef MOZ_FFMPEG
   if (StaticPrefs::media_ffmpeg_enabled() &&
       !CreateAndStartupPDM<FFmpegRuntimeLinker>()) {
-    mFailureFlags += DecoderDoctorDiagnostics::Flags::FFmpegFailedToLoad;
+    mFailureFlags += GetFailureFlagBasedOnFFmpegStatus(
+        FFmpegRuntimeLinker::LinkStatusCode());
   }
 #endif
 #ifdef MOZ_WIDGET_ANDROID
@@ -514,8 +555,7 @@ void PDMFactory::CreateContentPDMs() {
 void PDMFactory::CreateDefaultPDMs() {
 #ifdef XP_WIN
   if (StaticPrefs::media_wmf_enabled() && !IsWin7AndPre2000Compatible()) {
-    RefPtr<WMFDecoderModule> m = MakeAndAddRef<WMFDecoderModule>();
-    if (!StartupPDM(m.forget())) {
+    if (!CreateAndStartupPDM<WMFDecoderModule>()) {
       mFailureFlags += DecoderDoctorDiagnostics::Flags::WMFFailedToLoad;
     }
   } else if (StaticPrefs::media_decoder_doctor_wmf_disabled_is_failure()) {
@@ -539,7 +579,8 @@ void PDMFactory::CreateDefaultPDMs() {
 #ifdef MOZ_FFMPEG
   if (StaticPrefs::media_ffmpeg_enabled() &&
       !CreateAndStartupPDM<FFmpegRuntimeLinker>()) {
-    mFailureFlags += DecoderDoctorDiagnostics::Flags::FFmpegFailedToLoad;
+    mFailureFlags += GetFailureFlagBasedOnFFmpegStatus(
+        FFmpegRuntimeLinker::LinkStatusCode());
   }
 #endif
 #ifdef MOZ_WIDGET_ANDROID
@@ -623,38 +664,38 @@ PDMFactory::MediaCodecsSupported PDMFactory::Supported(bool aForceRefresh) {
     // available.
     // This logic will have to be revisited if a PDM supporting either codec
     // will be added in addition to the WMF and FFmpeg PDM (such as OpenH264)
-    if (pdm->SupportsMimeType("video/avc"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("video/avc"_ns)) {
       supported += MediaCodecs::H264;
     }
-    if (pdm->SupportsMimeType("video/vp9"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("video/vp9"_ns)) {
       supported += MediaCodecs::VP9;
     }
-    if (pdm->SupportsMimeType("video/vp8"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("video/vp8"_ns)) {
       supported += MediaCodecs::VP8;
     }
-    if (pdm->SupportsMimeType("video/av1"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("video/av1"_ns)) {
       supported += MediaCodecs::AV1;
     }
-    if (pdm->SupportsMimeType("video/theora"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("video/theora"_ns)) {
       supported += MediaCodecs::Theora;
     }
-    if (pdm->SupportsMimeType("audio/mp4a-latm"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("audio/mp4a-latm"_ns)) {
       supported += MediaCodecs::AAC;
     }
     // MP3 can be either decoded by ffvpx or WMF/FFmpeg
-    if (pdm->SupportsMimeType("audio/mpeg"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("audio/mpeg"_ns)) {
       supported += MediaCodecs::MP3;
     }
-    if (pdm->SupportsMimeType("audio/opus"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("audio/opus"_ns)) {
       supported += MediaCodecs::Opus;
     }
-    if (pdm->SupportsMimeType("audio/vorbis"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("audio/vorbis"_ns)) {
       supported += MediaCodecs::Vorbis;
     }
-    if (pdm->SupportsMimeType("audio/flac"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("audio/flac"_ns)) {
       supported += MediaCodecs::Flac;
     }
-    if (pdm->SupportsMimeType("audio/x-wav"_ns, nullptr)) {
+    if (pdm->SupportsMimeType("audio/x-wav"_ns)) {
       supported += MediaCodecs::Wave;
     }
     return supported;
@@ -707,4 +748,21 @@ bool PDMFactory::SupportsMimeType(const nsACString& aMimeType,
   return false;
 }
 
+/* static */
+bool PDMFactory::AllDecodersAreRemote() {
+  return StaticPrefs::media_rdd_process_enabled() &&
+#if defined(MOZ_FFVPX)
+         StaticPrefs::media_rdd_ffvpx_enabled() &&
+#endif
+         StaticPrefs::media_rdd_opus_enabled() &&
+         StaticPrefs::media_rdd_theora_enabled() &&
+         StaticPrefs::media_rdd_vorbis_enabled() &&
+         StaticPrefs::media_rdd_vpx_enabled() &&
+#if defined(MOZ_WMF)
+         StaticPrefs::media_rdd_wmf_enabled() &&
+#endif
+         StaticPrefs::media_rdd_wav_enabled();
+}
+
+#undef PDM_INIT_LOG
 }  // namespace mozilla

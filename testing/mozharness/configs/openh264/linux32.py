@@ -19,9 +19,18 @@ config = {
     },
     "dump_syms_binary": "{}/dump_syms/dump_syms".format(os.environ["MOZ_FETCHES_DIR"]),
     "arch": "x86",
-    "avoid_avx2": True,
     "operating_system": "linux",
     "partial_env": {
+        "CXXFLAGS": (
+            "--sysroot {MOZ_FETCHES_DIR}/sysroot".format(
+                MOZ_FETCHES_DIR=os.environ["MOZ_FETCHES_DIR"]
+            )
+        ),
+        "LDFLAGS": (
+            "--sysroot {MOZ_FETCHES_DIR}/sysroot".format(
+                MOZ_FETCHES_DIR=os.environ["MOZ_FETCHES_DIR"]
+            )
+        ),
         "PATH": (
             "{MOZ_FETCHES_DIR}/clang/bin:"
             "{MOZ_FETCHES_DIR}/binutils/bin:"

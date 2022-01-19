@@ -43,6 +43,7 @@
 #include "vm/StringType.h"            // for NameToId, PropertyName, JSAtom
 #include "wasm/WasmDebug.h"           // for ExprLoc, DebugState
 #include "wasm/WasmInstance.h"        // for Instance
+#include "wasm/WasmJS.h"              // for WasmInstanceObject
 #include "wasm/WasmTypes.h"           // for Bytes
 
 #include "vm/BytecodeUtil-inl.h"  // for BytecodeRangeWithPosition
@@ -194,7 +195,7 @@ struct MOZ_STACK_CLASS DebuggerScript::CallData {
         referent(cx, obj->getReferent()),
         script(cx) {}
 
-  MOZ_MUST_USE bool ensureScriptMaybeLazy() {
+  [[nodiscard]] bool ensureScriptMaybeLazy() {
     if (!referent.is<BaseScript*>()) {
       ReportValueError(cx, JSMSG_DEBUG_BAD_REFERENT, JSDVG_SEARCH_STACK,
                        args.thisv(), nullptr, "a JS script");
@@ -203,7 +204,7 @@ struct MOZ_STACK_CLASS DebuggerScript::CallData {
     return true;
   }
 
-  MOZ_MUST_USE bool ensureScript() {
+  [[nodiscard]] bool ensureScript() {
     if (!ensureScriptMaybeLazy()) {
       return false;
     }
@@ -216,7 +217,6 @@ struct MOZ_STACK_CLASS DebuggerScript::CallData {
 
   bool getIsGeneratorFunction();
   bool getIsAsyncFunction();
-  bool getIsDefaultClassConstructor();
   bool getIsFunction();
   bool getIsModule();
   bool getDisplayName();
@@ -249,7 +249,6 @@ struct MOZ_STACK_CLASS DebuggerScript::CallData {
   bool isInCatchScope();
   bool getOffsetsCoverage();
   bool setInstrumentationId();
-  bool getCompressedContents();
 
   using Method = bool (CallData::*)();
 
@@ -285,14 +284,6 @@ bool DebuggerScript::CallData::getIsAsyncFunction() {
     return false;
   }
   args.rval().setBoolean(obj->getReferentScript()->isAsync());
-  return true;
-}
-
-bool DebuggerScript::CallData::getIsDefaultClassConstructor() {
-  if (!ensureScriptMaybeLazy()) {
-    return false;
-  }
-  args.rval().setBoolean(obj->getReferentScript()->isDefaultClassConstructor());
   return true;
 }
 
@@ -337,7 +328,7 @@ bool DebuggerScript::CallData::getDisplayName() {
 }
 
 bool DebuggerScript::CallData::getParameterNames() {
-  if (!ensureScriptMaybeLazy()) {
+  if (!ensureScript()) {
     return false;
   }
 
@@ -514,6 +505,11 @@ static bool PushFunctionScript(JSContext* cx, Debugger* dbg, HandleFunction fun,
   }
 
   Rooted<BaseScript*> script(cx, fun->baseScript());
+  MOZ_ASSERT(script);
+  if (!script) {
+    // If the function doesn't have script, ignore it.
+    return true;
+  }
   RootedObject wrapped(cx, dbg->wrapScript(cx, script));
   if (!wrapped) {
     return false;
@@ -534,6 +530,12 @@ static bool PushInnerFunctions(JSContext* cx, Debugger* dbg, HandleObject array,
     JSObject* obj = &gcThing.as<JSObject>();
     if (obj->is<JSFunction>()) {
       fun = &obj->as<JSFunction>();
+
+      // Ignore any delazification placeholder functions. These should not be
+      // exposed to debugger in any way.
+      if (fun->isGhost()) {
+        continue;
+      }
 
       if (!PushFunctionScript(cx, dbg, fun, array)) {
         return false;
@@ -1496,8 +1498,8 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::Lineno:
     case JSOp::JumpTarget:
     case JSOp::Undefined:
-    case JSOp::IfNe:
-    case JSOp::IfEq:
+    case JSOp::JumpIfTrue:
+    case JSOp::JumpIfFalse:
     case JSOp::Return:
     case JSOp::RetRval:
     case JSOp::And:
@@ -1604,6 +1606,7 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::Swap:
     case JSOp::Pick:
     case JSOp::Unpick:
+    case JSOp::GetAliasedDebugVar:
     case JSOp::GetAliasedVar:
     case JSOp::Uint24:
     case JSOp::ResumeIndex:
@@ -1622,7 +1625,6 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::RegExp:
     case JSOp::CallSiteObj:
     case JSOp::Object:
-    case JSOp::ClassConstructor:
     case JSOp::Typeof:
     case JSOp::TypeofExpr:
     case JSOp::ToAsyncIter:
@@ -1633,6 +1635,7 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::PopLexicalEnv:
     case JSOp::FreshenLexicalEnv:
     case JSOp::RecreateLexicalEnv:
+    case JSOp::PushClassBodyEnv:
     case JSOp::Iter:
     case JSOp::MoreIter:
     case JSOp::IsNoIter:
@@ -1666,7 +1669,6 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::FunWithProto:
     case JSOp::ObjWithProto:
     case JSOp::BuiltinObject:
-    case JSOp::DerivedConstructor:
     case JSOp::CheckThis:
     case JSOp::CheckReturn:
     case JSOp::CheckThisReinit:
@@ -2457,7 +2459,6 @@ bool DebuggerScript::construct(JSContext* cx, unsigned argc, Value* vp) {
 const JSPropertySpec DebuggerScript::properties_[] = {
     JS_DEBUG_PSG("isGeneratorFunction", getIsGeneratorFunction),
     JS_DEBUG_PSG("isAsyncFunction", getIsAsyncFunction),
-    JS_DEBUG_PSG("isDefaultClassConstructor", getIsDefaultClassConstructor),
     JS_DEBUG_PSG("isFunction", getIsFunction),
     JS_DEBUG_PSG("isModule", getIsModule),
     JS_DEBUG_PSG("displayName", getDisplayName),

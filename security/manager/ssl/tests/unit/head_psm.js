@@ -32,7 +32,7 @@ const gEVExpected = isDebugBuild;
 
 const CLIENT_AUTH_FILE_NAME = "ClientAuthRememberList.txt";
 const SSS_STATE_FILE_NAME = "SiteSecurityServiceState.txt";
-const PRELOAD_STATE_FILE_NAME = "SecurityPreloadState.txt";
+const CERT_OVERRIDE_FILE_NAME = "cert_override.txt";
 
 const SEC_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SEC_ERROR_BASE;
 const SSL_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SSL_ERROR_BASE;
@@ -523,7 +523,13 @@ async function asyncConnectTo(
     let sts = Cc["@mozilla.org/network/socket-transport-service;1"].getService(
       Ci.nsISocketTransportService
     );
-    this.transport = sts.createTransport(["ssl"], host, REMOTE_PORT, null);
+    this.transport = sts.createTransport(
+      ["ssl"],
+      host,
+      REMOTE_PORT,
+      null,
+      null
+    );
     if (aEchConfig) {
       this.transport.setEchConfig(atob(aEchConfig));
     }
@@ -909,6 +915,7 @@ function add_cert_override(aHost, aExpectedBits, aSecurityInfo) {
   certOverrideService.rememberValidityOverride(
     aHost,
     8443,
+    {},
     cert,
     aExpectedBits,
     true
@@ -975,6 +982,7 @@ function attempt_adding_cert_override(aHost, aExpectedBits, aSecurityInfo) {
     certOverrideService.rememberValidityOverride(
       aHost,
       8443,
+      {},
       cert,
       aExpectedBits,
       true

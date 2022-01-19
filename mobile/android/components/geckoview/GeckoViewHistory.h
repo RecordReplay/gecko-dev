@@ -6,7 +6,6 @@
 #define GECKOVIEWHISTORY_H
 
 #include "mozilla/BaseHistory.h"
-#include "nsDataHashtable.h"
 #include "nsTObserverArray.h"
 #include "nsURIHashKey.h"
 #include "nsINamed.h"
@@ -43,8 +42,7 @@ class GeckoViewHistory final : public mozilla::BaseHistory {
 
   GeckoViewHistory();
 
-  void QueryVisitedState(nsIWidget* aWidget,
-                         const nsTArray<RefPtr<nsIURI>>&& aURIs);
+  void QueryVisitedState(nsIWidget* aWidget, nsTArray<RefPtr<nsIURI>>&& aURIs);
   void HandleVisitedState(const nsTArray<VisitedURI>& aVisitedURIs);
 
  private:

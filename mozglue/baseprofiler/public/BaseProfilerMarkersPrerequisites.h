@@ -13,24 +13,31 @@
 #ifndef BaseProfilerMarkersPrerequisites_h
 #define BaseProfilerMarkersPrerequisites_h
 
-#ifdef MOZ_GECKO_PROFILER
+namespace mozilla {
 
-#  include "BaseProfilingCategory.h"
-#  include "mozilla/Maybe.h"
-#  include "mozilla/ProfileChunkedBuffer.h"
-#  include "mozilla/TimeStamp.h"
-#  include "mozilla/UniquePtr.h"
-#  include "mozilla/Variant.h"
+enum class StackCaptureOptions {
+  NoStack,    // No stack captured.
+  Full,       // Capture a full stack, including label frames, JS frames and
+              // native frames.
+  NonNative,  // Capture a stack without native frames for reduced overhead.
+};
 
-#  include <initializer_list>
-#  include <string_view>
-#  include <string>
-#  include <type_traits>
-#  include <utility>
-#  include <vector>
+}
 
-// TODO: Move common stuff to shared header instead.
-#  include "BaseProfiler.h"
+#include "BaseProfilingCategory.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/ProfileChunkedBuffer.h"
+#include "mozilla/BaseProfilerState.h"
+#include "mozilla/TimeStamp.h"
+#include "mozilla/UniquePtr.h"
+#include "mozilla/Variant.h"
+
+#include <initializer_list>
+#include <string_view>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace mozilla {
 
@@ -239,16 +246,16 @@ namespace baseprofiler::category {
 // E.g.: mozilla::baseprofiler::category::OTHER_Profiling
 // Profiler macros will take the category name alone without namespace.
 // E.g.: `PROFILER_MARKER_UNTYPED("name", OTHER_Profiling)`
-#  define CATEGORY_ENUM_BEGIN_CATEGORY(name, labelAsString, color)
-#  define CATEGORY_ENUM_SUBCATEGORY(supercategory, name, labelAsString) \
-    static constexpr MarkerCategory name{ProfilingCategoryPair::name};
-#  define CATEGORY_ENUM_END_CATEGORY
+#define CATEGORY_ENUM_BEGIN_CATEGORY(name, labelAsString, color)
+#define CATEGORY_ENUM_SUBCATEGORY(supercategory, name, labelAsString) \
+  static constexpr MarkerCategory name{ProfilingCategoryPair::name};
+#define CATEGORY_ENUM_END_CATEGORY
 MOZ_PROFILING_CATEGORY_LIST(CATEGORY_ENUM_BEGIN_CATEGORY,
                             CATEGORY_ENUM_SUBCATEGORY,
                             CATEGORY_ENUM_END_CATEGORY)
-#  undef CATEGORY_ENUM_BEGIN_CATEGORY
-#  undef CATEGORY_ENUM_SUBCATEGORY
-#  undef CATEGORY_ENUM_END_CATEGORY
+#undef CATEGORY_ENUM_BEGIN_CATEGORY
+#undef CATEGORY_ENUM_SUBCATEGORY
+#undef CATEGORY_ENUM_END_CATEGORY
 
 // Import `MarkerCategory` into this namespace. This will allow using this type
 // dynamically in macros that prepend `::mozilla::baseprofiler::category::` to
@@ -427,7 +434,7 @@ class MarkerStack {
 
   // Allow move.
   MarkerStack(MarkerStack&& aOther)
-      : mIsCaptureRequested(aOther.mIsCaptureRequested),
+      : mCaptureOptions(aOther.mCaptureOptions),
         mOptionalChunkedBufferStorage(
             std::move(aOther.mOptionalChunkedBufferStorage)),
         mChunkedBuffer(aOther.mChunkedBuffer) {
@@ -435,7 +442,7 @@ class MarkerStack {
     aOther.Clear();
   }
   MarkerStack& operator=(MarkerStack&& aOther) {
-    mIsCaptureRequested = aOther.mIsCaptureRequested;
+    mCaptureOptions = aOther.mCaptureOptions;
     mOptionalChunkedBufferStorage =
         std::move(aOther.mOptionalChunkedBufferStorage);
     mChunkedBuffer = aOther.mChunkedBuffer;
@@ -446,8 +453,7 @@ class MarkerStack {
 
   // Take ownership of a backtrace. If null or empty, equivalent to NoStack().
   explicit MarkerStack(UniquePtr<ProfileChunkedBuffer>&& aExternalChunkedBuffer)
-      : mIsCaptureRequested(false),
-        mOptionalChunkedBufferStorage(
+      : mOptionalChunkedBufferStorage(
             (!aExternalChunkedBuffer || aExternalChunkedBuffer->IsEmpty())
                 ? nullptr
                 : std::move(aExternalChunkedBuffer)),
@@ -458,25 +464,27 @@ class MarkerStack {
   // Use an existing backtrace stored elsewhere, which the user must guarantee
   // is alive during the add-marker call. If empty, equivalent to NoStack().
   explicit MarkerStack(ProfileChunkedBuffer& aExternalChunkedBuffer)
-      : mIsCaptureRequested(false),
-        mChunkedBuffer(aExternalChunkedBuffer.IsEmpty()
+      : mChunkedBuffer(aExternalChunkedBuffer.IsEmpty()
                            ? nullptr
                            : &aExternalChunkedBuffer) {
     AssertInvariants();
   }
 
   // Don't capture a stack in this marker.
-  static MarkerStack NoStack() { return MarkerStack(false); }
+  static MarkerStack NoStack() {
+    return MarkerStack(StackCaptureOptions::NoStack);
+  }
 
   // Capture a stack when adding this marker.
-  static MarkerStack Capture() {
+  static MarkerStack Capture(
+      StackCaptureOptions aCaptureOptions = StackCaptureOptions::Full) {
     // Actual capture will be handled inside profiler_add_marker.
-    return MarkerStack(true);
+    return MarkerStack(aCaptureOptions);
   }
 
   // Optionally capture a stack, useful for avoiding long-winded ternaries.
   static MarkerStack MaybeCapture(bool aDoCapture) {
-    return MarkerStack(aDoCapture);
+    return aDoCapture ? Capture() : NoStack();
   }
 
   // Use an existing backtrace stored elsewhere, which the user must guarantee
@@ -493,18 +501,16 @@ class MarkerStack {
     return MarkerStack(std::move(aExternalChunkedBuffer));
   }
 
-  [[nodiscard]] bool IsCaptureNeeded() const {
-    // If the chunked buffer already contains something, consider the capture
-    // request already fulfilled.
-    return mIsCaptureRequested;
+  [[nodiscard]] StackCaptureOptions CaptureOptions() const {
+    return mCaptureOptions;
   }
 
   ProfileChunkedBuffer* GetChunkedBuffer() const { return mChunkedBuffer; }
 
   // Use backtrace after a request. If null, equivalent to NoStack().
   void UseRequestedBacktrace(ProfileChunkedBuffer* aExternalChunkedBuffer) {
-    MOZ_RELEASE_ASSERT(IsCaptureNeeded());
-    mIsCaptureRequested = false;
+    MOZ_RELEASE_ASSERT(mCaptureOptions != StackCaptureOptions::NoStack);
+    mCaptureOptions = StackCaptureOptions::NoStack;
     if (aExternalChunkedBuffer && !aExternalChunkedBuffer->IsEmpty()) {
       // We only need to use the provided buffer if it is not empty.
       mChunkedBuffer = aExternalChunkedBuffer;
@@ -513,22 +519,22 @@ class MarkerStack {
   }
 
   void Clear() {
-    mIsCaptureRequested = false;
+    mCaptureOptions = StackCaptureOptions::NoStack;
     mOptionalChunkedBufferStorage.reset();
     mChunkedBuffer = nullptr;
     AssertInvariants();
   }
 
  private:
-  explicit MarkerStack(bool aIsCaptureRequested)
-      : mIsCaptureRequested(aIsCaptureRequested) {
+  explicit MarkerStack(StackCaptureOptions aCaptureOptions)
+      : mCaptureOptions(aCaptureOptions) {
     AssertInvariants();
   }
 
   // This should be called after every constructor and non-const function.
   void AssertInvariants() const {
-#  ifdef DEBUG
-    if (mIsCaptureRequested) {
+#ifdef DEBUG
+    if (mCaptureOptions != StackCaptureOptions::NoStack) {
       MOZ_ASSERT(!mOptionalChunkedBufferStorage,
                  "We should not hold a buffer when capture is requested");
       MOZ_ASSERT(!mChunkedBuffer,
@@ -544,11 +550,10 @@ class MarkerStack {
                    "Non-null mChunkedBuffer must not be empty");
       }
     }
-#  endif  // DEBUG
+#endif  // DEBUG
   }
 
-  // True if a capture is requested when marker is added to the profile buffer.
-  bool mIsCaptureRequested = false;
+  StackCaptureOptions mCaptureOptions = StackCaptureOptions::NoStack;
 
   // Optional storage for the backtrace, in case it was captured before the
   // add-marker call.
@@ -617,26 +622,26 @@ class MarkerOptions {
   //
   // Options can be read by their name (without "Marker"), e.g.: `o.ThreadId()`.
   // Add "Ref" for a non-const reference, e.g.: `o.ThreadIdRef() = ...;`
-#  define FUNCTIONS_ON_MEMBER(NAME)                      \
-    MarkerOptions& Set(Marker##NAME&& a##NAME)& {        \
-      m##NAME = std::move(a##NAME);                      \
-      return *this;                                      \
-    }                                                    \
-                                                         \
-    MarkerOptions&& Set(Marker##NAME&& a##NAME)&& {      \
-      m##NAME = std::move(a##NAME);                      \
-      return std::move(*this);                           \
-    }                                                    \
-                                                         \
-    const Marker##NAME& NAME() const { return m##NAME; } \
-                                                         \
-    Marker##NAME& NAME##Ref() { return m##NAME; }
+#define FUNCTIONS_ON_MEMBER(NAME)                      \
+  MarkerOptions& Set(Marker##NAME&& a##NAME)& {        \
+    m##NAME = std::move(a##NAME);                      \
+    return *this;                                      \
+  }                                                    \
+                                                       \
+  MarkerOptions&& Set(Marker##NAME&& a##NAME)&& {      \
+    m##NAME = std::move(a##NAME);                      \
+    return std::move(*this);                           \
+  }                                                    \
+                                                       \
+  const Marker##NAME& NAME() const { return m##NAME; } \
+                                                       \
+  Marker##NAME& NAME##Ref() { return m##NAME; }
 
   FUNCTIONS_ON_MEMBER(ThreadId);
   FUNCTIONS_ON_MEMBER(Timing);
   FUNCTIONS_ON_MEMBER(Stack);
   FUNCTIONS_ON_MEMBER(InnerWindowId);
-#  undef FUNCTIONS_ON_MEMBER
+#undef FUNCTIONS_ON_MEMBER
 
  private:
   friend ProfileBufferEntryReader::Deserializer<MarkerOptions>;
@@ -756,17 +761,17 @@ class MarkerSchema {
   // can contain element keys in braces to include data elements streamed by
   // `StreamJSONMarkerData()`. E.g.: "This is {text}"
 
-#  define LABEL_SETTER(name)                       \
-    MarkerSchema& Set##name(std::string a##name) { \
-      m##name = std::move(a##name);                \
-      return *this;                                \
-    }
+#define LABEL_SETTER(name)                       \
+  MarkerSchema& Set##name(std::string a##name) { \
+    m##name = std::move(a##name);                \
+    return *this;                                \
+  }
 
   LABEL_SETTER(ChartLabel)
   LABEL_SETTER(TooltipLabel)
   LABEL_SETTER(TableLabel)
 
-#  undef LABEL_SETTER
+#undef LABEL_SETTER
 
   MarkerSchema& SetAllLabels(std::string aText) {
     // Here we set the same text in each label.
@@ -860,7 +865,5 @@ class MarkerSchema {
 };
 
 }  // namespace mozilla
-
-#endif  // MOZ_GECKO_PROFILER
 
 #endif  // BaseProfilerMarkersPrerequisites_h

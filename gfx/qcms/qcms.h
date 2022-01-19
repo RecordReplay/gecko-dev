@@ -111,7 +111,8 @@ typedef enum {
 	QCMS_DATA_RGBA_8,
 	QCMS_DATA_BGRA_8,
 	QCMS_DATA_GRAY_8,
-	QCMS_DATA_GRAYA_8
+	QCMS_DATA_GRAYA_8,
+	QCMS_DATA_CMYK
 } qcms_data_type;
 
 /* the names for the following two types are sort of ugly */
@@ -168,6 +169,7 @@ void qcms_profile_release(qcms_profile *profile);
 bool qcms_profile_is_bogus(qcms_profile *profile);
 qcms_intent qcms_profile_get_rendering_intent(qcms_profile *profile);
 icColorSpaceSignature qcms_profile_get_color_space(qcms_profile *profile);
+bool qcms_profile_is_sRGB(qcms_profile *profile);
 
 void qcms_profile_precache_output_transform(qcms_profile *profile);
 

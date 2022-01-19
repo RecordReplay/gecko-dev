@@ -1,11 +1,11 @@
-use std::{cmp::Ordering, fmt, hash, marker::PhantomData, num::NonZeroU32};
+use std::{cmp::Ordering, fmt, hash, marker::PhantomData, num::NonZeroU32, ops};
 
 /// An unique index in the arena array that a handle points to.
 /// The "non-zero" part ensures that an `Option<Handle<T>>` has
 /// the same size and representation as `Handle<T>`.
 type Index = NonZeroU32;
 
-/// A strongly typed reference to a SPIR-V element.
+/// A strongly typed reference to an arena item.
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -45,7 +45,7 @@ impl<T> Ord for Handle<T> {
 }
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "Handle({})", self.index)
+        write!(formatter, "[{}]", self.index)
     }
 }
 impl<T> hash::Hash for Handle<T> {
@@ -75,13 +75,53 @@ impl<T> Handle<T> {
     }
 }
 
+/// A strongly typed range of handles.
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "serialize", feature = "deserialize"),
+    serde(transparent)
+)]
+pub struct Range<T> {
+    inner: ops::Range<u32>,
+    #[cfg_attr(any(feature = "serialize", feature = "deserialize"), serde(skip))]
+    marker: PhantomData<T>,
+}
+
+impl<T> Clone for Range<T> {
+    fn clone(&self) -> Self {
+        Range {
+            inner: self.inner.clone(),
+            marker: self.marker,
+        }
+    }
+}
+impl<T> fmt::Debug for Range<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "[{}..{}]", self.inner.start + 1, self.inner.end)
+    }
+}
+impl<T> Iterator for Range<T> {
+    type Item = Handle<T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.inner.start < self.inner.end {
+            self.inner.start += 1;
+            Some(Handle {
+                index: NonZeroU32::new(self.inner.start).unwrap(),
+                marker: self.marker,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 /// An arena holding some kind of component (e.g., type, constant,
 /// instruction, etc.) that can be referenced.
 ///
 /// Adding new items to the arena produces a strongly-typed [`Handle`].
 /// The arena can be indexed using the given handle to obtain
 /// a reference to the stored item.
-#[derive(Debug)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -99,11 +139,21 @@ impl<T> Default for Arena<T> {
         Self::new()
     }
 }
+impl<T: fmt::Debug> fmt::Debug for Arena<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
 
 impl<T> Arena<T> {
     /// Create a new arena with no initial capacity allocated.
     pub fn new() -> Self {
         Arena { data: Vec::new() }
+    }
+
+    /// Extracts the inner vector.
+    pub fn into_inner(self) -> Vec<T> {
+        self.data
     }
 
     /// Returns the current number of items stored in this arena.
@@ -118,7 +168,7 @@ impl<T> Arena<T> {
 
     /// Returns an iterator over the items stored in this arena, returning both
     /// the item's handle and a reference to it.
-    pub fn iter(&self) -> impl Iterator<Item = (Handle<T>, &T)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (Handle<T>, &T)> {
         self.data.iter().enumerate().map(|(i, v)| {
             let position = i + 1;
             let index = unsafe { Index::new_unchecked(position as u32) };
@@ -126,12 +176,21 @@ impl<T> Arena<T> {
         })
     }
 
+    /// Returns a iterator over the items stored in this arena,
+    /// returning both the item's handle and a mutable reference to it.
+    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Handle<T>, &mut T)> {
+        self.data.iter_mut().enumerate().map(|(i, v)| {
+            let position = i + 1;
+            let index = unsafe { Index::new_unchecked(position as u32) };
+            (Handle::new(index), v)
+        })
+    }
+
     /// Adds a new value to the arena, returning a typed handle.
-    ///
-    /// The value is not linked to any SPIR-V module.
     pub fn append(&mut self, value: T) -> Handle<T> {
         let position = self.data.len() + 1;
-        let index = unsafe { Index::new_unchecked(position as u32) };
+        let index =
+            Index::new(position as u32).expect("Failed to append to Arena. Handle overflows");
         self.data.push(value);
         Handle::new(index)
     }
@@ -173,13 +232,27 @@ impl<T> Arena<T> {
     pub fn get_mut(&mut self, handle: Handle<T>) -> &mut T {
         self.data.get_mut(handle.index.get() as usize - 1).unwrap()
     }
+
+    /// Get the range of handles from a particular number of elements to the end.
+    pub fn range_from(&self, old_length: usize) -> Range<T> {
+        Range {
+            inner: old_length as u32..self.data.len() as u32,
+            marker: PhantomData,
+        }
+    }
 }
 
-impl<T> std::ops::Index<Handle<T>> for Arena<T> {
+impl<T> ops::Index<Handle<T>> for Arena<T> {
     type Output = T;
     fn index(&self, handle: Handle<T>) -> &T {
-        let index = handle.index.get() - 1;
-        &self.data[index as usize]
+        &self.data[handle.index()]
+    }
+}
+
+impl<T> ops::Index<Range<T>> for Arena<T> {
+    type Output = [T];
+    fn index(&self, range: Range<T>) -> &[T] {
+        &self.data[range.inner.start as usize..range.inner.end as usize]
     }
 }
 

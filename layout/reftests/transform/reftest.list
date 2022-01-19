@@ -75,7 +75,7 @@ fuzzy-if(skiaContent,0-1,0-80) == percent-1g.html percent-1-ref.html
 == abspos-1g.html abspos-1-ref.html
 # Origin can use "top" "right" etc.
 == origin-name-1a.html origin-name-1-ref.html
-== origin-name-1b.html origin-name-1-ref.html
+fuzzy-if(webrender,0-1,0-19) == origin-name-1b.html origin-name-1-ref.html
 == origin-name-2a.html origin-name-2-ref.html
 == origin-name-2b.html origin-name-2-ref.html
 fuzzy-if(skiaContent,0-1,0-350) == origin-name-2c.html origin-name-2-ref.html
@@ -109,6 +109,7 @@ fuzzy-if(skiaContent,0-2,0-5) == stresstest-1.html stresstest-1-ref.html
 == scale-1a.html scale-1-ref.html
 == scale-1b.html scale-1-ref.html
 == scale-percent-1.html scale-percent-1-ref.html
+== scaled-blend-mode.html scaled-blend-mode-ref.html
 # Some simple checks that it obeys selector operations
 == descendant-1.html descendant-1-ref.html
 == propagate-inherit-boolean.html propagate-inherit-boolean-ref.html
@@ -141,7 +142,7 @@ fuzzy-if(webrender&&swgl,0-1,0-2) == animate-layer-scale-inherit-2.html animate-
 == animate-layer-scale-inherit-3.html animate-layer-scale-inherit-1-ref.html
 # Bug 1301500
 == dynamic-add-without-change-cb-1.html dynamic-add-without-change-cb-1-ref.html
-fuzzy-if(d2d,0-1,0-5) fuzzy-if(skiaContent,0-26,0-208) == table-overflowed-by-animation.html table-overflowed-by-animation-ref.html
+skip-if(useDrawSnapshot&&webrender) fuzzy-if(d2d,0-1,0-5) fuzzy-if(skiaContent,0-26,0-208) == table-overflowed-by-animation.html table-overflowed-by-animation-ref.html # Bug 1715402 for useDrawSnapshot&&webrender
 == translate-rounding-1.html translate-rounding-ref.html
 == translate-rounding-2.html translate-rounding-ref.html
 fails == translate-rounding-3.html translate-rounding-viewport-ref.html # bug 1397146
@@ -159,24 +160,25 @@ test-pref(layout.css.zoom-transform-hack.enabled,true) == zoom-hack-2.html zoom-
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) == partial-prerender-expansion-translate.html partial-prerender-expansion-ref.html
 test-pref(layout.animation.prerender.partial,true) == partial-prerender-translate-1.html about:blank
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-2.html partial-prerender-translate-2-ref.html
-fails test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-3.html partial-prerender-translate-3-ref.html # bug 1642575
+fails-if(!useDrawSnapshot) test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-3.html partial-prerender-translate-3-ref.html # bug 1642575
 # This reftest doesn't fail on WebRender, this reftest fails only if there is a jank mechanism and the mechanism doesn't properly handle ancestor's transform values
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-4.html partial-prerender-expansion-ref.html
 # This reftest doesn't fail on WebRender, this reftest fails only if there is a jank mechanism and the mechanism does inproperly handle position:fixed scroll target
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-5.html partial-prerender-translate-5-ref.html
-test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-6.html partial-prerender-translate-6-ref.html
+random-if(useDrawSnapshot) test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-6.html partial-prerender-translate-6-ref.html
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-7.html partial-prerender-translate-2-ref.html
 # This reftest doesn't fail on WebRender, this reftest fails only if there is a jank mechanism and the mechanism doesn't properly clip transform in iframes.
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-8.html partial-prerender-translate-8-ref.html
 # This reftest doesn't fail on WebRender, this reftest fails only if there is a jank mechanism and the mechanism does inproperly handle position:fixed scroll target
-test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-9.html partial-prerender-translate-5-ref.html
+fails-if(useDrawSnapshot) test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-9.html partial-prerender-translate-5-ref.html
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-10.html partial-prerender-translate-10-ref.html
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-11.html partial-prerender-translate-11-ref.html
 skip-if(webrender) test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-translate-12.html partial-prerender-translate-2-ref.html # bug 1666692 for WebRender
 # This reftest heavily depends on layout.animation.prerender.viewport-ratio-limit
 # and reftest viewport size (800, 1000).
-skip-if(/^Windows\x20NT\x206\.1/.test(http.oscpu)||Android) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") fuzzy-if(winWidget&&!layersGPUAccelerated,0-74,0-2667) == partial-prerender-expansion-rotate.html partial-prerender-expansion-ref.html
-test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") pref(dom.meta-viewport.enabled,true) pref(apz.allow_zooming,true) == partial-prerender-expansion-with-resolution-1.html partial-prerender-expansion-with-resolution-ref.html
+skip-if(/^Windows\x20NT\x206\.1/.test(http.oscpu)||Android) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") fuzzy-if(!layersGPUAccelerated,0-75,0-2683) == partial-prerender-expansion-rotate.html partial-prerender-expansion-ref.html
+# Bug 1710321
+skip-if(useDrawSnapshot&&webrender) fails-if(webrender&&Android) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") pref(dom.meta-viewport.enabled,true) pref(apz.allow_zooming,true) fails-if(webrender&&Android) == partial-prerender-expansion-with-resolution-1.html partial-prerender-expansion-with-resolution-ref.html
 skip-if(webrender) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") pref(dom.meta-viewport.enabled,true) pref(apz.allow_zooming,true) == partial-prerender-expansion-with-resolution-2.html partial-prerender-expansion-with-resolution-ref.html # bug 1650039 for WebRender
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-in-svg-1.html partial-prerender-in-svg-1-ref.html
 test-pref(layout.animation.prerender.partial.jank,true) test-pref(layout.animation.prerender.partial,true) test-pref(layout.animation.prerender.viewport-ratio-limit,"1.125") == partial-prerender-in-svg-2.html partial-prerender-in-svg-1-ref.html # Reuse partial-prerender-in-svg-1-ref.html since the result should look same as partial-prerender-in-svg-1.html

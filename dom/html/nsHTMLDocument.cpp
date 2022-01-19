@@ -115,7 +115,7 @@ nsresult NS_NewHTMLDocument(Document** aInstancePtrResult, bool aLoadedAsData) {
     return rv;
   }
 
-  doc->SetLoadedAsData(aLoadedAsData);
+  doc->SetLoadedAsData(aLoadedAsData, /* aConsiderForMemoryReporting */ true);
   doc.forget(aInstancePtrResult);
 
   return NS_OK;
@@ -182,22 +182,21 @@ void nsHTMLDocument::ResetToURI(nsIURI* aURI, nsILoadGroup* aLoadGroup,
   SetContentTypeInternal(nsDependentCString("text/html"));
 }
 
-void nsHTMLDocument::TryHintCharset(nsIContentViewer* aCv,
-                                    int32_t& aCharsetSource,
-                                    NotNull<const Encoding*>& aEncoding) {
+void nsHTMLDocument::TryReloadCharset(nsIContentViewer* aCv,
+                                      int32_t& aCharsetSource,
+                                      NotNull<const Encoding*>& aEncoding) {
   if (aCv) {
-    int32_t requestCharsetSource;
-    nsresult rv = aCv->GetHintCharacterSetSource(&requestCharsetSource);
+    int32_t reloadEncodingSource;
+    const auto reloadEncoding =
+        aCv->GetReloadEncodingAndSource(&reloadEncodingSource);
+    if (kCharsetUninitialized != reloadEncodingSource) {
+      aCv->ForgetReloadEncoding();
 
-    if (NS_SUCCEEDED(rv) && kCharsetUninitialized != requestCharsetSource) {
-      auto requestCharset = aCv->GetHintCharset();
-      aCv->SetHintCharacterSetSource((int32_t)(kCharsetUninitialized));
+      if (reloadEncodingSource <= aCharsetSource) return;
 
-      if (requestCharsetSource <= aCharsetSource) return;
-
-      if (requestCharset && IsAsciiCompatible(requestCharset)) {
-        aCharsetSource = requestCharsetSource;
-        aEncoding = WrapNotNull(requestCharset);
+      if (reloadEncoding && IsAsciiCompatible(reloadEncoding)) {
+        aCharsetSource = reloadEncodingSource;
+        aEncoding = WrapNotNull(reloadEncoding);
       }
     }
   }
@@ -207,7 +206,7 @@ void nsHTMLDocument::TryUserForcedCharset(nsIContentViewer* aCv,
                                           nsIDocShell* aDocShell,
                                           int32_t& aCharsetSource,
                                           NotNull<const Encoding*>& aEncoding) {
-  if (kCharsetFromUserForced <= aCharsetSource) {
+  if (aCharsetSource >= kCharsetFromXmlDeclarationUtf16) {
     return;
   }
 
@@ -216,20 +215,11 @@ void nsHTMLDocument::TryUserForcedCharset(nsIContentViewer* aCv,
     return;
   }
 
-  if (aDocShell) {
+  if (aDocShell && nsDocShell::Cast(aDocShell)->GetForcedAutodetection()) {
     // This is the Character Encoding menu code path in Firefox
-    auto encoding = nsDocShell::Cast(aDocShell)->GetForcedCharset();
-
-    if (encoding) {
-      if (!IsAsciiCompatible(encoding)) {
-        return;
-      }
-      aEncoding = WrapNotNull(encoding);
-      aCharsetSource = nsDocShell::Cast(aDocShell)->GetForcedAutodetection()
-                           ? kCharsetFromPendingUserForcedAutoDetection
-                           : kCharsetFromUserForced;
-      aDocShell->SetCharset(""_ns);
-    }
+    aEncoding = WINDOWS_1252_ENCODING;
+    aCharsetSource = kCharsetFromPendingUserForcedAutoDetection;
+    nsDocShell::Cast(aDocShell)->ResetForcedAutodetection();
   }
 }
 
@@ -239,7 +229,7 @@ void nsHTMLDocument::TryParentCharset(nsIDocShell* aDocShell,
   if (!aDocShell) {
     return;
   }
-  if (aCharsetSource >= kCharsetFromUserForced) {
+  if (aCharsetSource >= kCharsetFromXmlDeclarationUtf16) {
     return;
   }
 
@@ -251,9 +241,7 @@ void nsHTMLDocument::TryParentCharset(nsIDocShell* aDocShell,
   if (!parentCharset) {
     return;
   }
-  if (kCharsetFromUserForced == parentSource ||
-      kCharsetFromUserForcedJapaneseAutoDetection == parentSource ||
-      kCharsetFromPendingUserForcedAutoDetection == parentSource ||
+  if (kCharsetFromPendingUserForcedAutoDetection == parentSource ||
       kCharsetFromInitialUserForcedAutoDetection == parentSource ||
       kCharsetFromFinalUserForcedAutoDetection == parentSource) {
     if (WillIgnoreCharsetOverride() ||
@@ -262,11 +250,7 @@ void nsHTMLDocument::TryParentCharset(nsIDocShell* aDocShell,
       return;
     }
     aEncoding = WrapNotNull(parentCharset);
-    aCharsetSource =
-        (kCharsetFromUserForced == parentSource ||
-         kCharsetFromUserForcedJapaneseAutoDetection == parentSource)
-            ? kCharsetFromUserForced
-            : kCharsetFromPendingUserForcedAutoDetection;
+    aCharsetSource = kCharsetFromPendingUserForcedAutoDetection;
     return;
   }
 
@@ -446,12 +430,14 @@ nsresult nsHTMLDocument::StartDocumentLoad(const char* aCommand,
     executor = static_cast<nsHtml5TreeOpExecutor*>(mParser->GetContentSink());
   }
 
+  bool channelHadCharset = false;
   if (forceUtf8) {
     charsetSource = kCharsetFromUtf8OnlyMime;
   } else if (!IsHTMLDocument() || !docShell) {  // no docshell for text/html XHR
     charsetSource =
         IsHTMLDocument() ? kCharsetFromFallback : kCharsetFromDocTypeDefault;
     TryChannelCharset(aChannel, charsetSource, encoding, executor);
+    channelHadCharset = (charsetSource == kCharsetFromChannel);
   } else {
     NS_ASSERTION(docShell, "Unexpected null value");
 
@@ -462,7 +448,7 @@ nsresult nsHTMLDocument::StartDocumentLoad(const char* aCommand,
     // The following will try to get the character encoding from various
     // sources. Each Try* function will return early if the source is already
     // at least as large as any of the sources it might look at.  Some of
-    // these functions (like TryHintCharset and TryParentCharset) can set
+    // these functions (like TryReloadCharset and TryParentCharset) can set
     // charsetSource to various values depending on where the charset they
     // end up finding originally comes from.
 
@@ -474,10 +460,11 @@ nsresult nsHTMLDocument::StartDocumentLoad(const char* aCommand,
     // interpretation as ASCII and the user can be lured to using the
     // charset menu.
     TryChannelCharset(aChannel, charsetSource, encoding, executor);
+    channelHadCharset = (charsetSource == kCharsetFromChannel);
 
     TryUserForcedCharset(cv, docShell, charsetSource, encoding);
 
-    TryHintCharset(cv, charsetSource, encoding);  // For encoding reload
+    TryReloadCharset(cv, charsetSource, encoding);  // For encoding reload
     TryParentCharset(docShell, charsetSource, encoding);
   }
 
@@ -492,7 +479,7 @@ nsresult nsHTMLDocument::StartDocumentLoad(const char* aCommand,
 #ifdef DEBUG_charset
   printf(" charset = %s source %d\n", charset.get(), charsetSource);
 #endif
-  mParser->SetDocumentCharset(encoding, charsetSource);
+  mParser->SetDocumentCharset(encoding, charsetSource, channelHadCharset);
   mParser->SetCommand(aCommand);
 
   if (!IsHTMLDocument()) {
@@ -616,11 +603,10 @@ bool nsHTMLDocument::ResolveName(JSContext* aCx, const nsAString& aName,
 }
 
 void nsHTMLDocument::GetSupportedNames(nsTArray<nsString>& aNames) {
-  for (auto iter = mIdentifierMap.Iter(); !iter.Done(); iter.Next()) {
-    IdentifierMapEntry* entry = iter.Get();
-    if (entry->HasNameElement() ||
-        entry->HasIdElementExposedAsHTMLDocumentProperty()) {
-      aNames.AppendElement(entry->GetKeyAsString());
+  for (const auto& entry : mIdentifierMap) {
+    if (entry.HasNameElement() ||
+        entry.HasIdElementExposedAsHTMLDocumentProperty()) {
+      aNames.AppendElement(entry.GetKeyAsString());
     }
   }
 }
@@ -688,7 +674,37 @@ bool nsHTMLDocument::WillIgnoreCharsetOverride() {
       return true;
     }
   }
-  return false;
+
+  switch (mCharacterSetSource) {
+    case kCharsetUninitialized:
+    case kCharsetFromFallback:
+    case kCharsetFromDocTypeDefault:
+    case kCharsetFromInitialAutoDetectionWouldHaveBeenUTF8:
+    case kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD:
+    case kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8:
+    case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD:
+    case kCharsetFromParentFrame:
+    case kCharsetFromXmlDeclaration:
+    case kCharsetFromMetaPrescan:
+    case kCharsetFromMetaTag:
+    case kCharsetFromChannel:
+      return false;
+  }
+
+  bool potentialEffect = false;
+  nsIPrincipal* parentPrincipal = NodePrincipal();
+
+  auto subDoc = [&potentialEffect, parentPrincipal](Document& aSubDoc) {
+    if (parentPrincipal->Equals(aSubDoc.NodePrincipal()) &&
+        !aSubDoc.WillIgnoreCharsetOverride()) {
+      potentialEffect = true;
+      return CallState::Stop;
+    }
+    return CallState::Continue;
+  };
+  EnumerateSubDocuments(subDoc);
+
+  return !potentialEffect;
 }
 
 void nsHTMLDocument::GetFormsAndFormControls(nsContentList** aFormList,

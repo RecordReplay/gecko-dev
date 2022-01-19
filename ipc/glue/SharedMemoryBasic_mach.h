@@ -10,12 +10,12 @@
 #include "base/file_descriptor_posix.h"
 #include "base/process.h"
 
-#include "SharedMemory.h"
+#include "mozilla/ipc/SharedMemory.h"
 #include <mach/port.h>
 #include "chrome/common/mach_ipc_mac.h"
 
 #ifdef FUZZING
-#  include "SharedMemoryFuzzer.h"
+#  include "mozilla/ipc/SharedMemoryFuzzer.h"
 #endif
 
 //
@@ -73,6 +73,8 @@ class SharedMemoryBasic final : public SharedMemoryCommon<mach_port_t> {
 
   virtual bool Map(size_t nBytes, void* fixed_address = nullptr) override;
 
+  virtual void Unmap() override;
+
   virtual void CloseHandle() override;
 
   virtual void* memory() const override {
@@ -97,7 +99,6 @@ class SharedMemoryBasic final : public SharedMemoryCommon<mach_port_t> {
  private:
   ~SharedMemoryBasic();
 
-  void Unmap();
   mach_port_t mPort;
   // Pointer to mapped region, null if unmapped.
   void* mMemory;

@@ -133,11 +133,7 @@ void nsIDNService::prefsChanged(const char* pref) {
   }
 }
 
-nsIDNService::nsIDNService()
-    : mLock("DNService pref value lock"),
-      mShowPunycode(false),
-      mRestrictionProfile(static_cast<restrictionProfile>(0)),
-      mIDNUseWhitelist(false) {
+nsIDNService::nsIDNService() {
   MOZ_ASSERT(NS_IsMainThread());
 
   uint32_t IDNAOptions = UIDNA_CHECK_BIDI | UIDNA_CHECK_CONTEXTJ;
@@ -216,7 +212,13 @@ nsresult nsIDNService::IDNA2008StringPrep(const nsAString& input,
     return NS_OK;
   }
 
-  if (info.errors != 0) {
+  uint32_t ignoredErrors = 0;
+  if (flag == eStringPrepForDNS) {
+    ignoredErrors = UIDNA_ERROR_LEADING_HYPHEN | UIDNA_ERROR_TRAILING_HYPHEN |
+                    UIDNA_ERROR_HYPHEN_3_4;
+  }
+
+  if ((info.errors & ~ignoredErrors) != 0) {
     if (flag == eStringPrepForDNS) {
       output.Truncate();
     }
@@ -329,16 +331,25 @@ nsresult nsIDNService::ACEtoUTF8(const nsACString& input, nsACString& _retval,
 }
 
 NS_IMETHODIMP nsIDNService::IsACE(const nsACString& input, bool* _retval) {
-  const char* data = input.BeginReading();
-  uint32_t dataLen = input.Length();
-
   // look for the ACE prefix in the input string.  it may occur
   // at the beginning of any segment in the domain name.  for
   // example: "www.xn--ENCODED.com"
 
-  const char* p = PL_strncasestr(data, kACEPrefix, dataLen);
+  if (!IsAscii(input)) {
+    *_retval = false;
+    return NS_OK;
+  }
 
-  *_retval = p && (p == data || *(p - 1) == '.');
+  auto stringContains = [](const nsACString& haystack,
+                           const nsACString& needle) {
+    return std::search(haystack.BeginReading(), haystack.EndReading(),
+                       needle.BeginReading(),
+                       needle.EndReading()) != haystack.EndReading();
+  };
+
+  *_retval = StringBeginsWith(input, "xn--"_ns) ||
+             (!input.IsEmpty() && input[0] != '.' &&
+              stringContains(input, ".xn--"_ns));
   return NS_OK;
 }
 
@@ -387,10 +398,11 @@ NS_IMETHODIMP nsIDNService::Normalize(const nsACString& input,
 namespace {
 
 class MOZ_STACK_CLASS MutexSettableAutoUnlock final {
-  Mutex* mMutex;
+ private:
+  Mutex* mMutex = nullptr;
 
  public:
-  MutexSettableAutoUnlock() : mMutex(nullptr) {}
+  MutexSettableAutoUnlock() = default;
 
   void Acquire(mozilla::Mutex& aMutex) {
     MOZ_ASSERT(!mMutex);

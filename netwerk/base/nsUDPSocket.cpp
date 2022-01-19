@@ -37,7 +37,7 @@ static const uint32_t UDP_PACKET_CHUNK_SIZE = 1400;
 
 //-----------------------------------------------------------------------------
 
-typedef void (nsUDPSocket::*nsUDPSocketFunc)(void);
+using nsUDPSocketFunc = void (nsUDPSocket::*)();
 
 static nsresult PostEvent(nsUDPSocket* s, nsUDPSocketFunc func) {
   if (!gSocketTransportService) return NS_ERROR_FAILURE;
@@ -221,15 +221,7 @@ FallibleTArray<uint8_t>& nsUDPMessage::GetDataAsTArray() { return mData; }
 // nsUDPSocket
 //-----------------------------------------------------------------------------
 
-nsUDPSocket::nsUDPSocket()
-    : mLock("nsUDPSocket.mLock"),
-      mFD(nullptr),
-      mOriginAttributes(),
-      mAttached(false),
-      mByteReadCount(0),
-      mByteWriteCount(0) {
-  this->mAddr.inet = {};
-  mAddr.raw.family = PR_AF_UNSPEC;
+nsUDPSocket::nsUDPSocket() {
   // we want to be able to access the STS directly, and it may not have been
   // constructed yet.  the STS constructor sets gSocketTransportService.
   if (!gSocketTransportService) {
@@ -395,6 +387,11 @@ void nsUDPSocket::OnSocketReady(PRFileDesc* fd, int16_t outFlags) {
     return;
   }
 
+  if (mSyncListener) {
+    mSyncListener->OnPacketReceived(this);
+    return;
+  }
+
   PRNetAddr prClientAddr;
   int32_t count;
   // Bug 1252755 - use 9216 bytes to allign with nICEr and transportlayer to
@@ -454,7 +451,10 @@ void nsUDPSocket::OnSocketDetached(PRFileDesc* fd) {
     CloseSocket();
   }
 
-  if (mListener) {
+  if (mSyncListener) {
+    mSyncListener->OnStopListening(this, mCondition);
+    mSyncListener = nullptr;
+  } else if (mListener) {
     // need to atomically clear mListener.  see our Close() method.
     RefPtr<nsIUDPSocketListener> listener = nullptr;
     {
@@ -495,10 +495,11 @@ nsUDPSocket::Init(int32_t aPort, bool aLoopbackOnly, nsIPrincipal* aPrincipal,
   addr.raw.family = AF_INET;
   addr.inet.port = htons(aPort);
 
-  if (aLoopbackOnly)
+  if (aLoopbackOnly) {
     addr.inet.ip = htonl(INADDR_LOOPBACK);
-  else
+  } else {
     addr.inet.ip = htonl(INADDR_ANY);
+  }
 
   return InitWithAddress(&addr, aPrincipal, aAddressReuse, aOptionalArgc);
 }
@@ -511,30 +512,19 @@ nsUDPSocket::Init2(const nsACString& aAddr, int32_t aPort,
     return NS_ERROR_INVALID_ARG;
   }
 
-  PRNetAddr prAddr;
-  memset(&prAddr, 0, sizeof(prAddr));
-  if (PR_StringToNetAddr(aAddr.BeginReading(), &prAddr) != PR_SUCCESS) {
-    return NS_ERROR_FAILURE;
-  }
-
   if (aPort < 0) {
     aPort = 0;
   }
 
-  switch (prAddr.raw.family) {
-    case PR_AF_INET:
-      prAddr.inet.port = PR_htons(aPort);
-      break;
-    case PR_AF_INET6:
-      prAddr.ipv6.port = PR_htons(aPort);
-      break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Dont accept address other than IPv4 and IPv6");
-      return NS_ERROR_ILLEGAL_VALUE;
+  NetAddr addr;
+  if (NS_FAILED(addr.InitFromString(aAddr, uint16_t(aPort)))) {
+    return NS_ERROR_FAILURE;
   }
 
-  NetAddr addr;
-  PRNetAddrToNetAddr(&prAddr, &addr);
+  if (addr.raw.family != PR_AF_INET && addr.raw.family != PR_AF_INET6) {
+    MOZ_ASSERT_UNREACHABLE("Dont accept address other than IPv4 and IPv6");
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
 
   return InitWithAddress(&addr, aPrincipal, aAddressReuse, aOptionalArgc);
 }
@@ -669,7 +659,7 @@ nsUDPSocket::Close() {
     MutexAutoLock lock(mLock);
     // we want to proxy the close operation to the socket thread if a listener
     // has been set.  otherwise, we should just close the socket here...
-    if (!mListener) {
+    if (!mListener && !mSyncListener) {
       // Here we want to go directly with closing the socket since some tests
       // expects this happen synchronously.
       CloseSocket();
@@ -1054,6 +1044,7 @@ nsUDPSocket::AsyncListen(nsIUDPSocketListener* aListener) {
   // ensuring mFD implies ensuring mLock
   NS_ENSURE_TRUE(mFD, NS_ERROR_NOT_INITIALIZED);
   NS_ENSURE_TRUE(mListener == nullptr, NS_ERROR_IN_PROGRESS);
+  NS_ENSURE_TRUE(mSyncListener == nullptr, NS_ERROR_IN_PROGRESS);
   {
     MutexAutoLock lock(mLock);
     mListenerTarget = GetCurrentEventTarget();
@@ -1065,6 +1056,18 @@ nsUDPSocket::AsyncListen(nsIUDPSocketListener* aListener) {
       mListener = new SocketListenerProxyBackground(aListener);
     }
   }
+  return PostEvent(this, &nsUDPSocket::OnMsgAttach);
+}
+
+NS_IMETHODIMP
+nsUDPSocket::SyncListen(nsIUDPSocketSyncListener* aListener) {
+  // ensuring mFD implies ensuring mLock
+  NS_ENSURE_TRUE(mFD, NS_ERROR_NOT_INITIALIZED);
+  NS_ENSURE_TRUE(mListener == nullptr, NS_ERROR_IN_PROGRESS);
+  NS_ENSURE_TRUE(mSyncListener == nullptr, NS_ERROR_IN_PROGRESS);
+
+  mSyncListener = aListener;
+
   return PostEvent(this, &nsUDPSocket::OnMsgAttach);
 }
 
@@ -1170,6 +1173,29 @@ nsUDPSocket::SendBinaryStreamWithAddress(const NetAddr* aAddr,
   RefPtr<nsUDPOutputStream> os = new nsUDPOutputStream(this, mFD, prAddr);
   return NS_AsyncCopy(aStream, os, mSts, NS_ASYNCCOPY_VIA_READSEGMENTS,
                       UDP_PACKET_CHUNK_SIZE);
+}
+
+NS_IMETHODIMP
+nsUDPSocket::RecvWithAddr(NetAddr* addr, nsTArray<uint8_t>& aData) {
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+  PRNetAddr prAddr;
+  int32_t count;
+  char buff[9216];
+  count = PR_RecvFrom(mFD, buff, sizeof(buff), 0, &prAddr, PR_INTERVAL_NO_WAIT);
+  if (count < 0) {
+    UDPSOCKET_LOG(
+        ("nsUDPSocket::RecvWithAddr: PR_RecvFrom failed [this=%p]\n", this));
+    return NS_OK;
+  }
+  mByteReadCount += count;
+  PRNetAddrToNetAddr(&prAddr, addr);
+
+  if (!aData.AppendElements(buff, count, fallible)) {
+    UDPSOCKET_LOG((
+        "nsUDPSocket::OnSocketReady: AppendElements FAILED [this=%p]\n", this));
+    mCondition = NS_ERROR_UNEXPECTED;
+  }
+  return NS_OK;
 }
 
 nsresult nsUDPSocket::SetSocketOption(const PRSocketOptionData& aOpt) {
@@ -1369,6 +1395,29 @@ nsUDPSocket::SetRecvBufferSize(int size) {
     return NS_ERROR_FAILURE;
   }
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsUDPSocket::GetDontFragment(bool* dontFragment) {
+  // Bug 1252759 - missing support for GetSocketOption
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+nsUDPSocket::SetDontFragment(bool dontFragment) {
+  if (NS_WARN_IF(!mFD)) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  PRSocketOptionData opt;
+  opt.option = PR_SockOpt_DontFrag;
+  opt.value.dont_fragment = dontFragment;
+
+  nsresult rv = SetSocketOption(opt);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return NS_ERROR_FAILURE;
+  }
   return NS_OK;
 }
 

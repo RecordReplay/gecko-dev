@@ -264,6 +264,14 @@ class nsTableFrame : public nsContainerFrame {
   LogicalMargin GetExcludedOuterBCBorder(const WritingMode aWM) const;
 
   /**
+   * Emplace our border and padding in aBorder and aPadding if we are
+   * border-collapsed. Otherwise, do nothing.
+   */
+  void GetCollapsedBorderPadding(
+      mozilla::Maybe<mozilla::LogicalMargin>& aBorder,
+      mozilla::Maybe<mozilla::LogicalMargin>& aPadding) const;
+
+  /**
    * In quirks mode, the size of the table background is reduced
    * by the outer BC border. Compute the reduction needed.
    */
@@ -295,19 +303,20 @@ class nsTableFrame : public nsContainerFrame {
   IntrinsicSizeOffsetData IntrinsicISizeOffsets(
       nscoord aPercentageBasis = NS_UNCONSTRAINEDSIZE) override;
 
-  SizeComputationResult ComputeSize(gfxContext* aRenderingContext,
-                                    mozilla::WritingMode aWM,
-                                    const mozilla::LogicalSize& aCBSize,
-                                    nscoord aAvailableISize,
-                                    const mozilla::LogicalSize& aMargin,
-                                    const mozilla::LogicalSize& aBorderPadding,
-                                    mozilla::ComputeSizeFlags aFlags) override;
-
-  virtual mozilla::LogicalSize ComputeAutoSize(
+  SizeComputationResult ComputeSize(
       gfxContext* aRenderingContext, mozilla::WritingMode aWM,
       const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
       const mozilla::LogicalSize& aMargin,
       const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
+      mozilla::ComputeSizeFlags aFlags) override;
+
+  mozilla::LogicalSize ComputeAutoSize(
+      gfxContext* aRenderingContext, mozilla::WritingMode aWM,
+      const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
+      const mozilla::LogicalSize& aMargin,
+      const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
       mozilla::ComputeSizeFlags aFlags) override;
 
   /**

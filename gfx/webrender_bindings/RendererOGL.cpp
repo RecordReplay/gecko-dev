@@ -255,7 +255,7 @@ void RendererOGL::CheckGraphicsResetStatus(const char* aCaller, bool aForce) {
   if (mCompositor) {
     auto reason = mCompositor->IsContextLost(aForce);
     if (reason != LOCAL_GL_NO_ERROR) {
-      RenderThread::Get()->HandleDeviceReset(aCaller, mBridge, reason);
+      RenderThread::Get()->HandleDeviceReset(aCaller, reason);
     }
   }
 }
@@ -413,7 +413,7 @@ RenderTextureHost* RendererOGL::GetRenderTexture(
 }
 
 void RendererOGL::AccumulateMemoryReport(MemoryReport* aReport) {
-  wr_renderer_accumulate_memory_report(GetRenderer(), aReport);
+  wr_renderer_accumulate_memory_report(GetRenderer(), aReport, swgl());
 
   LayoutDeviceIntSize size = mCompositor->GetBufferSize();
 

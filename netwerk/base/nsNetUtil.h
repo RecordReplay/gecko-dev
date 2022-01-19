@@ -81,7 +81,7 @@ already_AddRefed<nsINetUtil> do_GetNetUtil(nsresult* error = nullptr);
 // private little helper function... don't call this directly!
 nsresult net_EnsureIOService(nsIIOService** ios, nsCOMPtr<nsIIOService>& grip);
 
-nsresult NS_NewURI(nsIURI** result, const nsACString& spec,
+nsresult NS_NewURI(nsIURI** aURI, const nsACString& spec,
                    const char* charset = nullptr, nsIURI* baseURI = nullptr);
 
 nsresult NS_NewURI(nsIURI** result, const nsACString& spec,
@@ -629,11 +629,6 @@ bool NS_IsSafeMethodNav(nsIChannel* aChannel);
   "about.ef2a7dd5-93bc-417f-a698-142c3116864f.mozilla"
 
 /**
- * Determines whether appcache should be checked for a given principal.
- */
-bool NS_ShouldCheckAppCache(nsIPrincipal* aPrincipal);
-
-/**
  * Wraps an nsIAuthPrompt so that it can be used as an nsIAuthPrompt2. This
  * method is provided mainly for use by other methods in this file.
  *
@@ -980,5 +975,17 @@ bool SchemeIsResource(nsIURI* aURI);
 bool SchemeIsFTP(nsIURI* aURI);
 }  // namespace net
 }  // namespace mozilla
+
+/**
+ * Returns true if the |aInput| in is part of the root domain of |aHost|.
+ * For example, if |aInput| is "www.mozilla.org", and we pass in
+ * "mozilla.org" as |aHost|, this will return true.  It would return false
+ * the other way around.
+ *
+ * @param aInput The host to be analyzed.
+ * @param aHost  The host to compare to.
+ */
+nsresult NS_HasRootDomain(const nsACString& aInput, const nsACString& aHost,
+                          bool* aResult);
 
 #endif  // !nsNetUtil_h__

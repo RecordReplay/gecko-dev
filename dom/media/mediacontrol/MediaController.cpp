@@ -26,8 +26,9 @@
 namespace mozilla::dom {
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(MediaController, DOMEventTargetHelper)
-NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(MediaController,
-                                               DOMEventTargetHelper)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(MediaController,
+                                             DOMEventTargetHelper,
+                                             nsITimerCallback)
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(MediaController,
                                                DOMEventTargetHelper)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
@@ -169,6 +170,7 @@ void MediaController::Stop() {
   LOG("Stop");
   UpdateMediaControlActionToContentMediaIfNeeded(
       MediaControlAction(MediaControlKey::Stop));
+  MediaStatusManager::ClearActiveMediaSessionContextIdIfNeeded();
 }
 
 uint64_t MediaController::Id() const { return mTopLevelBrowsingContextId; }

@@ -223,7 +223,8 @@ class gfxDWriteFontEntry final : public gfxFontEntry {
 
   nsresult CreateFontFace(
       IDWriteFontFace** aFontFace, const gfxFontStyle* aFontStyle = nullptr,
-      DWRITE_FONT_SIMULATIONS aSimulations = DWRITE_FONT_SIMULATIONS_NONE);
+      DWRITE_FONT_SIMULATIONS aSimulations = DWRITE_FONT_SIMULATIONS_NONE,
+      const nsTArray<gfxFontVariation>* aVariations = nullptr);
 
   static bool InitLogFont(IDWriteFont* aFont, LOGFONTW* aLogFont);
 
@@ -272,6 +273,9 @@ class DWriteFontFallbackRenderer final : public IDWriteTextRenderer {
   }
 
   ~DWriteFontFallbackRenderer() {}
+
+  // If we don't have an mSystemFonts pointer, this renderer is unusable.
+  bool IsValid() const { return mSystemFonts; }
 
   // IDWriteTextRenderer methods
   IFACEMETHOD(DrawGlyphRun)
@@ -365,7 +369,8 @@ class gfxDWriteFontList final : public gfxPlatformFontList {
   gfxDWriteFontList();
 
   static gfxDWriteFontList* PlatformFontList() {
-    return static_cast<gfxDWriteFontList*>(sPlatformFontList);
+    return static_cast<gfxDWriteFontList*>(
+        gfxPlatformFontList::PlatformFontList());
   }
 
   // initialize font lists
@@ -406,7 +411,7 @@ class gfxDWriteFontList final : public gfxPlatformFontList {
                                  uint32_t aLength) override;
 
   IDWriteGdiInterop* GetGDIInterop() { return mGDIInterop; }
-  bool UseGDIFontTableAccess() { return mGDIFontTableAccess; }
+  bool UseGDIFontTableAccess() const;
 
   bool FindAndAddFamilies(mozilla::StyleGenericFontFamily aGeneric,
                           const nsACString& aFamily,

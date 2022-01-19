@@ -65,9 +65,6 @@ async function waitForIdle() {
   }
 }
 
-let extension;
-let currentEngineName;
-
 SearchTestUtils.init(this);
 UrlbarTestUtils.init(this);
 
@@ -82,9 +79,9 @@ add_task(async function setup() {
   Services.telemetry.canRecordExtended = true;
   Services.prefs.setBoolPref("browser.search.log", true);
 
-  currentEngineName = (await Services.search.getDefault()).name;
+  let currentEngineName = (await Services.search.getDefault()).name;
 
-  extension = await SearchTestUtils.installSearchExtension({
+  await SearchTestUtils.installSearchExtension({
     search_url: getPageUrl(true),
     search_url_get_params: "s={searchTerms}&abc=ff",
     suggest_url:
@@ -103,6 +100,9 @@ add_task(async function setup() {
     SearchSERPTelemetry.overrideSearchTelemetryForTests();
     Services.telemetry.canRecordExtended = oldCanRecord;
     Services.telemetry.clearScalars();
+    await Services.search.setDefault(
+      Services.search.getEngineByName(currentEngineName)
+    );
   });
 });
 
@@ -115,10 +115,12 @@ async function track_ad_click(
   searchCounts.clear();
   Services.telemetry.clearScalars();
 
+  let expectedContentScalarKey = "example:tagged:ff";
   let expectedScalarKeyOld = "example:sap";
   let expectedScalarKey = "example:tagged";
   let expectedHistogramKey = "example.in-content:sap:ff";
   let expectedHistogramSAPSourceKey = `other-Example.${expectedHistogramSource}`;
+  let expectedContentScalar = `browser.search.content.${expectedScalarSource}`;
   let expectedWithAdsScalar = `browser.search.withads.${expectedScalarSource}`;
   let expectedAdClicksScalar = `browser.search.adclicks.${expectedScalarSource}`;
 
@@ -130,6 +132,7 @@ async function track_ad_click(
       [expectedHistogramSAPSourceKey]: 1,
     },
     {
+      [expectedContentScalar]: { [expectedContentScalarKey]: 1 },
       "browser.search.with_ads": { [expectedScalarKeyOld]: 1 },
       [expectedWithAdsScalar]: { [expectedScalarKey]: 1 },
     }
@@ -148,6 +151,7 @@ async function track_ad_click(
       [expectedHistogramSAPSourceKey]: 1,
     },
     {
+      [expectedContentScalar]: { [expectedContentScalarKey]: 1 },
       "browser.search.with_ads": { [expectedScalarKeyOld]: 1 },
       [expectedWithAdsScalar]: { [expectedScalarKey]: 1 },
       "browser.search.ad_clicks": { [expectedScalarKeyOld]: 1 },
@@ -236,6 +240,14 @@ async function checkAboutPage(
       await BrowserTestUtils.browserStopped(tab.linkedBrowser, page);
 
       // Wait for the full load.
+      await SpecialPowers.pushPrefEnv({
+        set: [
+          [
+            "browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar",
+            false,
+          ],
+        ],
+      });
       await SpecialPowers.spawn(tab.linkedBrowser, [], async function() {
         await ContentTaskUtils.waitForCondition(
           () => content.wrappedJSObject.gContentSearchController.defaultEngine
@@ -254,6 +266,7 @@ async function checkAboutPage(
     },
     async () => {
       BrowserTestUtils.removeTab(tab);
+      await SpecialPowers.popPrefEnv();
     }
   );
 }
@@ -325,12 +338,4 @@ add_task(async function test_source_webextension() {
       BrowserTestUtils.removeTab(tab);
     }
   );
-});
-
-add_task(async function cleanup() {
-  await Services.search.setDefault(
-    Services.search.getEngineByName(currentEngineName)
-  );
-  // Extension must be unloaded before registerCleanupFunction is called.
-  await extension.unload();
 });

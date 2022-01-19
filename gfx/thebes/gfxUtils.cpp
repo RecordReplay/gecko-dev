@@ -14,6 +14,7 @@
 #include "gfxQuad.h"
 #include "imgIEncoder.h"
 #include "mozilla/Base64.h"
+#include "mozilla/Components.h"
 #include "mozilla/dom/ImageEncoder.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
@@ -31,6 +32,7 @@
 #include "mozilla/layers/SynchronousTask.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ServoStyleConsts.h"
 #include "mozilla/StaticPrefs_gfx.h"
@@ -48,7 +50,6 @@
 #include "nsPresContext.h"
 #include "nsRegion.h"
 #include "nsServiceManagerUtils.h"
-#include "GeckoProfiler.h"
 #include "ImageContainer.h"
 #include "ImageRegion.h"
 #include "gfx2DGlue.h"
@@ -1127,9 +1128,8 @@ const float kIdentityNarrowYCbCrToRGB_RowMajor[16] = {
       return rec2020;
     case gfx::YUVColorSpace::Identity:
       return identity;
-    default:  // YUVColorSpace::UNKNOWN
-      MOZ_ASSERT(false, "unknown aYUVColorSpace");
-      return rec601;
+    default:
+      MOZ_CRASH("Bad YUVColorSpace");
   }
 }
 
@@ -1154,9 +1154,8 @@ const float kIdentityNarrowYCbCrToRGB_RowMajor[16] = {
       return rec2020;
     case YUVColorSpace::Identity:
       return identity;
-    default:  // YUVColorSpace::UNKNOWN
-      MOZ_ASSERT(false, "unknown aYUVColorSpace");
-      return rec601;
+    default:
+      MOZ_CRASH("Bad YUVColorSpace");
   }
 }
 
@@ -1184,9 +1183,8 @@ const float kIdentityNarrowYCbCrToRGB_RowMajor[16] = {
       return rec2020;
     case YUVColorSpace::Identity:
       return identity;
-    default:  // YUVColorSpace::UNKNOWN
-      MOZ_ASSERT(false, "unknown aYUVColorSpace");
-      return rec601;
+    default:
+      MOZ_CRASH("Bad YUVColorSpace");
   }
 }
 
@@ -1401,6 +1399,7 @@ class GetFeatureStatusWorkerRunnable final
 };
 
 #define GFX_SHADER_CHECK_BUILD_VERSION_PREF "gfx-shader-check.build-version"
+#define GFX_SHADER_CHECK_PTR_SIZE_PREF "gfx-shader-check.ptr-size"
 #define GFX_SHADER_CHECK_DEVICE_ID_PREF "gfx-shader-check.device-id"
 #define GFX_SHADER_CHECK_DRIVER_VERSION_PREF "gfx-shader-check.driver-version"
 
@@ -1410,10 +1409,11 @@ void gfxUtils::RemoveShaderCacheFromDiskIfNecessary() {
     return;
   }
 
-  nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+  nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
 
   // Get current values
   nsCString buildID(mozilla::PlatformBuildID());
+  int ptrSize = sizeof(void*);
   nsString deviceID, driverVersion;
   gfxInfo->GetAdapterDeviceID(deviceID);
   gfxInfo->GetAdapterDriverVersion(driverVersion);
@@ -1421,13 +1421,14 @@ void gfxUtils::RemoveShaderCacheFromDiskIfNecessary() {
   // Get pref stored values
   nsAutoCString buildIDChecked;
   Preferences::GetCString(GFX_SHADER_CHECK_BUILD_VERSION_PREF, buildIDChecked);
+  int ptrSizeChecked = Preferences::GetInt(GFX_SHADER_CHECK_PTR_SIZE_PREF, 0);
   nsAutoString deviceIDChecked, driverVersionChecked;
   Preferences::GetString(GFX_SHADER_CHECK_DEVICE_ID_PREF, deviceIDChecked);
   Preferences::GetString(GFX_SHADER_CHECK_DRIVER_VERSION_PREF,
                          driverVersionChecked);
 
-  if (buildID == buildIDChecked && deviceID == deviceIDChecked &&
-      driverVersion == driverVersionChecked) {
+  if (buildID == buildIDChecked && ptrSize == ptrSizeChecked &&
+      deviceID == deviceIDChecked && driverVersion == driverVersionChecked) {
     return;
   }
 
@@ -1441,6 +1442,7 @@ void gfxUtils::RemoveShaderCacheFromDiskIfNecessary() {
   }
 
   Preferences::SetCString(GFX_SHADER_CHECK_BUILD_VERSION_PREF, buildID);
+  Preferences::SetInt(GFX_SHADER_CHECK_PTR_SIZE_PREF, ptrSize);
   Preferences::SetString(GFX_SHADER_CHECK_DEVICE_ID_PREF, deviceID);
   Preferences::SetString(GFX_SHADER_CHECK_DRIVER_VERSION_PREF, driverVersion);
 }
@@ -1464,7 +1466,7 @@ DeviceColor ToDeviceColor(const sRGBColor& aColor) {
   // need to return the same object from all return points in this function. We
   // could declare a local Color variable and use that, but we might as well
   // just use aColor.
-  if (gfxPlatform::GetCMSMode() == eCMSMode_All) {
+  if (gfxPlatform::GetCMSMode() == CMSMode::All) {
     qcms_transform* transform = gfxPlatform::GetCMSRGBTransform();
     if (transform) {
       return gfxPlatform::TransformPixel(aColor, transform);

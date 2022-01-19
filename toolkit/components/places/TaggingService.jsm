@@ -22,7 +22,7 @@ function TaggingService() {
   // Observe bookmarks changes.
   PlacesUtils.bookmarks.addObserver(this);
   PlacesUtils.observers.addListener(
-    ["bookmark-added", "bookmark-removed"],
+    ["bookmark-added", "bookmark-removed", "bookmark-moved"],
     this.handlePlacesEvents
   );
 
@@ -327,7 +327,7 @@ TaggingService.prototype = {
     if (aTopic == TOPIC_SHUTDOWN) {
       PlacesUtils.bookmarks.removeObserver(this);
       PlacesUtils.observers.removeListener(
-        ["bookmark-added", "bookmark-removed"],
+        ["bookmark-added", "bookmark-removed", "bookmark-moved"],
         this.handlePlacesEvents
       );
       Services.obs.removeObserver(this, TOPIC_SHUTDOWN);
@@ -418,6 +418,15 @@ TaggingService.prototype = {
             }
           });
           break;
+        case "bookmark-moved":
+          if (
+            this._tagFolders[event.id] &&
+            PlacesUtils.bookmarks.tagsGuid === event.oldParentGuid &&
+            PlacesUtils.bookmarks.tagsGuid !== event.parentGuid
+          ) {
+            delete this._tagFolders[event.id];
+          }
+          break;
       }
     }
   },
@@ -434,26 +443,6 @@ TaggingService.prototype = {
       this._tagFolders[aItemId] = aNewValue;
     }
   },
-
-  onItemMoved: function TS_onItemMoved(
-    aItemId,
-    aOldParent,
-    aOldIndex,
-    aNewParent,
-    aNewIndex,
-    aItemType
-  ) {
-    if (
-      this._tagFolders[aItemId] &&
-      PlacesUtils.tagsFolderId == aOldParent &&
-      PlacesUtils.tagsFolderId != aNewParent
-    ) {
-      delete this._tagFolders[aItemId];
-    }
-  },
-
-  onBeginUpdateBatch() {},
-  onEndUpdateBatch() {},
 
   // nsISupports
 

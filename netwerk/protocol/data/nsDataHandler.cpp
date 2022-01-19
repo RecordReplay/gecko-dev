@@ -13,10 +13,6 @@
 #include "nsSimpleURI.h"
 #include "mozilla/dom/MimeType.h"
 
-#ifdef ANDROID
-#  include "mozilla/StaticPrefs_network.h"
-#endif
-
 ////////////////////////////////////////////////////////////////////////////////
 
 NS_IMPL_ISUPPORTS(nsDataHandler, nsIProtocolHandler, nsISupportsWeakReference)
@@ -58,13 +54,7 @@ nsDataHandler::GetProtocolFlags(uint32_t* result) {
   nsresult rv;
   nsCOMPtr<nsIURI> uri;
 
-  nsCString spec(aSpec);
-
-#ifdef ANDROID
-  // Due to heap limitations on mobile, limits the size of data URL
-  if (spec.Length() > StaticPrefs::network_data_max_uri_length_mobile())
-    return NS_ERROR_OUT_OF_MEMORY;
-#endif
+  const nsPromiseFlatCString& spec = PromiseFlatCString(aSpec);
 
   if (aBaseURI && !spec.IsEmpty() && spec[0] == '#') {
     // Looks like a reference instead of a fully-specified URI.
@@ -83,14 +73,16 @@ nsDataHandler::GetProtocolFlags(uint32_t* result) {
     if (base64 || (strncmp(contentType.get(), "text/", 5) != 0 &&
                    contentType.Find("xml") == kNotFound)) {
       // it's ascii encoded binary, don't let any spaces in
-      if (!spec.StripWhitespace(mozilla::fallible)) {
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
+      rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
+               .Apply(NS_MutatorMethod(
+                   &nsISimpleURIMutator::SetSpecAndFilterWhitespace, spec,
+                   nullptr))
+               .Finalize(uri);
+    } else {
+      rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
+               .SetSpec(spec)
+               .Finalize(uri);
     }
-
-    rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
-             .SetSpec(spec)
-             .Finalize(uri);
   }
 
   if (NS_FAILED(rv)) return rv;
@@ -239,7 +231,7 @@ nsresult nsDataHandler::ParsePathWithoutRef(
   return NS_OK;
 }
 
-nsresult nsDataHandler::ParseURI(nsCString& spec, nsCString& contentType,
+nsresult nsDataHandler::ParseURI(const nsCString& spec, nsCString& contentType,
                                  nsCString* contentCharset, bool& isBase64,
                                  nsCString* dataBuffer) {
   static constexpr auto kDataScheme = "data:"_ns;

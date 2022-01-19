@@ -24,9 +24,12 @@ class gfxConfigManager {
         mFeatureWrAngle(nullptr),
         mFeatureWrDComp(nullptr),
         mFeatureWrPartial(nullptr),
+        mFeatureWrShaderCache(nullptr),
+        mFeatureWrOptimizedShaders(nullptr),
         mFeatureWrSoftware(nullptr),
         mFeatureHwCompositing(nullptr),
         mFeatureD3D11HwAngle(nullptr),
+        mFeatureD3D11Compositing(nullptr),
         mFeatureGPUProcess(nullptr),
         mWrForceEnabled(false),
         mWrForceDisabled(false),
@@ -37,6 +40,7 @@ class gfxConfigManager {
         mWrDCompWinEnabled(false),
         mWrCompositorDCompRequired(false),
         mWrPartialPresent(false),
+        mWrOptimizedShaders(false),
         mGPUProcessAllowSoftware(false),
         mXRenderEnabled(false),
         mWrEnvForceEnabled(false),
@@ -44,8 +48,10 @@ class gfxConfigManager {
         mScaledResolution(false),
         mDisableHwCompositingNoWr(false),
         mIsNightly(false),
+        mIsEarlyBetaOrEarlier(false),
         mSafeMode(false),
-        mIsWin10OrLater(false) {}
+        mIsWin10OrLater(false),
+        mHasWrSoftwareBlocklist(false) {}
 
   void Init();
 
@@ -65,10 +71,13 @@ class gfxConfigManager {
   FeatureState* mFeatureWrAngle;
   FeatureState* mFeatureWrDComp;
   FeatureState* mFeatureWrPartial;
+  FeatureState* mFeatureWrShaderCache;
+  FeatureState* mFeatureWrOptimizedShaders;
   FeatureState* mFeatureWrSoftware;
 
   FeatureState* mFeatureHwCompositing;
   FeatureState* mFeatureD3D11HwAngle;
+  FeatureState* mFeatureD3D11Compositing;
   FeatureState* mFeatureGPUProcess;
 
   /**
@@ -84,6 +93,8 @@ class gfxConfigManager {
   bool mWrDCompWinEnabled;
   bool mWrCompositorDCompRequired;
   bool mWrPartialPresent;
+  Maybe<bool> mWrShaderCache;
+  bool mWrOptimizedShaders;
   bool mGPUProcessAllowSoftware;
   bool mXRenderEnabled;
 
@@ -100,8 +111,10 @@ class gfxConfigManager {
   bool mScaledResolution;
   bool mDisableHwCompositingNoWr;
   bool mIsNightly;
+  bool mIsEarlyBetaOrEarlier;
   bool mSafeMode;
   bool mIsWin10OrLater;
+  bool mHasWrSoftwareBlocklist;
 };
 
 }  // namespace gfx

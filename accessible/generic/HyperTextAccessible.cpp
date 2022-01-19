@@ -6,12 +6,13 @@
 
 #include "HyperTextAccessible-inl.h"
 
-#include "Accessible-inl.h"
 #include "nsAccessibilityService.h"
 #include "nsAccessiblePivot.h"
 #include "nsIAccessibleTypes.h"
+#include "AccAttributes.h"
 #include "DocAccessible.h"
 #include "HTMLListAccessible.h"
+#include "LocalAccessible-inl.h"
 #include "Pivot.h"
 #include "Relation.h"
 #include "Role.h"
@@ -29,19 +30,18 @@
 #include "nsFrameSelection.h"
 #include "nsILineIterator.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsPersistentProperties.h"
 #include "nsIScrollableFrame.h"
 #include "nsIMathMLFrame.h"
 #include "nsRange.h"
 #include "nsTextFragment.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/BinarySearch.h"
+#include "mozilla/EditorBase.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/HTMLEditor.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/StaticPrefs_layout.h"
-#include "mozilla/TextEditor.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLBRElement.h"
 #include "mozilla/dom/HTMLHeadingElement.h"
@@ -58,7 +58,7 @@ using namespace mozilla::a11y;
  */
 class ParagraphBoundaryRule : public PivotRule {
  public:
-  explicit ParagraphBoundaryRule(Accessible* aAnchor,
+  explicit ParagraphBoundaryRule(LocalAccessible* aAnchor,
                                  uint32_t aAnchorTextoffset,
                                  nsDirection aDirection,
                                  bool aSkipAnchorSubtree = false)
@@ -70,7 +70,7 @@ class ParagraphBoundaryRule : public PivotRule {
 
   virtual uint16_t Match(const AccessibleOrProxy& aAccOrProxy) override {
     MOZ_ASSERT(aAccOrProxy.IsAccessible());
-    Accessible* acc = aAccOrProxy.AsAccessible();
+    LocalAccessible* acc = aAccOrProxy.AsAccessible();
     if (acc->IsOuterDoc()) {
       // The child document might be remote and we can't (and don't want to)
       // handle remote documents. Also, iframes are inline anyway and thus
@@ -131,7 +131,7 @@ class ParagraphBoundaryRule : public PivotRule {
   uint32_t GetLastMatchTextOffset() { return mLastMatchTextOffset; }
 
  private:
-  Accessible* mAnchor;
+  LocalAccessible* mAnchor;
   uint32_t mAnchorTextOffset;
   nsDirection mDirection;
   bool mSkipAnchorSubtree;
@@ -236,8 +236,7 @@ nsIntRect HyperTextAccessible::GetBoundsInFrame(nsIFrame* aFrame,
     nsRect frameScreenRect = frame->GetScreenRectInAppUnits();
 
     // Get the length of the substring in this frame that we want the bounds for
-    int32_t startFrameTextOffset, endFrameTextOffset;
-    frame->GetOffsets(startFrameTextOffset, endFrameTextOffset);
+    auto [startFrameTextOffset, endFrameTextOffset] = frame->GetOffsets();
     int32_t frameTotalTextLength = endFrameTextOffset - startFrameTextOffset;
     int32_t seekLength = endContentOffset - startContentOffset;
     int32_t frameSubStringLength =
@@ -292,7 +291,7 @@ void HyperTextAccessible::TextSubstring(int32_t aStartOffset,
     int32_t childOffset = GetChildOffset(startChildIdx);
     if (childOffset == -1) return;
 
-    Accessible* child = GetChildAt(startChildIdx);
+    LocalAccessible* child = LocalChildAt(startChildIdx);
     child->AppendTextTo(aText, startOffset - childOffset,
                         endOffset - startOffset);
     return;
@@ -301,19 +300,19 @@ void HyperTextAccessible::TextSubstring(int32_t aStartOffset,
   int32_t startChildOffset = GetChildOffset(startChildIdx);
   if (startChildOffset == -1) return;
 
-  Accessible* startChild = GetChildAt(startChildIdx);
+  LocalAccessible* startChild = LocalChildAt(startChildIdx);
   startChild->AppendTextTo(aText, startOffset - startChildOffset);
 
   for (int32_t childIdx = startChildIdx + 1; childIdx < endChildIdx;
        childIdx++) {
-    Accessible* child = GetChildAt(childIdx);
+    LocalAccessible* child = LocalChildAt(childIdx);
     child->AppendTextTo(aText);
   }
 
   int32_t endChildOffset = GetChildOffset(endChildIdx);
   if (endChildOffset == -1) return;
 
-  Accessible* endChild = GetChildAt(endChildIdx);
+  LocalAccessible* endChild = LocalChildAt(endChildIdx);
   endChild->AppendTextTo(aText, 0, endOffset - endChildOffset);
 }
 
@@ -375,7 +374,7 @@ uint32_t HyperTextAccessible::DOMPointToOffset(nsINode* aNode,
   // Get accessible for this findNode, or if that node isn't accessible, use the
   // accessible for the next DOM node which has one (based on forward depth
   // first search)
-  Accessible* descendant = nullptr;
+  LocalAccessible* descendant = nullptr;
   if (findNode) {
     dom::HTMLBRElement* brElement = dom::HTMLBRElement::FromNode(findNode);
     if (brElement && brElement->IsPaddingForEmptyEditor()) {
@@ -386,7 +385,7 @@ uint32_t HyperTextAccessible::DOMPointToOffset(nsINode* aNode,
 
     descendant = mDoc->GetAccessible(findNode);
     if (!descendant && findNode->IsContent()) {
-      Accessible* container = mDoc->GetContainerAccessible(findNode);
+      LocalAccessible* container = mDoc->GetContainerAccessible(findNode);
       if (container) {
         TreeWalker walker(container, findNode->AsContent(),
                           TreeWalker::eWalkContextTree);
@@ -399,14 +398,14 @@ uint32_t HyperTextAccessible::DOMPointToOffset(nsINode* aNode,
   return TransformOffset(descendant, offset, aIsEndOffset);
 }
 
-uint32_t HyperTextAccessible::TransformOffset(Accessible* aDescendant,
+uint32_t HyperTextAccessible::TransformOffset(LocalAccessible* aDescendant,
                                               uint32_t aOffset,
                                               bool aIsEndOffset) const {
   // From the descendant, go up and get the immediate child of this hypertext.
   uint32_t offset = aOffset;
-  Accessible* descendant = aDescendant;
+  LocalAccessible* descendant = aDescendant;
   while (descendant) {
-    Accessible* parent = descendant->Parent();
+    LocalAccessible* parent = descendant->LocalParent();
     if (parent == this) return GetChildOffset(descendant) + offset;
 
     // This offset no longer applies because the passed-in text object is not
@@ -422,8 +421,9 @@ uint32_t HyperTextAccessible::TransformOffset(Accessible* aDescendant,
       // for a list when it should return the list bullet.
       // We manually set the offset so the error doesn't propagate up.
       if (offset == 0 && parent && parent->IsHTMLListItem() &&
-          descendant->PrevSibling() && descendant->PrevSibling()->GetFrame() &&
-          descendant->PrevSibling()->GetFrame()->IsBulletFrame()) {
+          descendant->LocalPrevSibling() &&
+          descendant->LocalPrevSibling() ==
+              parent->AsHTMLListItem()->Bullet()) {
         offset = 0;
       } else {
         offset = (offset > 0 || descendant->IndexInParent() > 0) ? 1 : 0;
@@ -444,10 +444,10 @@ DOMPoint HyperTextAccessible::OffsetToDOMPoint(int32_t aOffset) const {
   // 0 offset is valid even if no children. In this case the associated editor
   // is empty so return a DOM point for editor root element.
   if (aOffset == 0) {
-    RefPtr<TextEditor> textEditor = GetEditor();
-    if (textEditor) {
-      if (textEditor->IsEmpty()) {
-        return DOMPoint(textEditor->GetRoot(), 0);
+    RefPtr<EditorBase> editorBase = GetEditor();
+    if (editorBase) {
+      if (editorBase->IsEmpty()) {
+        return DOMPoint(editorBase->GetRoot(), 0);
       }
     }
   }
@@ -455,7 +455,7 @@ DOMPoint HyperTextAccessible::OffsetToDOMPoint(int32_t aOffset) const {
   int32_t childIdx = GetChildIndexAtOffset(aOffset);
   if (childIdx == -1) return DOMPoint();
 
-  Accessible* child = GetChildAt(childIdx);
+  LocalAccessible* child = LocalChildAt(childIdx);
   int32_t innerOffset = aOffset - GetChildOffset(childIdx);
 
   // A text leaf case.
@@ -466,8 +466,9 @@ DOMPoint HyperTextAccessible::OffsetToDOMPoint(int32_t aOffset) const {
       nsIContent* content = child->GetContent();
       int32_t idx = 0;
       if (NS_FAILED(RenderedToContentOffset(content->GetPrimaryFrame(),
-                                            innerOffset, &idx)))
+                                            innerOffset, &idx))) {
         return DOMPoint();
+      }
 
       return DOMPoint(content, idx);
     }
@@ -495,7 +496,7 @@ uint32_t HyperTextAccessible::FindOffset(uint32_t aOffset,
 
   // Find a leaf accessible frame to start with. PeekOffset wants this.
   HyperTextAccessible* text = this;
-  Accessible* child = nullptr;
+  LocalAccessible* child = nullptr;
   int32_t innerOffset = aOffset;
 
   do {
@@ -509,7 +510,7 @@ uint32_t HyperTextAccessible::FindOffset(uint32_t aOffset,
       return DOMPointToOffset(text->GetNode(), 0, aDirection == eDirNext);
     }
 
-    child = text->GetChildAt(childIdx);
+    child = text->LocalChildAt(childIdx);
 
     // HTML list items may need special processing because PeekOffset doesn't
     // work with list bullets.
@@ -607,7 +608,7 @@ uint32_t HyperTextAccessible::FindOffset(uint32_t aOffset,
     // PeekOffset stops right before bullet so return 0 to workaround it.
     if (IsHTMLListItem() && aAmount == eSelectBeginLine &&
         hyperTextOffset > 0) {
-      Accessible* prevOffsetChild = GetChildAtOffset(hyperTextOffset - 1);
+      LocalAccessible* prevOffsetChild = GetChildAtOffset(hyperTextOffset - 1);
       if (prevOffsetChild == AsHTMLListItem()->Bullet()) return 0;
     }
   }
@@ -636,7 +637,7 @@ uint32_t HyperTextAccessible::FindWordBoundary(
     // Case 1: Example: "a @"
     // If aOffset is 2 or 3, orig will be 0, but it should be 2. That is,
     // previous word moved back too far.
-    Accessible* child = GetChildAtOffset(orig);
+    LocalAccessible* child = GetChildAtOffset(orig);
     if (child && child->IsHyperText()) {
       // For a multi-word embedded object, previous word correctly goes back
       // to the start of the word (the embedded object). Next word (below)
@@ -719,8 +720,9 @@ uint32_t HyperTextAccessible::FindLineBoundary(
     case ePrevLineBegin: {
       // Fetch a previous line and move to its start (as arrow up and home keys
       // were pressed).
-      if (IsEmptyLastLineOffset(aOffset))
+      if (IsEmptyLastLineOffset(aOffset)) {
         return FindOffset(aOffset, eDirPrevious, eSelectBeginLine);
+      }
 
       uint32_t tmpOffset = FindOffset(aOffset, eDirPrevious, eSelectLine);
       return FindOffset(tmpOffset, eDirPrevious, eSelectBeginLine);
@@ -858,7 +860,7 @@ int32_t HyperTextAccessible::FindParagraphStartOffset(uint32_t aOffset) {
   // accessibility API requirements, for example when a paragraph contains
   // presentational line breaks as found in Google Docs, use the accessibility
   // tree to find the start offset instead.
-  Accessible* child = GetChildAtOffset(aOffset);
+  LocalAccessible* child = GetChildAtOffset(aOffset);
   if (!child) {
     return -1;  // Invalid offset
   }
@@ -917,7 +919,7 @@ int32_t HyperTextAccessible::FindParagraphEndOffset(uint32_t aOffset) {
   // accessibility API requirements, for example when a paragraph contains
   // presentational line breaks as found in Google Docs, use the accessibility
   // tree to find the end offset instead.
-  Accessible* child = GetChildAtOffset(aOffset);
+  LocalAccessible* child = GetChildAtOffset(aOffset);
   if (!child) {
     return -1;  // invalid offset
   }
@@ -936,7 +938,7 @@ int32_t HyperTextAccessible::FindParagraphEndOffset(uint32_t aOffset) {
   AccessibleOrProxy match = p.Next(wrappedChild, boundaryRule, true);
   if (!match.IsNull()) {
     // Found something of relevance, adjust end offset.
-    Accessible* matchAcc = match.AsAccessible();
+    LocalAccessible* matchAcc = match.AsAccessible();
     uint32_t matchOffset;
     if (matchAcc->IsTextLeaf()) {
       // ParagraphBoundaryRule only returns a text leaf if it contains a line
@@ -977,13 +979,15 @@ void HyperTextAccessible::TextBeforeOffset(int32_t aOffset,
   }
 
   uint32_t adjustedOffset = convertedOffset;
-  if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET)
+  if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET) {
     adjustedOffset = AdjustCaretOffset(adjustedOffset);
+  }
 
   switch (aBoundaryType) {
     case nsIAccessibleText::BOUNDARY_CHAR:
-      if (convertedOffset != 0)
+      if (convertedOffset != 0) {
         CharAt(convertedOffset - 1, aText, aStartOffset, aEndOffset);
+      }
       break;
 
     case nsIAccessibleText::BOUNDARY_WORD_START: {
@@ -1053,15 +1057,17 @@ void HyperTextAccessible::TextAtOffset(int32_t aOffset,
       // Return no char if caret is at the end of wrapped line (case of no line
       // end character). Returning a next line char is confusing for AT.
       if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET &&
-          IsCaretAtEndOfLine())
+          IsCaretAtEndOfLine()) {
         *aStartOffset = *aEndOffset = adjustedOffset;
-      else
+      } else {
         CharAt(adjustedOffset, aText, aStartOffset, aEndOffset);
+      }
       break;
 
     case nsIAccessibleText::BOUNDARY_WORD_START:
-      if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET)
+      if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET) {
         adjustedOffset = AdjustCaretOffset(adjustedOffset);
+      }
 
       *aEndOffset = FindWordBoundary(adjustedOffset, eDirNext, eStartWord);
       *aStartOffset = FindWordBoundary(*aEndOffset, eDirPrevious, eStartWord);
@@ -1078,8 +1084,9 @@ void HyperTextAccessible::TextAtOffset(int32_t aOffset,
       break;
 
     case nsIAccessibleText::BOUNDARY_LINE_START:
-      if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET)
+      if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET) {
         adjustedOffset = AdjustCaretOffset(adjustedOffset);
+      }
 
       *aStartOffset = FindLineBoundary(adjustedOffset, eThisLineBegin);
       *aEndOffset = FindLineBoundary(adjustedOffset, eNextLineBegin);
@@ -1087,8 +1094,9 @@ void HyperTextAccessible::TextAtOffset(int32_t aOffset,
       break;
 
     case nsIAccessibleText::BOUNDARY_LINE_END:
-      if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET)
+      if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET) {
         adjustedOffset = AdjustCaretOffset(adjustedOffset);
+      }
 
       // In contrast to word end boundary we follow the spec here.
       *aStartOffset = FindLineBoundary(adjustedOffset, ePrevLineEnd);
@@ -1137,17 +1145,19 @@ void HyperTextAccessible::TextAfterOffset(int32_t aOffset,
   }
 
   uint32_t adjustedOffset = convertedOffset;
-  if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET)
+  if (aOffset == nsIAccessibleText::TEXT_OFFSET_CARET) {
     adjustedOffset = AdjustCaretOffset(adjustedOffset);
+  }
 
   switch (aBoundaryType) {
     case nsIAccessibleText::BOUNDARY_CHAR:
       // If caret is at the end of wrapped line (case of no line end character)
       // then char after the offset is a first char at next line.
-      if (adjustedOffset >= CharacterCount())
+      if (adjustedOffset >= CharacterCount()) {
         *aStartOffset = *aEndOffset = CharacterCount();
-      else
+      } else {
         CharAt(adjustedOffset + 1, aText, aStartOffset, aEndOffset);
+      }
       break;
 
     case nsIAccessibleText::BOUNDARY_WORD_START:
@@ -1189,7 +1199,7 @@ void HyperTextAccessible::TextAfterOffset(int32_t aOffset,
   }
 }
 
-already_AddRefed<nsIPersistentProperties> HyperTextAccessible::TextAttributes(
+already_AddRefed<AccAttributes> HyperTextAccessible::TextAttributes(
     bool aIncludeDefAttrs, int32_t aOffset, int32_t* aStartOffset,
     int32_t* aEndOffset) {
   // 1. Get each attribute and its ranges one after another.
@@ -1197,16 +1207,15 @@ already_AddRefed<nsIPersistentProperties> HyperTextAccessible::TextAttributes(
   //    as in/out parameters. In other words, as attributes are collected,
   //    the attribute range itself can only stay the same or get smaller.
 
+  RefPtr<AccAttributes> attributes = new AccAttributes();
   *aStartOffset = *aEndOffset = 0;
   index_t offset = ConvertMagicOffset(aOffset);
   if (!offset.IsValid() || offset > CharacterCount()) {
     NS_ERROR("Wrong in offset!");
-    return nullptr;
+    return attributes.forget();
   }
 
-  RefPtr<nsPersistentProperties> attributes = new nsPersistentProperties();
-
-  Accessible* accAtOffset = GetChildAtOffset(offset);
+  LocalAccessible* accAtOffset = GetChildAtOffset(offset);
   if (!accAtOffset) {
     // Offset 0 is correct offset when accessible has empty text. Include
     // default attributes if they were requested, otherwise return empty set.
@@ -1215,9 +1224,8 @@ already_AddRefed<nsIPersistentProperties> HyperTextAccessible::TextAttributes(
         TextAttrsMgr textAttrsMgr(this);
         textAttrsMgr.GetAttributes(attributes);
       }
-      return attributes.forget();
     }
-    return nullptr;
+    return attributes.forget();
   }
 
   int32_t accAtOffsetIdx = accAtOffset->IndexInParent();
@@ -1245,9 +1253,8 @@ already_AddRefed<nsIPersistentProperties> HyperTextAccessible::TextAttributes(
   return attributes.forget();
 }
 
-already_AddRefed<nsIPersistentProperties>
-HyperTextAccessible::DefaultTextAttributes() {
-  RefPtr<nsPersistentProperties> attributes = new nsPersistentProperties();
+already_AddRefed<AccAttributes> HyperTextAccessible::DefaultTextAttributes() {
+  RefPtr<AccAttributes> attributes = new AccAttributes();
 
   TextAttrsMgr textAttrsMgr(this);
   textAttrsMgr.GetAttributes(attributes);
@@ -1261,10 +1268,9 @@ int32_t HyperTextAccessible::GetLevelInternal() {
   return AccessibleWrap::GetLevelInternal();
 }
 
-void HyperTextAccessible::SetMathMLXMLRoles(
-    nsIPersistentProperties* aAttributes) {
+void HyperTextAccessible::SetMathMLXMLRoles(AccAttributes* aAttributes) {
   // Add MathML xmlroles based on the position inside the parent.
-  Accessible* parent = Parent();
+  LocalAccessible* parent = LocalParent();
   if (parent) {
     switch (parent->Role()) {
       case roles::MATHML_CELL:
@@ -1284,66 +1290,66 @@ void HyperTextAccessible::SetMathMLXMLRoles(
             nsEmbellishData embellishData;
             mathMLFrame->GetEmbellishData(embellishData);
             if (NS_MATHML_EMBELLISH_IS_FENCE(embellishData.flags)) {
-              if (!PrevSibling()) {
-                nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                                       nsGkAtoms::open_fence);
-              } else if (!NextSibling()) {
-                nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                                       nsGkAtoms::close_fence);
+              if (!LocalPrevSibling()) {
+                aAttributes->SetAttribute(nsGkAtoms::xmlroles,
+                                          nsGkAtoms::open_fence);
+              } else if (!LocalNextSibling()) {
+                aAttributes->SetAttribute(nsGkAtoms::xmlroles,
+                                          nsGkAtoms::close_fence);
               }
             }
             if (NS_MATHML_EMBELLISH_IS_SEPARATOR(embellishData.flags)) {
-              nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                                     nsGkAtoms::separator_);
+              aAttributes->SetAttribute(nsGkAtoms::xmlroles,
+                                        nsGkAtoms::separator_);
             }
           }
         }
         break;
       case roles::MATHML_FRACTION:
-        nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                               IndexInParent() == 0 ? nsGkAtoms::numerator
-                                                    : nsGkAtoms::denominator);
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles, IndexInParent() == 0 ? nsGkAtoms::numerator
+                                                      : nsGkAtoms::denominator);
         break;
       case roles::MATHML_ROOT:
-        nsAccUtils::SetAccAttr(
-            aAttributes, nsGkAtoms::xmlroles,
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles,
             IndexInParent() == 0 ? nsGkAtoms::base : nsGkAtoms::root_index);
         break;
       case roles::MATHML_SUB:
-        nsAccUtils::SetAccAttr(
-            aAttributes, nsGkAtoms::xmlroles,
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles,
             IndexInParent() == 0 ? nsGkAtoms::base : nsGkAtoms::subscript);
         break;
       case roles::MATHML_SUP:
-        nsAccUtils::SetAccAttr(
-            aAttributes, nsGkAtoms::xmlroles,
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles,
             IndexInParent() == 0 ? nsGkAtoms::base : nsGkAtoms::superscript);
         break;
       case roles::MATHML_SUB_SUP: {
         int32_t index = IndexInParent();
-        nsAccUtils::SetAccAttr(
-            aAttributes, nsGkAtoms::xmlroles,
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles,
             index == 0
                 ? nsGkAtoms::base
                 : (index == 1 ? nsGkAtoms::subscript : nsGkAtoms::superscript));
       } break;
       case roles::MATHML_UNDER:
-        nsAccUtils::SetAccAttr(
-            aAttributes, nsGkAtoms::xmlroles,
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles,
             IndexInParent() == 0 ? nsGkAtoms::base : nsGkAtoms::underscript);
         break;
       case roles::MATHML_OVER:
-        nsAccUtils::SetAccAttr(
-            aAttributes, nsGkAtoms::xmlroles,
+        aAttributes->SetAttribute(
+            nsGkAtoms::xmlroles,
             IndexInParent() == 0 ? nsGkAtoms::base : nsGkAtoms::overscript);
         break;
       case roles::MATHML_UNDER_OVER: {
         int32_t index = IndexInParent();
-        nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                               index == 0
-                                   ? nsGkAtoms::base
-                                   : (index == 1 ? nsGkAtoms::underscript
-                                                 : nsGkAtoms::overscript));
+        aAttributes->SetAttribute(nsGkAtoms::xmlroles,
+                                  index == 0
+                                      ? nsGkAtoms::base
+                                      : (index == 1 ? nsGkAtoms::underscript
+                                                    : nsGkAtoms::overscript));
       } break;
       case roles::MATHML_MULTISCRIPTS: {
         // Get the <multiscripts> base.
@@ -1360,8 +1366,7 @@ void HyperTextAccessible::SetMathMLXMLRoles(
           nsIContent* content = GetContent();
           if (child == content) {
             // We are the base.
-            nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                                   nsGkAtoms::base);
+            aAttributes->SetAttribute(nsGkAtoms::xmlroles, nsGkAtoms::base);
           } else {
             // Browse the list of scripts to find us and determine our type.
             bool postscript = true;
@@ -1376,13 +1381,14 @@ void HyperTextAccessible::SetMathMLXMLRoles(
               }
               if (child == content) {
                 if (postscript) {
-                  nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                                         subscript ? nsGkAtoms::subscript
-                                                   : nsGkAtoms::superscript);
+                  aAttributes->SetAttribute(nsGkAtoms::xmlroles,
+                                            subscript ? nsGkAtoms::subscript
+                                                      : nsGkAtoms::superscript);
                 } else {
-                  nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
-                                         subscript ? nsGkAtoms::presubscript
-                                                   : nsGkAtoms::presuperscript);
+                  aAttributes->SetAttribute(nsGkAtoms::xmlroles,
+                                            subscript
+                                                ? nsGkAtoms::presubscript
+                                                : nsGkAtoms::presuperscript);
                 }
                 break;
               }
@@ -1397,25 +1403,20 @@ void HyperTextAccessible::SetMathMLXMLRoles(
   }
 }
 
-already_AddRefed<nsIPersistentProperties>
-HyperTextAccessible::NativeAttributes() {
-  nsCOMPtr<nsIPersistentProperties> attributes =
-      AccessibleWrap::NativeAttributes();
+already_AddRefed<AccAttributes> HyperTextAccessible::NativeAttributes() {
+  RefPtr<AccAttributes> attributes = AccessibleWrap::NativeAttributes();
 
   // 'formatting' attribute is deprecated, 'display' attribute should be
   // instead.
   nsIFrame* frame = GetFrame();
   if (frame && frame->IsBlockFrame()) {
-    nsAutoString unused;
-    attributes->SetStringProperty("formatting"_ns, u"block"_ns, unused);
+    attributes->SetAttribute(nsGkAtoms::formatting, nsGkAtoms::block);
   }
 
   if (FocusMgr()->IsFocused(this)) {
     int32_t lineNumber = CaretLineNumber();
     if (lineNumber >= 1) {
-      nsAutoString strLineNumber;
-      strLineNumber.AppendInt(lineNumber);
-      nsAccUtils::SetAccAttr(attributes, nsGkAtoms::lineNumber, strLineNumber);
+      attributes->SetAttribute(nsGkAtoms::lineNumber, lineNumber);
     }
   }
 
@@ -1460,8 +1461,9 @@ int32_t HyperTextAccessible::OffsetAtPoint(int32_t aX, int32_t aY,
       ToAppUnits(coords, presContext->AppUnitsPerDevPixel());
 
   nsRect frameScreenRect = hyperFrame->GetScreenRectInAppUnits();
-  if (!frameScreenRect.Contains(coordsInAppUnits.x, coordsInAppUnits.y))
+  if (!frameScreenRect.Contains(coordsInAppUnits.x, coordsInAppUnits.y)) {
     return -1;  // Not found
+  }
 
   nsPoint pointInHyperText(coordsInAppUnits.x - frameScreenRect.X(),
                            coordsInAppUnits.y - frameScreenRect.Y());
@@ -1474,7 +1476,7 @@ int32_t HyperTextAccessible::OffsetAtPoint(int32_t aX, int32_t aY,
   int32_t offset = 0;
   uint32_t childCount = ChildCount();
   for (uint32_t childIdx = 0; childIdx < childCount; childIdx++) {
-    Accessible* childAcc = mChildren[childIdx];
+    LocalAccessible* childAcc = mChildren[childIdx];
 
     nsIFrame* primaryFrame = childAcc->GetFrame();
     NS_ENSURE_TRUE(primaryFrame, -1);
@@ -1542,7 +1544,7 @@ nsIntRect HyperTextAccessible::TextBounds(int32_t aStartOffset,
   int32_t offset1 = startOffset - prevOffset;
 
   while (childIdx < static_cast<int32_t>(ChildCount())) {
-    nsIFrame* frame = GetChildAt(childIdx++)->GetFrame();
+    nsIFrame* frame = LocalChildAt(childIdx++)->GetFrame();
     if (!frame) {
       MOZ_ASSERT_UNREACHABLE("No frame for a child!");
       continue;
@@ -1581,11 +1583,11 @@ nsIntRect HyperTextAccessible::TextBounds(int32_t aStartOffset,
   return bounds;
 }
 
-already_AddRefed<TextEditor> HyperTextAccessible::GetEditor() const {
+already_AddRefed<EditorBase> HyperTextAccessible::GetEditor() const {
   if (!mContent->HasFlag(NODE_IS_EDITABLE)) {
     // If we're inside an editable container, then return that container's
     // editor
-    Accessible* ancestor = Parent();
+    LocalAccessible* ancestor = LocalParent();
     while (ancestor) {
       HyperTextAccessible* hyperText = ancestor->AsHyperText();
       if (hyperText) {
@@ -1594,7 +1596,7 @@ already_AddRefed<TextEditor> HyperTextAccessible::GetEditor() const {
         return hyperText->GetEditor();
       }
 
-      ancestor = ancestor->Parent();
+      ancestor = ancestor->LocalParent();
     }
 
     return nullptr;
@@ -1623,7 +1625,7 @@ nsresult HyperTextAccessible::SetSelectionRange(int32_t aStartPos,
   // the selection we set here and leave the caret at the end of the text.
   // By calling GetEditor here, we ensure that editor initialization is
   // completed before we set the selection.
-  RefPtr<TextEditor> textEditor = GetEditor();
+  RefPtr<EditorBase> editorBase = GetEditor();
 
   bool isFocusable = InteractiveState() & states::FOCUSABLE;
 
@@ -1688,8 +1690,9 @@ int32_t HyperTextAccessible::CaretOffset() const {
 
     nsINode* textNode = text->GetNode();
     // Ignore offset if cached accessible isn't a text leaf.
-    if (nsCoreUtils::IsAncestorOf(GetNode(), textNode))
+    if (nsCoreUtils::IsAncestorOf(GetNode(), textNode)) {
       return TransformOffset(text, textNode->IsText() ? caretOffset : 0, false);
+    }
   }
 
   // No caret if the focused node is not inside this DOM node and this DOM node
@@ -1714,8 +1717,9 @@ int32_t HyperTextAccessible::CaretOffset() const {
 
     nsINode* thisNode = GetNode();
     if (resultNode != thisNode &&
-        !nsCoreUtils::IsAncestorOf(thisNode, resultNode))
+        !nsCoreUtils::IsAncestorOf(thisNode, resultNode)) {
       return -1;
+    }
   }
 
   return DOMPointToOffset(focusNode, focusOffset);
@@ -1816,8 +1820,16 @@ LayoutDeviceIntRect HyperTextAccessible::GetCaretRect(nsIWidget** aWidget) {
   // the character. This is important for font size transitions, and is
   // necessary because the Gecko caret uses the previous character's size as
   // the user moves forward in the text by character.
+  int32_t caretOffset = CaretOffset();
+  if (NS_WARN_IF(caretOffset == -1)) {
+    // The caret offset will be -1 if this Accessible isn't focused. Note that
+    // the DOM node contaning the caret might be focused, but the Accessible
+    // might not be; e.g. due to an autocomplete popup suggestion having a11y
+    // focus.
+    return LayoutDeviceIntRect();
+  }
   nsIntRect charRect = CharBounds(
-      CaretOffset(), nsIAccessibleCoordinateType::COORDTYPE_SCREEN_RELATIVE);
+      caretOffset, nsIAccessibleCoordinateType::COORDTYPE_SCREEN_RELATIVE);
   if (!charRect.IsEmpty()) {
     caretRect.SetTopEdge(charRect.Y());
   }
@@ -1829,17 +1841,18 @@ void HyperTextAccessible::GetSelectionDOMRanges(SelectionType aSelectionType,
   // Ignore selection if it is not visible.
   RefPtr<nsFrameSelection> frameSelection = FrameSelection();
   if (!frameSelection || frameSelection->GetDisplaySelection() <=
-                             nsISelectionController::SELECTION_HIDDEN)
+                             nsISelectionController::SELECTION_HIDDEN) {
     return;
+  }
 
   dom::Selection* domSel = frameSelection->GetSelection(aSelectionType);
   if (!domSel) return;
 
   nsINode* startNode = GetNode();
 
-  RefPtr<TextEditor> textEditor = GetEditor();
-  if (textEditor) {
-    startNode = textEditor->GetRoot();
+  RefPtr<EditorBase> editorBase = GetEditor();
+  if (editorBase) {
+    startNode = editorBase->GetRoot();
   }
 
   if (!startNode) return;
@@ -1869,8 +1882,9 @@ bool HyperTextAccessible::SelectionBoundsAt(int32_t aSelectionNum,
   GetSelectionDOMRanges(SelectionType::eNormal, &ranges);
 
   uint32_t rangeCount = ranges.Length();
-  if (aSelectionNum < 0 || aSelectionNum >= static_cast<int32_t>(rangeCount))
+  if (aSelectionNum < 0 || aSelectionNum >= static_cast<int32_t>(rangeCount)) {
     return false;
+  }
 
   nsRange* range = ranges[aSelectionNum];
 
@@ -1898,15 +1912,17 @@ bool HyperTextAccessible::SelectionBoundsAt(int32_t aSelectionNum,
     endOffset = tempOffset;
   }
 
-  if (!startNode->IsInclusiveDescendantOf(mContent))
+  if (!startNode->IsInclusiveDescendantOf(mContent)) {
     *aStartOffset = 0;
-  else
+  } else {
     *aStartOffset = DOMPointToOffset(startNode, startOffset);
+  }
 
-  if (!endNode->IsInclusiveDescendantOf(mContent))
+  if (!endNode->IsInclusiveDescendantOf(mContent)) {
     *aEndOffset = CharacterCount();
-  else
+  } else {
     *aEndOffset = DOMPointToOffset(endNode, endOffset, true);
+  }
   return true;
 }
 
@@ -1930,8 +1946,9 @@ bool HyperTextAccessible::RemoveFromSelection(int32_t aSelectionNum) {
   if (!domSel) return false;
 
   if (aSelectionNum < 0 ||
-      aSelectionNum >= static_cast<int32_t>(domSel->RangeCount()))
+      aSelectionNum >= static_cast<int32_t>(domSel->RangeCount())) {
     return false;
+  }
 
   const RefPtr<nsRange> range{domSel->GetRangeAt(aSelectionNum)};
   domSel->RemoveRangeAndUnselectFramesAndNotifyListeners(*range,
@@ -2027,7 +2044,7 @@ void HyperTextAccessible::SelectionRanges(
 void HyperTextAccessible::VisibleRanges(
     nsTArray<a11y::TextRange>* aRanges) const {}
 
-void HyperTextAccessible::RangeByChild(Accessible* aChild,
+void HyperTextAccessible::RangeByChild(LocalAccessible* aChild,
                                        a11y::TextRange& aRange) const {
   HyperTextAccessible* ht = aChild->AsHyperText();
   if (ht) {
@@ -2035,10 +2052,11 @@ void HyperTextAccessible::RangeByChild(Accessible* aChild,
     return;
   }
 
-  Accessible* child = aChild;
-  Accessible* parent = nullptr;
-  while ((parent = child->Parent()) && !(ht = parent->AsHyperText()))
+  LocalAccessible* child = aChild;
+  LocalAccessible* parent = nullptr;
+  while ((parent = child->LocalParent()) && !(ht = parent->AsHyperText())) {
     child = parent;
+  }
 
   // If no text then return collapsed text range, otherwise return a range
   // containing the text enclosed by the given child.
@@ -2053,11 +2071,14 @@ void HyperTextAccessible::RangeByChild(Accessible* aChild,
 
 void HyperTextAccessible::RangeAtPoint(int32_t aX, int32_t aY,
                                        a11y::TextRange& aRange) const {
-  Accessible* child = mDoc->ChildAtPoint(aX, aY, eDeepestChild);
+  LocalAccessible* child =
+      mDoc->LocalChildAtPoint(aX, aY, EWhichChildAtPoint::DeepestChild);
   if (!child) return;
 
-  Accessible* parent = nullptr;
-  while ((parent = child->Parent()) && !parent->IsHyperText()) child = parent;
+  LocalAccessible* parent = nullptr;
+  while ((parent = child->LocalParent()) && !parent->IsHyperText()) {
+    child = parent;
+  }
 
   // Return collapsed text range for the point.
   if (parent) {
@@ -2068,9 +2089,9 @@ void HyperTextAccessible::RangeAtPoint(int32_t aX, int32_t aY,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Accessible public
+// LocalAccessible public
 
-// Accessible protected
+// LocalAccessible protected
 ENameValueFlag HyperTextAccessible::NativeName(nsString& aName) const {
   // Check @alt attribute for invalid img elements.
   bool hasImgAlt = false;
@@ -2087,8 +2108,9 @@ ENameValueFlag HyperTextAccessible::NativeName(nsString& aName) const {
   // a valid name from markup. Otherwise their name isn't picked up by recursive
   // name computation algorithm. See NS_OK_NAME_FROM_TOOLTIP.
   if (IsAbbreviation() && mContent->AsElement()->GetAttr(
-                              kNameSpaceID_None, nsGkAtoms::title, aName))
+                              kNameSpaceID_None, nsGkAtoms::title, aName)) {
     aName.CompressWhitespace();
+  }
 
   return hasImgAlt ? eNoNameOnPurpose : eNameOK;
 }
@@ -2098,7 +2120,7 @@ void HyperTextAccessible::Shutdown() {
   AccessibleWrap::Shutdown();
 }
 
-bool HyperTextAccessible::RemoveChild(Accessible* aAccessible) {
+bool HyperTextAccessible::RemoveChild(LocalAccessible* aAccessible) {
   const int32_t childIndex = aAccessible->IndexInParent();
   if (childIndex < static_cast<int64_t>(mOffsets.Length())) {
     mOffsets.RemoveLastElements(mOffsets.Length() -
@@ -2108,7 +2130,8 @@ bool HyperTextAccessible::RemoveChild(Accessible* aAccessible) {
   return AccessibleWrap::RemoveChild(aAccessible);
 }
 
-bool HyperTextAccessible::InsertChildAt(uint32_t aIndex, Accessible* aChild) {
+bool HyperTextAccessible::InsertChildAt(uint32_t aIndex,
+                                        LocalAccessible* aChild) {
   if (aIndex < mOffsets.Length()) {
     mOffsets.RemoveLastElements(mOffsets.Length() - aIndex);
   }
@@ -2117,12 +2140,12 @@ bool HyperTextAccessible::InsertChildAt(uint32_t aIndex, Accessible* aChild) {
 }
 
 Relation HyperTextAccessible::RelationByType(RelationType aType) const {
-  Relation rel = Accessible::RelationByType(aType);
+  Relation rel = LocalAccessible::RelationByType(aType);
 
   switch (aType) {
     case RelationType::NODE_CHILD_OF:
       if (HasOwnContent() && mContent->IsMathMLElement()) {
-        Accessible* parent = Parent();
+        LocalAccessible* parent = LocalParent();
         if (parent) {
           nsIContent* parentContent = parent->GetContent();
           if (parentContent &&
@@ -2135,8 +2158,8 @@ Relation HyperTextAccessible::RelationByType(RelationType aType) const {
       break;
     case RelationType::NODE_PARENT_OF:
       if (HasOwnContent() && mContent->IsMathMLElement(nsGkAtoms::mroot_)) {
-        Accessible* base = GetChildAt(0);
-        Accessible* index = GetChildAt(1);
+        LocalAccessible* base = LocalChildAt(0);
+        LocalAccessible* index = LocalChildAt(1);
         if (base && index) {
           // Append the <mroot> children in the order index, base.
           rel.AppendTarget(index);
@@ -2226,7 +2249,7 @@ int32_t HyperTextAccessible::GetChildOffset(uint32_t aChildIndex,
       mOffsets.IsEmpty() ? 0 : mOffsets[mOffsets.Length() - 1];
 
   while (mOffsets.Length() < aChildIndex) {
-    Accessible* child = mChildren[mOffsets.Length()];
+    LocalAccessible* child = mChildren[mOffsets.Length()];
     lastOffset += nsAccUtils::TextLength(child);
     mOffsets.AppendElement(lastOffset);
   }
@@ -2252,7 +2275,7 @@ int32_t HyperTextAccessible::GetChildIndexAtOffset(uint32_t aOffset) const {
 
   uint32_t childCount = ChildCount();
   while (mOffsets.Length() < childCount) {
-    Accessible* child = GetChildAt(mOffsets.Length());
+    LocalAccessible* child = LocalChildAt(mOffsets.Length());
     lastOffset += nsAccUtils::TextLength(child);
     mOffsets.AppendElement(lastOffset);
     if (aOffset < lastOffset) return mOffsets.Length() - 1;
@@ -2266,10 +2289,9 @@ int32_t HyperTextAccessible::GetChildIndexAtOffset(uint32_t aOffset) const {
 ////////////////////////////////////////////////////////////////////////////////
 // HyperTextAccessible protected
 
-nsresult HyperTextAccessible::GetDOMPointByFrameOffset(nsIFrame* aFrame,
-                                                       int32_t aOffset,
-                                                       Accessible* aAccessible,
-                                                       DOMPoint* aPoint) {
+nsresult HyperTextAccessible::GetDOMPointByFrameOffset(
+    nsIFrame* aFrame, int32_t aOffset, LocalAccessible* aAccessible,
+    DOMPoint* aPoint) {
   NS_ENSURE_ARG(aAccessible);
 
   if (!aFrame) {
@@ -2312,9 +2334,10 @@ nsresult HyperTextAccessible::GetDOMPointByFrameOffset(nsIFrame* aFrame,
 }
 
 // HyperTextAccessible
-void HyperTextAccessible::GetSpellTextAttr(
-    nsINode* aNode, int32_t aNodeOffset, uint32_t* aStartOffset,
-    uint32_t* aEndOffset, nsIPersistentProperties* aAttributes) {
+void HyperTextAccessible::GetSpellTextAttr(nsINode* aNode, int32_t aNodeOffset,
+                                           uint32_t* aStartOffset,
+                                           uint32_t* aEndOffset,
+                                           AccAttributes* aAttributes) {
   RefPtr<nsFrameSelection> fs = FrameSelection();
   if (!fs) return;
 
@@ -2368,9 +2391,7 @@ void HyperTextAccessible::GetSpellTextAttr(
 
       if (endOffset < *aEndOffset) *aEndOffset = endOffset;
 
-      if (aAttributes) {
-        nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::invalid, u"spelling"_ns);
-      }
+      aAttributes->SetAttribute(nsGkAtoms::invalid, nsGkAtoms::spelling);
 
       return;
     }
@@ -2387,8 +2408,9 @@ void HyperTextAccessible::GetSpellTextAttr(
     // The previous range might not be within this accessible. In that case,
     // DOMPointToOffset returns length as a fallback. We don't want to use
     // that offset if so, hence the startOffset < *aEndOffset check.
-    if (startOffset > *aStartOffset && startOffset < *aEndOffset)
+    if (startOffset > *aStartOffset && startOffset < *aEndOffset) {
       *aStartOffset = startOffset;
+    }
 
     if (endOffset < *aEndOffset) *aEndOffset = endOffset;
 
@@ -2406,18 +2428,7 @@ void HyperTextAccessible::GetSpellTextAttr(
   // The previous range might not be within this accessible. In that case,
   // DOMPointToOffset returns length as a fallback. We don't want to use
   // that offset if so, hence the startOffset < *aEndOffset check.
-  if (startOffset > *aStartOffset && startOffset < *aEndOffset)
+  if (startOffset > *aStartOffset && startOffset < *aEndOffset) {
     *aStartOffset = startOffset;
-}
-
-bool HyperTextAccessible::IsTextRole() {
-  const nsRoleMapEntry* roleMapEntry = ARIARoleMap();
-  if (roleMapEntry && (roleMapEntry->role == roles::GRAPHIC ||
-                       roleMapEntry->role == roles::IMAGE_MAP ||
-                       roleMapEntry->role == roles::SLIDER ||
-                       roleMapEntry->role == roles::PROGRESSBAR ||
-                       roleMapEntry->role == roles::SEPARATOR))
-    return false;
-
-  return true;
+  }
 }

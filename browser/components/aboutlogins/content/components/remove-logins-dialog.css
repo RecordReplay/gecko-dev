@@ -53,7 +53,7 @@
   font-size: 1.25em;
 }
 
-label[for="confirmation-checkbox"] {
+.checkbox-text {
   font-size: 1.25em;
 }
 
@@ -69,9 +69,8 @@ label[for="confirmation-checkbox"] {
 }
 
 .dismiss-icon {
-  -moz-context-properties: fill, fill-opacity;
+  -moz-context-properties: fill;
   fill: currentColor;
-  fill-opacity: 0;
 }
 
 .warning-icon {
@@ -80,7 +79,6 @@ label[for="confirmation-checkbox"] {
   width: 32px;
   height: 32px;
   margin: 8px;
-  user-select: none;
 }
 
 .content,
@@ -96,9 +94,9 @@ label[for="confirmation-checkbox"] {
 }
 
 .checkbox-wrapper {
-  display: flex;
   grid-area: 3 / 2 / 4 / 8;
   align-self: first baseline;
+  justify-self: start;
 }
 
 .warning-icon {

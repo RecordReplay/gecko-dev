@@ -21,9 +21,8 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIProgressEventSink.h"
+#include "nsICacheEntry.h"
 #include "nsICacheInfoChannel.h"
-#include "nsIApplicationCache.h"
-#include "nsIApplicationCacheChannel.h"
 #include "nsIResumableChannel.h"
 #include "nsIProxiedChannel.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
@@ -57,7 +56,6 @@ class HttpChannelChild final : public PHttpChannelChild,
                                public HttpAsyncAborter<HttpChannelChild>,
                                public nsICacheInfoChannel,
                                public nsIProxiedChannel,
-                               public nsIApplicationCacheChannel,
                                public nsIAsyncVerifyRedirectCallback,
                                public nsIChildChannel,
                                public nsIHttpChannelChild,
@@ -70,8 +68,6 @@ class HttpChannelChild final : public PHttpChannelChild,
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSICACHEINFOCHANNEL
   NS_DECL_NSIPROXIEDCHANNEL
-  NS_DECL_NSIAPPLICATIONCACHECONTAINER
-  NS_DECL_NSIAPPLICATIONCACHECHANNEL
   NS_DECL_NSIASYNCVERIFYREDIRECTCALLBACK
   NS_DECL_NSICHILDCHANNEL
   NS_DECL_NSIHTTPCHANNELCHILD
@@ -100,7 +96,6 @@ class HttpChannelChild final : public PHttpChannelChild,
   NS_IMETHOD GetProtocolVersion(nsACString& aProtocolVersion) override;
   void DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() override;
   // nsIHttpChannelInternal
-  NS_IMETHOD SetupFallbackChannel(const char* aFallbackKey) override;
   NS_IMETHOD GetIsAuthChannel(bool* aIsAuthChannel) override;
   // nsISupportsPriority
   NS_IMETHOD SetPriority(int32_t value) override;
@@ -210,7 +205,7 @@ class HttpChannelChild final : public PHttpChannelChild,
   // Callbacks while receiving OnTransportAndData/OnStopRequest/OnProgress/
   // OnStatus/FlushedForDiversion/DivertMessages on background IPC channel.
   void ProcessOnTransportAndData(const nsresult& aChannelStatus,
-                                 const nsresult& aStatus,
+                                 const nsresult& aTransportStatus,
                                  const uint64_t& aOffset,
                                  const uint32_t& aCount,
                                  const nsCString& aData);
@@ -283,7 +278,7 @@ class HttpChannelChild final : public PHttpChannelChild,
   nsCOMPtr<nsIInputStreamReceiver> mAltDataInputStreamReceiver;
 
   // Used to ensure atomicity of mBgChild and mBgInitFailCallback
-  Mutex mBgChildMutex;
+  Mutex mBgChildMutex{"HttpChannelChild::BgChildMutex", /* aOrdered */ true};
 
   // Associated HTTP background channel
   RefPtr<HttpBackgroundChannelChild> mBgChild;
@@ -298,34 +293,36 @@ class HttpChannelChild final : public PHttpChannelChild,
   // Target thread for delivering ODA.
   nsCOMPtr<nsIEventTarget> mODATarget;
   // Used to ensure atomicity of mNeckoTarget / mODATarget;
-  Mutex mEventTargetMutex;
+  Mutex mEventTargetMutex{"HttpChannelChild::EventTargetMutex"};
 
   TimeStamp mLastStatusReported;
 
-  uint64_t mCacheEntryId;
+  uint64_t mCacheEntryId{0};
 
   // The result of RetargetDeliveryTo for this channel.
   // |notRequested| represents OMT is not requested by the channel owner.
   LABELS_HTTP_CHILD_OMT_STATS mOMTResult =
       LABELS_HTTP_CHILD_OMT_STATS::notRequested;
 
-  uint32_t mCacheKey;
-  int32_t mCacheFetchCount;
-  uint32_t mCacheExpirationTime;
+  uint32_t mCacheKey{0};
+  int32_t mCacheFetchCount{0};
+  uint32_t mCacheExpirationTime{
+      static_cast<uint32_t>(nsICacheEntry::NO_EXPIRATION_TIME)};
 
   // If we're handling a multi-part response, then this is set to the current
   // part ID during OnStartRequest.
   Maybe<uint32_t> mMultiPartID;
 
   // To ensure only one SendDeletingChannel is triggered.
-  Atomic<bool> mDeletingChannelSent;
+  Atomic<bool> mDeletingChannelSent{false};
 
-  Atomic<bool, SequentiallyConsistent> mIsFromCache;
-  Atomic<bool, SequentiallyConsistent> mIsRacing;
+  Atomic<bool, SequentiallyConsistent> mIsFromCache{false};
+  Atomic<bool, SequentiallyConsistent> mIsRacing{false};
   // Set if we get the result and cache |mNeedToReportBytesRead|
-  Atomic<bool, SequentiallyConsistent> mCacheNeedToReportBytesReadInitialized;
+  Atomic<bool, SequentiallyConsistent> mCacheNeedToReportBytesReadInitialized{
+      false};
   // True if we need to tell the parent the size of unreported received data
-  Atomic<bool, SequentiallyConsistent> mNeedToReportBytesRead;
+  Atomic<bool, SequentiallyConsistent> mNeedToReportBytesRead{true};
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   bool mDoDiagnosticAssertWhenOnStopNotCalledOnDestroy = false;
@@ -346,7 +343,7 @@ class HttpChannelChild final : public PHttpChannelChild,
     // BckChild was keeping events in the queue at the destruction time!
     BCKCHILD_NON_EMPTY
   };
-  Atomic<BckChildQueueStatus> mBackgroundChildQueueFinalState;
+  Atomic<BckChildQueueStatus> mBackgroundChildQueueFinalState{BCKCHILD_UNKNOWN};
   Maybe<ActorDestroyReason> mActorDestroyReason;
 #endif
 
@@ -391,8 +388,6 @@ class HttpChannelChild final : public PHttpChannelChild,
   // true after successful AsyncOpen until OnStopRequest completes.
   bool RemoteChannelExists() { return CanSend() && !mKeptAlive; }
 
-  void AssociateApplicationCache(const nsCString& groupID,
-                                 const nsCString& clientID);
   void OnStartRequest(const nsHttpResponseHead& aResponseHead,
                       const bool& aUseResponseHead,
                       const nsHttpHeaderArray& aRequestHeaders,
@@ -405,7 +400,8 @@ class HttpChannelChild final : public PHttpChannelChild,
                      const nsHttpHeaderArray& aResponseTrailers);
   void FailedAsyncOpen(const nsresult& status);
   void HandleAsyncAbort();
-  void Redirect1Begin(const uint32_t& registrarId, const URIParams& newUri,
+  void Redirect1Begin(const uint32_t& registrarId,
+                      const URIParams& newOriginalURI,
                       const uint32_t& newLoadFlags,
                       const uint32_t& redirectFlags,
                       const ParentLoadInfoForwarderArgs& loadInfoForwarder,

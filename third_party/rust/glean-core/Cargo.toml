@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "glean-core"
-version = "33.10.2"
+version = "39.0.0"
 authors = ["Jan-Erik Rediger <jrediger@mozilla.com>", "The Glean Team <glean-team@mozilla.com>"]
 include = ["/README.md", "/LICENSE", "/src", "/examples", "/tests", "/Cargo.toml"]
 description = "A modern Telemetry library"
@@ -22,7 +22,7 @@ keywords = ["telemetry"]
 license = "MPL-2.0"
 repository = "https://github.com/mozilla/glean"
 [package.metadata.glean]
-glean-parser = "1.29.0"
+glean-parser = "3.4.0"
 [dependencies.bincode]
 version = "1.2.1"
 
@@ -43,7 +43,7 @@ version = "0.4.8"
 version = "1.4.1"
 
 [dependencies.rkv]
-version = "0.16.0"
+version = "0.17.0"
 default-features = false
 
 [dependencies.serde]
@@ -56,6 +56,9 @@ version = "1.0.44"
 [dependencies.uuid]
 version = "0.8.1"
 features = ["v4"]
+
+[dependencies.zeitstempel]
+version = "0.1.0"
 [dev-dependencies.ctor]
 version = "0.1.12"
 
@@ -72,6 +75,8 @@ version = "3.1.0"
 
 [features]
 rkv-safe-mode = []
+[target."cfg(target_os = \"windows\")".dependencies.time]
+version = "0.1.40"
 [badges.circle-ci]
 branch = "main"
 repository = "mozilla/glean"

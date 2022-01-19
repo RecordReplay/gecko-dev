@@ -23,28 +23,31 @@ ImageTracker::~ImageTracker() { SetLockingState(false); }
 nsresult ImageTracker::Add(imgIRequest* aImage) {
   MOZ_ASSERT(aImage);
 
-  nsresult rv = NS_OK;
-  auto entry = mImages.LookupForAdd(aImage);
-  if (entry) {
-    // The image is already in the hashtable.  Increment its count.
-    uint32_t oldCount = entry.Data();
-    MOZ_ASSERT(oldCount > 0, "Entry in the image tracker with count 0!");
-    entry.Data() = oldCount + 1;
-  } else {
-    // A new entry was inserted - set the count to 1.
-    entry.OrInsert([]() { return 1; });
+  const nsresult rv = mImages.WithEntryHandle(aImage, [&](auto&& entry) {
+    nsresult rv = NS_OK;
+    if (entry) {
+      // The image is already in the hashtable.  Increment its count.
+      uint32_t oldCount = entry.Data();
+      MOZ_ASSERT(oldCount > 0, "Entry in the image tracker with count 0!");
+      entry.Data() = oldCount + 1;
+    } else {
+      // A new entry was inserted - set the count to 1.
+      entry.Insert(1);
 
-    // If we're locking images, lock this image too.
-    if (mLocking) {
-      rv = aImage->LockImage();
+      // If we're locking images, lock this image too.
+      if (mLocking) {
+        rv = aImage->LockImage();
+      }
+
+      // If we're animating images, request that this image be animated too.
+      if (mAnimating) {
+        nsresult rv2 = aImage->IncrementAnimationConsumers();
+        rv = NS_SUCCEEDED(rv) ? rv2 : rv;
+      }
     }
 
-    // If we're animating images, request that this image be animated too.
-    if (mAnimating) {
-      nsresult rv2 = aImage->IncrementAnimationConsumers();
-      rv = NS_SUCCEEDED(rv) ? rv2 : rv;
-    }
-  }
+    return rv;
+  });
 
   return rv;
 }
@@ -101,8 +104,7 @@ nsresult ImageTracker::SetLockingState(bool aLocked) {
   if (mLocking == aLocked) return NS_OK;
 
   // Otherwise, iterate over our images and perform the appropriate action.
-  for (auto iter = mImages.Iter(); !iter.Done(); iter.Next()) {
-    imgIRequest* image = iter.Key();
+  for (imgIRequest* image : mImages.Keys()) {
     if (aLocked) {
       image->LockImage();
     } else {
@@ -121,8 +123,7 @@ void ImageTracker::SetAnimatingState(bool aAnimating) {
   if (mAnimating == aAnimating) return;
 
   // Otherwise, iterate over our images and perform the appropriate action.
-  for (auto iter = mImages.Iter(); !iter.Done(); iter.Next()) {
-    imgIRequest* image = iter.Key();
+  for (imgIRequest* image : mImages.Keys()) {
     if (aAnimating) {
       image->IncrementAnimationConsumers();
     } else {
@@ -135,8 +136,8 @@ void ImageTracker::SetAnimatingState(bool aAnimating) {
 }
 
 void ImageTracker::RequestDiscardAll() {
-  for (auto iter = mImages.Iter(); !iter.Done(); iter.Next()) {
-    iter.Key()->RequestDiscard();
+  for (imgIRequest* image : mImages.Keys()) {
+    image->RequestDiscard();
   }
 }
 
@@ -150,8 +151,7 @@ void ImageTracker::MediaFeatureValuesChangedAllDocuments(
   // Pull the images out into an array and iterate over them, in case the
   // image notifications do something that ends up modifying the table.
   nsTArray<nsCOMPtr<imgIContainer>> images;
-  for (auto iter = mImages.Iter(); !iter.Done(); iter.Next()) {
-    imgIRequest* req = iter.Key();
+  for (imgIRequest* req : mImages.Keys()) {
     nsCOMPtr<imgIContainer> image;
     req->GetImage(getter_AddRefs(image));
     if (!image) {

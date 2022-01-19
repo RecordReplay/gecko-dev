@@ -28,7 +28,7 @@ win32/debug:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         options: [append-env-variables-from-configs]
@@ -81,7 +81,7 @@ win32/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         options: [append-env-variables-from-configs]
@@ -134,7 +134,7 @@ win64/debug:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         options: [append-env-variables-from-configs]
@@ -187,7 +187,7 @@ win64-fuzzing/debug:
         max-run-time: 7200
         env:
             PERFHERDER_EXTRA_OPTIONS: fuzzing
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -239,7 +239,7 @@ win64-plain/debug:
         max-run-time: 7200
         env:
             PERFHERDER_EXTRA_OPTIONS: plain
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [build]
         options: [append-env-variables-from-configs]
@@ -255,12 +255,13 @@ win64-plain/debug:
     run-on-projects: ['trunk']
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-node
             - win64-nasm
             - win64-cbindgen
             - win64-winchecksec
+            - win64-mozmake
     optimization:
         skip-unless-expanded: null
 
@@ -281,7 +282,7 @@ win64/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         options: [append-env-variables-from-configs]
@@ -335,7 +336,7 @@ win64-plain/opt:
         max-run-time: 7200
         env:
             PERFHERDER_EXTRA_OPTIONS: plain
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [build]
         options: [append-env-variables-from-configs]
@@ -351,12 +352,13 @@ win64-plain/opt:
     run-on-projects: ['mozilla-central']
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-nasm
             - win64-node
             - win64-cbindgen
             - win64-winchecksec
+            - win64-mozmake
     optimization:
         skip-unless-expanded: null
 
@@ -393,7 +395,7 @@ win32-shippable/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 10800
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         actions: [get-secrets, build]
@@ -449,7 +451,7 @@ win64-shippable/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 10800
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         actions: [get-secrets, build]
@@ -497,7 +499,7 @@ win32-add-on-devel/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 10800
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -547,7 +549,7 @@ win64-add-on-devel/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 10800
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -597,7 +599,7 @@ win64-noopt/debug:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -647,7 +649,7 @@ win32-noopt/debug:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -697,7 +699,7 @@ win32-rusttests/opt:
         max-run-time: 5400
         env:
             PERFHERDER_EXTRA_OPTIONS: rusttests
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -709,20 +711,21 @@ win32-rusttests/opt:
             - builds/taskcluster_base_win32.py
         extra-config:
             stage_platform: win32-rusttests
-            build_targets: ['pre-export', 'export', 'recurse_rusttests']
+            app_name: tools/rusttests
             disable_package_metrics: true
         mozconfig-variant: rusttests
     run-on-projects: ['mozilla-central']
     use-sccache: true
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-cbindgen
             - win64-sccache
             - win64-nasm
             - win64-node
             - win64-winchecksec
+            - win64-mozmake
     optimization:
         test-inclusive: [rusttests]
 
@@ -740,7 +743,7 @@ win32-rusttests/debug:
         max-run-time: 5400
         env:
             PERFHERDER_EXTRA_OPTIONS: rusttests
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -752,20 +755,21 @@ win32-rusttests/debug:
             - builds/taskcluster_base_win32.py
         extra-config:
             stage_platform: win32-rusttests
-            build_targets: ['pre-export', 'export', 'recurse_rusttests']
+            app_name: tools/rusttests
             disable_package_metrics: true
         mozconfig-variant: rusttests-debug
     run-on-projects: ['mozilla-central']
     use-sccache: true
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-cbindgen
             - win64-sccache
             - win64-nasm
             - win64-node
             - win64-winchecksec
+            - win64-mozmake
     optimization:
         test-inclusive: [rusttests]
 
@@ -783,7 +787,7 @@ win64-rusttests/opt:
         max-run-time: 5400
         env:
             PERFHERDER_EXTRA_OPTIONS: rusttests
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -799,13 +803,14 @@ win64-rusttests/opt:
     use-sccache: true
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-cbindgen
             - win64-sccache
             - win64-nasm
             - win64-node
             - win64-winchecksec
+            - win64-mozmake
     optimization:
         test-inclusive: [rusttests]
 
@@ -823,7 +828,7 @@ win64-rusttests/debug:
         max-run-time: 5400
         env:
             PERFHERDER_EXTRA_OPTIONS: rusttests
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         actions: [get-secrets, build]
         options: [append-env-variables-from-configs]
@@ -839,13 +844,14 @@ win64-rusttests/debug:
     use-sccache: true
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-cbindgen
             - win64-sccache
             - win64-nasm
             - win64-node
             - win64-winchecksec
+            - win64-mozmake
     optimization:
         test-inclusive: [rusttests]
 
@@ -868,7 +874,7 @@ win64-ccov/opt:
               type: file
         max-run-time: 9000
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             RUSTC_BOOTSTRAP: '1'
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -885,7 +891,7 @@ win64-ccov/opt:
     use-sccache: true
     fetches:
         toolchain:
-            - win64-clang-cl
+            - win64-clang
             - win64-rust
             - win64-rust-size
             - win64-cbindgen
@@ -894,6 +900,7 @@ win64-ccov/opt:
             - win64-nasm
             - win64-node
             - win64-winchecksec
+            - win64-mozmake
 
 win64-asan/debug:
     description: "Win64 Debug ASAN"
@@ -909,7 +916,7 @@ win64-asan/debug:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             PERFHERDER_EXTRA_OPTIONS: "debug asan"
     run:
         actions: [get-secrets, build]
@@ -962,7 +969,7 @@ win64-asan/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             PERFHERDER_EXTRA_OPTIONS: "opt asan"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -1020,7 +1027,7 @@ win64-asan-reporter-shippable/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             PERFHERDER_EXTRA_OPTIONS: "asan-reporter"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -1076,7 +1083,7 @@ win64-asan-fuzzing/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             PERFHERDER_EXTRA_OPTIONS: fuzzing-asan
     run:
         actions: [get-secrets, build]
@@ -1146,7 +1153,7 @@ win32-devedition/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 10800
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         actions: [get-secrets, build]
@@ -1203,7 +1210,7 @@ win64-devedition/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 10800
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
         actions: [get-secrets, build]
@@ -1255,7 +1262,7 @@ win64-aarch64/debug:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             PERFHERDER_EXTRA_OPTIONS: aarch64
     run:
         actions: [get-secrets, build]
@@ -1314,7 +1321,7 @@ win64-aarch64/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             PERFHERDER_EXTRA_OPTIONS: aarch64
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -1367,7 +1374,7 @@ win64-aarch64-eme/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             PERFHERDER_EXTRA_OPTIONS: aarch64-eme
             MOZ_ARTIFACT_TASK: {task-reference: '<win64-aarch64-opt>'}
             MOZ_ARTIFACT_TASK_WIN32_OPT: {task-reference: '<win32-opt>'}
@@ -1419,7 +1426,7 @@ win64-aarch64-shippable/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             PERFHERDER_EXTRA_OPTIONS: aarch64
             MOZ_ARTIFACT_TASK: {task-reference: '<win64-aarch64-opt>'}
             MOZ_ARTIFACT_TASK_WIN32_OPT: {task-reference: '<win32-opt>'}
@@ -1519,7 +1526,7 @@ win64-aarch64-shippable-no-eme/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             PERFHERDER_EXTRA_OPTIONS: aarch64-no-eme
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:
@@ -1580,7 +1587,7 @@ win64-aarch64-devedition/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             MOZ_ARTIFACT_TASK: {task-reference: '<win64-aarch64-opt>'}
             MOZ_ARTIFACT_TASK_WIN32_OPT: {task-reference: '<win32-opt>'}
             USE_ARTIFACT: '1'
@@ -1679,7 +1686,7 @@ win64-aarch64-devedition-no-eme/opt:
         docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 7200
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/aarch64.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.9.manifest"
             PERFHERDER_EXTRA_OPTIONS: aarch64-no-eme
             MOZ_AUTOMATION_PACKAGE_TESTS: "1"
     run:

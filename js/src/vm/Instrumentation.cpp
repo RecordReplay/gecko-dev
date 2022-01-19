@@ -96,13 +96,10 @@ static bool StringToInstrumentationKind(JSContext* cx, HandleString str,
 }
 
 /* static */
-const frontend::ParserAtom* RealmInstrumentation::getInstrumentationKindName(
-    JSContext* cx, frontend::ParserAtomsTable& parserAtoms,
-    InstrumentationKind kind) {
+const char* RealmInstrumentation::getInstrumentationKindName(InstrumentationKind kind) {
   for (size_t i = 0; i < std::size(instrumentationNames); i++) {
     if (kind == (InstrumentationKind)(1 << i)) {
-      return parserAtoms.internAscii(cx, instrumentationNames[i],
-                                     strlen(instrumentationNames[i]));
+      return instrumentationNames[i];
     }
   }
   MOZ_CRASH("Unexpected instrumentation kind");
@@ -180,8 +177,10 @@ bool RealmInstrumentation::setActive(JSContext* cx,
     // instrumentation activity changes.
     js::CancelOffThreadIonCompile(cx->runtime());
     cx->zone()->setPreservingCode(false);
-    cx->zone()->discardJitCode(cx->runtime()->defaultFreeOp(),
-                               Zone::KeepBaselineCode);
+
+    Zone::DiscardOptions options;
+    options.discardBaselineCode = false;
+    cx->zone()->discardJitCode(cx->runtime()->defaultFreeOp(), options);
   }
 
   return true;

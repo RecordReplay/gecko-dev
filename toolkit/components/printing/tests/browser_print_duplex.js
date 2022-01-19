@@ -3,6 +3,28 @@
 
 "use strict";
 
+function changeToOption(helper, index) {
+  return helper.waitForSettingsEvent(function() {
+    let select = helper.get("duplex-select");
+    select.focus();
+    select.scrollIntoView({ block: "center" });
+
+    EventUtils.sendKey("space", helper.win);
+    let selectedIndex = select.selectedIndex;
+    info(`Looking for ${index} from ${selectedIndex}`);
+    while (selectedIndex != index) {
+      if (index > selectedIndex) {
+        EventUtils.sendKey("down", helper.win);
+        selectedIndex++;
+      } else {
+        EventUtils.sendKey("up", helper.win);
+        selectedIndex--;
+      }
+    }
+    EventUtils.sendKey("return", helper.win);
+  });
+}
+
 add_task(async function testPDFPrinterIsNonDuplex() {
   await PrintHelper.withTestPage(async helper => {
     await helper.startPrint();
@@ -20,7 +42,7 @@ add_task(async function testPDFPrinterIsNonDuplex() {
       "The two-sided printing section should be hidden when the printer does not support duplex."
     );
 
-    helper.assertSettingsMatch({ duplex: Ci.nsIPrintSettings.kSimplex });
+    helper.assertSettingsMatch({ duplex: Ci.nsIPrintSettings.kDuplexNone });
 
     await helper.closeDialog();
   });
@@ -51,19 +73,25 @@ add_task(async function testToggleDuplexWithPortraitOrientation() {
 
     helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kSimplex,
+      duplex: Ci.nsIPrintSettings.kDuplexNone,
     });
 
-    await helper.click(helper.get("duplex-enabled"));
+    await changeToOption(helper, 1);
     helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kDuplexHorizontal,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
     });
 
-    await helper.click(helper.get("duplex-enabled"));
+    await changeToOption(helper, 2);
     helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kSimplex,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnShortEdge,
+    });
+
+    await changeToOption(helper, 0);
+    helper.assertSettingsMatch({
+      orientation: Ci.nsIPrintSettings.kPortraitOrientation,
+      duplex: Ci.nsIPrintSettings.kDuplexNone,
     });
 
     await helper.closeDialog();
@@ -95,26 +123,32 @@ add_task(async function testToggleDuplexWithLandscapeOrientation() {
 
     await helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kSimplex,
+      duplex: Ci.nsIPrintSettings.kDuplexNone,
     });
 
     await helper.dispatchSettingsChange({ orientation: 1 });
     await helper.awaitAnimationFrame();
     await helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kLandscapeOrientation,
-      duplex: Ci.nsIPrintSettings.kSimplex,
+      duplex: Ci.nsIPrintSettings.kDuplexNone,
     });
 
-    await helper.click(helper.get("duplex-enabled"));
-    await helper.assertSettingsMatch({
+    await changeToOption(helper, 1);
+    helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kLandscapeOrientation,
-      duplex: Ci.nsIPrintSettings.kDuplexHorizontal,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
     });
 
-    await helper.click(helper.get("duplex-enabled"));
-    await helper.assertSettingsMatch({
+    await changeToOption(helper, 2);
+    helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kLandscapeOrientation,
-      duplex: Ci.nsIPrintSettings.kSimplex,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnShortEdge,
+    });
+
+    await changeToOption(helper, 0);
+    helper.assertSettingsMatch({
+      orientation: Ci.nsIPrintSettings.kLandscapeOrientation,
+      duplex: Ci.nsIPrintSettings.kDuplexNone,
     });
 
     await helper.closeDialog();
@@ -146,27 +180,28 @@ add_task(async function testSwitchOrientationWithDuplexEnabled() {
 
     await helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kSimplex,
+      duplex: Ci.nsIPrintSettings.kDuplexNone,
     });
 
-    await helper.click(helper.get("duplex-enabled"));
+    await changeToOption(helper, 1);
+
     await helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kDuplexHorizontal,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
     });
 
     await helper.dispatchSettingsChange({ orientation: 1 });
     await helper.awaitAnimationFrame();
     await helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kLandscapeOrientation,
-      duplex: Ci.nsIPrintSettings.kDuplexHorizontal,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
     });
 
     await helper.dispatchSettingsChange({ orientation: 0 });
     await helper.awaitAnimationFrame();
     await helper.assertSettingsMatch({
       orientation: Ci.nsIPrintSettings.kPortraitOrientation,
-      duplex: Ci.nsIPrintSettings.kDuplexHorizontal,
+      duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
     });
 
     await helper.closeDialog();

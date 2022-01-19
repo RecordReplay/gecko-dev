@@ -61,12 +61,10 @@ EXPORTS.mozilla.dom += [
     "ImageUtils.h",
     "IpdlQueue.h",
     "OffscreenCanvas.h",
-    "ProducerConsumerQueue.h",
     "QueueParamTraits.h",
     "TextMetrics.h",
     "WebGLChild.h",
     "WebGLCommandQueue.h",
-    "WebGLCrossProcessCommandQueue.h",
     "WebGLIpdl.h",
     "WebGLParent.h",
     "WebGLTypes.h",
@@ -100,7 +98,7 @@ UNIFIED_SOURCES += [
     "ClientWebGLContext.cpp",
     "ClientWebGLExtensions.cpp",
     "HostWebGLContext.cpp",
-    "Queue.cpp",
+    "SanitizeRenderer.cpp",
     "TexUnpackBlob.cpp",
     "WebGL2Context.cpp",
     "WebGL2ContextBuffers.cpp",
@@ -128,7 +126,6 @@ UNIFIED_SOURCES += [
     "WebGLContextValidate.cpp",
     "WebGLContextVertexArray.cpp",
     "WebGLContextVertices.cpp",
-    "WebGLCrossProcessCommandQueue.cpp",
     "WebGLExtensionColorBufferFloat.cpp",
     "WebGLExtensionColorBufferHalfFloat.cpp",
     "WebGLExtensionCompressedTextureASTC.cpp",
@@ -179,6 +176,10 @@ SOURCES += [
 
 IPDL_SOURCES += [
     "PWebGL.ipdl",
+]
+
+TEST_DIRS += [
+    "gtest",
 ]
 
 # Suppress warnings from third-party code.

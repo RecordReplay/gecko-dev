@@ -32,8 +32,8 @@ using namespace mozilla::a11y;
                  andRoot:(MOXAccessibleBase*)root {
   if (id searchKeyParam = [params objectForKey:@"AXSearchKey"]) {
     mSearchKeys = [searchKeyParam isKindOfClass:[NSString class]]
-                      ? @[ searchKeyParam ]
-                      : searchKeyParam;
+                      ? [[NSArray alloc] initWithObjects:searchKeyParam, nil]
+                      : [searchKeyParam retain];
   }
 
   if (id startElemParam = [params objectForKey:@"AXStartElement"]) {
@@ -80,7 +80,8 @@ using namespace mozilla::a11y;
   // don't come up short on the final result count.
   int resultLimit = [self shouldApplyPostFilter] ? -1 : mResultLimit;
 
-  NSMutableArray<mozAccessible*>* matches = [[NSMutableArray alloc] init];
+  NSMutableArray<mozAccessible*>* matches =
+      [[[NSMutableArray alloc] init] autorelease];
   AccessibleOrProxy geckoRootAcc = [self rootGeckoAccessible];
   AccessibleOrProxy geckoStartAcc = [self startGeckoAccessible];
   Pivot p = Pivot(geckoRootAcc);
@@ -130,7 +131,8 @@ using namespace mozilla::a11y;
     return matches;
   }
 
-  NSMutableArray<mozAccessible*>* postMatches = [[NSMutableArray alloc] init];
+  NSMutableArray<mozAccessible*>* postMatches =
+      [[[NSMutableArray alloc] init] autorelease];
 
   nsString searchText;
   nsCocoaUtils::GetStringForNSString(mSearchText, searchText);
@@ -182,7 +184,7 @@ using namespace mozilla::a11y;
       return;
     }
 
-    ProxyAccessible* proxy = geckoAcc.AsProxy();
+    RemoteAccessible* proxy = geckoAcc.AsProxy();
     if (ipcDoc &&
         ((ipcDoc != proxy->Document()) || (idx + 1 == [matches count]))) {
       // If the ipcDoc doesn't match the current proxy's doc, we crossed into a
@@ -193,7 +195,7 @@ using namespace mozilla::a11y;
           accIds, mResultLimit, EWhichPostFilter::eContainsText, searchText,
           &matchIds);
       for (size_t i = 0; i < matchIds.Length(); i++) {
-        if (ProxyAccessible* postMatch =
+        if (RemoteAccessible* postMatch =
                 ipcDoc->GetAccessible(matchIds.ElementAt(i))) {
           if (mozAccessible* nativePostMatch =
                   GetNativeFromGeckoAccessible(postMatch)) {
@@ -225,7 +227,7 @@ using namespace mozilla::a11y;
 - (NSArray*)performSearch {
   AccessibleOrProxy geckoRootAcc = [self rootGeckoAccessible];
   AccessibleOrProxy geckoStartAcc = [self startGeckoAccessible];
-  NSMutableArray* matches = [[NSMutableArray alloc] init];
+  NSMutableArray* matches = [[[NSMutableArray alloc] init] autorelease];
   for (id key in mSearchKeys) {
     if ([key isEqualToString:@"AXAnyTypeSearchKey"]) {
       RotorRule rule =
@@ -362,7 +364,7 @@ using namespace mozilla::a11y;
       [matches addObjectsFromArray:[self getMatchesForRule:rule]];
     }
 
-    if ([key isEqualToString:@"AXCheckboxSearchKey"]) {
+    if ([key isEqualToString:@"AXCheckBoxSearchKey"]) {
       RotorRoleRule rule = mImmediateDescendantsOnly
                                ? RotorRoleRule(roles::CHECKBUTTON, geckoRootAcc)
                                : RotorRoleRule(roles::CHECKBUTTON);

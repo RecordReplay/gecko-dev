@@ -13,21 +13,12 @@ if CONFIG["COMPILE_ENVIRONMENT"] and CONFIG["ACCESSIBILITY"]:
 if CONFIG["ACCESSIBILITY"]:
     IPDL_SOURCES += ["PDocAccessible.ipdl"]
 
-    if not CONFIG["HAVE_64BIT_BUILD"]:
-        EXPORTS += [
-            "IAccessible32.manifest",
-        ]
-
-    EXPORTS += [
-        "IAccessible64.manifest",
-    ]
-
     EXPORTS.mozilla.a11y += [
         "COMPtrTypes.h",
         "DocAccessibleChild.h",
         "HandlerProvider.h",
         "PlatformChild.h",
-        "ProxyAccessible.h",
+        "RemoteAccessible.h",
     ]
 
     SOURCES += [
@@ -36,7 +27,7 @@ if CONFIG["ACCESSIBILITY"]:
         "DocAccessibleChild.cpp",
         "HandlerProvider.cpp",
         "PlatformChild.cpp",
-        "ProxyAccessible.cpp",
+        "RemoteAccessible.cpp",
     ]
 
     # Give some symbols a unique name in each translation unit, to avoid

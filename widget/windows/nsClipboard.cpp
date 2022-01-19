@@ -11,6 +11,7 @@
 // shellapi.h is needed to build with WIN32_LEAN_AND_MEAN
 #include <shellapi.h>
 
+#include "mozilla/StaticPrefs_clipboard.h"
 #include "nsArrayUtils.h"
 #include "nsCOMPtr.h"
 #include "nsDataObj.h"
@@ -36,10 +37,18 @@ using mozilla::LogLevel;
 
 static mozilla::LazyLogModule gWin32ClipboardLog("nsClipboard");
 
-// oddly, this isn't in the MSVC headers anywhere.
-UINT nsClipboard::CF_HTML = ::RegisterClipboardFormatW(L"HTML Format");
-UINT nsClipboard::CF_CUSTOMTYPES =
-    ::RegisterClipboardFormatW(L"application/x-moz-custom-clipdata");
+/* static */
+UINT nsClipboard::GetHtmlClipboardFormat() {
+  static UINT format = ::RegisterClipboardFormatW(L"HTML Format");
+  return format;
+}
+
+/* static */
+UINT nsClipboard::GetCustomClipboardFormat() {
+  static UINT format =
+      ::RegisterClipboardFormatW(L"application/x-moz-custom-clipdata");
+  return format;
+}
 
 //-------------------------------------------------------------------------
 //
@@ -96,9 +105,9 @@ UINT nsClipboard::GetFormat(const char* aMimeStr, bool aMapHTMLMime) {
     format = CF_HDROP;
   } else if ((strcmp(aMimeStr, kNativeHTMLMime) == 0) ||
              (aMapHTMLMime && strcmp(aMimeStr, kHTMLMime) == 0)) {
-    format = CF_HTML;
+    format = GetHtmlClipboardFormat();
   } else if (strcmp(aMimeStr, kCustomTypesMime) == 0) {
-    format = CF_CUSTOMTYPES;
+    format = GetCustomClipboardFormat();
   } else {
     format = ::RegisterClipboardFormatW(NS_ConvertASCIItoUTF16(aMimeStr).get());
   }
@@ -132,6 +141,29 @@ nsresult nsClipboard::CreateNativeDataObject(nsITransferable* aTransferable,
     dataObj->Release();
   }
   return res;
+}
+
+static nsresult StoreValueInDataObject(nsDataObj* aObj,
+                                       LPCWSTR aClipboardFormat, DWORD value) {
+  HGLOBAL hGlobalMemory = ::GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+  if (!hGlobalMemory) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  DWORD* pdw = (DWORD*)::GlobalLock(hGlobalMemory);
+  *pdw = value;
+  ::GlobalUnlock(hGlobalMemory);
+
+  STGMEDIUM stg;
+  stg.tymed = TYMED_HGLOBAL;
+  stg.pUnkForRelease = nullptr;
+  stg.hGlobal = hGlobalMemory;
+
+  FORMATETC fe;
+  SET_FORMATETC(fe, ::RegisterClipboardFormat(aClipboardFormat), 0,
+                DVASPECT_CONTENT, -1, TYMED_HGLOBAL)
+  aObj->SetData(&fe, &stg, TRUE);
+
+  return NS_OK;
 }
 
 //-------------------------------------------------------------------------
@@ -180,7 +212,8 @@ nsresult nsClipboard::SetupNativeDataObject(nsITransferable* aTransferable,
       // if we find text/html, also advertise win32's html flavor (which we will
       // convert on our own in nsDataObj::GetText().
       FORMATETC htmlFE;
-      SET_FORMATETC(htmlFE, CF_HTML, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL);
+      SET_FORMATETC(htmlFE, GetHtmlClipboardFormat(), 0, DVASPECT_CONTENT, -1,
+                    TYMED_HGLOBAL);
       dObj->AddDataFlavor(kHTMLMime, &htmlFE);
     } else if (flavorStr.EqualsLiteral(kURLMime)) {
       // if we're a url, in addition to also being text, we need to register
@@ -236,6 +269,23 @@ nsresult nsClipboard::SetupNativeDataObject(nsITransferable* aTransferable,
                     ::RegisterClipboardFormat(CFSTR_PREFERREDDROPEFFECT), 0,
                     DVASPECT_CONTENT, -1, TYMED_HGLOBAL)
       dObj->AddDataFlavor(kFilePromiseMime, &shortcutFE);
+    }
+  }
+
+  if (!StaticPrefs::clipboard_copyPrivateDataToClipboardCloudOrHistory()) {
+    // Let Clipboard know that data is sensitive and must not be copied to
+    // the Cloud Clipboard, Clipboard History and similar.
+    // https://docs.microsoft.com/en-us/windows/win32/dataxchg/clipboard-formats#cloud-clipboard-and-clipboard-history-formats
+    if (aTransferable->GetIsPrivateData()) {
+      nsresult rv =
+          StoreValueInDataObject(dObj, TEXT("CanUploadToCloudClipboard"), 0);
+      NS_ENSURE_SUCCESS(rv, rv);
+      rv =
+          StoreValueInDataObject(dObj, TEXT("CanIncludeInClipboardHistory"), 0);
+      NS_ENSURE_SUCCESS(rv, rv);
+      rv = StoreValueInDataObject(
+          dObj, TEXT("ExcludeClipboardContentFromMonitorProcessing"), 0);
+      NS_ENSURE_SUCCESS(rv, rv);
     }
   }
 
@@ -549,14 +599,14 @@ nsresult nsClipboard::GetNativeDataOffClipboard(IDataObject* aDataObject,
               //        assumption. Stay tuned.
               uint32_t allocLen = 0;
               if (NS_SUCCEEDED(GetGlobalData(stm.hGlobal, aData, &allocLen))) {
-                if (fe.cfFormat == CF_HTML) {
+                if (fe.cfFormat == GetHtmlClipboardFormat()) {
                   // CF_HTML is actually UTF8, not unicode, so disregard the
                   // assumption above. We have to check the header for the
                   // actual length, and we'll do that in FindPlatformHTML().
                   // For now, return the allocLen. This case is mostly to
                   // ensure we don't try to call strlen on the buffer.
                   *aLen = allocLen;
-                } else if (fe.cfFormat == CF_CUSTOMTYPES) {
+                } else if (fe.cfFormat == GetCustomClipboardFormat()) {
                   // Binary data
                   *aLen = allocLen;
                 } else if (fe.cfFormat == preferredDropEffect) {

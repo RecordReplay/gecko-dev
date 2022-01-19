@@ -13,7 +13,7 @@
 #include "gfxFont.h"
 #include "gfxFontConstants.h"
 
-nsLookAndFeel::nsLookAndFeel(LookAndFeelCache* aCache) : nsXPLookAndFeel(), mInitialized(false) {}
+nsLookAndFeel::nsLookAndFeel() : mInitialized(false) {}
 
 nsLookAndFeel::~nsLookAndFeel() {}
 
@@ -40,7 +40,7 @@ void nsLookAndFeel::RefreshImpl() {
   mInitialized = false;
 }
 
-nsresult nsLookAndFeel::NativeGetColor(const ColorID aID, nscolor& aResult) {
+nsresult nsLookAndFeel::NativeGetColor(ColorID, ColorScheme, nscolor& aResult) {
   EnsureInit();
 
   nsresult res = NS_OK;
@@ -322,7 +322,6 @@ nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::DWMCompositor:
     case IntID::WindowsClassic:
     case IntID::WindowsDefaultTheme:
-    case IntID::TouchEnabled:
       aResult = 0;
       res = NS_ERROR_NOT_IMPLEMENTED;
       break;
@@ -405,7 +404,7 @@ void nsLookAndFeel::EnsureInit() {
   if (color == 0x000000) {
     mColorTextSelectForeground = NS_RGB(0xff, 0xff, 0xff);
   } else {
-    mColorTextSelectForeground = NS_DONT_CHANGE_COLOR;
+    mColorTextSelectForeground = NS_SAME_AS_FOREGROUND_COLOR;
   }
 
   mColorDarkText = GetColorFromUIColor([UIColor darkTextColor]);

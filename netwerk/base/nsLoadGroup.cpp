@@ -86,18 +86,7 @@ static void RescheduleRequest(nsIRequest* aRequest, int32_t delta) {
 }
 
 nsLoadGroup::nsLoadGroup()
-    : mForegroundCount(0),
-      mLoadFlags(LOAD_NORMAL),
-      mDefaultLoadFlags(0),
-      mPriority(PRIORITY_NORMAL),
-      mRequests(&sRequestHashOps, sizeof(RequestMapEntry)),
-      mStatus(NS_OK),
-      mIsCanceling(false),
-      mDefaultLoadIsTimed(false),
-      mBrowsingContextDiscarded(false),
-      mExternalRequestContext(false),
-      mTimedRequests(0),
-      mCachedRequests(0) {
+    : mRequests(&sRequestHashOps, sizeof(RequestMapEntry)) {
   LOG(("LOADGROUP [%p]: Created.\n", this));
 }
 
@@ -145,14 +134,15 @@ nsLoadGroup::GetName(nsACString& result) {
 
 NS_IMETHODIMP
 nsLoadGroup::IsPending(bool* aResult) {
-  *aResult = (mForegroundCount > 0) ? true : false;
+  *aResult = mForegroundCount > 0;
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsLoadGroup::GetStatus(nsresult* status) {
-  if (NS_SUCCEEDED(mStatus) && mDefaultLoadRequest)
+  if (NS_SUCCEEDED(mStatus) && mDefaultLoadRequest) {
     return mDefaultLoadRequest->GetStatus(status);
+  }
 
   *status = mStatus;
   return NS_OK;
@@ -161,7 +151,7 @@ nsLoadGroup::GetStatus(nsresult* status) {
 static bool AppendRequestsToArray(PLDHashTable* aTable,
                                   nsTArray<nsIRequest*>* aArray) {
   for (auto iter = aTable->Iter(); !iter.Done(); iter.Next()) {
-    auto e = static_cast<RequestMapEntry*>(iter.Get());
+    auto* e = static_cast<RequestMapEntry*>(iter.Get());
     nsIRequest* request = e->mKey;
     NS_ASSERTION(request, "What? Null key in PLDHashTable entry?");
 
@@ -455,7 +445,7 @@ nsLoadGroup::AddRequest(nsIRequest* request, nsISupports* ctxt) {
   // Add the request to the list of active requests...
   //
 
-  auto entry = static_cast<RequestMapEntry*>(mRequests.Add(request, fallible));
+  auto* entry = static_cast<RequestMapEntry*>(mRequests.Add(request, fallible));
   if (!entry) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -465,10 +455,13 @@ nsLoadGroup::AddRequest(nsIRequest* request, nsISupports* ctxt) {
   nsCOMPtr<nsITimedChannel> timedChannel = do_QueryInterface(request);
   if (timedChannel) timedChannel->SetTimingEnabled(true);
 
-  if (!(flags & nsIRequest::LOAD_BACKGROUND)) {
+  bool foreground = !(flags & nsIRequest::LOAD_BACKGROUND);
+  if (foreground) {
     // Update the count of foreground URIs..
     mForegroundCount += 1;
+  }
 
+  if (foreground || mNotifyObserverAboutBackgroundRequests) {
     //
     // Fire the OnStartRequest notification out to the observer...
     //
@@ -495,12 +488,14 @@ nsLoadGroup::AddRequest(nsIRequest* request, nsISupports* ctxt) {
 
         rv = NS_OK;
 
-        mForegroundCount -= 1;
+        if (foreground) {
+          mForegroundCount -= 1;
+        }
       }
     }
 
     // Ensure that we're part of our loadgroup while pending
-    if (mForegroundCount == 1 && mLoadGroup) {
+    if (foreground && mForegroundCount == 1 && mLoadGroup) {
       mLoadGroup->AddRequest(this, nullptr);
     }
   }
@@ -542,7 +537,7 @@ nsresult nsLoadGroup::RemoveRequestFromHashtable(nsIRequest* request,
   // the request was *not* in the group so do not update the foreground
   // count or it will get messed up...
   //
-  auto entry = static_cast<RequestMapEntry*>(mRequests.Search(request));
+  auto* entry = static_cast<RequestMapEntry*>(mRequests.Search(request));
 
   if (!entry) {
     LOG(("LOADGROUP [%p]: Unable to remove request %p. Not in group!\n", this,
@@ -601,10 +596,13 @@ nsresult nsLoadGroup::NotifyRemovalObservers(nsIRequest* request,
   nsresult rv = request->GetLoadFlags(&flags);
   if (NS_FAILED(rv)) return rv;
 
-  if (!(flags & nsIRequest::LOAD_BACKGROUND)) {
+  bool foreground = !(flags & nsIRequest::LOAD_BACKGROUND);
+  if (foreground) {
     NS_ASSERTION(mForegroundCount > 0, "ForegroundCount messed up");
     mForegroundCount -= 1;
+  }
 
+  if (foreground || mNotifyObserverAboutBackgroundRequests) {
     // Fire the OnStopRequest out to the observer...
     nsCOMPtr<nsIRequestObserver> observer = do_QueryReferent(mObserver);
     if (observer) {
@@ -622,7 +620,7 @@ nsresult nsLoadGroup::NotifyRemovalObservers(nsIRequest* request,
     }
 
     // If that was the last request -> remove ourselves from loadgroup
-    if (mForegroundCount == 0 && mLoadGroup) {
+    if (foreground && mForegroundCount == 0 && mLoadGroup) {
       mLoadGroup->RemoveRequest(this, nullptr, aStatus);
     }
   }
@@ -636,7 +634,7 @@ nsLoadGroup::GetRequests(nsISimpleEnumerator** aRequests) {
   requests.SetCapacity(mRequests.EntryCount());
 
   for (auto iter = mRequests.Iter(); !iter.Done(); iter.Next()) {
-    auto e = static_cast<RequestMapEntry*>(iter.Get());
+    auto* e = static_cast<RequestMapEntry*>(iter.Get());
     requests.AppendObject(e->mKey);
   }
 
@@ -645,8 +643,14 @@ nsLoadGroup::GetRequests(nsISimpleEnumerator** aRequests) {
 
 NS_IMETHODIMP
 nsLoadGroup::SetGroupObserver(nsIRequestObserver* aObserver) {
-  mObserver = do_GetWeakReference(aObserver);
+  SetGroupObserver(aObserver, false);
   return NS_OK;
+}
+
+void nsLoadGroup::SetGroupObserver(nsIRequestObserver* aObserver,
+                                   bool aIncludeBackgroundRequests) {
+  mObserver = do_GetWeakReference(aObserver);
+  mNotifyObserverAboutBackgroundRequests = aIncludeBackgroundRequests;
 }
 
 NS_IMETHODIMP
@@ -744,7 +748,7 @@ nsLoadGroup::AdjustPriority(int32_t aDelta) {
   if (aDelta != 0) {
     mPriority += aDelta;
     for (auto iter = mRequests.Iter(); !iter.Done(); iter.Next()) {
-      auto e = static_cast<RequestMapEntry*>(iter.Get());
+      auto* e = static_cast<RequestMapEntry*>(iter.Get());
       RescheduleRequest(e->mKey, aDelta);
     }
   }
@@ -964,6 +968,35 @@ void nsLoadGroup::TelemetryReportChannel(nsITimedChannel* aTimedChannel,
       if (!responseEnd.IsNull()) {
         Telemetry::AccumulateTimeDelta(Telemetry::HTTP3_COMPLETE_LOAD, key,
                                        asyncOpen, responseEnd);
+      }
+    }
+  }
+
+  bool hasHTTPSRR = false;
+  if (httpChannel && NS_SUCCEEDED(httpChannel->GetHasHTTPSRR(&hasHTTPSRR)) &&
+      cacheReadStart.IsNull() && cacheReadEnd.IsNull() &&
+      !requestStart.IsNull()) {
+    nsCString key = (hasHTTPSRR) ? ((aDefaultRequest) ? "uses_https_rr_page"_ns
+                                                      : "uses_https_rr_sub"_ns)
+                                 : ((aDefaultRequest) ? "no_https_rr_page"_ns
+                                                      : "no_https_rr_sub"_ns);
+    Telemetry::AccumulateTimeDelta(Telemetry::HTTPS_RR_OPEN_TO_FIRST_SENT, key,
+                                   asyncOpen, requestStart);
+  }
+
+  if (StaticPrefs::network_trr_odoh_enabled() && !domainLookupStart.IsNull() &&
+      !domainLookupEnd.IsNull()) {
+    nsCOMPtr<nsIDNSService> dns = do_GetService(NS_DNSSERVICE_CONTRACTID);
+    bool ODoHActivated = false;
+    if (dns && NS_SUCCEEDED(dns->GetODoHActivated(&ODoHActivated)) &&
+        ODoHActivated) {
+      if (aDefaultRequest) {
+        Telemetry::AccumulateTimeDelta(
+            Telemetry::HTTP_PAGE_DNS_ODOH_LOOKUP_TIME, domainLookupStart,
+            domainLookupEnd);
+      } else {
+        Telemetry::AccumulateTimeDelta(Telemetry::HTTP_SUB_DNS_ODOH_LOOKUP_TIME,
+                                       domainLookupStart, domainLookupEnd);
       }
     }
   }

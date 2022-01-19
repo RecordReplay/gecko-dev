@@ -6,11 +6,11 @@
 
 #include "InterfaceInitFuncs.h"
 
-#include "Accessible-inl.h"
+#include "LocalAccessible-inl.h"
 #include "HyperTextAccessible.h"
 #include "nsMai.h"
 #include "nsMaiHyperlink.h"
-#include "ProxyAccessible.h"
+#include "RemoteAccessible.h"
 #include "mozilla/Likely.h"
 
 using namespace mozilla::a11y;
@@ -24,14 +24,14 @@ static AtkHyperlink* getLinkCB(AtkHypertext* aText, gint aLinkIndex) {
     HyperTextAccessible* hyperText = accWrap->AsHyperText();
     NS_ENSURE_TRUE(hyperText, nullptr);
 
-    Accessible* hyperLink = hyperText->LinkAt(aLinkIndex);
+    LocalAccessible* hyperLink = hyperText->LinkAt(aLinkIndex);
     if (!hyperLink || !hyperLink->IsLink()) {
       return nullptr;
     }
 
     atkHyperLink = AccessibleWrap::GetAtkObject(hyperLink);
-  } else if (ProxyAccessible* proxy = GetProxy(ATK_OBJECT(aText))) {
-    ProxyAccessible* proxyLink = proxy->LinkAt(aLinkIndex);
+  } else if (RemoteAccessible* proxy = GetProxy(ATK_OBJECT(aText))) {
+    RemoteAccessible* proxyLink = proxy->LinkAt(aLinkIndex);
     if (!proxyLink) return nullptr;
 
     atkHyperLink = GetWrapperFor(proxyLink);
@@ -49,7 +49,7 @@ static gint getLinkCountCB(AtkHypertext* aText) {
     return hyperText->LinkCount();
   }
 
-  if (ProxyAccessible* proxy = GetProxy(ATK_OBJECT(aText))) {
+  if (RemoteAccessible* proxy = GetProxy(ATK_OBJECT(aText))) {
     return proxy->LinkCount();
   }
 
@@ -65,7 +65,7 @@ static gint getLinkIndexCB(AtkHypertext* aText, gint aCharIndex) {
     return hyperText->LinkIndexAtOffset(aCharIndex);
   }
 
-  if (ProxyAccessible* proxy = GetProxy(ATK_OBJECT(aText))) {
+  if (RemoteAccessible* proxy = GetProxy(ATK_OBJECT(aText))) {
     return proxy->LinkIndexAtOffset(aCharIndex);
   }
 

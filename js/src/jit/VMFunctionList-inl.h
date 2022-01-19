@@ -35,6 +35,8 @@ namespace jit {
 // function to be called. This list must be sorted on the name field.
 #define VMFUNCTION_LIST(_)                                                     \
   _(AddOrUpdateSparseElementHelper, js::AddOrUpdateSparseElementHelper)        \
+  _(ArgumentsObjectCreateForInlinedIon,                                        \
+    js::ArgumentsObject::createForInlinedIon)                                  \
   _(ArgumentsObjectCreateForIon, js::ArgumentsObject::createForIon)            \
   _(ArrayConstructorOneArg, js::ArrayConstructorOneArg)                        \
   _(ArrayJoin, js::jit::ArrayJoin)                                             \
@@ -42,6 +44,14 @@ namespace jit {
   _(ArraySliceDense, js::ArraySliceDense)                                      \
   _(AsyncFunctionAwait, js::AsyncFunctionAwait)                                \
   _(AsyncFunctionResolve, js::AsyncFunctionResolve)                            \
+  _(AtomicsAdd64, js::jit::AtomicsAdd64)                                       \
+  _(AtomicsAnd64, js::jit::AtomicsAnd64)                                       \
+  _(AtomicsCompareExchange64, js::jit::AtomicsCompareExchange64)               \
+  _(AtomicsExchange64, js::jit::AtomicsExchange64)                             \
+  _(AtomicsLoad64, js::jit::AtomicsLoad64)                                     \
+  _(AtomicsOr64, js::jit::AtomicsOr64)                                         \
+  _(AtomicsSub64, js::jit::AtomicsSub64)                                       \
+  _(AtomicsXor64, js::jit::AtomicsXor64)                                       \
   _(BaselineCompileFromBaselineInterpreter,                                    \
     js::jit::BaselineCompileFromBaselineInterpreter)                           \
   _(BaselineDebugPrologue, js::jit::DebugPrologue)                             \
@@ -72,6 +82,8 @@ namespace jit {
     js::jit::BigIntStringEqual<js::jit::EqualityKind::NotEqual>)               \
   _(BigIntSub, JS::BigInt::sub)                                                \
   _(BindVarOperation, js::BindVarOperation)                                    \
+  _(BlockLexicalEnvironmentObjectCreate,                                       \
+    js::BlockLexicalEnvironmentObject::create)                                 \
   _(BoxBoxableValue, js::wasm::BoxBoxableValue)                                \
   _(BoxNonStrictThis, js::BoxNonStrictThis)                                    \
   _(BuiltinObjectOperation, js::BuiltinObjectOperation)                        \
@@ -85,6 +97,8 @@ namespace jit {
   _(CheckOverRecursed, js::jit::CheckOverRecursed)                             \
   _(CheckOverRecursedBaseline, js::jit::CheckOverRecursedBaseline)             \
   _(CheckPrivateFieldOperation, js::CheckPrivateFieldOperation)                \
+  _(ClassBodyLexicalEnvironmentObjectCreate,                                   \
+    js::ClassBodyLexicalEnvironmentObject::create)                             \
   _(CloneRegExpObject, js::CloneRegExpObject)                                  \
   _(ConcatStrings, js::ConcatStrings<CanGC>)                                   \
   _(CopyLexicalEnvironmentObject, js::jit::CopyLexicalEnvironmentObject)       \
@@ -170,19 +184,22 @@ namespace jit {
   _(Lambda, js::Lambda)                                                        \
   _(LambdaArrow, js::LambdaArrow)                                              \
   _(LeaveWith, js::jit::LeaveWith)                                             \
-  _(LexicalEnvironmentObjectCreate, js::LexicalEnvironmentObject::create)      \
-  _(MakeDefaultConstructor, js::MakeDefaultConstructor)                        \
+  _(LoadAliasedDebugVar, js::LoadAliasedDebugVar)                              \
   _(MutatePrototype, js::jit::MutatePrototype)                                 \
   _(NamedLambdaObjectCreateTemplateObject,                                     \
     js::NamedLambdaObject::createTemplateObject)                               \
   _(NativeGetElement, js::NativeGetElement)                                    \
   _(NewArgumentsObject, js::jit::NewArgumentsObject)                           \
   _(NewArrayIterator, js::NewArrayIterator)                                    \
+  _(NewArrayObjectBaselineFallback, js::NewArrayObjectBaselineFallback)        \
+  _(NewArrayObjectOptimzedFallback, js::NewArrayObjectOptimizedFallback)       \
   _(NewArrayOperation, js::NewArrayOperation)                                  \
-  _(NewArrayWithGroup, js::NewArrayWithGroup)                                  \
+  _(NewArrayWithShape, js::NewArrayWithShape)                                  \
   _(NewCallObject, js::jit::NewCallObject)                                     \
   _(NewObjectOperation, js::NewObjectOperation)                                \
   _(NewObjectOperationWithTemplate, js::NewObjectOperationWithTemplate)        \
+  _(NewPlainObjectBaselineFallback, js::NewPlainObjectBaselineFallback)        \
+  _(NewPlainObjectOptimizedFallback, js::NewPlainObjectOptimizedFallback)      \
   _(NewRegExpStringIterator, js::NewRegExpStringIterator)                      \
   _(NewStringIterator, js::NewStringIterator)                                  \
   _(NewStringObject, js::jit::NewStringObject)                                 \
@@ -205,6 +222,7 @@ namespace jit {
   _(ProxyHasOwn, js::ProxyHasOwn)                                              \
   _(ProxySetProperty, js::ProxySetProperty)                                    \
   _(ProxySetPropertyByValue, js::ProxySetPropertyByValue)                      \
+  _(PushClassBodyEnv, js::jit::PushClassBodyEnv)                               \
   _(PushLexicalEnv, js::jit::PushLexicalEnv)                                   \
   _(PushVarEnv, js::jit::PushVarEnv)                                           \
   _(RecordReplayAssertValue, js::RecordReplayAssertValue)                      \
@@ -213,6 +231,7 @@ namespace jit {
   _(RegExpMatcherRaw, js::RegExpMatcherRaw)                                    \
   _(RegExpSearcherRaw, js::RegExpSearcherRaw)                                  \
   _(RegExpTesterRaw, js::RegExpTesterRaw)                                      \
+  _(SameValue, js::SameValue)                                                  \
   _(SetArrayLength, js::jit::SetArrayLength)                                   \
   _(SetDenseElement, js::jit::SetDenseElement)                                 \
   _(SetFunctionName, js::SetFunctionName)                                      \

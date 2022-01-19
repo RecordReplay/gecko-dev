@@ -105,9 +105,7 @@ EXTRA_JS_MODULES += [
     "app/TelemetryStorage.jsm",
     "app/TelemetryTimestamps.jsm",
     "app/TelemetryUtils.jsm",
-    "other/UITelemetry.jsm",
     "pings/CoveragePing.jsm",
-    "pings/EcosystemTelemetry.jsm",
     "pings/EventPing.jsm",
     "pings/HealthPing.jsm",
     "pings/ModulesPing.jsm",
@@ -125,6 +123,7 @@ if CONFIG["OS_ARCH"] == "WINNT":
 
 TESTING_JS_MODULES += [
     "tests/unit/TelemetryArchiveTesting.jsm",
+    "tests/unit/TelemetryEnvironmentTesting.jsm",
 ]
 
 PYTHON_UNITTEST_MANIFESTS += [

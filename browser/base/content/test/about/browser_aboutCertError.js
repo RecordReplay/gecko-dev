@@ -48,11 +48,10 @@ add_task(async function checkReturnToAboutHome() {
     await SpecialPowers.spawn(bc, [useFrame], async function(subFrame) {
       let returnButton = content.document.getElementById("returnButton");
       if (!subFrame) {
-        Assert.equal(
-          returnButton.getAttribute("autofocus"),
-          "true",
-          "returnButton has autofocus"
-        );
+        if (!Services.focus.focusedElement == returnButton) {
+          await ContentTaskUtils.waitForEvent(returnButton, "focus");
+        }
+        Assert.ok(true, "returnButton has focus");
       }
       // Note that going back to about:newtab might cause a process flip, if
       // the browser is configured to run about:newtab in its own special
@@ -594,7 +593,7 @@ add_task(async function checkViewSource() {
   let certOverrideService = Cc[
     "@mozilla.org/security/certoverride;1"
   ].getService(Ci.nsICertOverrideService);
-  certOverrideService.clearValidityOverride("expired.example.com", -1);
+  certOverrideService.clearValidityOverride("expired.example.com", -1, {});
 
   loaded = BrowserTestUtils.waitForErrorPage(browser);
   BrowserReloadSkipCache();

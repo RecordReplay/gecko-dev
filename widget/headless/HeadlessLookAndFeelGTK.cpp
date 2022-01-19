@@ -8,18 +8,16 @@
 #include "mozilla/FontPropertyTypes.h"
 #include "nsIContent.h"
 
-using mozilla::LookAndFeel;
-
-namespace mozilla {
-namespace widget {
+namespace mozilla::widget {
 
 static const char16_t UNICODE_BULLET = 0x2022;
 
-HeadlessLookAndFeel::HeadlessLookAndFeel(const LookAndFeelCache* aCache) {}
+HeadlessLookAndFeel::HeadlessLookAndFeel() {}
 
 HeadlessLookAndFeel::~HeadlessLookAndFeel() = default;
 
-nsresult HeadlessLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
+nsresult HeadlessLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
+                                             nscolor& aColor) {
   // For headless mode, we use GetStandinForNativeColor for everything we can,
   // and hardcoded values for everything else.
 
@@ -56,9 +54,6 @@ nsresult HeadlessLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
     case ColorID::MozEventreerow:
       aColor = NS_RGB(0xff, 0xff, 0xff);
       break;
-    case ColorID::MozGtkInfoBarText:
-      aColor = NS_RGB(0x00, 0x00, 0x00);
-      break;
     case ColorID::MozMacButtonactivetext:
     case ColorID::MozMacDefaultbuttontext:
       aColor = NS_RGB(0xff, 0xff, 0xff);
@@ -88,11 +83,7 @@ nsresult HeadlessLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
       aColor = NS_RGB(0xaa, 0xaa, 0xaa);
       break;
     case ColorID::TextSelectForeground:
-      GetColor(ColorID::TextSelectBackground, aColor);
-      if (aColor == 0x000000)
-        aColor = NS_RGB(0xff, 0xff, 0xff);
-      else
-        aColor = NS_DONT_CHANGE_COLOR;
+      aColor = NS_SAME_AS_FOREGROUND_COLOR;
       break;
     case ColorID::Widget3DHighlight:
       aColor = NS_RGB(0xa0, 0xa0, 0xa0);
@@ -117,6 +108,14 @@ nsresult HeadlessLookAndFeel::NativeGetColor(ColorID aID, nscolor& aColor) {
       break;
     case ColorID::WindowForeground:
       aColor = NS_RGB(0x00, 0x00, 0x00);
+      break;
+    case ColorID::Highlight:
+    case ColorID::MozAccentColor:
+      aColor = NS_RGB(53, 132, 228);
+      break;
+    case ColorID::Highlighttext:
+    case ColorID::MozAccentColorForeground:
+      aColor = NS_RGB(0xff, 0xff, 0xff);
       break;
     default:
       aColor = GetStandinForNativeColor(aID);
@@ -214,7 +213,6 @@ nsresult HeadlessLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       aResult = 0;
       res = NS_ERROR_FAILURE;
       break;
-    case IntID::TouchEnabled:
     case IntID::MacGraphiteTheme:
     case IntID::MacBigSurTheme:
       aResult = 0;
@@ -355,5 +353,4 @@ void HeadlessLookAndFeel::RefreshImpl() { nsXPLookAndFeel::RefreshImpl(); }
 
 bool HeadlessLookAndFeel::GetEchoPasswordImpl() { return false; }
 
-}  // namespace widget
-}  // namespace mozilla
+}  // namespace mozilla::widget

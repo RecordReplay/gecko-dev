@@ -245,7 +245,7 @@ class Mitmproxy(Playback):
         self.download()
 
         # mitmproxy must be started before setup, so that the CA cert is available
-        self.start_mitmproxy_playback(self.mitmdump_path, self.browser_path)
+        self.start_mitmproxy(self.mitmdump_path, self.browser_path)
 
         # In case the setup fails, we want to stop the process before raising.
         try:
@@ -258,7 +258,7 @@ class Mitmproxy(Playback):
             LOG.error("Setup of MitmProxy failed.", exc_info=True)
             raise
 
-    def start_mitmproxy_playback(self, mitmdump_path, browser_path):
+    def start_mitmproxy(self, mitmdump_path, browser_path):
         """Startup mitmproxy and replay the specified flow file"""
         if self.mitmproxy_proc is not None:
             raise Exception("Proxy already started.")
@@ -272,6 +272,9 @@ class Mitmproxy(Playback):
         env["PATH"] = os.path.dirname(browser_path) + os.pathsep + env["PATH"]
         command = [mitmdump_path]
 
+        if self.config.get("verbose", False):
+            # Generate mitmproxy verbose logs
+            command.extend(["-v"])
         # add proxy host and port options
         command.extend(["--listen-host", self.host, "--listen-port", str(self.port)])
 
@@ -301,6 +304,9 @@ class Mitmproxy(Playback):
                 http_protocol_extractor,
             ]
             command.extend(args)
+            self.recording.set_metadata(
+                "proxy_version", self.config["playback_version"]
+            )
         else:
             # playback mode
             if len(self.playback_files) > 0:
@@ -310,9 +316,8 @@ class Mitmproxy(Playback):
                     "alternate-server-replay.py",
                 )
 
-                if self.config["playback_version"] in ["4.0.4", "5.1.1"]:
+                if self.config["playback_version"] in ["4.0.4", "5.1.1", "6.0.2"]:
                     args = [
-                        "-v",  # Verbose mode
                         "--set",
                         "upstream_cert=false",
                         "--set",
@@ -429,62 +434,3 @@ class Mitmproxy(Playback):
             return True
         except socket.error:
             return False
-
-    def confidence(self):
-        """Extract confidence metrics from the netlocs file
-        and convert them to perftest results
-        """
-        if len(self.playback_files) == 0:
-            LOG.warning(
-                "Proxy service did not load a recording file. "
-                "Confidence metrics will nt be generated"
-            )
-            return
-
-        file_name = (
-            "mitm_netlocs_%s.json"
-            % os.path.splitext(os.path.basename(self.playback_files[0].recording_path))[
-                0
-            ]
-        )
-        path = os.path.normpath(os.path.join(self.upload_dir, file_name))
-        if os.path.exists(path):
-            try:
-                LOG.info("Reading confidence values from: %s" % path)
-                with open(path, "r") as f:
-                    data = json.load(f)
-                    return {
-                        "replay-confidence": {
-                            "values": data["replay-confidence"],
-                            "subtest-prefix-type": False,
-                            "unit": "%",
-                            "shouldAlert": False,
-                            "lowerIsBetter": False,
-                        },
-                        "recording-proportion-used": {
-                            "values": data["recording-proportion-used"],
-                            "subtest-prefix-type": False,
-                            "unit": "%",
-                            "shouldAlert": False,
-                            "lowerIsBetter": False,
-                        },
-                        "not-replayed": {
-                            "values": data["not-replayed"],
-                            "subtest-prefix-type": False,
-                            "shouldAlert": False,
-                            "unit": "a.u.",
-                        },
-                        "replayed": {
-                            "values": data["replayed"],
-                            "subtest-prefix-type": False,
-                            "unit": "a.u.",
-                            "shouldAlert": False,
-                            "lowerIsBetter": False,
-                        },
-                    }
-            except Exception:
-                LOG.info("Can't read netlocs file!", exc_info=True)
-                return None
-        else:
-            LOG.info("Netlocs file is not available! Cant find %s" % path)
-            return None

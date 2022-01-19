@@ -199,6 +199,7 @@ async function executeTests() {
         set: [
           ["network.http.referer.defaultPolicy.trackers", test.nonPBPref],
           ["network.http.referer.defaultPolicy.trackers.pbmode", test.pbPref],
+          ["dom.security.https_first_pbm", false],
         ],
       });
 
@@ -434,6 +435,10 @@ add_task(async function() {
     set: [
       [
         "network.cookie.cookieBehavior",
+        Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
+      ],
+      [
+        "network.cookie.cookieBehavior.pbmode",
         Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
       ],
       ["network.http.referer.defaultPolicy", 3],

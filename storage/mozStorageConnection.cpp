@@ -38,10 +38,10 @@
 #include "SQLCollations.h"
 #include "FileSystemModule.h"
 #include "mozStorageHelper.h"
-#include "GeckoProfiler.h"
 
 #include "mozilla/Logging.h"
 #include "mozilla/Printf.h"
+#include "mozilla/ProfilerLabels.h"
 #include "nsProxyRelease.h"
 #include "nsURLHelper.h"
 
@@ -444,7 +444,8 @@ Connection::Connection(Service* aService, int aFlags,
       mFlags(aFlags),
       mIgnoreLockingMode(aIgnoreLockingMode),
       mStorageService(aService),
-      mSupportedOperations(aSupportedOperations) {
+      mSupportedOperations(aSupportedOperations),
+      mTransactionNestingLevel(0) {
   MOZ_ASSERT(!mIgnoreLockingMode || mFlags & SQLITE_OPEN_READONLY,
              "Can't ignore locking for a non-readonly connection!");
   mStorageService->registerConnection(this);
@@ -998,8 +999,8 @@ nsresult Connection::databaseElementExists(
 bool Connection::findFunctionByInstance(mozIStorageFunction* aInstance) {
   sharedDBMutex.assertCurrentThreadOwns();
 
-  for (auto iter = mFunctions.Iter(); !iter.Done(); iter.Next()) {
-    if (iter.UserData().function == aInstance) {
+  for (const auto& data : mFunctions.Values()) {
+    if (data.function == aInstance) {
       return true;
     }
   }
@@ -1686,9 +1687,9 @@ nsresult Connection::initializeClone(Connection* aClone, bool aReadOnly) {
 
   // Copy any functions that have been added to this connection.
   SQLiteMutexAutoLock lockedScope(sharedDBMutex);
-  for (auto iter = mFunctions.Iter(); !iter.Done(); iter.Next()) {
-    const nsACString& key = iter.Key();
-    Connection::FunctionInfo data = iter.UserData();
+  for (const auto& entry : mFunctions) {
+    const nsACString& key = entry.GetKey();
+    Connection::FunctionInfo data = entry.GetData();
 
     rv = aClone->CreateFunction(key, data.numArgs, data.function);
     if (NS_FAILED(rv)) {
@@ -2162,7 +2163,7 @@ Connection::CreateFunction(const nsACString& aFunctionName,
   // Check to see if this function is already defined.  We only check the name
   // because a function can be defined with the same body but different names.
   SQLiteMutexAutoLock lockedScope(sharedDBMutex);
-  NS_ENSURE_FALSE(mFunctions.Get(aFunctionName, nullptr), NS_ERROR_FAILURE);
+  NS_ENSURE_FALSE(mFunctions.Contains(aFunctionName), NS_ERROR_FAILURE);
 
   int srv = ::sqlite3_create_function(
       mDBConn, nsPromiseFlatCString(aFunctionName).get(), aNumArguments,
@@ -2170,7 +2171,7 @@ Connection::CreateFunction(const nsACString& aFunctionName,
   if (srv != SQLITE_OK) return convertResultCode(srv);
 
   FunctionInfo info = {aFunction, aNumArguments};
-  mFunctions.Put(aFunctionName, info);
+  mFunctions.InsertOrUpdate(aFunctionName, info);
 
   return NS_OK;
 }
@@ -2342,6 +2343,23 @@ Connection::GetQuotaObjects(QuotaObject** aDatabaseQuotaObject,
   databaseQuotaObject.forget(aDatabaseQuotaObject);
   journalQuotaObject.forget(aJournalQuotaObject);
   return NS_OK;
+}
+
+SQLiteMutex& Connection::GetSharedDBMutex() { return sharedDBMutex; }
+
+uint32_t Connection::GetTransactionNestingLevel(
+    const mozilla::storage::SQLiteMutexAutoLock& aProofOfLock) {
+  return mTransactionNestingLevel;
+}
+
+uint32_t Connection::IncreaseTransactionNestingLevel(
+    const mozilla::storage::SQLiteMutexAutoLock& aProofOfLock) {
+  return ++mTransactionNestingLevel;
+}
+
+uint32_t Connection::DecreaseTransactionNestingLevel(
+    const mozilla::storage::SQLiteMutexAutoLock& aProofOfLock) {
+  return --mTransactionNestingLevel;
 }
 
 }  // namespace mozilla::storage

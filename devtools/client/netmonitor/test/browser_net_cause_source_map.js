@@ -13,6 +13,12 @@ const CAUSE_URL = EXAMPLE_URL + CAUSE_FILE_NAME;
 const N_EXPECTED_REQUESTS = 4;
 
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   // the initNetMonitor function clears the network request list after the
   // page is loaded. That's why we first load a bogus page from SIMPLE_URL,
   // and only then load the real thing from CAUSE_URL - we want to catch
@@ -32,12 +38,12 @@ add_task(async function() {
   info("Clicking item and waiting for details panel to open");
   waitPromise = waitForDOM(document, ".network-details-bar");
   const xhrRequestItem = document.querySelectorAll(".request-list-item")[3];
-  await EventUtils.sendMouseEvent({ type: "mousedown" }, xhrRequestItem);
+  EventUtils.sendMouseEvent({ type: "mousedown" }, xhrRequestItem);
   await waitPromise;
 
   info("Clicking stack tab and waiting for stack panel to open");
   waitPromise = waitForDOM(document, "#stack-trace-panel");
-  await clickOnSidebarTab(document, "stack-trace");
+  clickOnSidebarTab(document, "stack-trace");
   await waitPromise;
 
   info("Waiting for source maps to be applied");

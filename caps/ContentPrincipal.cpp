@@ -47,47 +47,36 @@ static inline ExtensionPolicyService& EPS() {
 
 NS_IMPL_CLASSINFO(ContentPrincipal, nullptr, nsIClassInfo::MAIN_THREAD_ONLY,
                   NS_PRINCIPAL_CID)
-NS_IMPL_QUERY_INTERFACE_CI(ContentPrincipal, nsIPrincipal, nsISerializable)
-NS_IMPL_CI_INTERFACE_GETTER(ContentPrincipal, nsIPrincipal, nsISerializable)
+NS_IMPL_QUERY_INTERFACE_CI(ContentPrincipal, nsIPrincipal)
+NS_IMPL_CI_INTERFACE_GETTER(ContentPrincipal, nsIPrincipal)
 
-ContentPrincipal::ContentPrincipal() : BasePrincipal(eContentPrincipal) {}
-
-ContentPrincipal::~ContentPrincipal() {}
-
-nsresult ContentPrincipal::Init(nsIURI* aURI,
-                                const OriginAttributes& aOriginAttributes,
-                                const nsACString& aOriginNoSuffix) {
-  NS_ENSURE_ARG(aURI);
-
+ContentPrincipal::ContentPrincipal(nsIURI* aURI,
+                                   const OriginAttributes& aOriginAttributes,
+                                   const nsACString& aOriginNoSuffix)
+    : BasePrincipal(eContentPrincipal, aOriginNoSuffix, aOriginAttributes),
+      mURI(aURI) {
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   // Assert that the URI we get here isn't any of the schemes that we know we
   // should not get here.  These schemes always either inherit their principal
   // or fall back to a null principal.  These are schemes which return
   // URI_INHERITS_SECURITY_CONTEXT from their protocol handler's
   // GetProtocolFlags function.
   bool hasFlag = false;
-  Unused << hasFlag;  // silence possible compiler warnings.
   MOZ_DIAGNOSTIC_ASSERT(
       NS_SUCCEEDED(NS_URIChainHasFlags(
           aURI, nsIProtocolHandler::URI_INHERITS_SECURITY_CONTEXT, &hasFlag)) &&
       !hasFlag);
-
-  mURI = aURI;
-  FinishInit(aOriginNoSuffix, aOriginAttributes);
-
-  return NS_OK;
+#endif
 }
 
-nsresult ContentPrincipal::Init(ContentPrincipal* aOther,
-                                const OriginAttributes& aOriginAttributes) {
-  NS_ENSURE_ARG(aOther);
+ContentPrincipal::ContentPrincipal(ContentPrincipal* aOther,
+                                   const OriginAttributes& aOriginAttributes)
+    : BasePrincipal(aOther, aOriginAttributes),
+      mURI(aOther->mURI),
+      mDomain(aOther->mDomain),
+      mAddon(aOther->mAddon) {}
 
-  mURI = aOther->mURI;
-  FinishInit(aOther, aOriginAttributes);
-
-  mDomain = aOther->mDomain;
-  mAddon = aOther->mAddon;
-  return NS_OK;
-}
+ContentPrincipal::~ContentPrincipal() = default;
 
 nsresult ContentPrincipal::GetScriptLocation(nsACString& aStr) {
   return mURI->GetSpec(aStr);
@@ -274,7 +263,7 @@ bool ContentPrincipal::SubsumesInternal(
 
 NS_IMETHODIMP
 ContentPrincipal::GetURI(nsIURI** aURI) {
-  NS_ADDREF(*aURI = mURI);
+  *aURI = do_AddRef(mURI).take();
   return NS_OK;
 }
 
@@ -441,16 +430,31 @@ ContentPrincipal::GetBaseDomain(nsACString& aBaseDomain) {
 
 NS_IMETHODIMP
 ContentPrincipal::GetSiteOriginNoSuffix(nsACString& aSiteOrigin) {
+  nsresult rv = GetOriginNoSuffix(aSiteOrigin);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // It is possible for two principals with the same origin to have different
+  // mURI values. In order to ensure that two principals with matching origins
+  // also have matching siteOrigins, we derive the siteOrigin entirely from the
+  // origin string and do not rely on mURI at all here.
+  nsCOMPtr<nsIURI> origin;
+  rv = NS_NewURI(getter_AddRefs(origin), aSiteOrigin);
+  if (NS_FAILED(rv)) {
+    // We got an error parsing the origin as a URI? siteOrigin == origin
+    // aSiteOrigin was already filled with `OriginNoSuffix`
+    return rv;
+  }
+
   // Handle some special URIs first.
   nsAutoCString baseDomain;
   bool handled;
-  nsresult rv = GetSpecialBaseDomain(mURI, &handled, baseDomain);
+  rv = GetSpecialBaseDomain(origin, &handled, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (handled) {
     // This is a special URI ("file:", "about:", "view-source:", etc). Just
     // return the origin.
-    return GetOriginNoSuffix(aSiteOrigin);
+    return NS_OK;
   }
 
   // For everything else, we ask the TLD service. Note that, unlike in
@@ -465,7 +469,7 @@ ContentPrincipal::GetSiteOriginNoSuffix(nsACString& aSiteOrigin) {
   }
 
   bool gotBaseDomain = false;
-  rv = tldService->GetBaseDomain(mURI, 0, baseDomain);
+  rv = tldService->GetBaseDomain(origin, 0, baseDomain);
   if (NS_SUCCEEDED(rv)) {
     gotBaseDomain = true;
   } else {
@@ -480,7 +484,7 @@ ContentPrincipal::GetSiteOriginNoSuffix(nsACString& aSiteOrigin) {
   // NOTE: Calling `SetHostPort` with a portless domain is insufficient to clear
   // the port, so an extra `SetPort` call has to be made.
   nsCOMPtr<nsIURI> siteUri;
-  NS_MutateURI mutator(mURI);
+  NS_MutateURI mutator(origin);
   mutator.SetUserPass(""_ns).SetPort(-1);
   if (gotBaseDomain) {
     mutator.SetHost(baseDomain);
@@ -489,6 +493,7 @@ ContentPrincipal::GetSiteOriginNoSuffix(nsACString& aSiteOrigin) {
   MOZ_ASSERT(NS_SUCCEEDED(rv), "failed to create siteUri");
   NS_ENSURE_SUCCESS(rv, rv);
 
+  aSiteOrigin.Truncate();
   rv = GenerateOriginNoSuffixFromURI(siteUri, aSiteOrigin);
   MOZ_ASSERT(NS_SUCCEEDED(rv), "failed to create siteOriginNoSuffix");
   return rv;
@@ -525,7 +530,7 @@ WebExtensionPolicy* ContentPrincipal::AddonPolicy() {
 
 NS_IMETHODIMP
 ContentPrincipal::GetAddonId(nsAString& aAddonId) {
-  auto policy = AddonPolicy();
+  auto* policy = AddonPolicy();
   if (policy) {
     policy->GetId(aAddonId);
   } else {
@@ -535,7 +540,9 @@ ContentPrincipal::GetAddonId(nsAString& aAddonId) {
 }
 
 NS_IMETHODIMP
-ContentPrincipal::Read(nsIObjectInputStream* aStream) {
+ContentPrincipal::Deserializer::Read(nsIObjectInputStream* aStream) {
+  MOZ_ASSERT(!mPrincipal);
+
   nsCOMPtr<nsISupports> supports;
   nsCOMPtr<nsIURI> principalURI;
   nsresult rv = NS_ReadOptionalObject(aStream, true, getter_AddRefs(supports));
@@ -586,23 +593,17 @@ ContentPrincipal::Read(nsIObjectInputStream* aStream) {
   rv = GenerateOriginNoSuffixFromURI(principalURI, originNoSuffix);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = Init(principalURI, attrs, originNoSuffix);
-  NS_ENSURE_SUCCESS(rv, rv);
+  RefPtr<ContentPrincipal> principal =
+      new ContentPrincipal(principalURI, attrs, originNoSuffix);
 
   // Note: we don't call SetDomain here because we don't need the wrapper
   // recomputation code there (we just created this principal).
-  mDomain = domain;
-  if (mDomain) {
-    SetHasExplicitDomain();
+  if (domain) {
+    principal->mDomain = domain;
+    principal->SetHasExplicitDomain();
   }
 
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ContentPrincipal::Write(nsIObjectOutputStream* aStream) {
-  // Read is used still for legacy principals
-  MOZ_RELEASE_ASSERT(false, "Old style serialization is removed");
+  mPrincipal = principal.forget();
   return NS_OK;
 }
 
@@ -700,11 +701,8 @@ already_AddRefed<BasePrincipal> ContentPrincipal::FromProperties(
     return nullptr;
   }
 
-  RefPtr<ContentPrincipal> principal = new ContentPrincipal();
-  rv = principal->Init(principalURI, attrs, originNoSuffix);
-  if (NS_FAILED(rv)) {
-    return nullptr;
-  }
+  RefPtr<ContentPrincipal> principal =
+      new ContentPrincipal(principalURI, attrs, originNoSuffix);
 
   principal->mDomain = domain;
   if (principal->mDomain) {

@@ -6,7 +6,7 @@
 #ifndef PendingTransactionInfo_h__
 #define PendingTransactionInfo_h__
 
-#include "HalfOpenSocket.h"
+#include "DnsAndConnectSocket.h"
 
 namespace mozilla {
 namespace net {
@@ -20,27 +20,30 @@ class PendingTransactionInfo final : public ARefBase {
 
   void PrintDiagnostics(nsCString& log);
 
-  // Return true if the transaction has claimed a HalfOpen socket or
+  // Return true if the transaction has claimed a DnsAndConnectSocket or
   // a connection in TLS handshake phase.
   bool IsAlreadyClaimedInitializingConn();
 
-  void AbandonHalfOpenAndForgetActiveConn();
+  // This function return a weak poointer to DnsAndConnectSocket.
+  // The pointer is used by the caller(ConnectionEntry) to remove the
+  // DnsAndConnectSocket from the internal list. PendingTransactionInfo
+  // cannot perform this opereation.
+  [[nodiscard]] nsWeakPtr ForgetDnsAndConnectSocketAndActiveConn();
 
-  // Try to claim a halfOpen socket. We can only claim it if it is not
-  // claimed yet.
-  bool TryClaimingHalfOpen(HalfOpenSocket* sock);
+  // Remember associated DnsAndConnectSocket.
+  void RememberDnsAndConnectSocket(DnsAndConnectSocket* sock);
   // Similar as above, but for a ActiveConn that is performing a TLS handshake
   // and has only a NullTransaction associated.
   bool TryClaimingActiveConn(HttpConnectionBase* conn);
   // It is similar as above, but in tihs case the halfOpen is made for this
   // PendingTransactionInfo and it is already claimed.
-  void AddHalfOpen(HalfOpenSocket* sock);
+  void AddDnsAndConnectSocket(DnsAndConnectSocket* sock);
 
   nsHttpTransaction* Transaction() const { return mTransaction; }
 
  private:
   RefPtr<nsHttpTransaction> mTransaction;
-  nsWeakPtr mHalfOpen;
+  nsWeakPtr mDnsAndSock;
   nsWeakPtr mActiveConn;
 
   ~PendingTransactionInfo();

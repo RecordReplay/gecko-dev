@@ -12,13 +12,21 @@ const TYPES = {
   CSS_MESSAGE: "css-message",
   DOCUMENT_EVENT: "document-event",
   ERROR_MESSAGE: "error-message",
-  LOCAL_STORAGE: "local-storage",
   PLATFORM_MESSAGE: "platform-message",
   NETWORK_EVENT: "network-event",
-  SESSION_STORAGE: "session-storage",
   STYLESHEET: "stylesheet",
   NETWORK_EVENT_STACKTRACE: "network-event-stacktrace",
+  REFLOW: "reflow",
   SOURCE: "source",
+  THREAD_STATE: "thread-state",
+  SERVER_SENT_EVENT: "server-sent-event",
+  WEBSOCKET: "websocket",
+  // storage types
+  CACHE_STORAGE: "Cache",
+  COOKIE: "cookies",
+  INDEXED_DB: "indexed-db",
+  LOCAL_STORAGE: "local-storage",
+  SESSION_STORAGE: "session-storage",
 };
 exports.TYPES = TYPES;
 
@@ -32,6 +40,9 @@ exports.TYPES = TYPES;
 //    Each module exports a Resource Watcher class.
 // These lists are specific for the parent process and each target type.
 const FrameTargetResources = augmentResourceDictionary({
+  [TYPES.CACHE_STORAGE]: {
+    path: "devtools/server/actors/resources/storage-cache",
+  },
   [TYPES.CONSOLE_MESSAGE]: {
     path: "devtools/server/actors/resources/console-messages",
   },
@@ -59,19 +70,31 @@ const FrameTargetResources = augmentResourceDictionary({
   [TYPES.STYLESHEET]: {
     path: "devtools/server/actors/resources/stylesheets",
   },
+  [TYPES.NETWORK_EVENT]: {
+    path: "devtools/server/actors/resources/network-events-content",
+  },
   [TYPES.NETWORK_EVENT_STACKTRACE]: {
     path: "devtools/server/actors/resources/network-events-stacktraces",
   },
+  [TYPES.REFLOW]: {
+    path: "devtools/server/actors/resources/reflow",
+  },
   [TYPES.SOURCE]: {
     path: "devtools/server/actors/resources/sources",
+  },
+  [TYPES.THREAD_STATE]: {
+    path: "devtools/server/actors/resources/thread-states",
+  },
+  [TYPES.SERVER_SENT_EVENT]: {
+    path: "devtools/server/actors/resources/server-sent-events",
+  },
+  [TYPES.WEBSOCKET]: {
+    path: "devtools/server/actors/resources/websockets",
   },
 });
 const ProcessTargetResources = augmentResourceDictionary({
   [TYPES.CONSOLE_MESSAGE]: {
     path: "devtools/server/actors/resources/console-messages",
-  },
-  [TYPES.CSS_MESSAGE]: {
-    path: "devtools/server/actors/resources/css-messages",
   },
   [TYPES.ERROR_MESSAGE]: {
     path: "devtools/server/actors/resources/error-messages",
@@ -82,10 +105,13 @@ const ProcessTargetResources = augmentResourceDictionary({
   [TYPES.SOURCE]: {
     path: "devtools/server/actors/resources/sources",
   },
+  [TYPES.THREAD_STATE]: {
+    path: "devtools/server/actors/resources/thread-states",
+  },
 });
 
 // We'll only support a few resource types in Workers (console-message, source,
-// breakpoints, …) as error and platform messages are not supported since we need access
+// thread state, …) as error and platform messages are not supported since we need access
 // to Ci, which isn't available in worker context.
 // Errors are emitted from the content process main thread so the user would still get them.
 const WorkerTargetResources = augmentResourceDictionary({
@@ -95,11 +121,20 @@ const WorkerTargetResources = augmentResourceDictionary({
   [TYPES.SOURCE]: {
     path: "devtools/server/actors/resources/sources",
   },
+  [TYPES.THREAD_STATE]: {
+    path: "devtools/server/actors/resources/thread-states",
+  },
 });
 
 const ParentProcessResources = augmentResourceDictionary({
   [TYPES.NETWORK_EVENT]: {
     path: "devtools/server/actors/resources/network-events",
+  },
+  [TYPES.COOKIE]: {
+    path: "devtools/server/actors/resources/storage-cookie",
+  },
+  [TYPES.INDEXED_DB]: {
+    path: "devtools/server/actors/resources/storage-indexed-db",
   },
 });
 

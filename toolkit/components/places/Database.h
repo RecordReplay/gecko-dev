@@ -18,7 +18,7 @@
 
 // This is the schema version. Update it at any schema change and add a
 // corresponding migrateVxx method below.
-#define DATABASE_SCHEMA_VERSION 54
+#define DATABASE_SCHEMA_VERSION 57
 
 // Fired after Places inited.
 #define TOPIC_PLACES_INIT_COMPLETE "places-init-complete"
@@ -235,8 +235,6 @@ class Database final : public nsIObserver, public nsSupportsWeakReference {
    */
   void Shutdown();
 
-  bool IsShutdownStarted() const;
-
   /**
    * Ensure the favicons database file exists.
    *
@@ -329,6 +327,9 @@ class Database final : public nsIObserver, public nsSupportsWeakReference {
   nsresult MigrateV52Up();
   nsresult MigrateV53Up();
   nsresult MigrateV54Up();
+  nsresult MigrateV55Up();
+  nsresult MigrateV56Up();
+  nsresult MigrateV57Up();
 
   void MigrateV52OriginFrecencies();
 

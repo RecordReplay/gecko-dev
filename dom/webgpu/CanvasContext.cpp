@@ -66,6 +66,11 @@ bool CanvasContext::UpdateWebRenderCanvasData(
   return true;
 }
 
+dom::GPUTextureFormat CanvasContext::GetSwapChainPreferredFormat(
+    Adapter&) const {
+  return dom::GPUTextureFormat::Bgra8unorm;
+}
+
 RefPtr<SwapChain> CanvasContext::ConfigureSwapChain(
     const dom::GPUSwapChainDescriptor& aDesc, ErrorResult& aRv) {
   Cleanup();
@@ -86,7 +91,7 @@ RefPtr<SwapChain> CanvasContext::ConfigureSwapChain(
   dom::GPUExtent3DDict extent;
   extent.mWidth = mWidth;
   extent.mHeight = mHeight;
-  extent.mDepth = 1;
+  extent.mDepthOrArrayLayers = 1;
   mSwapChain = new SwapChain(aDesc, extent, mExternalImageId, format);
 
   // Force a new frame to be built, which will execute the
@@ -110,14 +115,34 @@ wr::ImageKey CanvasContext::CreateImageKey(
 
 bool CanvasContext::UpdateWebRenderLocalCanvasData(
     layers::WebRenderLocalCanvasData* aCanvasData) {
-  if (!mSwapChain || !mSwapChain->GetGpuBridge()) {
+  if (!mSwapChain || !mSwapChain->GetParent()) {
     return false;
   }
 
-  aCanvasData->mGpuBridge = mSwapChain->GetGpuBridge();
+  const auto size =
+      nsIntSize(AssertedCast<int>(mWidth), AssertedCast<int>(mHeight));
+  if (mSwapChain->mSize != size) {
+    const auto gfxFormat = mSwapChain->mGfxFormat;
+    dom::GPUSwapChainDescriptor desc;
+    desc.mFormat = static_cast<dom::GPUTextureFormat>(mSwapChain->mFormat);
+    desc.mUsage = mSwapChain->mUsage;
+    desc.mDevice = mSwapChain->GetParent();
+
+    mSwapChain->Destroy(mExternalImageId);
+    mExternalImageId =
+        layers::CompositorManagerChild::GetInstance()->GetNextExternalImageId();
+
+    dom::GPUExtent3DDict extent;
+    extent.mWidth = size.width;
+    extent.mHeight = size.height;
+    extent.mDepthOrArrayLayers = 1;
+    mSwapChain = new SwapChain(desc, extent, mExternalImageId, gfxFormat);
+  }
+
+  aCanvasData->mGpuBridge = mSwapChain->GetParent()->GetBridge().get();
   aCanvasData->mGpuTextureId = mSwapChain->GetCurrentTexture()->mId;
   aCanvasData->mExternalImageId = mExternalImageId;
-  aCanvasData->mFormat = mSwapChain->mFormat;
+  aCanvasData->mFormat = mSwapChain->mGfxFormat;
   return true;
 }
 

@@ -70,6 +70,7 @@ class nsTextControlFrame : public nsContainerFrame,
       const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
       const mozilla::LogicalSize& aMargin,
       const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
       mozilla::ComputeSizeFlags aFlags) override;
 
   void Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
@@ -85,16 +86,24 @@ class nsTextControlFrame : public nsContainerFrame,
   bool GetNaturalBaselineBOffset(mozilla::WritingMode aWM,
                                  BaselineSharingGroup aBaselineGroup,
                                  nscoord* aBaseline) const override {
-    if (StyleDisplay()->IsContainLayout() || !IsSingleLineTextControl()) {
+    if (!IsSingleLineTextControl()) {
       return false;
     }
-    NS_ASSERTION(mFirstBaseline != NS_INTRINSIC_ISIZE_UNKNOWN,
-                 "please call Reflow before asking for the baseline");
-    if (aBaselineGroup == BaselineSharingGroup::First) {
-      *aBaseline = mFirstBaseline;
-    } else {
-      *aBaseline = BSize(aWM) - mFirstBaseline;
+    return GetSingleLineTextControlBaseline(this, mFirstBaseline, aWM,
+                                            aBaselineGroup, aBaseline);
+  }
+
+  static bool GetSingleLineTextControlBaseline(
+      const nsIFrame* aFrame, nscoord aFirstBaseline, mozilla::WritingMode aWM,
+      BaselineSharingGroup aBaselineGroup, nscoord* aBaseline) {
+    if (aFrame->StyleDisplay()->IsContainLayout()) {
+      return false;
     }
+    NS_ASSERTION(aFirstBaseline != NS_INTRINSIC_ISIZE_UNKNOWN,
+                 "please call Reflow before asking for the baseline");
+    *aBaseline = aBaselineGroup == BaselineSharingGroup::First
+                     ? aFirstBaseline
+                     : aFrame->BSize(aWM) - aFirstBaseline;
     return true;
   }
 
@@ -201,12 +210,12 @@ class nsTextControlFrame : public nsContainerFrame,
   void ReflowTextControlChild(nsIFrame* aFrame, nsPresContext* aPresContext,
                               const ReflowInput& aReflowInput,
                               nsReflowStatus& aStatus,
-                              ReflowOutput& aParentDesiredSize);
+                              ReflowOutput& aParentDesiredSize,
+                              nscoord& aButtonBoxISize);
 
-  void ComputeBaseline(const ReflowInput&, ReflowOutput&);
-
- public:  // for methods who access nsTextControlFrame directly
-  void SetValueChanged(bool aValueChanged);
+ public:
+  static Maybe<nscoord> ComputeBaseline(const nsIFrame*, const ReflowInput&,
+                                        bool aForSingleLineControl);
 
   Element* GetRootNode() const { return mRootNode; }
 

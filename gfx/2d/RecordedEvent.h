@@ -30,7 +30,7 @@ const uint32_t kMagicInt = 0xc001feed;
 const uint16_t kMajorRevision = 10;
 // A change in minor revision means additions of new events. New streams will
 // not play in older players.
-const uint16_t kMinorRevision = 1;
+const uint16_t kMinorRevision = 2;
 
 struct ReferencePtr {
   ReferencePtr() : mLongPtr(0) {}
@@ -59,9 +59,9 @@ struct ReferencePtr {
 };
 
 struct RecordedFontDetails {
-  uint64_t fontDataKey;
-  uint32_t size;
-  uint32_t index;
+  uint64_t fontDataKey = 0;
+  uint32_t size = 0;
+  uint32_t index = 0;
 };
 
 struct RecordedDependentSurface {
@@ -93,7 +93,8 @@ class Translator {
   virtual Path* LookupPath(ReferencePtr aRefPtr) = 0;
   virtual SourceSurface* LookupSourceSurface(ReferencePtr aRefPtr) = 0;
   virtual FilterNode* LookupFilterNode(ReferencePtr aRefPtr) = 0;
-  virtual GradientStops* LookupGradientStops(ReferencePtr aRefPtr) = 0;
+  virtual already_AddRefed<GradientStops> LookupGradientStops(
+      ReferencePtr aRefPtr) = 0;
   virtual ScaledFont* LookupScaledFont(ReferencePtr aRefPtr) = 0;
   virtual UnscaledFont* LookupUnscaledFont(ReferencePtr aRefPtr) = 0;
   virtual NativeFontResource* LookupNativeFontResource(uint64_t aKey) = 0;
@@ -109,6 +110,19 @@ class Translator {
   virtual void AddFilterNode(mozilla::gfx::ReferencePtr aRefPtr,
                              FilterNode* aSurface) = 0;
   virtual void RemoveFilterNode(mozilla::gfx::ReferencePtr aRefPtr) = 0;
+
+  /**
+   * Get GradientStops compatible with the translation DrawTarget type.
+   * @param aRawStops array of raw gradient stops required
+   * @param aNumStops length of aRawStops
+   * @param aExtendMode extend mode required
+   * @return an already addrefed GradientStops for our DrawTarget type
+   */
+  virtual already_AddRefed<GradientStops> GetOrCreateGradientStops(
+      GradientStop* aRawStops, uint32_t aNumStops, ExtendMode aExtendMode) {
+    return GetReferenceDrawTarget()->CreateGradientStops(aRawStops, aNumStops,
+                                                         aExtendMode);
+  }
   virtual void AddGradientStops(ReferencePtr aRefPtr, GradientStops* aPath) = 0;
   virtual void RemoveGradientStops(ReferencePtr aRefPtr) = 0;
   virtual void AddScaledFont(ReferencePtr aRefPtr, ScaledFont* aScaledFont) = 0;
@@ -279,7 +293,11 @@ struct MemStream {
       if (mLength > mCapacity) {
         mCapacity = mLength * 2;
       }
-      mData = (char*)realloc(mData, mCapacity);
+      char* data = (char*)realloc(mData, mCapacity);
+      if (!data) {
+        free(mData);
+      }
+      mData = data;
     }
     if (mData) {
       return true;
@@ -287,8 +305,22 @@ struct MemStream {
     NS_ERROR("Failed to allocate MemStream!");
     mValid = false;
     mLength = 0;
+    mCapacity = 0;
     return false;
   }
+
+  void reset() {
+    free(mData);
+    mData = nullptr;
+    mValid = true;
+    mLength = 0;
+    mCapacity = 0;
+  }
+
+  MemStream(const MemStream&) = delete;
+  MemStream(MemStream&&) = delete;
+  MemStream& operator=(const MemStream&) = delete;
+  MemStream& operator=(MemStream&&) = delete;
 
   void write(const char* aData, size_t aSize) {
     if (Resize(mLength + aSize)) {
@@ -359,6 +391,7 @@ class RecordedEvent {
     FLUSH,
     DETACHALLSNAPSHOTS,
     OPTIMIZESOURCESURFACE,
+    LINK,
     LAST,
   };
 

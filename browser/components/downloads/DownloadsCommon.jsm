@@ -80,138 +80,11 @@ const kMaxHistoryResultsForLimitedView = 42;
 
 const kPrefBranch = Services.prefs.getBranch("browser.download.");
 
-const kFileExtensions = [
-  "aac",
-  "adt",
-  "adts",
-  "accdb",
-  "accde",
-  "accdr",
-  "accdt",
-  "aif",
-  "aifc",
-  "aiff",
-  "apng",
-  "aspx",
-  "avi",
-  "bat",
-  "bin",
-  "bmp",
-  "cab",
-  "cda",
-  "csv",
-  "dif",
-  "dll",
-  "doc",
-  "docm",
-  "docx",
-  "dot",
-  "dotx",
-  "eml",
-  "eps",
-  "exe",
-  "flac",
-  "flv",
-  "gif",
-  "htm",
-  "html",
-  "ico",
-  "ini",
-  "iso",
-  "jar",
-  "jfif",
-  "jpg",
-  "jpeg",
-  "json",
-  "m4a",
-  "mdb",
-  "mid",
-  "midi",
-  "mov",
-  "mp3",
-  "mp4",
-  "mpeg",
-  "mpg",
-  "msi",
-  "mui",
-  "oga",
-  "ogg",
-  "ogv",
-  "opus",
-  "pdf",
-  "pjpeg",
-  "pjp",
-  "png",
-  "pot",
-  "potm",
-  "potx",
-  "ppam",
-  "pps",
-  "ppsm",
-  "ppsx",
-  "ppt",
-  "pptm",
-  "pptx",
-  "psd",
-  "pst",
-  "pub",
-  "rar",
-  "rdf",
-  "rtf",
-  "shtml",
-  "sldm",
-  "sldx",
-  "svg",
-  "swf",
-  "sys",
-  "tif",
-  "tiff",
-  "tmp",
-  "txt",
-  "vob",
-  "vsd",
-  "vsdm",
-  "vsdx",
-  "vss",
-  "vssm",
-  "vst",
-  "vstm",
-  "vstx",
-  "wav",
-  "wbk",
-  "webm",
-  "webp",
-  "wks",
-  "wma",
-  "wmd",
-  "wmv",
-  "wmz",
-  "wms",
-  "wpd",
-  "wp5",
-  "xht",
-  "xhtml",
-  "xla",
-  "xlam",
-  "xll",
-  "xlm",
-  "xls",
-  "xlsm",
-  "xlsx",
-  "xlt",
-  "xltm",
-  "xltx",
-  "xml",
-  "zip",
-];
-
 const kGenericContentTypes = [
   "application/octet-stream",
   "binary/octet-stream",
   "application/unknown",
 ];
-
-const TELEMETRY_EVENT_CATEGORY = "downloads";
 
 var PrefObserver = {
   QueryInterface: ChromeUtils.generateQI([
@@ -952,26 +825,6 @@ DownloadsDataCtor.prototype = {
   // Integration with the asynchronous Downloads back-end
 
   onDownloadAdded(download) {
-    let extension = download.target.path.split(".").pop();
-
-    if (!kFileExtensions.includes(extension)) {
-      extension = "other";
-    }
-
-    try {
-      Services.telemetry.recordEvent(
-        TELEMETRY_EVENT_CATEGORY,
-        "added",
-        "fileExtension",
-        extension,
-        {}
-      );
-    } catch (ex) {
-      Cu.reportError(
-        "DownloadsCommon: error recording telemetry event. " + ex.message
-      );
-    }
-
     // Download objects do not store the end time of downloads, as the Downloads
     // API does not need to persist this information for all platforms. Once a
     // download terminates on a Desktop browser, it becomes a history download,
@@ -1065,7 +918,6 @@ DownloadsDataCtor.prototype = {
 
   set panelHasShownBefore(aValue) {
     Services.prefs.setBoolPref("browser.download.panel.shown", aValue);
-    return aValue;
   },
 
   /**
@@ -1089,7 +941,18 @@ DownloadsDataCtor.prototype = {
       return;
     }
 
-    if (this.panelHasShownBefore && aType != "error") {
+    let shouldOpenDownloadsPanel =
+      aType == "start" &&
+      Services.prefs.getBoolPref(
+        "browser.download.improvements_to_download_panel"
+      ) &&
+      DownloadsCommon.summarizeDownloads(this.downloads).numDownloading <= 1;
+
+    if (
+      this.panelHasShownBefore &&
+      aType != "error" &&
+      !shouldOpenDownloadsPanel
+    ) {
       // For new downloads after the first one, don't show the panel
       // automatically, but provide a visible notification in the topmost
       // browser window, if the status indicator is already visible.
@@ -1442,7 +1305,6 @@ DownloadsIndicatorDataCtor.prototype = {
   set attention(aValue) {
     this._attention = aValue;
     this._updateViews();
-    return aValue;
   },
   _attention: DownloadsCommon.ATTENTION_NONE,
 
@@ -1454,7 +1316,6 @@ DownloadsIndicatorDataCtor.prototype = {
     this._attentionSuppressed = aValue;
     this._attention = DownloadsCommon.ATTENTION_NONE;
     this._updateViews();
-    return aValue;
   },
   _attentionSuppressed: false,
 

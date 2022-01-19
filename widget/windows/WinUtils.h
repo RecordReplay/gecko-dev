@@ -38,6 +38,7 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
 #include "mozilla/WindowsDpiAwareness.h"
+#include "mozilla/WindowsProcessMitigations.h"
 #include "mozilla/gfx/2D.h"
 
 /**
@@ -84,7 +85,7 @@ namespace mozilla {
 enum class PointerCapabilities : uint8_t;
 #if defined(ACCESSIBILITY)
 namespace a11y {
-class Accessible;
+class LocalAccessible;
 }  // namespace a11y
 #endif  // defined(ACCESSIBILITY)
 
@@ -148,6 +149,8 @@ class WinUtils {
   class AutoSystemDpiAware {
    public:
     AutoSystemDpiAware() {
+      MOZ_DIAGNOSTIC_ASSERT(!IsWin32kLockedDown());
+
       if (sSetThreadDpiAwarenessContext) {
         mPrevContext =
             sSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
@@ -559,7 +562,7 @@ class WinUtils {
 
  public:
 #ifdef ACCESSIBILITY
-  static a11y::Accessible* GetRootAccessibleForHWND(HWND aHwnd);
+  static a11y::LocalAccessible* GetRootAccessibleForHWND(HWND aHwnd);
 #endif
 };
 

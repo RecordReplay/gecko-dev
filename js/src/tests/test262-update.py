@@ -22,12 +22,11 @@ from operator import itemgetter
 UNSUPPORTED_FEATURES = set(
     [
         "tail-call-optimization",
-        "regexp-match-indices",
         "Intl.DateTimeFormat-quarter",
         "Intl.Segmenter",
         "Atomics.waitAsync",
         "legacy-regexp",
-        "arbitrary-module-namespace-names",
+        "import-assertions",
     ]
 )
 FEATURE_CHECK_NEEDED = {
@@ -35,21 +34,9 @@ FEATURE_CHECK_NEEDED = {
     "FinalizationRegistry": "!this.hasOwnProperty('FinalizationRegistry')",
     "SharedArrayBuffer": "!this.hasOwnProperty('SharedArrayBuffer')",
     "WeakRef": "!this.hasOwnProperty('WeakRef')",
-    "Array.prototype.at": "!Array.prototype.at",
-    "String.prototype.at": "!String.prototype.at",
-    "TypedArray.prototype.at": "!Int32Array.prototype.at",
 }
-RELEASE_OR_BETA = set(
-    [
-        "Intl.DateTimeFormat-dayPeriod",
-        "Intl.DateTimeFormat-formatRange",
-    ]
-)
+RELEASE_OR_BETA = set([])
 SHELL_OPTIONS = {
-    "class-fields-private": "--enable-private-fields",
-    "class-static-fields-private": "--enable-private-fields",
-    "class-methods-private": "--enable-private-methods",
-    "class-static-methods-private": "--enable-private-methods",
     "top-level-await": "--enable-top-level-await",
 }
 

@@ -126,7 +126,7 @@ var DevToolsServer = {
 
     if (!isWorker) {
       // Mochitests watch this observable in order to register the custom actor
-      // test-actor.js.
+      // highlighter-test-actor.js.
       // Services.obs is not available in workers.
       const subject = { wrappedJSObject: ActorRegistry };
       Services.obs.notifyObservers(subject, "devtools-server-initialized");
@@ -145,6 +145,9 @@ var DevToolsServer = {
     return this._connections && Object.keys(this._connections).length > 0;
   },
 
+  hasConnectionForPrefix(prefix) {
+    return this._connections && !!this._connections[prefix + "/"];
+  },
   /**
    * Performs cleanup tasks before shutting down the devtools server. Such tasks
    * include clearing any actor constructors added at runtime. This method

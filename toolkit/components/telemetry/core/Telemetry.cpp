@@ -53,7 +53,7 @@
 #include "nsClassHashtable.h"
 #include "nsCOMArray.h"
 #include "nsCOMPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
 #include "nsIDirectoryEnumerator.h"
 #include "nsDirectoryServiceDefs.h"
@@ -73,7 +73,6 @@
 #include "nsReadableUtils.h"
 #include "nsString.h"
 #include "nsTHashtable.h"
-#include "nsThreadManager.h"
 #include "nsThreadUtils.h"
 #if defined(XP_WIN)
 #  include "nsUnicharUtils.h"
@@ -659,12 +658,6 @@ TelemetryImpl::GetDebugSlowSQL(JSContext* cx,
 }
 
 NS_IMETHODIMP
-TelemetryImpl::GetMaximalNumberOfConcurrentThreads(uint32_t* ret) {
-  *ret = nsThreadManager::get().GetHighestNumberOfThreads();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 TelemetryImpl::GetUntrustedModuleLoadEvents(uint32_t aFlags, JSContext* cx,
                                             Promise** aPromise) {
 #if defined(XP_WIN)
@@ -680,7 +673,7 @@ class GetLoadedModulesResultRunnable final : public Runnable {
   SharedLibraryInfo mRawModules;
   nsCOMPtr<nsIThread> mWorkerThread;
 #  if defined(XP_WIN)
-  nsDataHashtable<nsStringHashKey, nsString> mCertSubjects;
+  nsTHashMap<nsStringHashKey, nsString> mCertSubjects;
 #  endif  // defined(XP_WIN)
 
  public:
@@ -798,8 +791,7 @@ class GetLoadedModulesResultRunnable final : public Runnable {
 
 #  if defined(XP_WIN)
       // Cert Subject.
-      nsString* subject = mCertSubjects.GetValue(info.GetModulePath());
-      if (subject) {
+      if (auto subject = mCertSubjects.Lookup(info.GetModulePath())) {
         JS::RootedString jsOrg(cx, ToJSString(cx, *subject));
         if (!jsOrg) {
           mPromise->MaybeReject(NS_ERROR_FAILURE);
@@ -841,8 +833,8 @@ class GetLoadedModulesResultRunnable final : public Runnable {
 
       auto orgName = dllSvc->GetBinaryOrgName(info.GetModulePath().get());
       if (orgName) {
-        mCertSubjects.Put(info.GetModulePath(),
-                          nsDependentString(orgName.get()));
+        mCertSubjects.InsertOrUpdate(info.GetModulePath(),
+                                     nsDependentString(orgName.get()));
       }
     }
   }
@@ -880,9 +872,9 @@ TelemetryImpl::GetLoadedModules(JSContext* cx, Promise** aPromise) {
     return result.StealNSResult();
   }
 
-  nsCOMPtr<nsIThreadManager> tm = do_GetService(NS_THREADMANAGER_CONTRACTID);
   nsCOMPtr<nsIThread> getModulesThread;
-  nsresult rv = tm->NewThread(0, 0, getter_AddRefs(getModulesThread));
+  nsresult rv =
+      NS_NewNamedThread("TelemetryModule", getter_AddRefs(getModulesThread));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     promise->MaybeReject(NS_ERROR_FAILURE);
     return NS_OK;
@@ -1750,8 +1742,7 @@ TelemetryImpl::GetAllStores(JSContext* aCx, JS::MutableHandleValue aResult) {
     return NS_ERROR_FAILURE;
   }
 
-  for (auto iter = stores.Iter(); !iter.Done(); iter.Next()) {
-    auto& value = iter.Get()->GetKey();
+  for (const auto& value : stores) {
     JS::RootedValue store(aCx);
 
     store.setString(ToJSString(aCx, value));

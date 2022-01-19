@@ -59,10 +59,10 @@ pub enum GenericImage<G, MozImageRect, ImageUrl, Color, Percentage, Resolution> 
 pub use self::GenericImage as Image;
 
 /// <https://drafts.csswg.org/css-images-4/#cross-fade-function>
-#[css(comma, function = "cross-fade")]
 #[derive(
     Clone, Debug, MallocSizeOf, PartialEq, ToResolvedValue, ToShmem, ToCss, ToComputedValue,
 )]
+#[css(comma, function = "cross-fade")]
 #[repr(C)]
 pub struct GenericCrossFade<Image, Color, Percentage> {
     /// All of the image percent pairings passed as arguments to
@@ -117,10 +117,8 @@ pub use self::GenericCrossFadeElement as CrossFadeElement;
 pub use self::GenericCrossFadeImage as CrossFadeImage;
 
 /// https://drafts.csswg.org/css-images-4/#image-set-notation
+#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToCss, ToResolvedValue, ToShmem)]
 #[css(comma, function = "image-set")]
-#[derive(
-    Clone, Debug, MallocSizeOf, PartialEq, ToResolvedValue, ToShmem, ToCss,
-)]
 #[repr(C)]
 pub struct GenericImageSet<Image, Resolution> {
     /// The index of the selected candidate. Zero for specified values.
@@ -134,7 +132,7 @@ pub struct GenericImageSet<Image, Resolution> {
 
 /// An optional percent and a cross fade image.
 #[derive(
-    Clone, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem, ToCss,
+    Clone, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem,
 )]
 #[repr(C)]
 pub struct GenericImageSetItem<Image, Resolution> {
@@ -144,7 +142,33 @@ pub struct GenericImageSetItem<Image, Resolution> {
     ///
     /// TODO: Skip serialization if it is 1x.
     pub resolution: Resolution,
-    // TODO: type() function.
+
+    /// The `type(<string>)`
+    /// (Optional) Specify the image's MIME type
+    pub mime_type: crate::OwnedStr,
+
+    /// True if mime_type has been specified
+    pub has_mime_type: bool,
+}
+
+impl<I: style_traits::ToCss, R: style_traits::ToCss> ToCss for GenericImageSetItem<I, R>
+{
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: fmt::Write,
+    {
+        self.image.to_css(dest)?;
+        dest.write_str(" ")?;
+        self.resolution.to_css(dest)?;
+
+        if self.has_mime_type {
+            dest.write_str(" ")?;
+            dest.write_str("type(")?;
+            self.mime_type.to_css(dest)?;
+            dest.write_str(")")?;
+        }
+        Ok(())
+    }
 }
 
 pub use self::GenericImageSet as ImageSet;
@@ -203,7 +227,9 @@ pub enum GenericGradient<
 
 pub use self::GenericGradient as Gradient;
 
-#[derive(Clone, Copy, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem)]
+#[derive(
+    Clone, Copy, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem,
+)]
 #[repr(u8)]
 /// Whether we used the modern notation or the compatibility `-webkit`, `-moz` prefixes.
 pub enum GradientCompatMode {
@@ -230,7 +256,9 @@ pub enum GenericEndingShape<NonNegativeLength, NonNegativeLengthPercentage> {
 pub use self::GenericEndingShape as EndingShape;
 
 /// A circle shape.
-#[derive(Clone, Copy, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem)]
+#[derive(
+    Clone, Copy, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem,
+)]
 #[repr(C, u8)]
 pub enum GenericCircle<NonNegativeLength> {
     /// A circle radius.
@@ -365,7 +393,6 @@ impl ToCss for PaintWorklet {
 ///
 /// `-moz-image-rect(<uri>, top, right, bottom, left);`
 #[allow(missing_docs)]
-#[css(comma, function = "-moz-image-rect")]
 #[derive(
     Clone,
     Debug,
@@ -377,6 +404,7 @@ impl ToCss for PaintWorklet {
     ToResolvedValue,
     ToShmem,
 )]
+#[css(comma, function = "-moz-image-rect")]
 #[repr(C)]
 pub struct GenericMozImageRect<NumberOrPercentage, MozImageRectUrl> {
     pub url: MozImageRectUrl,

@@ -47,7 +47,9 @@ namespace mozilla {
 namespace image {
 
 class ImageRegion;
+class ImageIntRegion;
 struct Orientation;
+struct Resolution;
 
 }
 }
@@ -71,8 +73,10 @@ native TempRefImageContainer(already_AddRefed<mozilla::layers::ImageContainer>);
 [ref] native ImageRegion(mozilla::image::ImageRegion);
 [ptr] native LayerManager(mozilla::layers::LayerManager);
 native Orientation(mozilla::image::Orientation);
+native ImageResolution(mozilla::image::Resolution);
 [ref] native TimeStamp(mozilla::TimeStamp);
 [ref] native MaybeSVGImageContext(mozilla::Maybe<mozilla::SVGImageContext>);
+[ref] native MaybeImageIntRegion(mozilla::Maybe<mozilla::image::ImageIntRegion>);
 native TempRefSourceSurface(already_AddRefed<mozilla::gfx::SourceSurface>);
 native TempRefImgIContainer(already_AddRefed<imgIContainer>);
 native nsIntSizeByVal(nsIntSize);
@@ -202,11 +206,6 @@ interface imgIContainer : nsISupports
    * frame of any size (it could be neither the requested size, nor the
    * intrinsic size) to be substituted.
    *
-   * FLAG_WANT_DATA_SURFACE: Can be passed to GetFrame when the caller wants a
-   * DataSourceSurface instead of a hardware accelerated surface. This can be
-   * important for performance (by avoiding an upload to/readback from the GPU)
-   * when the caller knows they want a SourceSurface of type DATA.
-   *
    * FLAG_BYPASS_SURFACE_CACHE: Forces drawing to happen rather than taking
    * cached rendering from the surface cache. This is used when we are printing,
    * for example, where we want the vector commands from VectorImages to end up
@@ -237,6 +236,9 @@ interface imgIContainer : nsISupports
    *
    * FLAG_DECODE_TO_SRGB_COLORSPACE: Instead of converting the colorspace to
    * the display's colorspace, use sRGB.
+   *
+   * FLAG_RECORD_BLOB: Instead of rasterizing an SVG image on the main thread,
+   * record the drawing commands using blob images.
    */
   const unsigned long FLAG_NONE                            = 0x0;
   const unsigned long FLAG_SYNC_DECODE                     = 0x1;
@@ -246,12 +248,12 @@ interface imgIContainer : nsISupports
   const unsigned long FLAG_DECODE_NO_COLORSPACE_CONVERSION = 0x10;
   const unsigned long FLAG_CLAMP                           = 0x20;
   const unsigned long FLAG_HIGH_QUALITY_SCALING            = 0x40;
-  const unsigned long FLAG_WANT_DATA_SURFACE               = 0x80;
-  const unsigned long FLAG_BYPASS_SURFACE_CACHE            = 0x100;
-  const unsigned long FLAG_FORCE_PRESERVEASPECTRATIO_NONE  = 0x200;
-  const unsigned long FLAG_FORCE_UNIFORM_SCALING           = 0x400;
-  const unsigned long FLAG_AVOID_REDECODE_FOR_SIZE         = 0x800;
-  const unsigned long FLAG_DECODE_TO_SRGB_COLORSPACE       = 0x1000;
+  const unsigned long FLAG_BYPASS_SURFACE_CACHE            = 0x80;
+  const unsigned long FLAG_FORCE_PRESERVEASPECTRATIO_NONE  = 0x100;
+  const unsigned long FLAG_FORCE_UNIFORM_SCALING           = 0x200;
+  const unsigned long FLAG_AVOID_REDECODE_FOR_SIZE         = 0x400;
+  const unsigned long FLAG_DECODE_TO_SRGB_COLORSPACE       = 0x800;
+  const unsigned long FLAG_RECORD_BLOB                     = 0x1000;
 
   /**
    * A constant specifying the default set of decode flags (i.e., the default
@@ -362,6 +364,7 @@ interface imgIContainer : nsISupports
   [noscript, notxpcom] ImgDrawResult getImageContainerAtSize(in LayerManager aManager,
                                                              [const] in nsIntSize aSize,
                                                              [const] in MaybeSVGImageContext aSVGContext,
+                                                             [const] in MaybeImageIntRegion aRegion,
                                                              in uint32_t aFlags,
                                                              out ImageContainer aOutContainer);
 
@@ -640,10 +643,10 @@ interface imgIContainer : nsISupports
   [notxpcom] Orientation getOrientation();
 
   /*
-   * Returns whether the image handles the orientation returned by
-   * getOrientation() itself.
+   * Returns the intrinsic resolution of the image, or 1.0 if the image doesn't
+   * declare any.
    */
-  [notxpcom] bool handledOrientation();
+  [notxpcom] ImageResolution getResolution();
 
   /*
    * Returns the delay, in ms, between the first and second frame. If this

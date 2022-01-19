@@ -53,7 +53,6 @@ GLIB_VERSION=2.42
 GLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_42
 GLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_42
 CAIRO_VERSION=1.10
-GTK2_VERSION=2.18.0
 GTK3_VERSION=3.14.0
 GDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_14
 W32API_VERSION=3.14
@@ -301,7 +300,6 @@ if test "$GNU_CC"; then
     SSE2_FLAGS="-msse2"
     SSSE3_FLAGS="-mssse3"
     CFLAGS="$CFLAGS -fno-strict-aliasing"
-    DSO_CFLAGS=''
 
     if test "$OS_ARCH" != "WINNT" -o -z "$CLANG_CC"; then
         DSO_PIC_CFLAGS='-fPIC'
@@ -586,7 +584,6 @@ case "$target" in
     esac
     ;;
 *-mingw*)
-    DSO_CFLAGS=
     DSO_PIC_CFLAGS=
     # certain versions of cygwin's makedepend barf on the
     # #include <string> vs -I./dist/include/string issue so don't use it
@@ -748,9 +745,6 @@ case "$target" in
         fi
         MOZ_FIX_LINK_PATHS=
         LDFLAGS="$LDFLAGS -LARGEADDRESSAWARE"
-        if test -z "$DEVELOPER_OPTIONS"; then
-            LDFLAGS="$LDFLAGS -RELEASE"
-        fi
         dnl Minimum reqiurement of Gecko is VS2015 or later which supports
         dnl both SSSE3 and SSE4.1.
         HAVE_TOOLCHAIN_SUPPORT_MSSSE3=1
@@ -802,7 +796,6 @@ case "$target" in
     ;;
 
 *-netbsd*)
-    DSO_CFLAGS=''
     CFLAGS="$CFLAGS -Dunix"
     CXXFLAGS="$CXXFLAGS -Dunix"
     if $CC -E - -dM </dev/null | grep __ELF__ >/dev/null; then
@@ -824,7 +817,6 @@ case "$target" in
         X11BASE=/usr/X11R6
     fi
     MOZ_FIX_LINK_PATHS="$MOZ_FIX_LINK_PATHS -Wl,-rpath-link,${X11BASE}/lib"
-    DSO_CFLAGS=''
     DSO_PIC_CFLAGS='-fPIC'
     DSO_LDOPTS='-shared -fPIC'
     if test "$LIBRUNPATH"; then
@@ -837,6 +829,9 @@ case "$target" in
     ;;
 
 esac
+
+CFLAGS="$CFLAGS $DSO_PIC_CFLAGS"
+CXXFLAGS="$CXXFLAGS $DSO_PIC_CFLAGS"
 
 if test -z "$MOZ_OPTIMIZE_FLAGS"; then
     MOZ_OPTIMIZE_FLAGS="-O"
@@ -889,6 +884,9 @@ Darwin)
 esac
 
 if test "$MOZ_BUILD_APP" = "tools/crashreporter"; then
+    WRAP_STL_INCLUDES=
+fi
+if test "$MOZ_BUILD_APP" = "tools/crashreporter/injector"; then
     WRAP_STL_INCLUDES=
 fi
 
@@ -1139,9 +1137,7 @@ AC_CACHE_CHECK(for clock_gettime(CLOCK_MONOTONIC),
                ac_cv_clock_monotonic,
                [for libs in "" -lrt; do
                     _SAVE_LIBS="$LIBS"
-                    _SAVE_CFLAGS="$CFLAGS"
                     LIBS="$LIBS $libs"
-                    CFLAGS="$CFLAGS $DSO_PIC_CFLAGS"
 dnl clock_gettime is available on OSX since 10.12, so depending on MACOSX_DEPLOYMENT_TARGET,
 dnl we should or not be able to use it. To detect if we can, we need to make the
 dnl availability attribute strict, so that compilation fails when the target is < 10.12.
@@ -1151,11 +1147,9 @@ dnl availability attribute strict, so that compilation fails when the target is 
                                    clock_gettime(CLOCK_MONOTONIC, &ts); ],
                                  ac_cv_clock_monotonic=$libs
                                  LIBS="$_SAVE_LIBS"
-                                 CFLAGS="$_SAVE_CFLAGS"
                                  break,
                                  ac_cv_clock_monotonic=no)
                     LIBS="$_SAVE_LIBS"
-                    CFLAGS="$_SAVE_CFLAGS"
                 done])
 if test "$ac_cv_clock_monotonic" != "no"; then
     HAVE_CLOCK_MONOTONIC=1
@@ -1295,7 +1289,7 @@ fi
 # enabled, the linker in xcode 4.1 will crash. Without this it would crash when
 # linking XUL.
 _SAVE_LDFLAGS=$LDFLAGS
-LDFLAGS="$LDFLAGS $DSO_PIC_CFLAGS $DSO_LDOPTS $MOZ_OPTIMIZE_LDFLAGS"
+LDFLAGS="$LDFLAGS $DSO_LDOPTS $MOZ_OPTIMIZE_LDFLAGS"
 AC_CACHE_CHECK(for __thread keyword for TLS variables,
                ac_cv_thread_keyword,
                [AC_TRY_LINK([__thread bool tlsIsMainThread = false;],
@@ -1593,11 +1587,6 @@ if test "$COMPILE_ENVIRONMENT"; then
   if test "$MOZ_ENABLE_GTK"; then
     AC_DEFINE_UNQUOTED(GLIB_VERSION_MIN_REQUIRED,$GLIB_VERSION_MIN_REQUIRED)
     AC_DEFINE_UNQUOTED(GLIB_VERSION_MAX_ALLOWED,$GLIB_VERSION_MAX_ALLOWED)
-
-    if test "$MOZ_X11"; then
-      PKG_CHECK_MODULES(MOZ_GTK2, gtk+-2.0 >= $GTK2_VERSION gtk+-unix-print-2.0 glib-2.0 >= $GLIB_VERSION gobject-2.0 gio-unix-2.0 gdk-x11-2.0)
-      MOZ_GTK2_CFLAGS="-I${_topsrcdir}/widget/gtk/compat $MOZ_GTK2_CFLAGS"
-    fi
   fi
 fi # COMPILE_ENVIRONMENT
 
@@ -2499,11 +2488,6 @@ if test -n "$MOZ_BINARY_EXTENSIONS"; then
   AC_DEFINE(MOZ_BINARY_EXTENSIONS)
 fi
 
-AC_SUBST(MOZ_REQUIRE_SIGNING)
-if test "$MOZ_REQUIRE_SIGNING" = 1; then
-  AC_DEFINE(MOZ_REQUIRE_SIGNING)
-fi
-
 dnl ========================================================
 dnl = Mac bundle name prefix
 dnl ========================================================
@@ -2611,11 +2595,6 @@ AC_DEFINE_UNQUOTED(BROWSER_CHROME_URL, $BROWSER_CHROME_URL)
 AC_DEFINE_UNQUOTED(BROWSER_CHROME_URL_QUOTED, "$BROWSER_CHROME_URL")
 
 AC_SUBST(MOZ_APP_MAXVERSION)
-AC_SUBST(MOZ_UA_OS_AGNOSTIC)
-if test -n "$MOZ_UA_OS_AGNOSTIC"; then
-  AC_DEFINE(MOZ_UA_OS_AGNOSTIC)
-fi
-
 AC_SUBST(MOZ_PKG_SPECIAL)
 AC_SUBST(MOZ_SIMPLE_PACKAGE_NAME)
 
@@ -2719,8 +2698,6 @@ AC_SUBST(HAVE_TOOLCHAIN_SUPPORT_MSSE4_1)
 AC_SUBST(HAVE_X86_AVX2)
 AC_SUBST(HAVE_ALTIVEC)
 
-AC_SUBST_LIST(DSO_CFLAGS)
-AC_SUBST_LIST(DSO_PIC_CFLAGS)
 AC_SUBST(DSO_LDOPTS)
 AC_SUBST(BIN_SUFFIX)
 AC_SUBST(USE_N32)
@@ -2799,6 +2776,21 @@ AC_SUBST(A11Y_LOG)
 if test -n "$A11Y_LOG"; then
     AC_DEFINE(A11Y_LOG)
 fi
+
+dnl Windows AccessibilityHandler
+dnl ========================================================
+
+if test -z "$MOZ_HANDLER_CLSID"; then
+    MOZ_HANDLER_CLSID="4a195748-dca2-45fb-9295-0a139e76a9e7"
+    MOZ_IHANDLERCONTROL_IID="3316ce35-f892-4832-97c5-06c52c03cdba"
+    MOZ_ASYNCIHANDLERCONTROL_IID="15b48b76-ad38-4ad3-bd1a-d3c48a5a9947"
+    MOZ_IGECKOBACKCHANNEL_IID="dd2e4a89-999e-4d65-8b65-440c923ddb61"
+fi
+
+AC_SUBST(MOZ_HANDLER_CLSID)
+AC_SUBST(MOZ_IHANDLERCONTROL_IID)
+AC_SUBST(MOZ_ASYNCIHANDLERCONTROL_IID)
+AC_SUBST(MOZ_IGECKOBACKCHANNEL_IID)
 
 dnl Spit out some output
 dnl ========================================================

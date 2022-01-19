@@ -6,10 +6,6 @@
 
 XPIDL_SOURCES += [
     "mozIThirdPartyUtil.idl",
-    "nsIApplicationCache.idl",
-    "nsIApplicationCacheChannel.idl",
-    "nsIApplicationCacheContainer.idl",
-    "nsIApplicationCacheService.idl",
     "nsIArrayBufferInputStream.idl",
     "nsIAsyncStreamCopier.idl",
     "nsIAsyncStreamCopier2.idl",
@@ -98,6 +94,7 @@ XPIDL_SOURCES += [
     "nsISerializationHelper.idl",
     "nsIServerSocket.idl",
     "nsISimpleStreamListener.idl",
+    "nsISimpleURIMutator.idl",
     "nsISocketFilter.idl",
     "nsISocketTransport.idl",
     "nsISocketTransportService.idl",
@@ -172,7 +169,6 @@ EXPORTS.mozilla.net += [
     "RequestContextService.h",
     "SimpleChannelParent.h",
     "SSLTokensCache.h",
-    "TCPFastOpen.h",
     "ThrottleQueue.h",
 ]
 
@@ -241,7 +237,6 @@ UNIFIED_SOURCES += [
     "SimpleChannel.cpp",
     "SimpleChannelParent.cpp",
     "SSLTokensCache.cpp",
-    "TCPFastOpenLayer.cpp",
     "ThrottleQueue.cpp",
     "Tickler.cpp",
     "TLSServerSocket.cpp",

@@ -362,27 +362,6 @@ class _ToolbarPanelHub {
       })
     );
 
-    switch (content.layout) {
-      case "tracking-protections":
-        wrapperEl.appendChild(
-          RemoteL10n.createElement(doc, "h4", {
-            classList: "whatsNew-message-subtitle",
-            content: content.subtitle,
-            attributes: this.state.contentArguments,
-          })
-        );
-        wrapperEl.appendChild(
-          RemoteL10n.createElement(doc, "h2", {
-            classList: "whatsNew-message-title-large",
-            content: this.state.contentArguments[
-              content.layout_title_content_variable
-            ],
-            attributes: this.state.contentArguments,
-          })
-        );
-        break;
-    }
-
     wrapperEl.appendChild(
       RemoteL10n.createElement(doc, "p", {
         content: content.body,
@@ -502,13 +481,13 @@ class _ToolbarPanelHub {
   _showElement(document, id, string_id) {
     const el = PanelMultiView.getViewNode(document, id);
     document.l10n.setAttributes(el, string_id);
-    el.removeAttribute("hidden");
+    el.hidden = false;
   }
 
   _hideElement(document, id) {
     const el = PanelMultiView.getViewNode(document, id);
     if (el) {
-      el.setAttribute("hidden", true);
+      el.hidden = true;
     }
   }
 

@@ -33,10 +33,12 @@ NS_IMETHODIMP nsSystemAlertsService::ShowAlertNotification(
   nsCOMPtr<nsIAlertNotification> alert =
       do_CreateInstance(ALERT_NOTIFICATION_CONTRACTID);
   NS_ENSURE_TRUE(alert, NS_ERROR_FAILURE);
-  nsresult rv =
-      alert->Init(aAlertName, aImageUrl, aAlertTitle, aAlertText,
-                  aAlertTextClickable, aAlertCookie, aBidi, aLang, aData,
-                  aPrincipal, aInPrivateBrowsing, aRequireInteraction);
+  // vibrate is unused for now
+  nsTArray<uint32_t> vibrate;
+  nsresult rv = alert->Init(aAlertName, aImageUrl, aAlertTitle, aAlertText,
+                            aAlertTextClickable, aAlertCookie, aBidi, aLang,
+                            aData, aPrincipal, aInPrivateBrowsing,
+                            aRequireInteraction, false, vibrate);
   NS_ENSURE_SUCCESS(rv, rv);
   return ShowAlert(alert, aAlertListener);
 }
@@ -105,8 +107,13 @@ bool nsSystemAlertsService::IsActiveListener(const nsAString& aAlertName,
 
 void nsSystemAlertsService::AddListener(const nsAString& aAlertName,
                                         nsAlertsIconListener* aListener) {
-  RefPtr<nsAlertsIconListener> oldListener = mActiveListeners.Get(aAlertName);
-  mActiveListeners.Put(aAlertName, aListener);
+  const auto oldListener =
+      mActiveListeners.WithEntryHandle(aAlertName, [&](auto&& entry) {
+        RefPtr<nsAlertsIconListener> oldListener =
+            entry ? entry.Data() : nullptr;
+        entry.InsertOrUpdate(aListener);
+        return oldListener;
+      });
   if (oldListener) {
     // If an alert with this name already exists, close it.
     oldListener->Close();
@@ -115,9 +122,10 @@ void nsSystemAlertsService::AddListener(const nsAString& aAlertName,
 
 void nsSystemAlertsService::RemoveListener(const nsAString& aAlertName,
                                            nsAlertsIconListener* aListener) {
-  if (IsActiveListener(aAlertName, aListener)) {
+  auto entry = mActiveListeners.Lookup(aAlertName);
+  if (entry && entry.Data() == aListener) {
     // The alert may have been replaced; only remove it from the active
     // listeners map if it's the same.
-    mActiveListeners.Remove(aAlertName);
+    entry.Remove();
   }
 }

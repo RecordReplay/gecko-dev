@@ -25,7 +25,7 @@
 #include "mozilla/storage.h"
 #include "mozilla/dom/Link.h"
 #include "nsDocShellCID.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "nsThreadUtils.h"
 #include "nsNetUtil.h"
 #include "nsIWidget.h"
@@ -819,6 +819,9 @@ class InsertVisitedURIs final : public Runnable {
     mozStorageTransaction transaction(
         mDBConn, false, mozIStorageConnection::TRANSACTION_IMMEDIATE);
 
+    // XXX Handle the error, bug 1696133.
+    Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
+
     const VisitData* lastFetchedPlace = nullptr;
     uint32_t lastFetchedVisitCount = 0;
     bool shouldChunkNotifications = mPlaces.Length() > NOTIFY_VISITS_CHUNK_SIZE;
@@ -1318,7 +1321,7 @@ History::History()
       mRecentlyVisitedURIs(RECENTLY_VISITED_URIS_SIZE) {
   NS_ASSERTION(!gService, "Ruh-roh!  This service has already been created!");
   if (XRE_IsParentProcess()) {
-    nsCOMPtr<nsIProperties> dirsvc = services::GetDirectoryService();
+    nsCOMPtr<nsIProperties> dirsvc = components::Directory::Service();
     bool haveProfile = false;
     MOZ_RELEASE_ASSERT(
         dirsvc &&
@@ -1655,8 +1658,8 @@ History::CollectReports(nsIHandleReportCallback* aHandleReport,
 size_t History::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) {
   size_t size = aMallocSizeOf(this);
   size += mTrackedURIs.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (const auto& entry : mTrackedURIs) {
-    size += entry.GetData().SizeOfExcludingThis(aMallocSizeOf);
+  for (const auto& entry : mTrackedURIs.Values()) {
+    size += entry.SizeOfExcludingThis(aMallocSizeOf);
   }
   return size;
 }
@@ -1667,7 +1670,7 @@ History* History::GetService() {
     return gService;
   }
 
-  nsCOMPtr<IHistory> service = services::GetHistory();
+  nsCOMPtr<IHistory> service = components::History::Service();
   if (service) {
     NS_ASSERTION(gService, "Our constructor was not run?!");
   }
@@ -1730,15 +1733,7 @@ void History::Shutdown() {
 void History::AppendToRecentlyVisitedURIs(nsIURI* aURI, bool aHidden) {
   PRTime now = PR_Now();
 
-  {
-    RecentURIVisit& visit =
-        mRecentlyVisitedURIs.LookupForAdd(aURI).OrInsert([] {
-          return RecentURIVisit{0, false};
-        });
-
-    visit.mTime = now;
-    visit.mHidden = aHidden;
-  }
+  mRecentlyVisitedURIs.InsertOrUpdate(aURI, RecentURIVisit{now, aHidden});
 
   // Remove entries older than RECENTLY_VISITED_URIS_MAX_AGE.
   for (auto iter = mRecentlyVisitedURIs.Iter(); !iter.Done(); iter.Next()) {
@@ -1851,9 +1846,8 @@ History::VisitURI(nsIWidget* aWidget, nsIURI* aURI, nsIURI* aLastVisitedURI,
     auto entry = mRecentlyVisitedURIs.Lookup(aURI);
     // Check if the entry exists and is younger than
     // RECENTLY_VISITED_URIS_MAX_AGE.
-    if (entry &&
-        (PR_Now() - entry.Data().mTime) < RECENTLY_VISITED_URIS_MAX_AGE) {
-      bool wasHidden = entry.Data().mHidden;
+    if (entry && (PR_Now() - entry->mTime) < RECENTLY_VISITED_URIS_MAX_AGE) {
+      bool wasHidden = entry->mHidden;
       // Regardless of whether we store the visit or not, we must update the
       // stored visit time.
       AppendToRecentlyVisitedURIs(aURI, place.hidden);
@@ -2101,18 +2095,15 @@ History::IsURIVisited(nsIURI* aURI, mozIVisitedStatusCallback* aCallback) {
 void History::StartPendingVisitedQueries(
     const PendingVisitedQueries& aQueries) {
   if (XRE_IsContentProcess()) {
-    nsTArray<RefPtr<nsIURI>> uris(aQueries.Count());
-    for (auto iter = aQueries.ConstIter(); !iter.Done(); iter.Next()) {
-      uris.AppendElement(iter.Get()->GetKey());
-    }
+    const auto uris = ToTArray<nsTArray<RefPtr<nsIURI>>>(aQueries);
     auto* cpc = mozilla::dom::ContentChild::GetSingleton();
     MOZ_ASSERT(cpc, "Content Protocol is NULL!");
     Unused << cpc->SendStartVisitedQueries(uris);
   } else {
     // TODO(bug 1594368): We could do a single query, as long as we can
     // then notify each URI individually.
-    for (auto iter = aQueries.ConstIter(); !iter.Done(); iter.Next()) {
-      nsresult queryStatus = VisitedQuery::Start(iter.Get()->GetKey());
+    for (const auto& key : aQueries) {
+      nsresult queryStatus = VisitedQuery::Start(key);
       Unused << NS_WARN_IF(NS_FAILED(queryStatus));
     }
   }

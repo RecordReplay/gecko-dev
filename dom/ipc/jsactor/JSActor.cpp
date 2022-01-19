@@ -10,6 +10,7 @@
 #include "chrome/common/ipc_channel.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/FunctionRef.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/ClonedErrorHolder.h"
 #include "mozilla/dom/ClonedErrorHolderBinding.h"
 #include "mozilla/dom/DOMException.h"
@@ -47,9 +48,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(JSActor)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlobal)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWrappedJS)
-  for (auto& query : tmp->mPendingQueries) {
-    CycleCollectionNoteChild(cb, query.GetData().mPromise.get(),
-                             "Pending Query Promise");
+  for (const auto& query : tmp->mPendingQueries.Values()) {
+    CycleCollectionNoteChild(cb, query.mPromise.get(), "Pending Query Promise");
   }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -69,13 +69,13 @@ void JSActor::AfterDestroy() {
 
   // Take our queries out, in case somehow rejecting promises can trigger
   // additions or removals.
-  nsDataHashtable<nsUint64HashKey, PendingQuery> pendingQueries;
-  mPendingQueries.SwapElements(pendingQueries);
-  for (auto& entry : pendingQueries) {
+  const nsTHashMap<nsUint64HashKey, PendingQuery> pendingQueries =
+      std::move(mPendingQueries);
+  for (const auto& entry : pendingQueries.Values()) {
     nsPrintfCString message(
         "Actor '%s' destroyed before query '%s' was resolved", mName.get(),
-        NS_LossyConvertUTF16toASCII(entry.GetData().mMessageName).get());
-    entry.GetData().mPromise->MaybeRejectWithAbortError(message);
+        NS_LossyConvertUTF16toASCII(entry.mMessageName).get());
+    entry.mPromise->MaybeRejectWithAbortError(message);
   }
 
   InvokeCallback(CallbackFunction::DidDestroy);
@@ -243,8 +243,8 @@ already_AddRefed<Promise> JSActor::SendQuery(JSContext* aCx,
   meta.queryId() = mNextQueryId++;
   meta.kind() = JSActorMessageKind::Query;
 
-  mPendingQueries.Put(meta.queryId(),
-                      PendingQuery{promise, meta.messageName()});
+  mPendingQueries.InsertOrUpdate(meta.queryId(),
+                                 PendingQuery{promise, meta.messageName()});
 
   SendRawMessage(meta, std::move(data), CaptureJSStack(aCx), aRv);
   return promise.forget();
@@ -324,7 +324,7 @@ void JSActor::ReceiveQueryReply(JSContext* aCx,
     return;
   }
 
-  Maybe<PendingQuery> query = mPendingQueries.GetAndRemove(aMetadata.queryId());
+  Maybe<PendingQuery> query = mPendingQueries.Extract(aMetadata.queryId());
   if (NS_WARN_IF(!query)) {
     aRv.ThrowUnknownError("Received reply for non-pending query");
     return;

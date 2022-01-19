@@ -5,19 +5,13 @@
 from __future__ import absolute_import
 
 import os
-import sys
 
 import manifestparser
 import mozinfo
 import mozunit
 import pytest
 
-PY2 = sys.version_info.major == 2
-
-if PY2:
-    from mock import Mock, patch, mock_open, sentinel, DEFAULT
-else:
-    from unittest.mock import Mock, patch, mock_open, sentinel, DEFAULT
+from unittest.mock import Mock, patch, mock_open, sentinel, DEFAULT
 
 from marionette_harness.runtests import MarionetteTestRunner
 
@@ -267,7 +261,10 @@ def test_load_testvars_throws_expected_errors(mach_parsed_kwargs):
         runner._load_testvars()
     assert "does not exist" in str(io_exc.value)
     with patch("os.path.exists", return_value=True):
-        with patch("__builtin__.open", mock_open(read_data="[not {valid JSON]")):
+        with patch(
+            "marionette_harness.runner.base.open",
+            mock_open(read_data="[not {valid JSON]"),
+        ):
             with pytest.raises(Exception) as json_exc:
                 runner._load_testvars()
     assert "not properly formatted" in str(json_exc.value)
@@ -378,15 +375,7 @@ def test_manifest_basic_args(mock_runner, manifest, monkeypatch):
     assert kwargs["exists"] is False
     assert kwargs["disabled"] is True
     assert kwargs["appname"] == "fake_app"
-    assert kwargs["actors"] is True
     assert "mozinfo_key" in kwargs and kwargs["mozinfo_key"] == "mozinfo_val"
-
-
-def test_manifest_actors_disabled(mock_runner, manifest, monkeypatch):
-    kwargs = get_kwargs_passed_to_manifest(
-        mock_runner, manifest, monkeypatch, disable_actors=True
-    )
-    assert kwargs["actors"] is False
 
 
 @pytest.mark.parametrize("test_tags", (None, ["tag", "tag2"]))

@@ -20,25 +20,9 @@ struct samplerCommon {
   TextureFormat format = TextureFormat::RGBA8;
 };
 
-struct samplerDepth {
-  int depth = 0;
-  uint32_t height_stride = 0;  // in units of BPP if < 4, or dwords if BPP >= 4
-};
-
 struct samplerFilter {
   TextureFilter filter = TextureFilter::NEAREST;
 };
-
-struct sampler2DArray_impl : samplerCommon, samplerDepth, samplerFilter {};
-typedef sampler2DArray_impl* sampler2DArray;
-
-typedef struct sampler2DArrayR8_impl : sampler2DArray_impl{} * sampler2DArrayR8;
-typedef struct sampler2DArrayRG8_impl : sampler2DArray_impl{} *
-                                        sampler2DArrayRG8;
-typedef struct sampler2DArrayRGBA8_impl : sampler2DArray_impl{} *
-                                          sampler2DArrayRGBA8;
-typedef struct sampler2DArrayRGBA32F_impl : sampler2DArray_impl{} *
-                                            sampler2DArrayRGBA32F;
 
 struct sampler2D_impl : samplerCommon, samplerFilter {};
 typedef sampler2D_impl* sampler2D;
@@ -72,6 +56,7 @@ SI bool test_none(Bool cond) {
   return bit_cast<uint32_t>(CONVERT(cond, U8)) == 0;
 }
 #endif
+SI bool test_equal(Bool cond) { return test_none(cond != cond.x); }
 
 float make_float(float n) { return n; }
 
@@ -125,6 +110,7 @@ struct vec4;
 struct ivec2;
 
 SI int32_t if_then_else(int32_t c, int32_t t, int32_t e) { return c ? t : e; }
+SI int32_t if_then_else(bool c, int32_t t, int32_t e) { return c ? t : e; }
 
 SI float if_then_else(int32_t c, float t, float e) { return c ? t : e; }
 
@@ -215,7 +201,37 @@ SI Float sqrt(Float v) {
 #endif
 }
 
-SI float inversesqrt(float x) { return 1.0f / sqrtf(x); }
+SI float recip(float x) {
+#if USE_SSE2
+  return _mm_cvtss_f32(_mm_rcp_ss(_mm_set_ss(x)));
+#else
+  return 1.0f / x;
+#endif
+}
+
+// Use a fast vector reciprocal approximation when available. This should only
+// be used in cases where it is okay that the approximation is imprecise -
+// essentially visually correct but numerically wrong. Otherwise just rely on
+// however the compiler would implement slower division if the platform doesn't
+// provide a convenient intrinsic.
+SI Float recip(Float v) {
+#if USE_SSE2
+  return _mm_rcp_ps(v);
+#elif USE_NEON
+  Float e = vrecpeq_f32(v);
+  return vrecpsq_f32(v, e) * e;
+#else
+  return 1.0f / v;
+#endif
+}
+
+SI float inversesqrt(float x) {
+#if USE_SSE2
+  return _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(x)));
+#else
+  return 1.0f / sqrtf(x);
+#endif
+}
 
 SI Float inversesqrt(Float v) {
 #if USE_SSE2
@@ -253,6 +269,8 @@ enum XYZW {
   A = 3,
 };
 
+struct bvec4_scalar;
+
 struct bvec2_scalar {
   bool x;
   bool y;
@@ -260,6 +278,31 @@ struct bvec2_scalar {
   bvec2_scalar() : bvec2_scalar(false) {}
   IMPLICIT constexpr bvec2_scalar(bool a) : x(a), y(a) {}
   constexpr bvec2_scalar(bool x, bool y) : x(x), y(y) {}
+
+  bool& select(XYZW c) {
+    switch (c) {
+      case X:
+        return x;
+      case Y:
+        return y;
+      default:
+        UNREACHABLE;
+    }
+  }
+  bool sel(XYZW c1) { return select(c1); }
+
+  bvec2_scalar sel(XYZW c1, XYZW c2) {
+    return bvec2_scalar(select(c1), select(c2));
+  }
+  bvec4_scalar sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4);
+};
+
+struct bvec2_scalar1 {
+  bool x;
+
+  IMPLICIT constexpr bvec2_scalar1(bool a) : x(a) {}
+
+  operator bvec2_scalar() const { return bvec2_scalar(x); }
 };
 
 struct bvec2 {
@@ -278,13 +321,15 @@ struct bvec2 {
   }
   Bool sel(XYZW c1) { return select(c1); }
 
+  bvec2 sel(XYZW c1, XYZW c2) { return bvec2(select(c1), select(c2)); }
+
   bvec2 operator~() { return bvec2(~x, ~y); }
 
   Bool x;
   Bool y;
 };
 
-bvec2_scalar make_bvec2(bool n) { return bvec2_scalar{n, n}; }
+bvec2_scalar1 make_bvec2(bool n) { return bvec2_scalar1(n); }
 
 bvec2_scalar make_bvec2(bool x, bool y) { return bvec2_scalar{x, y}; }
 
@@ -298,6 +343,7 @@ bvec2 make_bvec2(const X& x, const Y& y) {
   return bvec2(x, y);
 }
 
+struct vec3_scalar;
 struct vec4_scalar;
 
 struct vec2_scalar {
@@ -326,6 +372,7 @@ struct vec2_scalar {
   vec2_scalar sel(XYZW c1, XYZW c2) {
     return vec2_scalar(select(c1), select(c2));
   }
+  vec3_scalar sel(XYZW c1, XYZW c2, XYZW c3);
   vec4_scalar sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4);
 
   friend bool operator==(const vec2_scalar& l, const vec2_scalar& r) {
@@ -344,6 +391,9 @@ struct vec2_scalar {
   }
   friend vec2_scalar operator*(vec2_scalar a, vec2_scalar b) {
     return vec2_scalar(a.x * b.x, a.y * b.y);
+  }
+  friend vec2_scalar operator/(vec2_scalar a, float b) {
+    return vec2_scalar(a.x / b, a.y / b);
   }
   friend vec2_scalar operator/(vec2_scalar a, vec2_scalar b) {
     return vec2_scalar(a.x / b.x, a.y / b.y);
@@ -535,6 +585,7 @@ vec2 operator*(vec2_scalar a, Float b) { return vec2(a.x * b, a.y * b); }
 vec2 operator*(Float a, vec2_scalar b) { return vec2(a * b.x, a * b.y); }
 
 SI vec2 min(vec2 a, vec2 b) { return vec2(min(a.x, b.x), min(a.y, b.y)); }
+SI vec2 min(vec2 a, Float b) { return vec2(min(a.x, b), min(a.y, b)); }
 
 SI vec2_scalar min(vec2_scalar a, vec2_scalar b) {
   return vec2_scalar{min(a.x, b.x), min(a.y, b.y)};
@@ -554,8 +605,8 @@ vec2_scalar step(vec2_scalar edge, vec2_scalar x) {
   return vec2_scalar(step(edge.x, x.x), step(edge.y, x.y));
 }
 
-vec2 max(vec2 a, vec2 b) { return vec2(max(a.x, b.x), max(a.y, b.y)); }
-vec2 max(vec2 a, Float b) { return vec2(max(a.x, b), max(a.y, b)); }
+SI vec2 max(vec2 a, vec2 b) { return vec2(max(a.x, b.x), max(a.y, b.y)); }
+SI vec2 max(vec2 a, Float b) { return vec2(max(a.x, b), max(a.y, b)); }
 
 SI vec2_scalar max(vec2_scalar a, vec2_scalar b) {
   return vec2_scalar{max(a.x, b.x), max(a.y, b.y)};
@@ -568,9 +619,31 @@ Float length(vec2 a) { return sqrt(a.x * a.x + a.y * a.y); }
 
 float length(vec2_scalar a) { return hypotf(a.x, a.y); }
 
-SI Float distance(vec2 a, vec2 b) { return length(a - b); }
+template <typename A, typename B>
+SI auto distance(A a, B b) {
+  return length(a - b);
+}
 
-SI vec2 normalize(vec2 a) { return a / length(a); }
+template <typename T>
+SI T normalize(T a) {
+  return a / length(a);
+}
+
+SI vec2 sqrt(vec2 a) { return vec2(sqrt(a.x), sqrt(a.y)); }
+
+SI vec2_scalar sqrt(vec2_scalar a) { return vec2_scalar(sqrt(a.x), sqrt(a.y)); }
+
+SI vec2 recip(vec2 a) { return vec2(recip(a.x), recip(a.y)); }
+
+SI vec2_scalar recip(vec2_scalar a) {
+  return vec2_scalar(recip(a.x), recip(a.y));
+}
+
+SI vec2 inversesqrt(vec2 a) { return vec2(inversesqrt(a.x), inversesqrt(a.y)); }
+
+SI vec2_scalar inversesqrt(vec2_scalar a) {
+  return vec2_scalar(inversesqrt(a.x), inversesqrt(a.y));
+}
 
 #define abs __glsl_abs
 
@@ -584,6 +657,13 @@ Float abs(Float v) {
 #else
   return bit_cast<Float>(bit_cast<I32>(v) & bit_cast<I32>(0.0f - v));
 #endif
+}
+
+float sign(float a) { return copysignf(1.0f, a); }
+
+Float sign(Float v) {
+  return bit_cast<Float>((bit_cast<I32>(v) & 0x80000000) |
+                         bit_cast<I32>(Float(1.0f)));
 }
 
 Float cast(U32 v) { return CONVERT((I32)v, Float); }
@@ -648,8 +728,8 @@ SI I32 roundfast(Float v, Float scale) {
 }
 
 template <typename T>
-SI auto round_pixel(T v) {
-  return roundfast(v, 255.0f);
+SI auto round_pixel(T v, float scale = 255.0f) {
+  return roundfast(v, scale);
 }
 
 #define round __glsl_round
@@ -670,10 +750,14 @@ vec2 fract(vec2 v) { return vec2(fract(v.x), fract(v.y)); }
 // uniform scaling, and thus abs(dFdx(p.x)) + abs(dFdy(p.x)) = abs(dFdx(p.x)) +
 // abs(dFdx(p.y)) which mirrors abs(dFdx(p.y)) + abs(dFdy(p.y)) = abs(dFdx(p.y))
 // + abs(dFdx(p.x)).
-vec2 fwidth(vec2 p) {
+vec2_scalar fwidth(vec2 p) {
   Float d = abs(SHUFFLE(p.x, p.y, 1, 1, 5, 5) - SHUFFLE(p.x, p.y, 0, 0, 4, 4));
-  return vec2(d + d.zwxy);
+  return vec2_scalar(d.x + d.z);
 }
+
+float dFdx(Float x) { return x.y - x.x; }
+
+vec2_scalar dFdx(vec2 p) { return vec2_scalar(dFdx(p.x), dFdx(p.y)); }
 
 // See
 // http://www.machinedlearnings.com/2011/06/fast-approximate-logarithm-exponential.html.
@@ -991,6 +1075,24 @@ struct ivec4_scalar {
   friend ivec4_scalar operator&(int32_t a, ivec4_scalar b) {
     return ivec4_scalar{a & b.x, a & b.y, a & b.z, a & b.w};
   }
+  friend ivec4_scalar operator<<(ivec4_scalar a, int32_t b) {
+    return ivec4_scalar{a.x << b, a.y << b, a.z << b, a.w << b};
+  }
+
+  int32_t& operator[](int index) {
+    switch (index) {
+      case 0:
+        return x;
+      case 1:
+        return y;
+      case 2:
+        return z;
+      case 3:
+        return w;
+      default:
+        UNREACHABLE;
+    }
+  }
 };
 
 struct ivec4 {
@@ -1097,6 +1199,14 @@ struct bvec3_scalar {
   constexpr bvec3_scalar(bool x, bool y, bool z) : x(x), y(y), z(z) {}
 };
 
+struct bvec3_scalar1 {
+  bool x;
+
+  IMPLICIT constexpr bvec3_scalar1(bool a) : x(a) {}
+
+  operator bvec3_scalar() const { return bvec3_scalar(x); }
+};
+
 struct bvec3 {
   bvec3() : bvec3(0) {}
   IMPLICIT bvec3(Bool a) : x(a), y(a), z(a) {}
@@ -1120,7 +1230,7 @@ struct bvec3 {
   Bool z;
 };
 
-bvec3_scalar make_bvec3(bool n) { return bvec3_scalar{n, n, n}; }
+bvec3_scalar1 make_bvec3(bool n) { return bvec3_scalar1(n); }
 
 struct bvec4_scalar {
   bool x;
@@ -1132,6 +1242,37 @@ struct bvec4_scalar {
   IMPLICIT constexpr bvec4_scalar(bool a) : x(a), y(a), z(a), w(a) {}
   constexpr bvec4_scalar(bool x, bool y, bool z, bool w)
       : x(x), y(y), z(z), w(w) {}
+
+  bool& select(XYZW c) {
+    switch (c) {
+      case X:
+        return x;
+      case Y:
+        return y;
+      case Z:
+        return z;
+      case W:
+        return w;
+      default:
+        UNREACHABLE;
+    }
+  }
+  bool sel(XYZW c1) { return select(c1); }
+  bvec2_scalar sel(XYZW c1, XYZW c2) {
+    return bvec2_scalar(select(c1), select(c2));
+  }
+};
+
+bvec4_scalar bvec2_scalar::sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
+  return bvec4_scalar{select(c1), select(c2), select(c3), select(c4)};
+}
+
+struct bvec4_scalar1 {
+  bool x;
+
+  IMPLICIT constexpr bvec4_scalar1(bool a) : x(a) {}
+
+  operator bvec4_scalar() const { return bvec4_scalar(x); }
 };
 
 struct bvec4 {
@@ -1149,6 +1290,8 @@ struct bvec4 {
         return z;
       case W:
         return w;
+      default:
+        UNREACHABLE;
     }
   }
   Bool sel(XYZW c1) { return select(c1); }
@@ -1159,10 +1302,14 @@ struct bvec4 {
   Bool w;
 };
 
-bvec4_scalar make_bvec4(bool n) { return bvec4_scalar{n, n, n, n}; }
+bvec4_scalar1 make_bvec4(bool n) { return bvec4_scalar1(n); }
 
 bvec4_scalar make_bvec4(bool x, bool y, bool z, bool w) {
   return bvec4_scalar{x, y, z, w};
+}
+
+bvec4_scalar make_bvec4(bvec2_scalar a, bvec2_scalar b) {
+  return bvec4_scalar{a.x, a.y, b.x, b.y};
 }
 
 template <typename N>
@@ -1335,6 +1482,7 @@ struct vec3 {
   IMPLICIT constexpr vec3(Float a) : x(a), y(a), z(a) {}
   constexpr vec3(Float x, Float y, Float z) : x(x), y(y), z(z) {}
   vec3(vec2 a, Float z) : x(a.x), y(a.y), z(z) {}
+  explicit vec3(vec4);
   IMPLICIT constexpr vec3(vec3_scalar s) : x(s.x), y(s.y), z(s.z) {}
   constexpr vec3(vec3_scalar s0, vec3_scalar s1, vec3_scalar s2, vec3_scalar s3)
       : x(Float{s0.x, s1.x, s2.x, s3.x}),
@@ -1364,6 +1512,8 @@ struct vec3 {
     return vec3(select(c1), select(c2), select(c3));
   }
 
+  vec4 sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4);
+
   vec2_ref lsel(XYZW c1, XYZW c2) { return vec2_ref(select(c1), select(c2)); }
 
   friend vec3 operator*(vec3 a, Float b) {
@@ -1378,6 +1528,9 @@ struct vec3 {
 
   friend vec3 operator/(vec3 a, Float b) {
     return vec3(a.x / b, a.y / b, a.z / b);
+  }
+  friend vec3 operator/(vec3 a, vec3 b) {
+    return vec3(a.x / b.x, a.y / b.y, a.z / b.z);
   }
 
   friend I32 operator==(const vec3& l, const vec3& r) {
@@ -1460,13 +1613,26 @@ vec3 step(vec3 edge, vec3 x) {
   return vec3(step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z));
 }
 
+vec3_scalar step(vec3_scalar edge, vec3_scalar x) {
+  return vec3_scalar(step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z));
+}
+
 SI vec3 min(vec3 a, vec3 b) {
   return vec3(min(a.x, b.x), min(a.y, b.y), min(a.z, b.z));
 }
+SI vec3 min(vec3 a, Float b) {
+  return vec3(min(a.x, b), min(a.y, b), min(a.z, b));
+}
+SI vec3_scalar min(vec3_scalar a, vec3_scalar b) {
+  return vec3_scalar{min(a.x, b.x), min(a.y, b.y), min(a.z, b.z)};
+}
+
 SI vec3 max(vec3 a, vec3 b) {
   return vec3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z));
 }
-
+SI vec3 max(vec3 a, Float b) {
+  return vec3(max(a.x, b), max(a.y, b), max(a.z, b));
+}
 SI vec3_scalar max(vec3_scalar a, vec3_scalar b) {
   return vec3_scalar{max(a.x, b.x), max(a.y, b.y), max(a.z, b.z)};
 }
@@ -1517,6 +1683,10 @@ struct vec4_scalar {
       : x(x), y(y), z(z), w(w) {}
   vec4_scalar(vec3_scalar xyz, float w) : x(xyz.x), y(xyz.y), z(xyz.z), w(w) {}
 
+  static vec4_scalar load_from_ptr(const float* f) {
+    return vec4_scalar(f[0], f[1], f[2], f[3]);
+  }
+
   ALWAYS_INLINE float& select(XYZW c) {
     switch (c) {
       case X:
@@ -1537,6 +1707,9 @@ struct vec4_scalar {
   }
   vec3_scalar sel(XYZW c1, XYZW c2, XYZW c3) {
     return vec3_scalar{select(c1), select(c2), select(c3)};
+  }
+  vec4_scalar sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
+    return vec4_scalar{select(c1), select(c2), select(c3), select(c4)};
   }
   vec2_scalar_ref lsel(XYZW c1, XYZW c2) {
     return vec2_scalar_ref(select(c1), select(c2));
@@ -1586,6 +1759,14 @@ struct vec4_scalar {
     return *this;
   }
 
+  vec4_scalar& operator*=(vec4_scalar a) {
+    x *= a.x;
+    y *= a.y;
+    z *= a.z;
+    w *= a.w;
+    return *this;
+  }
+
   friend bool operator==(const vec4_scalar& l, const vec4_scalar& r) {
     return l.x == r.x && l.y == r.y && l.z == r.z && l.w == r.w;
   }
@@ -1595,9 +1776,22 @@ struct vec4_scalar {
   }
 };
 
+vec3_scalar vec2_scalar::sel(XYZW c1, XYZW c2, XYZW c3) {
+  return {select(c1), select(c2), select(c3)};
+}
 vec4_scalar vec2_scalar::sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
   return vec4_scalar{select(c1), select(c2), select(c3), select(c4)};
 }
+
+struct vec4_ref {
+  vec4_ref(Float& x, Float& y, Float& z, Float& w) : x(x), y(y), z(z), w(w) {}
+  Float& x;
+  Float& y;
+  Float& z;
+  Float& w;
+
+  vec4_ref& operator=(const vec4& a);
+};
 
 struct vec4 {
   typedef struct vec4 vector_type;
@@ -1616,7 +1810,7 @@ struct vec4 {
         y(Float{s0.y, s1.y, s2.y, s3.y}),
         z(Float{s0.z, s1.z, s2.z, s3.z}),
         w(Float{s0.w, s1.w, s2.w, s3.w}) {}
-  Float& select(XYZW c) {
+  ALWAYS_INLINE Float& select(XYZW c) {
     switch (c) {
       case X:
         return x;
@@ -1630,18 +1824,29 @@ struct vec4 {
         UNREACHABLE;
     }
   }
-  Float& sel(XYZW c1) { return select(c1); }
+  ALWAYS_INLINE Float& sel(XYZW c1) { return select(c1); }
 
-  vec2 sel(XYZW c1, XYZW c2) { return vec2(select(c1), select(c2)); }
+  ALWAYS_INLINE vec2 sel(XYZW c1, XYZW c2) {
+    return vec2(select(c1), select(c2));
+  }
 
-  vec3 sel(XYZW c1, XYZW c2, XYZW c3) {
+  ALWAYS_INLINE vec3 sel(XYZW c1, XYZW c2, XYZW c3) {
     return vec3(select(c1), select(c2), select(c3));
   }
-  vec3_ref lsel(XYZW c1, XYZW c2, XYZW c3) {
+  ALWAYS_INLINE vec3_ref lsel(XYZW c1, XYZW c2, XYZW c3) {
     return vec3_ref(select(c1), select(c2), select(c3));
   }
 
-  vec2_ref lsel(XYZW c1, XYZW c2) { return vec2_ref(select(c1), select(c2)); }
+  ALWAYS_INLINE vec2_ref lsel(XYZW c1, XYZW c2) {
+    return vec2_ref(select(c1), select(c2));
+  }
+
+  ALWAYS_INLINE vec4 sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
+    return vec4(select(c1), select(c2), select(c3), select(c4));
+  }
+  ALWAYS_INLINE vec4_ref lsel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
+    return vec4_ref(select(c1), select(c2), select(c3), select(c4));
+  }
 
   Float& operator[](int index) {
     switch (index) {
@@ -1763,6 +1968,13 @@ struct vec4 {
     w /= a.w;
     return *this;
   }
+  vec4& operator*=(vec4 a) {
+    x *= a.x;
+    y *= a.y;
+    z *= a.z;
+    w *= a.w;
+    return *this;
+  }
   vec4& operator*=(Float a) {
     x *= a;
     y *= a;
@@ -1776,6 +1988,18 @@ struct vec4 {
   Float z;
   Float w;
 };
+
+inline vec4_ref& vec4_ref::operator=(const vec4& a) {
+  x = a.x;
+  y = a.y;
+  z = a.z;
+  w = a.w;
+  return *this;
+}
+
+inline vec4 vec3::sel(XYZW c1, XYZW c2, XYZW c3, XYZW c4) {
+  return vec4(select(c1), select(c2), select(c3), select(c4));
+}
 
 vec4_scalar force_scalar(const vec4& v) {
   return vec4_scalar{force_scalar(v.x), force_scalar(v.y), force_scalar(v.z),
@@ -1828,6 +2052,12 @@ vec4 make_vec4(const X& x, const Y& y, const Z& z, const W& w) {
   return vec4(x, y, z, w);
 }
 
+vec4_scalar make_vec4(const ivec4_scalar& v) {
+  return vec4_scalar{float(v.x), float(v.y), float(v.z), float(v.w)};
+}
+
+ALWAYS_INLINE vec3::vec3(vec4 v) : x(v.x), y(v.y), z(v.z) {}
+
 SI ivec4 roundfast(vec4 v, Float scale) {
   return ivec4(roundfast(v.x, scale), roundfast(v.y, scale),
                roundfast(v.z, scale), roundfast(v.w, scale));
@@ -1844,6 +2074,14 @@ SI vec4 if_then_else(I32 c, vec4 t, vec4 e) {
 
 SI vec4 if_then_else(int32_t c, vec4 t, vec4 e) { return c ? t : e; }
 
+SI vec4_scalar if_then_else(int32_t c, vec4_scalar t, vec4_scalar e) {
+  return c ? t : e;
+}
+
+SI vec2 clamp(vec2 a, Float minVal, Float maxVal) {
+  return vec2(clamp(a.x, minVal, maxVal), clamp(a.y, minVal, maxVal));
+}
+
 SI vec2 clamp(vec2 a, vec2 minVal, vec2 maxVal) {
   return vec2(clamp(a.x, minVal.x, maxVal.x), clamp(a.y, minVal.y, maxVal.y));
 }
@@ -1853,14 +2091,28 @@ SI vec2_scalar clamp(vec2_scalar a, vec2_scalar minVal, vec2_scalar maxVal) {
                      clamp(a.y, minVal.y, maxVal.y)};
 }
 
+SI vec2_scalar clamp(vec2_scalar a, float minVal, float maxVal) {
+  return vec2_scalar{clamp(a.x, minVal, maxVal), clamp(a.y, minVal, maxVal)};
+}
+
 SI I32 clamp(I32 a, I32 minVal, I32 maxVal) {
   a = if_then_else(a < minVal, minVal, a);
   return if_then_else(a > maxVal, maxVal, a);
 }
 
+SI vec3 clamp(vec3 a, Float minVal, Float maxVal) {
+  return vec3(clamp(a.x, minVal, maxVal), clamp(a.y, minVal, maxVal),
+              clamp(a.z, minVal, maxVal));
+}
+
 SI vec3 clamp(vec3 a, vec3 minVal, vec3 maxVal) {
   return vec3(clamp(a.x, minVal.x, maxVal.x), clamp(a.y, minVal.y, maxVal.y),
               clamp(a.z, minVal.z, maxVal.z));
+}
+
+SI vec4 clamp(vec4 a, Float minVal, Float maxVal) {
+  return vec4(clamp(a.x, minVal, maxVal), clamp(a.y, minVal, maxVal),
+              clamp(a.z, minVal, maxVal), clamp(a.w, minVal, maxVal));
 }
 
 SI vec4 clamp(vec4 a, vec4 minVal, vec4 maxVal) {
@@ -1872,6 +2124,21 @@ SI vec4_scalar clamp(vec4_scalar a, vec4_scalar minVal, vec4_scalar maxVal) {
   return vec4_scalar{
       clamp(a.x, minVal.x, maxVal.x), clamp(a.y, minVal.y, maxVal.y),
       clamp(a.z, minVal.z, maxVal.z), clamp(a.w, minVal.w, maxVal.w)};
+}
+
+SI vec4_scalar clamp(vec4_scalar a, float minVal, float maxVal) {
+  return vec4_scalar{clamp(a.x, minVal, maxVal), clamp(a.y, minVal, maxVal),
+                     clamp(a.z, minVal, maxVal), clamp(a.w, minVal, maxVal)};
+}
+
+vec4 step(vec4 edge, vec4 x) {
+  return vec4(step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z),
+              step(edge.w, x.w));
+}
+
+vec4_scalar step(vec4_scalar edge, vec4_scalar x) {
+  return vec4_scalar(step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z),
+                     step(edge.w, x.w));
 }
 
 template <typename T>
@@ -1911,6 +2178,20 @@ SI bvec2 lessThan(vec2 x, vec2 y) {
   return bvec2(lessThan(x.x, y.x), lessThan(x.y, y.y));
 }
 
+SI bvec2_scalar lessThan(vec2_scalar x, vec2_scalar y) {
+  return bvec2_scalar(lessThan(x.x, y.x), lessThan(x.y, y.y));
+}
+
+SI bvec4 lessThan(vec4 x, vec4 y) {
+  return bvec4(lessThan(x.x, y.x), lessThan(x.y, y.y), lessThan(x.z, y.z),
+               lessThan(x.w, y.w));
+}
+
+SI bvec4_scalar lessThan(vec4_scalar x, vec4_scalar y) {
+  return bvec4_scalar{lessThan(x.x, y.x), lessThan(x.y, y.y),
+                      lessThan(x.z, y.z), lessThan(x.w, y.w)};
+}
+
 template <typename T>
 auto greaterThan(T x, T y) -> decltype(x > y) {
   return x > y;
@@ -1918,6 +2199,20 @@ auto greaterThan(T x, T y) -> decltype(x > y) {
 
 bvec2 greaterThan(vec2 x, vec2 y) {
   return bvec2(greaterThan(x.x, y.x), greaterThan(x.y, y.y));
+}
+
+bvec2_scalar greaterThan(vec2_scalar x, vec2_scalar y) {
+  return bvec2_scalar(greaterThan(x.x, y.x), greaterThan(x.y, y.y));
+}
+
+SI bvec4 greaterThan(vec4 x, vec4 y) {
+  return bvec4(greaterThan(x.x, y.x), greaterThan(x.y, y.y),
+               greaterThan(x.z, y.z), greaterThan(x.w, y.w));
+}
+
+SI bvec4_scalar greaterThan(vec4_scalar x, vec4_scalar y) {
+  return bvec4_scalar{greaterThan(x.x, y.x), greaterThan(x.y, y.y),
+                      greaterThan(x.z, y.z), greaterThan(x.w, y.w)};
 }
 
 template <typename T>
@@ -1928,6 +2223,30 @@ auto greaterThanEqual(T x, T y) -> decltype(x >= y) {
 bvec4 greaterThanEqual(vec4 x, vec4 y) {
   return bvec4(greaterThanEqual(x.x, y.x), greaterThanEqual(x.y, y.y),
                greaterThanEqual(x.z, y.z), greaterThanEqual(x.w, y.w));
+}
+
+template <typename T>
+auto equal(T x, T y) -> decltype(x > y) {
+  return x == y;
+}
+
+bvec2 equal(vec2 x, vec2 y) { return bvec2(equal(x.x, y.x), equal(x.y, y.y)); }
+
+bvec2_scalar equal(vec2_scalar x, vec2_scalar y) {
+  return bvec2_scalar(equal(x.x, y.x), equal(x.y, y.y));
+}
+
+template <typename T>
+auto notEqual(T x, T y) -> decltype(x > y) {
+  return x != y;
+}
+
+bvec2 notEqual(vec2 x, vec2 y) {
+  return bvec2(notEqual(x.x, y.x), notEqual(x.y, y.y));
+}
+
+bvec2_scalar notEqual(vec2_scalar x, vec2_scalar y) {
+  return bvec2_scalar(notEqual(x.x, y.x), notEqual(x.y, y.y));
 }
 
 struct mat4_scalar;
@@ -2066,6 +2385,17 @@ struct mat3_scalar {
     u.z = m[0].z * v.x + m[1].z * v.y + m[2].z * v.z;
     return u;
   }
+
+  friend auto operator*(mat3_scalar a, mat3_scalar b) {
+    mat3_scalar r;
+    for (int c = 0; c < 3; c++) {
+      const auto& v = b[c];
+      r[c].x = a[0].x * v.x + a[1].x * v.y + a[2].x * v.z;
+      r[c].y = a[0].y * v.x + a[1].y * v.y + a[2].y * v.z;
+      r[c].z = a[0].z * v.x + a[1].z * v.y + a[2].z * v.z;
+    }
+    return r;
+  }
 };
 
 struct mat3 {
@@ -2136,6 +2466,87 @@ mat3 make_mat3(const N& n) {
 template <typename X, typename Y, typename Z>
 mat3 make_mat3(const X& x, const Y& y, const Z& z) {
   return mat3(x, y, z);
+}
+
+struct mat3x4_scalar {
+  vec4_scalar data[3];
+
+  mat3x4_scalar() = default;
+  constexpr mat3x4_scalar(vec4_scalar a, vec4_scalar b, vec4_scalar c) {
+    data[0] = a;
+    data[1] = b;
+    data[2] = c;
+  }
+
+  auto& operator[](int index) { return data[index]; }
+  constexpr auto operator[](int index) const { return data[index]; }
+
+  friend auto operator*(mat3x4_scalar m, vec3_scalar v) {
+    vec4_scalar u;
+    u.x = m[0].x * v.x + m[1].x * v.y + m[2].x * v.z;
+    u.y = m[0].y * v.x + m[1].y * v.y + m[2].y * v.z;
+    u.z = m[0].z * v.x + m[1].z * v.y + m[2].z * v.z;
+    u.w = m[0].w * v.x + m[1].w * v.y + m[2].w * v.z;
+    return u;
+  }
+
+  friend auto operator*(mat3x4_scalar m, vec3 v) {
+    vec4 u;
+    u.x = m[0].x * v.x + m[1].x * v.y + m[2].x * v.z;
+    u.y = m[0].y * v.x + m[1].y * v.y + m[2].y * v.z;
+    u.z = m[0].z * v.x + m[1].z * v.y + m[2].z * v.z;
+    u.w = m[0].w * v.x + m[1].w * v.y + m[2].w * v.z;
+    return u;
+  }
+};
+
+constexpr mat3x4_scalar make_mat3x4(float m0, float m1, float m2, float m3,
+                                    float m4, float m5, float m6, float m7,
+                                    float m8, float m9, float m10, float m11) {
+  return mat3x4_scalar{
+      {m0, m1, m2, m3},
+      {m4, m5, m6, m7},
+      {m8, m9, m10, m11},
+  };
+}
+
+struct mat4x3_scalar {
+  vec3_scalar data[4];
+
+  mat4x3_scalar() = default;
+  constexpr mat4x3_scalar(vec3_scalar a, vec3_scalar b, vec3_scalar c,
+                          vec3_scalar d) {
+    data[0] = a;
+    data[1] = b;
+    data[2] = c;
+    data[3] = d;
+  }
+
+  auto& operator[](int index) { return data[index]; }
+  constexpr auto operator[](int index) const { return data[index]; }
+
+  friend auto operator*(mat4x3_scalar m, vec4_scalar v) {
+    vec3_scalar u;
+    u.x = m[0].x * v.x + m[1].x * v.y + m[2].x * v.z + m[3].x * v.w;
+    u.y = m[0].y * v.x + m[1].y * v.y + m[2].y * v.z + m[3].y * v.w;
+    u.z = m[0].z * v.x + m[1].z * v.y + m[2].z * v.z + m[3].z * v.w;
+    return u;
+  }
+
+  friend auto operator*(mat4x3_scalar m, vec4 v) {
+    vec3 u;
+    u.x = m[0].x * v.x + m[1].x * v.y + m[2].x * v.z + m[3].x * v.w;
+    u.y = m[0].y * v.x + m[1].y * v.y + m[2].y * v.z + m[3].y * v.w;
+    u.z = m[0].z * v.x + m[1].z * v.y + m[2].z * v.z + m[3].z * v.w;
+    return u;
+  }
+};
+
+constexpr mat4x3_scalar transpose(const mat3x4_scalar m) {
+  return {{m[0].x, m[1].x, m[2].x},
+          {m[0].y, m[1].y, m[2].y},
+          {m[0].z, m[1].z, m[2].z},
+          {m[0].w, m[1].w, m[2].w}};
 }
 
 struct mat4_scalar {
@@ -2294,6 +2705,16 @@ SI T mix(T x, T y, float a) {
 }
 
 template <typename T>
+SI T mix(T x, T y, vec2_scalar a) {
+  return T{mix(x.x, y.x, a.x), mix(x.y, y.y, a.y)};
+}
+
+template <typename T>
+SI T mix(T x, T y, vec3_scalar a) {
+  return T{mix(x.x, y.x, a.x), mix(x.y, y.y, a.y), mix(x.z, y.z, a.z)};
+}
+
+template <typename T>
 SI T mix(T x, T y, vec4_scalar a) {
   return T{mix(x.x, y.x, a.x), mix(x.y, y.y, a.y), mix(x.z, y.z, a.z),
            mix(x.w, y.w, a.w)};
@@ -2361,13 +2782,28 @@ SI T mix(T x, T y, bvec4_scalar a) {
 }
 
 template <typename T>
+SI T mix(T x, T y, bvec4_scalar1 a) {
+  return a.x ? y : x;
+}
+
+template <typename T>
 SI T mix(T x, T y, bvec3_scalar a) {
   return T{a.x ? y.x : x.x, a.y ? y.y : x.y, a.z ? y.z : x.z};
 }
 
 template <typename T>
+SI T mix(T x, T y, bvec3_scalar1 a) {
+  return a.x ? y : x;
+}
+
+template <typename T>
 SI T mix(T x, T y, bvec2_scalar a) {
   return T{a.x ? y.x : x.x, a.y ? y.y : x.y};
+}
+
+template <typename T>
+SI T mix(T x, T y, bvec2_scalar1 a) {
+  return a.x ? y : x;
 }
 
 float dot(vec3_scalar a, vec3_scalar b) {
@@ -2411,6 +2847,26 @@ Float atan(Float a, Float b) {
           atan2f(a.w, b.w)};
 }
 
+bvec4 equal(vec4 x, vec4 y) {
+  return bvec4(equal(x.x, y.x), equal(x.y, y.y), equal(x.z, y.z),
+               equal(x.w, y.w));
+}
+
+bvec4_scalar equal(vec4_scalar x, vec4_scalar y) {
+  return bvec4_scalar(equal(x.x, y.x), equal(x.y, y.y), equal(x.z, y.z),
+                      equal(x.w, y.w));
+}
+
+bvec4 notEqual(vec4 x, vec4 y) {
+  return bvec4(notEqual(x.x, y.x), notEqual(x.y, y.y), notEqual(x.z, y.z),
+               notEqual(x.w, y.w));
+}
+
+bvec4_scalar notEqual(vec4_scalar x, vec4_scalar y) {
+  return bvec4_scalar(notEqual(x.x, y.x), notEqual(x.y, y.y),
+                      notEqual(x.z, y.z), notEqual(x.w, y.w));
+}
+
 bvec4 notEqual(ivec4 a, ivec4 b) {
   return bvec4(a.x != b.x, a.y != b.y, a.z != b.z, a.w != b.w);
 }
@@ -2434,11 +2890,17 @@ vec2 abs(vec2 v) { return vec2(abs(v.x), abs(v.y)); }
 
 vec2_scalar abs(vec2_scalar v) { return vec2_scalar{fabsf(v.x), fabsf(v.y)}; }
 
+vec2 sign(vec2 v) { return vec2(sign(v.x), sign(v.y)); }
+
+vec2_scalar sign(vec2_scalar v) { return vec2_scalar{sign(v.x), sign(v.y)}; }
+
 Float mod(Float a, Float b) { return a - b * floor(a / b); }
 
 vec2 mod(vec2 a, vec2 b) { return vec2(mod(a.x, b.x), mod(a.y, b.y)); }
 
 vec3 abs(vec3 v) { return vec3(abs(v.x), abs(v.y), abs(v.z)); }
+
+vec3 sign(vec3 v) { return vec3(sign(v.x), sign(v.y), sign(v.z)); }
 
 mat2 inverse(mat2 v) {
   Float det = v[0].x * v[1].y - v[0].y * v[1].x;

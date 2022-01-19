@@ -11,7 +11,6 @@
 #include "mozilla/dom/ElementInlines.h"
 
 #include "mozilla/dom/Document.h"
-#include "nsIPluginDocument.h"
 #include "nsThreadUtils.h"
 #include "nsIWidget.h"
 #include "nsContentUtils.h"
@@ -49,6 +48,11 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLEmbedElement,
   nsObjectLoadingContent::Traverse(tmp, cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLEmbedElement,
+                                                nsGenericHTMLElement)
+  nsObjectLoadingContent::Unlink(tmp);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(
     HTMLEmbedElement, nsGenericHTMLElement, nsIRequestObserver,
     nsIStreamListener, nsFrameLoaderOwner, nsIObjectLoadingContent,
@@ -68,16 +72,9 @@ nsresult HTMLEmbedElement::BindToTree(BindContext& aContext, nsINode& aParent) {
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (IsInComposedDoc()) {
-    // Don't kick off load from being bound to a plugin document - the plugin
-    // document will call nsObjectLoadingContent::InitializeFromChannel() for
-    // the initial load.
-    nsCOMPtr<nsIPluginDocument> pluginDoc =
-        do_QueryInterface(&aContext.OwnerDoc());
-    if (!pluginDoc) {
-      void (HTMLEmbedElement::*start)() = &HTMLEmbedElement::StartObjectLoad;
-      nsContentUtils::AddScriptRunner(
-          NewRunnableMethod("dom::HTMLEmbedElement::BindToTree", this, start));
-    }
+    void (HTMLEmbedElement::*start)() = &HTMLEmbedElement::StartObjectLoad;
+    nsContentUtils::AddScriptRunner(
+        NewRunnableMethod("dom::HTMLEmbedElement::BindToTree", this, start));
   }
 
   return NS_OK;
@@ -131,8 +128,14 @@ nsresult HTMLEmbedElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
       // a document, just in case that the caller wants to set additional
       // attributes before inserting the node into the document.
       if (aNotify && IsInComposedDoc() && !BlockEmbedOrObjectContentLoading()) {
-        nsresult rv = LoadObject(aNotify, true);
-        NS_ENSURE_SUCCESS(rv, rv);
+        nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
+            "HTMLEmbedElement::LoadObject",
+            [self = RefPtr<HTMLEmbedElement>(this), aNotify]() {
+              if (self->IsInComposedDoc()) {
+                self->LoadObject(aNotify, true);
+              }
+            }));
+        return NS_OK;
       }
     }
   }
@@ -142,9 +145,8 @@ nsresult HTMLEmbedElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
 
 bool HTMLEmbedElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
                                        int32_t* aTabIndex) {
-  // If we have decided that this is a blocked plugin then do not allow focus.
-  if ((Type() == eType_Null) &&
-      (PluginFallbackType() == eFallbackBlockAllPlugins)) {
+  // Plugins that show the empty fallback should not accept focus.
+  if (Type() == eType_Fallback) {
     if (aTabIndex) {
       *aTabIndex = -1;
     }
@@ -259,15 +261,7 @@ nsresult HTMLEmbedElement::CopyInnerTo(HTMLEmbedElement* aDest) {
 
 JSObject* HTMLEmbedElement::WrapNode(JSContext* aCx,
                                      JS::Handle<JSObject*> aGivenProto) {
-  JSObject* obj;
-  obj = HTMLEmbedElement_Binding::Wrap(aCx, this, aGivenProto);
-
-  if (!obj) {
-    return nullptr;
-  }
-  JS::Rooted<JSObject*> rootedObj(aCx, obj);
-  SetupProtoChain(aCx, rootedObj);
-  return rootedObj;
+  return HTMLEmbedElement_Binding::Wrap(aCx, this, aGivenProto);
 }
 
 nsContentPolicyType HTMLEmbedElement::GetContentPolicyType() const {

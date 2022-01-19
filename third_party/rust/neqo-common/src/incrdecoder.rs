@@ -21,6 +21,9 @@ impl IncrementalDecoderUint {
         self.remaining.unwrap_or(1)
     }
 
+    /// Consume some data.
+    #[allow(unknown_lints, renamed_and_removed_lints, clippy::unknown_clippy_lints)] // Until we require rust 1.51.
+    #[allow(clippy::missing_panics_doc)] // See https://github.com/rust-lang/rust-clippy/issues/6699
     pub fn consume(&mut self, dv: &mut Decoder) -> Option<u64> {
         if let Some(r) = &mut self.remaining {
             let amount = min(*r, dv.remaining());
@@ -84,13 +87,16 @@ impl IncrementalDecoderBuffer {
         self.remaining
     }
 
+    /// Consume some bytes from the decoder.
+    /// # Panics
+    /// Never; but rust doesn't know that.
     pub fn consume(&mut self, dv: &mut Decoder) -> Option<Vec<u8>> {
         let amount = min(self.remaining, dv.remaining());
         let b = dv.decode(amount).unwrap();
         self.v.extend_from_slice(b);
         self.remaining -= amount;
         if self.remaining == 0 {
-            Some(mem::replace(&mut self.v, Vec::new()))
+            Some(mem::take(&mut self.v))
         } else {
             None
         }
@@ -245,7 +251,7 @@ mod tests {
             assert!(dec.min_remaining() < tail);
 
             if tail > 1 {
-                assert_eq!(res, false);
+                assert!(!res);
                 assert!(dec.min_remaining() > 0);
                 let mut dv = Decoder::from(&db[split..]);
                 eprintln!("  split remainder {}: {:?}", split, dv);
@@ -254,7 +260,7 @@ mod tests {
             }
 
             assert_eq!(dec.min_remaining(), 0);
-            assert_eq!(res, true);
+            assert!(res);
         }
     }
 }

@@ -473,23 +473,16 @@ void GeckoMediaPluginServiceChild::RemoveShutdownBlockerIfNeeded() {
 
 already_AddRefed<GMPContentParent> GMPServiceChild::GetBridgedGMPContentParent(
     ProcessId aOtherPid, ipc::Endpoint<PGMPContentParent>&& endpoint) {
-  RefPtr<GMPContentParent> parent;
-  mContentParents.Get(aOtherPid, getter_AddRefs(parent));
+  return do_AddRef(mContentParents.LookupOrInsertWith(aOtherPid, [&] {
+    MOZ_ASSERT(aOtherPid == endpoint.OtherPid());
 
-  if (parent) {
-    return parent.forget();
-  }
+    auto parent = MakeRefPtr<GMPContentParent>();
 
-  MOZ_ASSERT(aOtherPid == endpoint.OtherPid());
+    DebugOnly<bool> ok = endpoint.Bind(parent);
+    MOZ_ASSERT(ok);
 
-  parent = new GMPContentParent();
-
-  DebugOnly<bool> ok = endpoint.Bind(parent);
-  MOZ_ASSERT(ok);
-
-  mContentParents.Put(aOtherPid, RefPtr{parent});
-
-  return parent.forget();
+    return parent;
+  }));
 }
 
 void GMPServiceChild::RemoveGMPContentParent(
@@ -505,11 +498,7 @@ void GMPServiceChild::RemoveGMPContentParent(
 
 void GMPServiceChild::GetAlreadyBridgedTo(
     nsTArray<base::ProcessId>& aAlreadyBridgedTo) {
-  aAlreadyBridgedTo.SetCapacity(mContentParents.Count());
-  for (auto iter = mContentParents.Iter(); !iter.Done(); iter.Next()) {
-    const uint64_t& id = iter.Key();
-    aAlreadyBridgedTo.AppendElement(id);
-  }
+  AppendToArray(aAlreadyBridgedTo, mContentParents.Keys());
 }
 
 class OpenPGMPServiceChild : public mozilla::Runnable {

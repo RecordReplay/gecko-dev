@@ -43,12 +43,16 @@ CODESPELL_FORMAT_REGEX = re.compile(r"(.*):(.*): (.*) ==> (.*)$")
 
 
 class CodespellProcess(LintProcess):
+    fixed = 0
+    _fix = None
+
     def process_line(self, line):
         try:
             match = CODESPELL_FORMAT_REGEX.match(line)
             abspath, line, typo, correct = match.groups()
         except AttributeError:
-            print("Unable to match regex against output: {}".format(line))
+            if "FIXED: " not in line:
+                print("Unable to match regex against output: {}".format(line))
             return
 
         # Ignore false positive like aParent (which would be fixed to apparent)
@@ -56,6 +60,8 @@ class CodespellProcess(LintProcess):
         m = re.match(r"^[a-z][A-Z][a-z]*", typo)
         if m:
             return
+        if CodespellProcess._fix:
+            CodespellProcess.fixed += 1
         res = {
             "path": abspath,
             "message": typo.strip() + " ==> " + correct,
@@ -116,10 +122,6 @@ def lint(paths, config, fix=None, **lintargs):
 
     config["root"] = lintargs["root"]
 
-    skip_files = ""
-    if "exclude" in config:
-        skip_files = "--skip=*.dic,{}".format(",".join(config["exclude"]))
-
     exclude_list = os.path.join(here, "exclude-list.txt")
     cmd_args = [
         which("python"),
@@ -132,16 +134,30 @@ def lint(paths, config, fix=None, **lintargs):
         #    that were disabled in dictionary.
         "--quiet-level=7",
         "--ignore-words=" + exclude_list,
-        skip_files,
     ]
 
-    if fix:
-        cmd_args.append("--write-changes")
-    log.debug("Command: {}".format(" ".join(cmd_args)))
+    if "exclude" in config:
+        cmd_args.append("--skip=*.dic,{}".format(",".join(config["exclude"])))
 
+    log.debug("Command: {}".format(" ".join(cmd_args)))
     log.debug("Version: {}".format(get_codespell_version(binary)))
 
-    base_command = cmd_args + paths
+    if fix:
+        CodespellProcess._fix = True
 
+    base_command = cmd_args + paths
     run_process(config, base_command)
-    return results
+
+    if fix:
+        global results
+        results = []
+        cmd_args.append("--write-changes")
+        log.debug("Command: {}".format(" ".join(cmd_args)))
+        log.debug("Version: {}".format(get_codespell_version(binary)))
+        base_command = cmd_args + paths
+        run_process(config, base_command)
+        CodespellProcess.fixed = CodespellProcess.fixed - len(results)
+    else:
+        CodespellProcess.fixed = 0
+
+    return {"results": results, "fixed": CodespellProcess.fixed}

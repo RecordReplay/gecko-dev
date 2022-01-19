@@ -1,22 +1,22 @@
+/*! Standard Portable Intermediate Representation (SPIR-V) backend
+!*/
+
 mod helpers;
 mod instructions;
 mod layout;
 mod writer;
 
-#[cfg(test)]
-mod test_framework;
+pub use spirv::Capability;
+pub use writer::{Error, Writer};
 
-#[cfg(test)]
-mod layout_tests;
-
-pub use writer::Writer;
-
-use spirv::*;
+use spirv::Word;
 
 bitflags::bitflags! {
     pub struct WriterFlags: u32 {
-        const NONE = 0x0;
+        /// Include debug labels for everything.
         const DEBUG = 0x1;
+        /// Flip Y coordinate of `BuiltIn::Position` output.
+        const ADJUST_COORDINATE_SPACE = 0x2;
     }
 }
 
@@ -43,10 +43,47 @@ struct LogicalLayout {
     function_definitions: Vec<Word>,
 }
 
-pub(self) struct Instruction {
-    op: Op,
+struct Instruction {
+    op: spirv::Op,
     wc: u32,
     type_id: Option<Word>,
     result_id: Option<Word>,
     operands: Vec<Word>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Options {
+    /// (Major, Minor) target version of the SPIR-V.
+    pub lang_version: (u8, u8),
+    /// Configuration flags for the writer.
+    pub flags: WriterFlags,
+    /// Set of SPIR-V allowed capabilities, if provided.
+    // Note: there is a major bug currently associated with deriving the capabilities.
+    // We are calling `required_capabilities`, but the semantics of this is broken.
+    pub capabilities: Option<crate::FastHashSet<Capability>>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        let mut flags = WriterFlags::ADJUST_COORDINATE_SPACE;
+        if cfg!(debug_assertions) {
+            flags |= WriterFlags::DEBUG;
+        }
+        Options {
+            lang_version: (1, 0),
+            flags,
+            capabilities: None,
+        }
+    }
+}
+
+pub fn write_vec(
+    module: &crate::Module,
+    info: &crate::valid::ModuleInfo,
+    options: &Options,
+) -> Result<Vec<u32>, Error> {
+    let mut words = Vec::new();
+    let mut w = Writer::new(options)?;
+    w.write(module, info, &mut words)?;
+    Ok(words)
 }

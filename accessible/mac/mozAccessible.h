@@ -6,7 +6,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AccessibleWrap.h"
-#include "ProxyAccessible.h"
+#include "RemoteAccessible.h"
 #include "AccessibleOrProxy.h"
 
 #import <Cocoa/Cocoa.h>
@@ -30,13 +30,13 @@ inline mozAccessible* GetNativeFromGeckoAccessible(
   if (aAccOrProxy.IsNull()) {
     return nil;
   }
-  if (Accessible* acc = aAccOrProxy.AsAccessible()) {
+  if (LocalAccessible* acc = aAccOrProxy.AsAccessible()) {
     mozAccessible* native = nil;
     acc->GetNativeInterface((void**)&native);
     return native;
   }
 
-  ProxyAccessible* proxy = aAccOrProxy.AsProxy();
+  RemoteAccessible* proxy = aAccOrProxy.AsProxy();
   return reinterpret_cast<mozAccessible*>(proxy->GetWrapper());
 }
 
@@ -192,6 +192,9 @@ inline mozAccessible* GetNativeFromGeckoAccessible(
 
 // override
 - (NSNumber*)moxSelected;
+
+// override
+- (NSValue*)moxFrame;
 
 // override
 - (NSString*)moxARIACurrent;

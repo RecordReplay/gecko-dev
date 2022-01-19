@@ -9,6 +9,7 @@
 #include "ChromiumCDMProxy.h"
 #include "GMPCrashHelper.h"
 #include "mozilla/EMEUtils.h"
+#include "mozilla/JSONWriter.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/Document.h"
@@ -67,6 +68,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(MediaKeys)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaKeys)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
   NS_INTERFACE_MAP_ENTRY(nsISupports)
+  NS_INTERFACE_MAP_ENTRY(nsIObserver)
 NS_INTERFACE_MAP_END
 
 MediaKeys::MediaKeys(nsPIDOMWindowInner* aParent, const nsAString& aKeySystem,
@@ -85,6 +87,43 @@ MediaKeys::~MediaKeys() {
   DisconnectInnerWindow();
   Shutdown();
   EME_LOG("MediaKeys[%p] destroyed", this);
+}
+
+NS_IMETHODIMP MediaKeys::Observe(nsISupports* aSubject, const char* aTopic,
+                                 const char16_t* aData) {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!strcmp(aTopic, kMediaKeysResponseTopic),
+             "Should only listen for responses to MediaKey requests");
+  EME_LOG("MediaKeys[%p] observing message with aTopic=%s aData=%s", this,
+          aTopic, NS_ConvertUTF16toUTF8(aData).get());
+  if (!strcmp(aTopic, kMediaKeysResponseTopic)) {
+    if (!mProxy) {
+      // This may happen if we're notified during shutdown or startup. If this
+      // is happening outside of those scenarios there's a bug.
+      EME_LOG(
+          "MediaKeys[%p] can't notify CDM of observed message as mProxy is "
+          "unset",
+          this);
+      return NS_OK;
+    }
+
+    if (u"capture-possible"_ns.Equals(aData)) {
+      mProxy->NotifyOutputProtectionStatus(
+          CDMProxy::OutputProtectionCheckStatus::CheckSuccessful,
+          CDMProxy::OutputProtectionCaptureStatus::CapturePossilbe);
+    } else if (u"capture-not-possible"_ns.Equals(aData)) {
+      mProxy->NotifyOutputProtectionStatus(
+          CDMProxy::OutputProtectionCheckStatus::CheckSuccessful,
+          CDMProxy::OutputProtectionCaptureStatus::CaptureNotPossible);
+    } else {
+      MOZ_ASSERT_UNREACHABLE("No code paths should lead to the failure case");
+      // This should be unreachable, but gracefully handle in case.
+      mProxy->NotifyOutputProtectionStatus(
+          CDMProxy::OutputProtectionCheckStatus::CheckFailed,
+          CDMProxy::OutputProtectionCaptureStatus::Unused);
+    }
+  }
+  return NS_OK;
 }
 
 void MediaKeys::ConnectInnerWindow() {
@@ -129,13 +168,11 @@ void MediaKeys::Terminated() {
 
   KeySessionHashMap keySessions;
   // Remove entries during iteration will screw it. Make a copy first.
-  for (auto iter = mKeySessions.Iter(); !iter.Done(); iter.Next()) {
-    RefPtr<MediaKeySession>& session = iter.Data();
+  for (const RefPtr<MediaKeySession>& session : mKeySessions.Values()) {
     // XXX Could the RefPtr still be moved here?
-    keySessions.Put(session->GetSessionId(), RefPtr{session});
+    keySessions.InsertOrUpdate(session->GetSessionId(), RefPtr{session});
   }
-  for (auto iter = keySessions.Iter(); !iter.Done(); iter.Next()) {
-    RefPtr<MediaKeySession>& session = iter.Data();
+  for (const RefPtr<MediaKeySession>& session : keySessions.Values()) {
     session->OnClosed();
   }
   keySessions.Clear();
@@ -156,13 +193,18 @@ void MediaKeys::Shutdown() {
     mProxy = nullptr;
   }
 
+  nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+  if (observerService && mObserverAdded) {
+    observerService->RemoveObserver(this, kMediaKeysResponseTopic);
+  }
+
   // Hold a self reference to keep us alive after we clear the self reference
   // for each promise. This ensures we stay alive until we're done shutting
   // down.
   RefPtr<MediaKeys> selfReference = this;
 
-  for (auto iter = mPromises.Iter(); !iter.Done(); iter.Next()) {
-    RefPtr<dom::DetailedPromise>& promise = iter.Data();
+  for (const RefPtr<dom::DetailedPromise>& promise : mPromises.Values()) {
     promise->MaybeRejectWithInvalidStateError(
         "Promise still outstanding at MediaKeys shutdown");
     Release();
@@ -233,19 +275,19 @@ PromiseId MediaKeys::StorePromise(DetailedPromise* aPromise) {
 
 #ifdef DEBUG
   // We should not have already stored this promise!
-  for (auto iter = mPromises.ConstIter(); !iter.Done(); iter.Next()) {
-    MOZ_ASSERT(iter.Data() != aPromise);
+  for (const RefPtr<dom::DetailedPromise>& promise : mPromises.Values()) {
+    MOZ_ASSERT(promise != aPromise);
   }
 #endif
 
-  mPromises.Put(id, RefPtr{aPromise});
+  mPromises.InsertOrUpdate(id, RefPtr{aPromise});
   return id;
 }
 
 void MediaKeys::ConnectPendingPromiseIdWithToken(PromiseId aId,
                                                  uint32_t aToken) {
   // Should only be called from MediaKeySession::GenerateRequest.
-  mPromiseIdToken.Put(aId, aToken);
+  mPromiseIdToken.InsertOrUpdate(aId, aToken);
   EME_LOG(
       "MediaKeys[%p]::ConnectPendingPromiseIdWithToken() id=%u => token(%u)",
       this, aId, aToken);
@@ -326,7 +368,7 @@ void MediaKeys::OnSessionIdReady(MediaKeySession* aSession) {
         "MediaKeySession with invalid sessionId passed to OnSessionIdReady()");
     return;
   }
-  mKeySessions.Put(aSession->GetSessionId(), RefPtr{aSession});
+  mKeySessions.InsertOrUpdate(aSession->GetSessionId(), RefPtr{aSession});
 }
 
 void MediaKeys::ResolvePromise(PromiseId aId) {
@@ -361,7 +403,7 @@ void MediaKeys::ResolvePromise(PromiseId aId) {
         "CDM LoadSession() returned a different session ID than requested");
     return;
   }
-  mKeySessions.Put(session->GetSessionId(), RefPtr{session});
+  mKeySessions.InsertOrUpdate(session->GetSessionId(), RefPtr{session});
   promise->MaybeResolve(session);
 }
 
@@ -619,7 +661,7 @@ already_AddRefed<MediaKeySession> MediaKeys::CreateSession(
   EME_LOG("MediaKeys[%p]::CreateSession(aSessionType=%" PRIu8
           ") putting session with token=%" PRIu32 " into mPendingSessions",
           this, static_cast<uint8_t>(aSessionType), session->Token());
-  mPendingSessions.Put(session->Token(), RefPtr{session});
+  mPendingSessions.InsertOrUpdate(session->Token(), RefPtr{session});
 
   return session.forget();
 }
@@ -674,10 +716,65 @@ void MediaKeys::Unbind() {
   mElement = nullptr;
 }
 
+struct StringWriteFunc : public JSONWriteFunc {
+  nsString& mString;
+  explicit StringWriteFunc(nsString& aString) : mString(aString) {}
+  void Write(const Span<const char>& aStr) override {
+    mString.Append(NS_ConvertUTF8toUTF16(aStr.data(), aStr.size()));
+  }
+};
+
+void MediaKeys::CheckIsElementCapturePossible() {
+  MOZ_ASSERT(NS_IsMainThread());
+  EME_LOG("MediaKeys[%p]::IsElementCapturePossible()", this);
+  // Note, HTMLMediaElement prevents capture of its content via Capture APIs
+  // on the element if it has a media keys attached (see bug 1071482). So we
+  // don't need to check those cases here (they are covered by tests).
+
+  nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+
+  if (!observerService) {
+    // This can happen if we're in shutdown which means we may be going away
+    // soon anyway, but respond saying capture is possible since we can't
+    // forward the check further.
+    if (mProxy) {
+      mProxy->NotifyOutputProtectionStatus(
+          CDMProxy::OutputProtectionCheckStatus::CheckFailed,
+          CDMProxy::OutputProtectionCaptureStatus::Unused);
+    }
+    return;
+  }
+  if (!mObserverAdded) {
+    nsresult rv =
+        observerService->AddObserver(this, kMediaKeysResponseTopic, false);
+    if (NS_FAILED(rv)) {
+      if (mProxy) {
+        mProxy->NotifyOutputProtectionStatus(
+            CDMProxy::OutputProtectionCheckStatus::CheckFailed,
+            CDMProxy::OutputProtectionCaptureStatus::Unused);
+      }
+      return;
+    }
+    mObserverAdded = true;
+  }
+
+  if (mCaptureCheckRequestJson.IsEmpty()) {
+    // Lazily populate the JSON the first time we need it.
+    JSONWriter jw{MakeUnique<StringWriteFunc>(mCaptureCheckRequestJson)};
+    jw.Start();
+    jw.StringProperty("status", "is-capture-possible");
+    jw.StringProperty("keySystem", NS_ConvertUTF16toUTF8(mKeySystem));
+    jw.End();
+  }
+
+  MOZ_DIAGNOSTIC_ASSERT(!mCaptureCheckRequestJson.IsEmpty());
+  observerService->NotifyObservers(mParent.get(), kMediaKeysRequestTopic,
+                                   mCaptureCheckRequestJson.get());
+}
+
 void MediaKeys::GetSessionsInfo(nsString& sessionsInfo) {
-  for (KeySessionHashMap::Iterator it = mKeySessions.Iter(); !it.Done();
-       it.Next()) {
-    MediaKeySession* keySession = it.Data();
+  for (const auto& keySession : mKeySessions.Values()) {
     nsString sessionID;
     keySession->GetSessionId(sessionID);
     sessionsInfo.AppendLiteral("(sid=");

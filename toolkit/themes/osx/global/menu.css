@@ -13,7 +13,7 @@ menucaption {
   -moz-box-align: center;
   list-style-image: none;
   -moz-image-region: auto;
-  padding: 0 21px 2px;
+  padding: 2px 21px;
 }
 
 menu[disabled="true"], menuitem[disabled="true"],
@@ -135,13 +135,13 @@ menuitem[customoptionstyling="true"] {
 
 menulist > menupopup {
   font: inherit;
+  color: FieldText;
 }
 
 menulist > menupopup > menuitem,
 menulist > menupopup > menucaption,
 menulist > menupopup > menu {
   max-width: none;
-  color: FieldText;
 }
 
 /* checked menuitems */
@@ -155,7 +155,9 @@ menulist > menupopup > menu {
 menulist > menupopup > menuitem[checked="true"]::before,
 menulist > menupopup > menuitem[selected="true"]::before {
   content: '\2713'; /* a checkmark */
-  display: block;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 0;
   width: 15px;
   margin-inline-start: -15px;
 }

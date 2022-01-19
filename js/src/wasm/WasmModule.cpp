@@ -19,7 +19,6 @@
 #include "wasm/WasmModule.h"
 
 #include <chrono>
-#include <thread>
 
 #include "jit/JitOptions.h"
 #include "js/BuildId.h"                 // JS::BuildIdCharVector
@@ -28,7 +27,6 @@
 #include "threading/LockGuard.h"
 #include "vm/HelperThreadState.h"  // Tier2GeneratorTask
 #include "vm/PlainObject.h"        // js::PlainObject
-#include "wasm/TypedObject.h"
 #include "wasm/WasmBaselineCompile.h"
 #include "wasm/WasmCompile.h"
 #include "wasm/WasmInstance.h"
@@ -50,17 +48,14 @@ class Module::Tier2GeneratorTaskImpl : public Tier2GeneratorTask {
   SharedBytes bytecode_;
   SharedModule module_;
   Atomic<bool> cancelled_;
-  JSTelemetrySender telemetrySender_;
 
  public:
   Tier2GeneratorTaskImpl(const CompileArgs& compileArgs,
-                         const ShareableBytes& bytecode, Module& module,
-                         JSTelemetrySender telemetrySender)
+                         const ShareableBytes& bytecode, Module& module)
       : compileArgs_(&compileArgs),
         bytecode_(&bytecode),
         module_(&module),
-        cancelled_(false),
-        telemetrySender_(telemetrySender) {}
+        cancelled_(false) {}
 
   ~Tier2GeneratorTaskImpl() override {
     module_->tier2Listener_ = nullptr;
@@ -72,13 +67,13 @@ class Module::Tier2GeneratorTaskImpl : public Tier2GeneratorTask {
   void runHelperThreadTask(AutoLockHelperThreadState& locked) override {
     {
       AutoUnlockHelperThreadState unlock(locked);
-      CompileTier2(*compileArgs_, bytecode_->bytes, *module_, &cancelled_,
-                   telemetrySender_);
+      CompileTier2(*compileArgs_, bytecode_->bytes, *module_, &cancelled_);
     }
 
     // During shutdown the main thread will wait for any ongoing (cancelled)
     // tier-2 generation to shut down normally.  To do so, it waits on the
-    // CONSUMER condition for the count of finished generators to rise.
+    // HelperThreadState's condition variable for the count of finished
+    // generators to rise.
     HelperThreadState().incWasmTier2GeneratorsFinished(locked);
 
     // The task is finished, release it.
@@ -86,7 +81,7 @@ class Module::Tier2GeneratorTaskImpl : public Tier2GeneratorTask {
   }
 
   ThreadType threadType() override {
-    return ThreadType::THREAD_TYPE_WASM_TIER2;
+    return ThreadType::THREAD_TYPE_WASM_GENERATOR_TIER2;
   }
 };
 
@@ -97,12 +92,10 @@ Module::~Module() {
 }
 
 void Module::startTier2(const CompileArgs& args, const ShareableBytes& bytecode,
-                        JS::OptimizedEncodingListener* listener,
-                        JSTelemetrySender telemetrySender) {
+                        JS::OptimizedEncodingListener* listener) {
   MOZ_ASSERT(!testingTier2Active_);
 
-  auto task = MakeUnique<Tier2GeneratorTaskImpl>(args, bytecode, *this,
-                                                 telemetrySender);
+  auto task = MakeUnique<Tier2GeneratorTaskImpl>(args, bytecode, *this);
   if (!task) {
     return;
   }
@@ -131,6 +124,8 @@ bool Module::finishTier2(const LinkData& linkData2,
   // extant tier1 lazy stubs (otherwise, tiering would break the assumption
   // that any extant exported wasm function has had a lazy entry stub already
   // compiled for it).
+  //
+  // Also see doc block for stubs in WasmJS.cpp.
   {
     // We need to prevent new tier1 stubs generation until we've committed
     // the newer tier2 stubs, otherwise we might not generate one tier2
@@ -172,7 +167,9 @@ bool Module::finishTier2(const LinkData& linkData2,
     stubs2->setJitEntries(stub2Index, code());
   }
 
-  // And we update the jump vector.
+  // And we update the jump vectors with pointers to tier-2 functions and eager
+  // stubs.  Callers will continue to invoke tier-1 code until, suddenly, they
+  // will invoke tier-2 code.  This is benign.
 
   uint8_t* base = code().segment(Tier::Optimized).base();
   for (const CodeRange& cr : metadata(Tier::Optimized).codeRanges) {
@@ -202,7 +199,7 @@ bool Module::finishTier2(const LinkData& linkData2,
 
 void Module::testingBlockOnTier2Complete() const {
   while (testingTier2Active_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ThisThread::SleepMilliseconds(1);
   }
 }
 
@@ -516,20 +513,6 @@ bool Module::extractCode(JSContext* cx, Tier tier,
   return true;
 }
 
-static uint32_t EvaluateOffsetInitExpr(const ValVector& globalImportValues,
-                                       InitExpr initExpr) {
-  switch (initExpr.kind()) {
-    case InitExpr::Kind::Constant:
-      return initExpr.val().i32();
-    case InitExpr::Kind::GetGlobal:
-      return globalImportValues[initExpr.globalIndex()].i32();
-    case InitExpr::Kind::RefFunc:
-      break;
-  }
-
-  MOZ_CRASH("bad initializer expression");
-}
-
 #ifdef DEBUG
 static bool AllSegmentsArePassive(const DataSegmentVector& vec) {
   for (const DataSegment* seg : vec) {
@@ -553,8 +536,12 @@ bool Module::initSegments(JSContext* cx, HandleWasmInstanceObject instanceObj,
 
   for (const ElemSegment* seg : elemSegments_) {
     if (seg->active()) {
-      uint32_t offset =
-          EvaluateOffsetInitExpr(globalImportValues, seg->offset());
+      RootedVal offsetVal(cx);
+      if (!seg->offset().evaluate(cx, globalImportValues, instanceObj,
+                                  &offsetVal)) {
+        return false;  // OOM
+      }
+      uint32_t offset = offsetVal.get().i32();
       uint32_t count = seg->length();
 
       uint32_t tableLength = tables[seg->tableIndex]->length();
@@ -571,7 +558,7 @@ bool Module::initSegments(JSContext* cx, HandleWasmInstanceObject instanceObj,
   }
 
   if (memoryObj) {
-    uint32_t memoryLength = memoryObj->volatileMemoryLength32();
+    size_t memoryLength = memoryObj->volatileMemoryLength();
     uint8_t* memoryBase =
         memoryObj->buffer().dataPointerEither().unwrap(/* memcpy */);
 
@@ -580,8 +567,12 @@ bool Module::initSegments(JSContext* cx, HandleWasmInstanceObject instanceObj,
         continue;
       }
 
-      uint32_t offset =
-          EvaluateOffsetInitExpr(globalImportValues, seg->offset());
+      RootedVal offsetVal(cx);
+      if (!seg->offset().evaluate(cx, globalImportValues, instanceObj,
+                                  &offsetVal)) {
+        return false;  // OOM
+      }
+      uint32_t offset = offsetVal.get().i32();
       uint32_t count = seg->bytes.length();
 
       if (offset > memoryLength || memoryLength - offset < count) {
@@ -651,8 +642,8 @@ bool Module::instantiateFunctions(JSContext* cx,
 
 template <typename T>
 static bool CheckLimits(JSContext* cx, T declaredMin,
-                        const Maybe<T>& declaredMax, T actualLength,
-                        const Maybe<T>& actualMax, bool isAsmJS,
+                        const Maybe<T>& declaredMax, T defaultMax,
+                        T actualLength, const Maybe<T>& actualMax, bool isAsmJS,
                         const char* kind) {
   if (isAsmJS) {
     MOZ_ASSERT(actualLength >= declaredMin);
@@ -662,7 +653,7 @@ static bool CheckLimits(JSContext* cx, T declaredMin,
   }
 
   if (actualLength < declaredMin ||
-      actualLength > declaredMax.valueOr(UINT32_MAX)) {
+      actualLength > declaredMax.valueOr(defaultMax)) {
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
                              JSMSG_WASM_BAD_IMP_SIZE, kind);
     return false;
@@ -712,37 +703,35 @@ bool Module::instantiateMemory(JSContext* cx,
     return true;
   }
 
-  uint64_t declaredMin = metadata().minMemoryLength;
-  Maybe<uint64_t> declaredMax = metadata().maxMemoryLength;
-  bool declaredShared = metadata().memoryUsage == MemoryUsage::Shared;
+  MemoryDesc desc = *metadata().memory;
+  MOZ_ASSERT(desc.kind == MemoryKind::Memory32);
 
   if (memory) {
     MOZ_ASSERT_IF(metadata().isAsmJS(), memory->buffer().isPreparedForAsmJS());
     MOZ_ASSERT_IF(!metadata().isAsmJS(), memory->buffer().isWasm());
 
-    if (!CheckLimits(cx, declaredMin, declaredMax,
-                     uint64_t(memory->volatileMemoryLength32()),
-                     memory->buffer().wasmMaxSize(), metadata().isAsmJS(),
-                     "Memory")) {
+    if (!CheckLimits(cx, desc.initialPages(), desc.maximumPages(),
+                     /* defaultMax */ MaxMemory32Pages(),
+                     /* actualLength */
+                     memory->volatilePages(), memory->maxPages(),
+                     metadata().isAsmJS(), "Memory")) {
       return false;
     }
 
-    if (!CheckSharing(cx, declaredShared, memory->isShared())) {
+    if (!CheckSharing(cx, desc.isShared(), memory->isShared())) {
       return false;
     }
   } else {
     MOZ_ASSERT(!metadata().isAsmJS());
 
-    if (declaredMin / PageSize > MaxMemory32Pages) {
+    if (desc.initialPages() > MaxMemory32Pages()) {
       JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr,
                                JSMSG_WASM_MEM_IMP_LIMIT);
       return false;
     }
 
     RootedArrayBufferObjectMaybeShared buffer(cx);
-    Limits l(declaredMin, declaredMax,
-             declaredShared ? Shareable::True : Shareable::False);
-    if (!CreateWasmBuffer(cx, MemoryKind::Memory32, l, &buffer)) {
+    if (!CreateWasmBuffer32(cx, desc, &buffer)) {
       return false;
     }
 
@@ -849,8 +838,10 @@ bool Module::instantiateImportedTable(JSContext* cx, const TableDesc& td,
   MOZ_ASSERT(!metadata().isAsmJS());
 
   Table& table = tableObj->table();
-  if (!CheckLimits(cx, td.initialLength, td.maximumLength, table.length(),
-                   table.maximum(), metadata().isAsmJS(), "Table")) {
+  if (!CheckLimits(cx, td.initialLength, td.maximumLength,
+                   /* declaredMin */ MaxTableLimitField,
+                   /* actualLength */ table.length(), table.maximum(),
+                   metadata().isAsmJS(), "Table")) {
     return false;
   }
 
@@ -1105,36 +1096,11 @@ static bool GetGlobalExport(JSContext* cx, HandleWasmInstanceObject instanceObj,
   MOZ_ASSERT(!global.isMutable());
   MOZ_ASSERT(!global.isImport());
   RootedVal globalVal(cx);
-  switch (global.kind()) {
-    case GlobalKind::Variable: {
-      const InitExpr& init = global.initExpr();
-      switch (init.kind()) {
-        case InitExpr::Kind::Constant:
-          globalVal.set(Val(init.val()));
-          break;
-        case InitExpr::Kind::GetGlobal:
-          globalVal.set(Val(globalImportValues[init.globalIndex()]));
-          break;
-        case InitExpr::Kind::RefFunc:
-          RootedFunction func(cx);
-          if (!GetFunctionExport(cx, instanceObj, funcImports,
-                                 init.refFuncIndex(), &func)) {
-            return false;
-          }
-          globalVal.set(
-              Val(ValType(RefType::func()), FuncRef::fromJSFunction(func)));
-      }
-      break;
-    }
-    case GlobalKind::Constant: {
-      globalVal.set(Val(global.constantValue()));
-      break;
-    }
-    case GlobalKind::Import: {
-      MOZ_CRASH();
-    }
+  MOZ_RELEASE_ASSERT(!global.isImport());
+  const InitExpr& init = global.initExpr();
+  if (!init.evaluate(cx, globalImportValues, instanceObj, &globalVal)) {
+    return false;
   }
-
   globalObj->val() = globalVal;
   return true;
 }

@@ -20,9 +20,8 @@ namespace mozilla {
 namespace net {
 
 static uint64_t TabIdForQueuing(nsAHttpTransaction* transaction) {
-  return gHttpHandler->ActiveTabPriority()
-             ? transaction->TopLevelOuterContentWindowId()
-             : 0;
+  return gHttpHandler->ActiveTabPriority() ? transaction->TopBrowsingContextId()
+                                           : 0;
 }
 
 // This function decides the transaction's order in the pending queue.
@@ -51,17 +50,16 @@ void PendingTransactionQueue::InsertTransactionNormal(
     bool aInsertAsFirstForTheSamePriority /*= false*/) {
   LOG(
       ("PendingTransactionQueue::InsertTransactionNormal"
-       " trans=%p, windowId=%" PRIu64 "\n",
-       info->Transaction(),
-       info->Transaction()->TopLevelOuterContentWindowId()));
+       " trans=%p, bid=%" PRIu64 "\n",
+       info->Transaction(), info->Transaction()->TopBrowsingContextId()));
 
   uint64_t windowId = TabIdForQueuing(info->Transaction());
-  nsTArray<RefPtr<PendingTransactionInfo>>* infoArray;
-  if (!mPendingTransactionTable.Get(windowId, &infoArray)) {
-    infoArray = new nsTArray<RefPtr<PendingTransactionInfo>>();
-    mPendingTransactionTable.Put(windowId, infoArray);
-  }
+  nsTArray<RefPtr<PendingTransactionInfo>>* const infoArray =
+      mPendingTransactionTable.GetOrInsertNew(windowId);
 
+  // XXX At least if a new array was empty before, this isn't efficient, as it
+  // does an insert-sort. It would be better to just append all elements and
+  // then sort.
   InsertTransactionSorted(*infoArray, info, aInsertAsFirstForTheSamePriority);
 }
 
@@ -175,26 +173,26 @@ void PendingTransactionQueue::AppendPendingQForNonFocusedWindows(
     uint32_t maxCount) {
   // XXX Adjust the order of transactions in a smarter manner.
   uint32_t totalCount = 0;
-  for (auto it = mPendingTransactionTable.Iter(); !it.Done(); it.Next()) {
-    if (windowId && it.Key() == windowId) {
+  for (const auto& entry : mPendingTransactionTable) {
+    if (windowId && entry.GetKey() == windowId) {
       continue;
     }
 
     uint32_t count = 0;
-    for (; count < it.UserData()->Length(); ++count) {
+    for (; count < entry.GetWeak()->Length(); ++count) {
       if (maxCount && totalCount == maxCount) {
         break;
       }
 
       // Because elements in |result| could come from multiple penndingQ,
       // call |InsertTransactionSorted| to make sure the order is correct.
-      InsertTransactionSorted(result, it.UserData()->ElementAt(count));
+      InsertTransactionSorted(result, entry.GetWeak()->ElementAt(count));
       ++totalCount;
     }
-    it.UserData()->RemoveElementsAt(0, count);
+    entry.GetWeak()->RemoveElementsAt(0, count);
 
     if (maxCount && totalCount == maxCount) {
-      if (it.UserData()->Length()) {
+      if (entry.GetWeak()->Length()) {
         // There are still some pending transactions for background
         // tabs but we limit their dispatch.  This is considered as
         // an active tab optimization.
@@ -228,8 +226,8 @@ void PendingTransactionQueue::RemoveEmptyPendingQ() {
 
 size_t PendingTransactionQueue::PendingQueueLength() const {
   size_t length = 0;
-  for (auto it = mPendingTransactionTable.ConstIter(); !it.Done(); it.Next()) {
-    length += it.UserData()->Length();
+  for (const auto& data : mPendingTransactionTable.Values()) {
+    length += data->Length();
   }
 
   return length;
@@ -250,9 +248,9 @@ void PendingTransactionQueue::PrintPendingQ() {
   for (const auto& info : mUrgentStartQ) {
     LOG(("  %p", info->Transaction()));
   }
-  for (auto it = mPendingTransactionTable.Iter(); !it.Done(); it.Next()) {
-    LOG(("] window id = %" PRIx64 " queue [", it.Key()));
-    for (const auto& info : *it.UserData()) {
+  for (const auto& entry : mPendingTransactionTable) {
+    LOG(("] window id = %" PRIx64 " queue [", entry.GetKey()));
+    for (const auto& info : *entry.GetWeak()) {
       LOG(("  %p", info->Transaction()));
     }
   }
@@ -261,8 +259,8 @@ void PendingTransactionQueue::PrintPendingQ() {
 
 void PendingTransactionQueue::Compact() {
   mUrgentStartQ.Compact();
-  for (auto it = mPendingTransactionTable.Iter(); !it.Done(); it.Next()) {
-    it.UserData()->Compact();
+  for (const auto& data : mPendingTransactionTable.Values()) {
+    data->Compact();
   }
 }
 
@@ -274,13 +272,13 @@ void PendingTransactionQueue::CancelAllTransactions(nsresult reason) {
   }
   mUrgentStartQ.Clear();
 
-  for (auto it = mPendingTransactionTable.Iter(); !it.Done(); it.Next()) {
-    for (const auto& pendingTransInfo : *it.UserData()) {
+  for (const auto& data : mPendingTransactionTable.Values()) {
+    for (const auto& pendingTransInfo : *data) {
       LOG(("PendingTransactionQueue::CancelAllTransactions %p\n",
            pendingTransInfo->Transaction()));
       pendingTransInfo->Transaction()->Close(reason);
     }
-    it.UserData()->Clear();
+    data->Clear();
   }
 
   mPendingTransactionTable.Clear();

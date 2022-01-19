@@ -79,16 +79,17 @@ const webExtensionTargetPrototype = extend({}, parentProcessTargetPrototype);
  * @param {nsIMessageSender} chromeGlobal.
  *        The chromeGlobal where this actor has been injected by the
  *        frame-connector.js connectToFrame method.
- * @param {string} prefix
- *        the custom RDP prefix to use.
- * @param {string} addonId
- *        the addonId of the target WebExtension.
+ * @param {Object} options
+ *        - addonId: {String} the addonId of the target WebExtension.
+ *        - chromeGlobal: {nsIMessageSender} The chromeGlobal where this actor
+ *          has been injected by the frame-connector.js connectToFrame method.
+ *        - isTopLevelTarget: {Boolean} flag to indicate if this is the top
+ *          level target of the DevTools session
+ *        - prefix: {String} the custom RDP prefix to use.
  */
 webExtensionTargetPrototype.initialize = function(
   conn,
-  chromeGlobal,
-  prefix,
-  addonId
+  { addonId, chromeGlobal, isTopLevelTarget, prefix }
 ) {
   this.addonId = addonId;
   this.chromeGlobal = chromeGlobal;
@@ -97,7 +98,10 @@ webExtensionTargetPrototype.initialize = function(
   // URL shown in the window tittle when the addon debugger is opened).
   const extensionWindow = this._searchForExtensionWindow();
 
-  parentProcessTargetPrototype.initialize.call(this, conn, extensionWindow);
+  parentProcessTargetPrototype.initialize.call(this, conn, {
+    isTopLevelTarget,
+    window: extensionWindow,
+  });
   this._chromeGlobal = chromeGlobal;
   this._prefix = prefix;
 
@@ -150,7 +154,7 @@ webExtensionTargetPrototype.isRootActor = true;
 /**
  * Called when the actor is removed from the connection.
  */
-webExtensionTargetPrototype.exit = function() {
+webExtensionTargetPrototype.destroy = function() {
   if (this._chromeGlobal) {
     const chromeGlobal = this._chromeGlobal;
     this._chromeGlobal = null;
@@ -168,7 +172,7 @@ webExtensionTargetPrototype.exit = function() {
   this.addon = null;
   this.addonId = null;
 
-  return ParentProcessTargetActor.prototype.exit.apply(this);
+  return ParentProcessTargetActor.prototype.destroy.apply(this);
 };
 
 // Private helpers.
@@ -420,7 +424,7 @@ webExtensionTargetPrototype._onParentExit = function(msg) {
     return;
   }
 
-  this.exit();
+  this.destroy();
 };
 
 exports.WebExtensionTargetActor = TargetActorMixin(

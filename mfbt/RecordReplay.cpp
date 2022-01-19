@@ -30,10 +30,6 @@ namespace recordreplay {
   Macro(InternalAreThreadEventsDisallowed, bool, (), ())                       \
   Macro(InternalRecordReplayValue, size_t, (const char* aWhy, size_t aValue),  \
         (aWhy, aValue))                                                        \
-  Macro(InternalGeneratePLDHashTableCallbacks, const PLDHashTableOps*,         \
-        (const PLDHashTableOps* aOps), (aOps))                                 \
-  Macro(InternalUnwrapPLDHashTableCallbacks, const PLDHashTableOps*,           \
-        (const PLDHashTableOps* aOps), (aOps))                                 \
   Macro(InternalHasDivergedFromRecording, bool, (), ())                        \
   Macro(InternalIsUnhandledDivergenceAllowed, bool, (), ())                    \
   Macro(InternalThingIndex, size_t, (void* aThing), (aThing))                  \
@@ -66,11 +62,6 @@ namespace recordreplay {
   Macro(InternalRecordReplayBytes, (const char* aWhy, void* aData, size_t aSize), \
         (aWhy, aData, aSize))                                                  \
   Macro(InternalInvalidateRecording, (const char* aWhy), (aWhy))               \
-  Macro(InternalDestroyPLDHashTableCallbacks, (const PLDHashTableOps* aOps),   \
-        (aOps))                                                                \
-  Macro(InternalMovePLDHashTableContents,                                      \
-        (const PLDHashTableOps* aFirstOps, const PLDHashTableOps* aSecondOps), \
-        (aFirstOps, aSecondOps))                                               \
   Macro(InternalHoldJSObject, (void* aJSObj), (aJSObj))                        \
   Macro(InternalRecordReplayAssert, (const char* aFormat, va_list aArgs),      \
         (aFormat, aArgs))                                                      \

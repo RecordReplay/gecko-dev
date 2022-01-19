@@ -56,6 +56,9 @@ pub enum CachedGlyphData {
 #[derive(Default)]
 pub struct GlyphKeyCacheInfo {
     eviction_notice: EvictionNotice,
+    #[cfg(debug_assertions)]
+    #[allow(dead_code)]
+    #[cfg_attr(feature = "replay", serde(default))]
     last_frame_used: FrameId,
 }
 
@@ -98,12 +101,21 @@ impl GlyphCache {
         }
     }
 
-    pub fn get_glyph_key_cache_for_font_mut(&mut self, font: FontInstance) -> &mut GlyphKeyCache {
+    pub fn insert_glyph_key_cache_for_font(&mut self, font: &FontInstance) -> &mut GlyphKeyCache {
         let cache = self.glyph_key_caches
-                        .entry(font)
+                        .entry(font.clone())
                         .or_insert_with(GlyphKeyCache::new);
-        cache.user_data.last_frame_used = self.current_frame;
+        #[cfg(debug_assertions)]
+        {
+            cache.user_data.last_frame_used = self.current_frame;
+        }
         cache
+    }
+
+    pub fn get_glyph_key_cache_for_font_mut(&mut self, font: &FontInstance) -> &mut GlyphKeyCache {
+        self.glyph_key_caches
+            .get_mut(font)
+            .expect("BUG: Unable to find glyph key cache!")
     }
 
     pub fn get_glyph_key_cache_for_font(&self, font: &FontInstance) -> &GlyphKeyCache {

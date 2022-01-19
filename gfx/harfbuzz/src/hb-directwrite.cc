@@ -623,7 +623,7 @@ _hb_directwrite_shape_full (hb_shape_plan_t    *shape_plan,
   * but we never attempt to shape a word longer than 64K characters
   * in a single gfxShapedWord, so we cannot exceed that limit.
   */
-  uint32_t textLength = buffer->len;
+  uint32_t textLength = chars_len;
 
   TextAnalysis analysis (textString, textLength, nullptr, readingDirection);
   TextAnalysis::Run *runHead;
@@ -957,6 +957,8 @@ _hb_directwrite_font_release (void *data)
  * hb_directwrite_face_create:
  * @font_face: a DirectWrite IDWriteFontFace object.
  *
+ * Constructs a new face object from the specified DirectWrite IDWriteFontFace.
+ *
  * Return value: #hb_face_t object corresponding to the given input
  *
  * Since: 2.4.0
@@ -973,6 +975,8 @@ hb_directwrite_face_create (IDWriteFontFace *font_face)
 /**
 * hb_directwrite_face_get_font_face:
 * @face: a #hb_face_t object
+*
+* Gets the DirectWrite IDWriteFontFace associated with @face.
 *
 * Return value: DirectWrite IDWriteFontFace object corresponding to the given input
 *

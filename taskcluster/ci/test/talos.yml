@@ -5,17 +5,15 @@
 job-defaults:
     max-run-time: 3600
     suite: talos
+    variants: [fission]
     tier:
-        by-test-platform:
-            windows10-64-ccov.*/.*: 3
-            linux64-ccov.*/.*: 3
-            default: default
-    variants: ['fission']
-    fission-tier: 2
-    virtualization:
-        by-test-platform:
-            windows10-64-ccov.*/.*: virtual
-            default: hardware
+        by-variant:
+            fission: 2
+            default:
+                by-test-platform:
+                    macosx1100.*: 2
+                    default: default
+    virtualization: hardware
     mozharness:
         script: talos_script.py
         config:
@@ -24,66 +22,91 @@ job-defaults:
                     - talos/mac_config.py
                 windows.*:
                     - talos/windows_config.py
-                windows10-64-ccov-qr/opt:
-                    - talos/windows_vm_config.py
-                linux64-ccov.*/.*:
-                    - talos/linux64_config_taskcluster.py
                 default:
                     - talos/linux_config.py
     test-manifest-loader: null  # don't load tests in the taskgraph
     run-on-projects:
-        by-test-name:
-            talos-.*-profiling:
-                by-test-platform:
-                    windows7-32.*: []
-                    (linux|windows10|macos)(?!.*shippable).*: []
-                    .*(?:shippable-qr).*: []
-                    windows10.*(?!shippable-qr)shippable.*: []
-                    default: ['mozilla-central']
+        by-variant:
+            fission:
+                by-test-name:
+                    talos-.*-profiling-fis: []
+                    talos-tabswitch-fis:
+                        by-test-platform:
+                            macosx1014.*: []
+                            (linux1804-64|windows10-64|macosx.*)-shippable-qr/opt: [mozilla-central]
+                            default: []
+                    default:
+                        by-test-platform:
+                            (linux1804-64|windows10-64|macosx.*)-shippable-qr/opt: [mozilla-central]
+                            default: []
             default:
-                by-test-platform:
-                    windows7-32.*: []
-                    (linux|windows10|macos)(?!.*shippable).*: []
-                    default: ['mozilla-beta', 'trunk']
-    fission-run-on-projects:
-        by-test-platform:
-            (linux64|windows10-64|macosx1014-64)-shippable-qr/opt: ['mozilla-central']
-            default: []
+                by-test-name:
+                    talos-.*-profiling:
+                        by-test-platform:
+                            windows.*-32.*: []
+                            (linux|windows10-64|macos)(?!.*shippable).*: []
+                            (linux|windows10-64|macos)(?!.*-qr).*: []
+                            default: [mozilla-central]
+                    talos-tabswitch:
+                        by-test-platform:
+                            windows.*-32.*: []
+                            macosx1014.*: []
+                            (linux|windows10-64|macos)(?!.*shippable).*: []
+                            (linux|windows10-64|macos)(?!.*-qr).*: []
+                            default: [mozilla-beta, trunk]
+                    default:
+                        by-test-platform:
+                            windows.*-32.*: []
+                            (linux|windows10-64|macos)(?!.*shippable).*: []
+                            (linux|windows10-64|macosx1015)(?!.*-qr).*: []
+                            default: [mozilla-beta, trunk]
+    python-3: true
 
 talos-bcv:
-    description: "Talos basic compositor video"
+    description: Talos basic compositor video
     try-name: bcv
     treeherder-symbol: T(bcv)
     variants:
         by-test-platform:
-            (linux64|windows10|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows10-64|macosx1015-64).*-qr.*: [fission, webrender-sw]
+            default: [fission]
     run-on-projects:
-        by-test-platform:
-            .(linux|windows10|macos)(?:shippable-qr|-qr)/.*:
-                by-variant:
-                    webrender-sw: ['trunk']
+        by-variant:
+            fission:
+                by-test-platform:
+                    (linux1804-64|windows10-64|macosx.*)-shippable-qr/opt: [mozilla-central]
                     default: []
-            windows7-32.*: []
-            (linux|windows10|macos)(?!.*shippable)(?!.*-qr).*: []
-            default: ['mozilla-beta', 'trunk']
+            default:
+                by-test-platform:
+                    (linux|windows10-64|macosx1015-64)(?:shippable-qr|-qr)/.*:
+                        by-variant:
+                            webrender-sw: [trunk]
+                            default: []
+                    windows.*-32.*: []
+                    (linux|windows10-64|macos)(?!.*shippable).*: []
+                    (linux|windows10-64|macos)(?!.*-qr).*: []
+                    default: [mozilla-beta, trunk]
     max-run-time: 1800
     mozharness:
         extra-options:
             - --suite=bcv
 
 talos-bcv-profiling:
-    description: "Talos basic compositor video with gecko profiling"
+    description: Talos basic compositor video with gecko profiling
     try-name: bcv-prof
     treeherder-symbol: T-Prof(bcv)
     tier: 2
     run-on-projects:
-        by-test-platform:
-            windows7-32.*: []
-            .*(?:shippable-qr|-qr)/.*: []
-            (linux|windows10|macos)(?!.*shippable)(?!.*-qr).*: []
-            windows10-64-shippable/opt: []
-            default: ['mozilla-central']
+        by-variant:
+            fission: []
+            default:
+                by-test-platform:
+                    windows.*-32.*: []
+                    .*(?:shippable-qr|-qr)/.*: []
+                    (linux|windows10-64|macos)(?!.*shippable).*: []
+                    (linux|windows10-64|macos)(?!.*-qr).*: []
+                    windows10-64-shippable/opt: []
+                    default: [mozilla-central]
     max-run-time: 1800
     mozharness:
         extra-options:
@@ -91,20 +114,20 @@ talos-bcv-profiling:
             - --gecko-profile
 
 talos-chrome:
-    description: "Talos chrome"
+    description: Talos chrome
     try-name: chromez
     treeherder-symbol: T(c)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macos).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time: 1800
     mozharness:
         extra-options:
             - --suite=chromez
 
 talos-chrome-profiling:
-    description: "Talos chrome with gecko profiling"
+    description: Talos chrome with gecko profiling
     try-name: chromez-prof
     treeherder-symbol: T-Prof(c)
     tier: 2
@@ -115,47 +138,53 @@ talos-chrome-profiling:
             - --gecko-profile
 
 talos-damp:
-    description: "Talos devtools (damp)"
+    description: Talos devtools (damp)
     try-name: damp
     treeherder-symbol: T(damp)
     max-run-time: 5400
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
-    run-on-projects:
-        by-test-platform:
-            windows7-32-shippable/.*: []
-            (linux|windows|macos)(?!.*shippable).*: []
-            default: ['mozilla-beta', 'trunk']
-    fission-run-on-projects:
-        by-test-platform:
-            (linux64|windows10-64)-shippable-qr/opt: ['mozilla-central']
-            # Bug 1657864 - Disabled on macos for high frequency intermittents
+            (linux1804-64|windows|macos).*-qr.*: [fission, webrender-sw]
             default: []
-
+    run-on-projects:
+        by-variant:
+            fission:
+                by-test-platform:
+                    (linux1804-64|windows10-64)-shippable-qr/opt: [mozilla-central]
+                    # Bug 1657864 - Disabled on macos for high frequency intermittents
+                    default: []
+            default:
+                by-test-platform:
+                    windows.*-32-shippable/.*: []
+                    (linux|windows|macos)(?!.*shippable).*: []
+                    (linux|windows10-64|macos)(?!.*-qr).*: []
+                    macosx1014.*: []
+                    default: [mozilla-beta, trunk]
     mozharness:
         extra-options:
             - --suite=damp
 
 talos-damp-profiling:
-    description: "Talos devtools (damp) with gecko profiling"
+    description: Talos devtools (damp) with gecko profiling
     try-name: damp-prof
     treeherder-symbol: T-Prof(damp)
     tier: 2
     max-run-time: 5400
     run-on-projects:
-        by-test-platform:
-            windows7-32-shippable/.*: []
-            (linux|windows|macos)(?!.*shippable).*: []
-            default: ['mozilla-central']
+        by-variant:
+            fission: []
+            default:
+                by-test-platform:
+                    windows.*-32-shippable/.*: []
+                    (linux|windows|macos)(?!.*shippable).*: []
+                    default: [mozilla-central]
     mozharness:
         extra-options:
             - --suite=damp
             - --gecko-profile
 
 talos-dromaeojs:
-    description: "Talos dromaeojs"
+    description: Talos dromaeojs
     try-name: dromaeojs
     treeherder-symbol: T(d)
     max-run-time: 2100
@@ -164,7 +193,7 @@ talos-dromaeojs:
             - --suite=dromaeojs
 
 talos-dromaeojs-profiling:
-    description: "Talos dromaeojs with gecko profiling"
+    description: Talos dromaeojs with gecko profiling
     try-name: dromaeojs-prof
     treeherder-symbol: T-Prof(d)
     tier: 2
@@ -175,30 +204,40 @@ talos-dromaeojs-profiling:
             - --gecko-profile
 
 talos-flex:
-    description: "Talos XUL flexbox emulation enabled"
+    description: Talos XUL flexbox emulation enabled
     try-name: flex
     treeherder-symbol: T(f)
-    tier: 3
+    tier:
+        by-variant:
+            fission: 2
+            default: 3
     run-on-projects:
-        by-test-platform:
-            windows7-32.*: []
-            (linux|windows10|macos)(?!.*shippable).*: []
-            default: ['mozilla-central']
+        by-variant:
+            fission: []
+            default:
+                by-test-platform:
+                    windows.*-32.*: []
+                    (linux|windows10-64|macos)(?!.*shippable).*: []
+                    (linux|windows10-64|macos)(?!.*-qr).*: []
+                    default: [mozilla-central]
     max-run-time: 1800
     mozharness:
         extra-options:
             - --suite=flex
 
 talos-flex-profiling:
-    description: "Talos XUL flexbox emulation enabled with gecko profiling"
+    description: Talos XUL flexbox emulation enabled with gecko profiling
     try-name: flex-prof
     treeherder-symbol: T-Prof(f)
     tier: 3
     run-on-projects:
-        by-test-platform:
-            windows7-32.*: []
-            (linux|windows10|macos)(?!.*shippable).*: []
-            default: ['mozilla-central']
+        by-variant:
+            fission: []
+            default:
+                by-test-platform:
+                    windows.*-32.*: []
+                    (linux|windows10-64|macos)(?!.*shippable).*: []
+                    default: [mozilla-central]
     max-run-time: 1800
     mozharness:
         extra-options:
@@ -206,29 +245,29 @@ talos-flex-profiling:
             - --gecko-profile
 
 talos-g1:
-    description: "Talos g1"
+    description: Talos g1
     try-name: g1
     treeherder-symbol: T(g1)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time:
         by-test-platform:
-            linux64.*: 3600
+            linux1804-64.*: 3600
             default: 7200
     mozharness:
         extra-options:
             - --suite=g1
 
 talos-g1-profiling:
-    description: "Talos g1 with gecko profiling"
+    description: Talos g1 with gecko profiling
     try-name: g1-prof
     treeherder-symbol: T-Prof(g1)
     tier: 2
     max-run-time:
         by-test-platform:
-            linux64.*: 3600
+            linux1804-64.*: 3600
             default: 7200
     mozharness:
         extra-options:
@@ -236,20 +275,20 @@ talos-g1-profiling:
             - --gecko-profile
 
 talos-g3:
-    description: "Talos g3"
+    description: Talos g3
     try-name: g3
     treeherder-symbol: T(g3)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows10-64|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time: 900
     mozharness:
         extra-options:
             - --suite=g3
 
 talos-g3-profiling:
-    description: "Talos g3 with gecko profiling"
+    description: Talos g3 with gecko profiling
     try-name: g3-prof
     treeherder-symbol: T-Prof(g3)
     tier: 2
@@ -260,36 +299,42 @@ talos-g3-profiling:
             - --gecko-profile
 
 talos-g4:
-    description: "Talos g4"
+    description: Talos g4
     try-name: g4
     treeherder-symbol: T(g4)
     variants:
         by-test-platform:
-            windows7-32.*: []
-            (linux64|windows10|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            windows.*-32.*: []
+            (linux1804-64|windows10-64|macosx1015-64).*-qr.*: [fission, webrender-sw]
+            default: []
     run-on-projects:
-        by-test-platform:
-            windows7-32.*: []
-            windows10-64-ref-hw-2017/opt: ['mozilla-central']
-            (linux|windows10|macos)(?!.*shippable).*: []
-            default: ['mozilla-beta', 'trunk']
+        by-variant:
+            fission:
+                by-test-platform:
+                    (linux1804-64|windows10-64|macosx)-shippable-qr/opt: [mozilla-central]
+                    default: []
+            default:
+                by-test-platform:
+                    windows.*-32.*: []
+                    (linux|windows10-64|macos)(?!.*shippable).*: []
+                    (linux|windows10-64|macos)(?!.*-qr).*: []
+                    default: [mozilla-beta, trunk]
     max-run-time:
         by-test-platform:
-            linux64.*: 1500
+            linux1804-64.*: 1500
             default: 1800
     mozharness:
         extra-options:
             - --suite=g4
 
 talos-g4-profiling:
-    description: "Talos g4 with gecko profiling"
+    description: Talos g4 with gecko profiling
     try-name: g4-prof
     treeherder-symbol: T-Prof(g4)
     tier: 2
     max-run-time:
         by-test-platform:
-            linux64.*: 1500
+            linux1804-64.*: 1500
             default: 1800
     mozharness:
         extra-options:
@@ -297,7 +342,7 @@ talos-g4-profiling:
             - --gecko-profile
 
 talos-g5:
-    description: "Talos g5"
+    description: Talos g5
     try-name: g5
     treeherder-symbol: T(g5)
     mozharness:
@@ -305,16 +350,16 @@ talos-g5:
             - --suite=g5
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time:
         by-test-platform:
-            linux64.*: 1200
+            linux1804-64.*: 1200
             macosx.*: 2400
             default: 1800
 
 talos-g5-profiling:
-    description: "Talos g5 with gecko profiling"
+    description: Talos g5 with gecko profiling
     try-name: g5-prof
     treeherder-symbol: T-Prof(g5)
     tier: 2
@@ -324,11 +369,11 @@ talos-g5-profiling:
             - --gecko-profile
     max-run-time:
         by-test-platform:
-            linux64.*: 1200
+            linux1804-64.*: 1200
             default: 1800
 
 talos-h1:
-    description: "Talos h1"
+    description: Talos h1
     try-name: h1
     treeherder-symbol: T(h1)
     mozharness:
@@ -336,69 +381,62 @@ talos-h1:
             - --suite=h1
     max-run-time:
         by-test-platform:
-            linux64.*: 900
+            linux1804-64.*: 900
             default: 1800
 
 talos-h2:
-    description: "Talos h2"
+    description: Talos h2
     try-name: h2
     treeherder-symbol: T(h2)
     max-run-time:
         by-test-platform:
-            linux64.*: 900
+            linux1804-64.*: 900
             default: 7200
     mozharness:
         extra-options:
             - --suite=h2
 
 talos-motionmark:
-    description: "Talos motionmark"
+    description: Talos motionmark
     try-name: motionmark
     treeherder-symbol: T(mm)
     run-on-projects:
         by-test-platform:
-            (linux|windows|macos)(?!.*shippable).*: []
-            default: ['mozilla-central']
+            (linux|windows10-64|macos)(?!.*shippable).*: []
+            (linux|windows10-64|macos)(?!.*-qr).*: []
+            default: [mozilla-central]
     max-run-time: 3600
-    tier:
-        by-test-platform:
-            windows10-64-ccov.*/.*: 3
-            linux64-ccov.*/.*: 3
-            default: 2
+    tier: 2
     mozharness:
         extra-options:
             - --suite=motionmark
 
 talos-motionmark-profiling:
-    description: "Talos motionmark with gecko profiling"
+    description: Talos motionmark with gecko profiling
     try-name: motionmark-prof
     treeherder-symbol: T-Prof(mm)
     max-run-time: 3600
-    tier:
-        by-test-platform:
-            windows10-64-ccov.*/.*: 3
-            linux64-ccov.*/.*: 3
-            default: 2
+    tier: 2
     mozharness:
         extra-options:
             - --suite=motionmark
             - --gecko-profile
 
 talos-other:
-    description: "Talos other"
+    description: Talos other
     try-name: other
     treeherder-symbol: T(o)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time: 1500
     mozharness:
         extra-options:
             - --suite=other
 
 talos-other-profiling:
-    description: "Talos other with gecko profiling"
+    description: Talos other with gecko profiling
     try-name: other-prof
     treeherder-symbol: T-Prof(o)
     tier: 2
@@ -409,25 +447,32 @@ talos-other-profiling:
             - --gecko-profile
 
 talos-sessionrestore-many-windows:
-    description: "Talos sessionrestore-many-windows"
+    description: Talos sessionrestore-many-windows
     try-name: sessionrestore-many-windows
     treeherder-symbol: T(smw)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     run-on-projects:
-        by-test-platform:
-            windows7-32.*/opt: []
-            (linux|windows10|macos)(?!.*shippable).*: []
-            default: ['mozilla-central']
+        by-variant:
+            fission:
+                by-test-platform:
+                    (linux1804-64|windows10-64|macosx.*)-shippable-qr/opt: [mozilla-central]
+                    default: []
+            default:
+                by-test-platform:
+                    windows.*-32.*/opt: []
+                    (linux|windows10-64|macos)(?!.*shippable).*: []
+                    (linux|windows10-64|macos)(?!.*-qr).*: []
+                    default: [mozilla-central]
     max-run-time: 1500
     mozharness:
         extra-options:
             - --suite=sessionrestore-many-windows
 
 talos-sessionrestore-many-windows-profiling:
-    description: "Talos sessionrestore-many-windows with gecko profiling"
+    description: Talos sessionrestore-many-windows with gecko profiling
     try-name: sessionrestore-many-windows-prof
     treeherder-symbol: T-Prof(smw)
     tier: 2
@@ -438,20 +483,20 @@ talos-sessionrestore-many-windows-profiling:
             - --gecko-profile
 
 talos-perf-reftest:
-    description: "Talos perf-reftest"
+    description: Talos perf-reftest
     try-name: perf-reftest
     treeherder-symbol: T(p)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time: 1200
     mozharness:
         extra-options:
             - --suite=perf-reftest
 
 talos-perf-reftest-profiling:
-    description: "Talos perf-reftest with gecko profiling"
+    description: Talos perf-reftest with gecko profiling
     try-name: perf-reftest-prof
     treeherder-symbol: T-Prof(p)
     tier: 2
@@ -462,7 +507,7 @@ talos-perf-reftest-profiling:
             - --gecko-profile
 
 talos-perf-reftest-singletons:
-    description: "Talos perf-reftest singletons"
+    description: Talos perf-reftest singletons
     try-name: perf-reftest-singletons
     treeherder-symbol: T(ps)
     max-run-time: 1500
@@ -471,7 +516,7 @@ talos-perf-reftest-singletons:
             - --suite=perf-reftest-singletons
 
 talos-perf-reftest-singletons-profiling:
-    description: "Talos perf-reftest singletons with gecko profiling"
+    description: Talos perf-reftest singletons with gecko profiling
     try-name: perf-reftest-singletons-prof
     treeherder-symbol: T-Prof(ps)
     tier: 2
@@ -482,20 +527,20 @@ talos-perf-reftest-singletons-profiling:
             - --gecko-profile
 
 talos-svgr:
-    description: "Talos svgr"
+    description: Talos svgr
     try-name: svgr
     treeherder-symbol: T(s)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time: 1800
     mozharness:
         extra-options:
             - --suite=svgr
 
 talos-svgr-profiling:
-    description: "Talos svgr with gecko profiling"
+    description: Talos svgr with gecko profiling
     try-name: svgr-prof
     treeherder-symbol: T-Prof(s)
     tier: 2
@@ -506,20 +551,20 @@ talos-svgr-profiling:
             - --gecko-profile
 
 talos-tp5o:
-    description: "Talos tp5o"
+    description: Talos tp5o
     try-name: tp5o
     treeherder-symbol: T(tp)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
     max-run-time: 1800
     mozharness:
         extra-options:
             - --suite=tp5o
 
 talos-tp5o-profiling:
-    description: "Talos tp5o with gecko profiling"
+    description: Talos tp5o with gecko profiling
     try-name: tp5o-prof
     treeherder-symbol: T-Prof(tp)
     tier: 2
@@ -530,20 +575,20 @@ talos-tp5o-profiling:
             - --gecko-profile
 
 talos-tabswitch:
-    description: "Talos page scroll (tabswitch)"
+    description: Talos page scroll (tabswitch)
     try-name: tabswitch
     treeherder-symbol: T(tabswitch)
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
-    max-run-time: 1200
+            (linux1804-64|windows|macosx).*-qr.*: [fission, webrender-sw]
+            default: []
+    max-run-time: 1800
     mozharness:
         extra-options:
             - --suite=tabswitch
 
 talos-tabswitch-profiling:
-    description: "Talos page scroll (tabswitch) with gecko profiling"
+    description: Talos page scroll (tabswitch) with gecko profiling
     try-name: tabswitch-prof
     treeherder-symbol: T-Prof(tabswitch)
     tier: 2
@@ -554,40 +599,36 @@ talos-tabswitch-profiling:
             - --gecko-profile
 
 talos-webgl:
-    description: "Talos WebGL"
+    description: Talos WebGL
     try-name: webgl
     treeherder-symbol: T(webgl)
     variants:
         by-test-platform:
-            .*-ccov.*/.*: []
-            android.*: []
-            windows7-32.*: []
-            (linux64|windows10|macos).*-qr.*: ['webgl-ipc', 'webrender-sw']
-            windows10-64-ccov-qr/opt: []
-            default: ['webgl-ipc']
+            (linux1804-64|windows10-64|macosx1015-64).*-qr.*: [webgl-ipc, webrender-sw]
+            default: []
     run-on-projects:
         by-test-platform:
-            windows7-32.*: []
-            windows10-64-ref-hw-2017/opt: ['mozilla-central']
-            (linux|windows10|macos)(?!.*shippable).*: []
-            default: ['mozilla-beta', 'trunk']
-    max-run-time: 1800
+            windows.*-32.*: []
+            macosx1014.*: []
+            (linux|windows10-64|macos)(?!.*shippable).*: []
+            (linux|windows10-64|macos)(?!.*-qr).*: []
+            default: [mozilla-beta, trunk]
+    max-run-time: 2100
     mozharness:
         extra-options:
             - --suite=webgl
 
 talos-webgl-profiling:
-    description: "Talos WebGL with gecko profiling"
+    description: Talos WebGL with gecko profiling
     try-name: webgl
     treeherder-symbol: T-Prof(webgl)
     tier: 2
     run-on-projects: []
     variants:
         by-test-platform:
-            .*-ccov.*/.*: []
             android.*: []
-            windows7-32.*: []
-            default: ['webgl-ipc']
+            windows.*-32.*: []
+            default: [webgl-ipc-profiling]
     max-run-time: 1800
     mozharness:
         extra-options:
@@ -595,28 +636,30 @@ talos-webgl-profiling:
             - --gecko-profile
 
 talos-xperf:
-    description: "Talos xperf"
+    description: Talos xperf
     try-name: xperf
     treeherder-symbol: T(x)
     virtualization: virtual
-    os-groups: ['Administrators']
+    os-groups: [Administrators]
     run-as-administrator:
         by-test-platform:
-            windows7-32.*: false
+            windows.*32.*: false
             windows10-64.*: true
     variants:
         by-test-platform:
-            (linux64|windows|macos).*-qr.*: ['fission', 'webrender-sw']
-            default: ['fission']
-    run-on-projects:
-        by-test-platform:
-            windows7-32-shippable(?:-qr)?/.*: []
-            windows10-64-shippable(?:-qr)?/.*: ['mozilla-beta', 'trunk']
+            (linux1804-64|windows|macos).*-qr.*: [fission, webrender-sw]
             default: []
-    tier:
-        by-test-platform:
-            windows10-64-ccov.*/.*: 3
-            default: default
+    run-on-projects:
+        by-variant:
+            fission:
+                by-test-platform:
+                    (linux1804-64|windows10-64|macosx1015-64)-shippable-qr/opt: [mozilla-central]
+                    default: []
+            default:
+                by-test-platform:
+                    windows.*-32-shippable(?:-qr)?/.*: []
+                    windows10-64-shippable-qr/.*: [mozilla-beta, trunk]
+                    default: []
     mozharness:
         extra-options:
             - --suite=xperf
@@ -624,10 +667,11 @@ talos-xperf:
             by-test-platform:
                 windows.*:
                     - talos/windows_vm_config.py
+    python-3: false
 
 talos-realworld-webextensions:
-    description: "Talos tests with realworld WebExtensions"
-    try-name: "realworld-webextensions"
+    description: Talos tests with realworld WebExtensions
+    try-name: realworld-webextensions
     treeherder-symbol: T(realwebext)
     max-run-time: 1500
     mozharness:
@@ -635,8 +679,8 @@ talos-realworld-webextensions:
             - --suite=realworld-webextensions
 
 talos-realworld-webextensions-profiling:
-    description: "Talos tests with realworld WebExtensions with gecko profiling"
-    try-name: "realworld-webextensions-prof"
+    description: Talos tests with realworld WebExtensions with gecko profiling
+    try-name: realworld-webextensions-prof
     treeherder-symbol: T-Prof(realwebext)
     tier: 2
     max-run-time: 1500

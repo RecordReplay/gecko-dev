@@ -30,11 +30,11 @@ class RenderTextureHostSWGL : public RenderTextureHost {
   virtual gfx::SurfaceFormat GetFormat() const = 0;
 
   virtual gfx::ColorDepth GetColorDepth() const {
-    return gfx::ColorDepth::UNKNOWN;
+    return gfx::ColorDepth::COLOR_8;
   }
 
-  virtual gfx::YUVColorSpace GetYUVColorSpace() const {
-    return gfx::YUVColorSpace::UNKNOWN;
+  virtual gfx::YUVRangedColorSpace GetYUVColorSpace() const {
+    return gfx::YUVRangedColorSpace::Default;
   }
 
   struct PlaneInfo {
@@ -56,9 +56,10 @@ class RenderTextureHostSWGL : public RenderTextureHost {
   // WrSWGLCompositeSurfaceInfo. This is paired with a call to UnlockSWGL when
   // composition is done.
   bool LockSWGLCompositeSurface(void* aContext,
-                                wr::WrSWGLCompositeSurfaceInfo* aInfo);
+                                wr::SWGLCompositeSurfaceInfo* aInfo);
 
-  size_t Bytes() override {
+  size_t BytesFromPlanes() {
+    NS_ASSERTION(mPlanes.size(), "Can't compute bytes without any planes");
     size_t bytes = 0;
     for (auto& plane : mPlanes) {
       bytes += plane.mStride * plane.mSize.height;

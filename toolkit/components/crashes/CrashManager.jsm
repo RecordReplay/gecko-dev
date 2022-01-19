@@ -6,16 +6,19 @@
 
 const myScope = this;
 
-ChromeUtils.import("resource://gre/modules/Log.jsm", this);
 const { PromiseUtils } = ChromeUtils.import(
   "resource://gre/modules/PromiseUtils.jsm"
 );
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
-const { TelemetryController } = ChromeUtils.import(
-  "resource://gre/modules/TelemetryController.jsm"
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
 );
-ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  Log: "resource://gre/modules/Log.jsm",
+  TelemetryController: "resource://gre/modules/TelemetryController.jsm",
+});
 
 var EXPORTED_SYMBOLS = ["CrashManager", "getCrashManager"];
 
@@ -110,8 +113,6 @@ function parseAndRemoveField(obj, field) {
  *     Telemetry histogram to report store size under.
  */
 var CrashManager = function(options) {
-  this._log = Log.repository.getLogger("Crashes.CrashManager");
-
   for (let k in options) {
     let value = options[k];
 
@@ -164,9 +165,6 @@ CrashManager.prototype = Object.freeze({
 
   // A crash in a content process.
   PROCESS_TYPE_CONTENT: "content",
-
-  // A crash in a plugin process.
-  PROCESS_TYPE_PLUGIN: "plugin",
 
   // A crash in a Gecko media plugin process.
   PROCESS_TYPE_GMPLUGIN: "gmplugin",
@@ -921,8 +919,7 @@ var gCrashManager;
  *
  * The store has a mechanism for ensuring it doesn't grow too large. A ceiling
  * is placed on the number of daily events that can occur for events that can
- * occur with relatively high frequency, notably plugin crashes and hangs
- * (plugins can enter cycles where they repeatedly crash). If we've reached
+ * occur with relatively high frequency. If we've reached
  * the high water mark and new data arrives, it's silently dropped.
  * However, the count of actual events is always preserved. This allows
  * us to report on the severity of problems beyond the storage threshold.
@@ -1505,6 +1502,10 @@ CrashRecord.prototype = Object.freeze({
     return this._o.metadata;
   },
 });
+
+XPCOMUtils.defineLazyGetter(CrashManager, "_log", () =>
+  Log.repository.getLogger("Crashes.CrashManager")
+);
 
 /**
  * Obtain the global CrashManager instance used by the running application.

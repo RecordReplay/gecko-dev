@@ -62,7 +62,7 @@ add_task(async function testIncognitoPopup() {
         );
       };
 
-      const URL = "http://example.com/incognito";
+      const URL = "https://example.com/incognito";
       let windowReady = new Promise(resolve => {
         browser.tabs.onUpdated.addListener(function listener(
           tabId,
@@ -138,11 +138,7 @@ add_task(async function testIncognitoPopup() {
 });
 
 add_task(async function test_pageAction_incognito_not_allowed() {
-  SpecialPowers.pushPrefEnv({
-    set: [["extensions.allowPrivateBrowsingByDefault", false]],
-  });
-
-  const URL = "http://example.com/";
+  const URL = "https://example.com/";
   let extension = ExtensionTestUtils.loadExtension({
     manifest: {
       permissions: ["*://example.com/*"],

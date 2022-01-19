@@ -29,11 +29,16 @@ import androidx.collection.ArraySet;
 import androidx.collection.SimpleArrayMap;
 import android.util.Log;
 
+import java.util.UUID;
+
 
 public final class GeckoProcessManager extends IProcessManager.Stub {
     private static final String LOGTAG = "GeckoProcessManager";
     private static final GeckoProcessManager INSTANCE = new GeckoProcessManager();
     private static final int INVALID_PID = 0;
+
+    // This id univocally identifies the current process manager instance
+    private final String mInstanceId;
 
     public static GeckoProcessManager getInstance() {
         return INSTANCE;
@@ -433,9 +438,10 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
         }
 
         private void removeContentConnection(@NonNull final ChildConnection conn) {
-            if (!mContentConnections.remove(conn) && !mNonStartedContentConnections.remove(conn)) {
+            if (!mContentConnections.remove(conn)) {
                 throw new RuntimeException("Attempt to remove non-registered connection");
             }
+            mNonStartedContentConnections.remove(conn);
 
             final int pid;
 
@@ -476,7 +482,7 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
          */
         public void onBindComplete(@NonNull final ChildConnection conn) {
             if (conn.getType() == GeckoProcessType.CONTENT) {
-                int pid = conn.getPid();
+                final int pid = conn.getPid();
                 if (pid == INVALID_PID) {
                     throw new AssertionError("PID is invalid even though our caller just successfully retrieved it after binding");
                 }
@@ -591,6 +597,7 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
 
     private GeckoProcessManager() {
         mConnections = new ConnectionManager();
+        mInstanceId = UUID.randomUUID().toString();
     }
 
     public void preload(final GeckoProcessType... types) {
@@ -612,7 +619,7 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
             conn.bind().accept(proc -> {
                 try {
                     proc.crash();
-                } catch (RemoteException e) {
+                } catch (final RemoteException e) {
                 }
             });
         });
@@ -703,7 +710,9 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
                 builder.append("; Type: ");
                 builder.append(type.toString());
 
-                result.completeExceptionally(new RuntimeException(builder.toString()));
+                final RuntimeException exception = new RuntimeException(builder.toString(), error);
+                Log.e(LOGTAG, "Could not bind to process", exception);
+                result.completeExceptionally(exception);
             });
     }
 
@@ -754,12 +763,13 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
         final ParcelFileDescriptor crashAnnotationPfd =
                 (crashAnnotationFd >= 0) ? ParcelFileDescriptor.adoptFd(crashAnnotationFd) : null;
 
-        boolean started = false;
+        int started = IChildProcess.STARTED_FAIL;
         RemoteException exception = null;
+        final String userSerialNumber = System.getenv("MOZ_ANDROID_USER_SERIAL_NUMBER");
         final String crashHandler = GeckoAppShell.getCrashHandlerService() != null ?
                 GeckoAppShell.getCrashHandlerService().getName() : null;
         try {
-            started = child.start(this, args, extras, flags, crashHandler,
+            started = child.start(this, mInstanceId, args, extras, flags, userSerialNumber, crashHandler,
                     prefsPfd, prefMapPfd, ipcPfd, crashPfd, crashAnnotationPfd);
         } catch (final RemoteException e) {
             exception = e;
@@ -779,8 +789,20 @@ public final class GeckoProcessManager extends IProcessManager.Stub {
             prefsPfd.detachFd();
         }
 
-        if (started) {
+        if (started == IChildProcess.STARTED_OK) {
             result.complete(connection.getPid());
+            return;
+        } else if (started == IChildProcess.STARTED_BUSY) {
+            // This process is owned by a different runtime, so we can't use
+            // it. Let's try another process.
+            // Note: this strategy is pretty bad, we go through each process in
+            // sequence until one works, the multiple runtime case is test-only
+            // for now, so that's ok. We can improve on this if we eventually
+            // end up needing something fancier.
+            Log.w(LOGTAG, "Trying a different process");
+            connection.unbind().accept(unused ->
+                start(result, type, args, extras, flags, prefsFd, prefMapFd, ipcFd,
+                        crashFd, crashAnnotationFd, /* isRetry */ false));
             return;
         }
 

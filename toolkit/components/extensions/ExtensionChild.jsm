@@ -464,10 +464,6 @@ class BrowserExtensionContent extends EventEmitter {
     return this.policy.allowedOrigins;
   }
 
-  get webAccessibleResources() {
-    return this.policy.webAccessibleResources;
-  }
-
   getSharedData(key, value) {
     return sharedData.get(`extension/${this.id}/${key}`);
   }
@@ -484,6 +480,10 @@ class BrowserExtensionContent extends EventEmitter {
       this._manifest = this.getSharedData("manifest");
     }
     return this._manifest;
+  }
+
+  get manifestVersion() {
+    return this.manifest.manifest_version;
   }
 
   get privateBrowsingAllowed() {
@@ -904,6 +904,10 @@ class ChildAPIManager {
 
   get principal() {
     return this.context.principal;
+  }
+
+  get manifestVersion() {
+    return this.context.manifestVersion;
   }
 
   shouldInject(namespace, name, allowedContexts) {

@@ -659,7 +659,7 @@ static void CollectImageURLsForProperty(nsCSSPropertyID aProp,
   switch (aProp) {
     case eCSSProperty_cursor:
       for (auto& image : aStyle.StyleUI()->mCursor.images.AsSpan()) {
-        AddImageURL(image.url, aURLs);
+        AddImageURL(image.image, aURLs);
       }
       break;
     case eCSSProperty_background_image:
@@ -822,12 +822,13 @@ bool nsComputedDOMStyle::NeedsToFlushStyle(nsCSSPropertyID aPropID) const {
   // If parent document is there, also needs to check if there is some change
   // that needs to flush this document (e.g. size change for iframe).
   while (doc->StyleOrLayoutObservablyDependsOnParentDocumentLayout()) {
-    Document* parentDocument = doc->GetInProcessParentDocument();
-    Element* element = parentDocument->FindContentForSubDocument(doc);
-    if (ElementNeedsRestyle(element, nullptr, mayNeedToFlushLayout)) {
-      return true;
+    if (Element* element = doc->GetEmbedderElement()) {
+      if (ElementNeedsRestyle(element, nullptr, mayNeedToFlushLayout)) {
+        return true;
+      }
     }
-    doc = parentDocument;
+
+    doc = doc->GetInProcessParentDocument();
   }
 
   return false;
@@ -837,7 +838,9 @@ static bool IsNonReplacedInline(nsIFrame* aFrame) {
   // FIXME: this should be IsInlineInsideStyle() since width/height
   // doesn't apply to ruby boxes.
   return aFrame->StyleDisplay()->IsInlineFlow() &&
-         !aFrame->IsFrameOfType(nsIFrame::eReplaced);
+         !aFrame->IsFrameOfType(nsIFrame::eReplaced) &&
+         !aFrame->IsFieldSetFrame() && !aFrame->IsBlockFrame() &&
+         !aFrame->IsScrollFrame() && !aFrame->IsColumnSetWrapperFrame();
 }
 
 static Side SideForPaddingOrMarginOrInsetProperty(nsCSSPropertyID aPropID) {
@@ -1484,16 +1487,9 @@ already_AddRefed<nsROCSSPrimitiveValue> nsComputedDOMStyle::GetGridTrackSize(
   if (aTrackSize.IsFitContent()) {
     // A fit-content() function.
     RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
-    nsAutoString argumentStr, fitContentStr;
-    fitContentStr.AppendLiteral("fit-content(");
     MOZ_ASSERT(aTrackSize.AsFitContent().IsBreadth(),
                "unexpected unit for fit-content() argument value");
-    SetValueToLengthPercentage(val, aTrackSize.AsFitContent().AsBreadth(),
-                               true);
-    val->GetCssText(argumentStr, IgnoreErrors());
-    fitContentStr.Append(argumentStr);
-    fitContentStr.Append(char16_t(')'));
-    val->SetString(fitContentStr);
+    SetValueFromFitContentFunction(val, aTrackSize.AsFitContent().AsBreadth());
     return val.forget();
   }
 
@@ -2158,11 +2154,11 @@ bool nsComputedDOMStyle::GetLineHeightCoord(nscoord& aCoord) {
   }
 
   if (lh.IsMozBlockHeight()) {
-    AssertFlushedPendingReflows();
-
     if (!mInnerFrame) {
       return false;
     }
+
+    AssertFlushedPendingReflows();
 
     if (nsLayoutUtils::IsNonWrapperBlock(mInnerFrame)) {
       blockHeight = mInnerFrame->GetContentRect().height;
@@ -2231,19 +2227,34 @@ already_AddRefed<CSSValue> nsComputedDOMStyle::GetMarginWidthFor(
   return val.forget();
 }
 
-void nsComputedDOMStyle::SetValueToExtremumLength(nsROCSSPrimitiveValue* aValue,
-                                                  StyleExtremumLength aSize) {
+static void SetValueToExtremumLength(nsROCSSPrimitiveValue* aValue,
+                                     nsIFrame::ExtremumLength aSize) {
   switch (aSize) {
-    case StyleExtremumLength::MaxContent:
+    case nsIFrame::ExtremumLength::MaxContent:
       return aValue->SetString("max-content");
-    case StyleExtremumLength::MinContent:
+    case nsIFrame::ExtremumLength::MinContent:
       return aValue->SetString("min-content");
-    case StyleExtremumLength::MozAvailable:
+    case nsIFrame::ExtremumLength::MozAvailable:
       return aValue->SetString("-moz-available");
-    case StyleExtremumLength::MozFitContent:
+    case nsIFrame::ExtremumLength::MozFitContent:
       return aValue->SetString("-moz-fit-content");
+    case nsIFrame::ExtremumLength::FitContentFunction:
+      MOZ_ASSERT_UNREACHABLE("fit-content() should be handled separately");
   }
   MOZ_ASSERT_UNREACHABLE("Unknown extremum length?");
+}
+
+void nsComputedDOMStyle::SetValueFromFitContentFunction(
+    nsROCSSPrimitiveValue* aValue, const LengthPercentage& aLength) {
+  nsAutoString argumentStr;
+  SetValueToLengthPercentage(aValue, aLength, true);
+  aValue->GetCssText(argumentStr, IgnoreErrors());
+
+  nsAutoString fitContentStr;
+  fitContentStr.AppendLiteral("fit-content(");
+  fitContentStr.Append(argumentStr);
+  fitContentStr.Append(char16_t(')'));
+  aValue->SetString(fitContentStr);
 }
 
 void nsComputedDOMStyle::SetValueToSize(nsROCSSPrimitiveValue* aValue,
@@ -2251,8 +2262,11 @@ void nsComputedDOMStyle::SetValueToSize(nsROCSSPrimitiveValue* aValue,
   if (aSize.IsAuto()) {
     return aValue->SetString("auto");
   }
-  if (aSize.IsExtremumLength()) {
-    return SetValueToExtremumLength(aValue, aSize.AsExtremumLength());
+  if (aSize.IsFitContentFunction()) {
+    return SetValueFromFitContentFunction(aValue, aSize.AsFitContentFunction());
+  }
+  if (auto length = nsIFrame::ToExtremumLength(aSize)) {
+    return SetValueToExtremumLength(aValue, *length);
   }
   MOZ_ASSERT(aSize.IsLengthPercentage());
   SetValueToLengthPercentage(aValue, aSize.AsLengthPercentage(), true);
@@ -2263,8 +2277,11 @@ void nsComputedDOMStyle::SetValueToMaxSize(nsROCSSPrimitiveValue* aValue,
   if (aSize.IsNone()) {
     return aValue->SetString("none");
   }
-  if (aSize.IsExtremumLength()) {
-    return SetValueToExtremumLength(aValue, aSize.AsExtremumLength());
+  if (aSize.IsFitContentFunction()) {
+    return SetValueFromFitContentFunction(aValue, aSize.AsFitContentFunction());
+  }
+  if (auto length = nsIFrame::ToExtremumLength(aSize)) {
+    return SetValueToExtremumLength(aValue, *length);
   }
   MOZ_ASSERT(aSize.IsLengthPercentage());
   SetValueToLengthPercentage(aValue, aSize.AsLengthPercentage(), true);

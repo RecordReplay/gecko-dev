@@ -12,7 +12,7 @@
 #include "GMPServiceChild.h"
 #include "GMPServiceParent.h"
 #include "GMPVideoDecoderParent.h"
-#include "GeckoChildProcessHost.h"
+#include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/dom/Document.h"
@@ -262,6 +262,64 @@ RefPtr<GetCDMParentPromise> GeckoMediaPluginService::GetCDM(
   return promise;
 }
 
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+RefPtr<GetGMPContentParentPromise>
+GeckoMediaPluginService::GetContentParentForTest() {
+  MOZ_ASSERT(mGMPThread->IsOnCurrentThread());
+
+  nsTArray<nsCString> tags;
+  tags.AppendElement("fake"_ns);
+
+  const nsString origin1 = u"http://example1.com"_ns;
+  const nsString origin2 = u"http://example2.org"_ns;
+  const nsString gmpName = u"gmp-fake"_ns;
+
+  NodeIdParts nodeIdParts = NodeIdParts{origin1, origin2, gmpName};
+
+  if (mShuttingDownOnGMPThread) {
+    nsPrintfCString reason("%s::%s failed, mShuttingDownOnGMPThread = %d.",
+                           __CLASS__, __FUNCTION__, mShuttingDownOnGMPThread);
+    return GetGMPContentParentPromise::CreateAndReject(
+        MediaResult(NS_ERROR_FAILURE, reason.get()), __func__);
+  }
+
+  using PromiseHolder = MozPromiseHolder<GetGMPContentParentPromise>;
+  PromiseHolder* rawHolder(new PromiseHolder());
+  RefPtr<GetGMPContentParentPromise> promise = rawHolder->Ensure(__func__);
+  nsCOMPtr<nsISerialEventTarget> thread(GetGMPThread());
+  GetContentParent(nullptr, NodeIdVariant{nodeIdParts},
+                   nsLiteralCString(CHROMIUM_CDM_API), tags)
+      ->Then(
+          thread, __func__,
+          [rawHolder](const RefPtr<GMPContentParent::CloseBlocker>& wrapper) {
+            RefPtr<GMPContentParent> parent = wrapper->mParent;
+            MOZ_ASSERT(
+                parent,
+                "Wrapper should wrap a valid parent if we're in this path.");
+            UniquePtr<PromiseHolder> holder(rawHolder);
+            if (!parent) {
+              nsPrintfCString reason("%s::%s failed since no GMPContentParent.",
+                                     __CLASS__, __FUNCTION__);
+              holder->Reject(MediaResult(NS_ERROR_FAILURE, reason.get()),
+                             __func__);
+              return;
+            }
+            holder->Resolve(wrapper, __func__);
+          },
+          [rawHolder](const MediaResult& result) {
+            nsPrintfCString reason(
+                "%s::%s failed since GetContentParent rejects the promise with "
+                "reason %s.",
+                __CLASS__, __FUNCTION__, result.Description().get());
+            UniquePtr<PromiseHolder> holder(rawHolder);
+            holder->Reject(MediaResult(NS_ERROR_FAILURE, reason.get()),
+                           __func__);
+          });
+
+  return promise;
+}
+#endif
+
 void GeckoMediaPluginService::ShutdownGMPThread() {
   GMP_LOG_DEBUG("%s::%s", __CLASS__, __FUNCTION__);
   nsCOMPtr<nsIThread> gmpThread;
@@ -430,15 +488,16 @@ void GeckoMediaPluginService::ConnectCrashHelper(uint32_t aPluginId,
   if (!aHelper) {
     return;
   }
+
   MutexAutoLock lock(mMutex);
-  nsTArray<RefPtr<GMPCrashHelper>>* helpers;
-  if (!mPluginCrashHelpers.Get(aPluginId, &helpers)) {
-    helpers = new nsTArray<RefPtr<GMPCrashHelper>>();
-    mPluginCrashHelpers.Put(aPluginId, helpers);
-  } else if (helpers->Contains(aHelper)) {
-    return;
-  }
-  helpers->AppendElement(aHelper);
+  mPluginCrashHelpers.WithEntryHandle(aPluginId, [&](auto&& entry) {
+    if (!entry) {
+      entry.Insert(MakeUnique<nsTArray<RefPtr<GMPCrashHelper>>>());
+    } else if (entry.Data()->Contains(aHelper)) {
+      return;
+    }
+    entry.Data()->AppendElement(aHelper);
+  });
 }
 
 void GeckoMediaPluginService::DisconnectCrashHelper(GMPCrashHelper* aHelper) {

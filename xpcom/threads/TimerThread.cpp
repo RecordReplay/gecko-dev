@@ -17,14 +17,11 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/OperatorNewExtensions.h"
+#include "mozilla/StaticPrefs_timer.h"
 
 #include <math.h>
 
 using namespace mozilla;
-#ifdef MOZ_TASK_TRACER
-#  include "GeckoTaskTracerImpl.h"
-using namespace mozilla::tasktracer;
-#endif
 
 NS_IMPL_ISUPPORTS_INHERITED(TimerThread, Runnable, nsIObserver)
 
@@ -152,6 +149,7 @@ class nsTimerEvent final : public CancelableRunnable {
   }
   void operator delete(void* aPtr) {
     sAllocator->Free(aPtr);
+    sAllocatorUsers--;
     DeleteAllocatorIfNeeded();
   }
 
@@ -166,7 +164,6 @@ class nsTimerEvent final : public CancelableRunnable {
     MOZ_ASSERT(!sCanDeleteAllocator || sAllocatorUsers > 0,
                "This will result in us attempting to deallocate the "
                "nsTimerEvent allocator twice");
-    sAllocatorUsers--;
   }
 
   TimeStamp mInitTime;
@@ -651,12 +648,6 @@ bool TimerThread::AddTimerInternal(nsTimerImpl* aTimer) {
 
   std::push_heap(mTimers.begin(), mTimers.end(), Entry::UniquePtrLessThan);
 
-#ifdef MOZ_TASK_TRACER
-  // Caller of AddTimer is the parent task of its timer event, so we store the
-  // TraceInfo here for later used.
-  aTimer->GetTLSTraceInfo();
-#endif
-
   return true;
 }
 
@@ -717,14 +708,6 @@ already_AddRefed<nsTimerImpl> TimerThread::PostTimerEvent(
   // event, so we can avoid firing a timer that was re-initialized after being
   // canceled.
 
-#ifdef MOZ_TASK_TRACER
-  // During the dispatch of TimerEvent, we overwrite the current TraceInfo
-  // partially with the info saved in timer earlier, and restore it back by
-  // AutoSaveCurTraceInfo.
-  AutoSaveCurTraceInfo saveCurTraceInfo;
-  (timer->GetTracedTask()).SetTLSTraceInfo();
-#endif
-
   nsCOMPtr<nsIEventTarget> target = timer->mEventTarget;
 
   void* p = nsTimerEvent::operator new(sizeof(nsTimerEvent));
@@ -772,6 +755,10 @@ void TimerThread::DoAfterSleep() {
 NS_IMETHODIMP
 TimerThread::Observe(nsISupports* /* aSubject */, const char* aTopic,
                      const char16_t* /* aData */) {
+  if (StaticPrefs::timer_ignore_sleep_wake_notifications()) {
+    return NS_OK;
+  }
+
   if (strcmp(aTopic, "sleep_notification") == 0 ||
       strcmp(aTopic, "suspend_process_notification") == 0) {
     DoBeforeSleep();

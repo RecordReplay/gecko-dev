@@ -18,11 +18,11 @@ namespace a11y {
 namespace utils {
 
 // convert an array of Gecko accessibles to an NSArray of native accessibles
-NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<Accessible*>& aArray);
+NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<LocalAccessible*>& aArray);
 
 // convert an array of Gecko proxy accessibles to an NSArray of native
 // accessibles
-NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray);
+NSArray<mozAccessible*>* ConvertToNSArray(nsTArray<RemoteAccessible*>& aArray);
 
 /**
  * Get a localized string from the string bundle.
@@ -35,7 +35,7 @@ NSString* LocalizedString(const nsString& aString);
  * accessible wrapper or proxy, and returns the value as an NSString.
  * nil if no attribute is found.
  */
-NSString* GetAccAttr(mozAccessible* aNativeAccessible, const char* aAttrName);
+NSString* GetAccAttr(mozAccessible* aNativeAccessible, nsAtom* aAttrName);
 }
 }
 }

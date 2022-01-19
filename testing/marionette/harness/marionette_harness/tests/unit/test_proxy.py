@@ -29,10 +29,6 @@ class TestProxyCapabilities(MarionetteTestCase):
 
         super(TestProxyCapabilities, self).tearDown()
 
-    def test_proxy_object_none_by_default(self):
-        self.marionette.start_session()
-        self.assertNotIn("proxy", self.marionette.session_capabilities)
-
     def test_proxy_object_in_returned_capabilities(self):
         capabilities = {"proxy": {"proxyType": "system"}}
 
@@ -57,12 +53,11 @@ class TestProxyCapabilities(MarionetteTestCase):
             self.marionette.session_capabilities["proxy"], capabilities["proxy"]
         )
 
-    def test_proxy_type_manual_without_port(self):
+    def test_proxy_type_manual(self):
         proxy_hostname = "marionette.test"
         capabilities = {
             "proxy": {
                 "proxyType": "manual",
-                "ftpProxy": "{}:21".format(proxy_hostname),
                 "httpProxy": "{}:80".format(proxy_hostname),
                 "sslProxy": "{}:443".format(proxy_hostname),
                 "socksProxy": proxy_hostname,

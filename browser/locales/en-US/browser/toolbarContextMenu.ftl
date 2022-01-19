@@ -2,6 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+toolbar-context-menu-new-tab =
+    .label = New Tab
+    .accesskey = w
 toolbar-context-menu-reload-selected-tab =
     .label = Reload Selected Tab
     .accesskey = R
@@ -17,13 +20,13 @@ toolbar-context-menu-bookmark-selected-tabs =
 toolbar-context-menu-select-all-tabs =
     .label = Select All Tabs
     .accesskey = S
-toolbar-context-menu-undo-close-tabs =
+toolbar-context-menu-reopen-closed-tabs =
     .label =
         { $tabCount ->
-            [1] Undo Close Tab
-           *[other] Undo Close Tabs
+            [1] Reopen Closed Tab
+           *[other] Reopen Closed Tabs
         }
-    .accesskey = U
+    .accesskey = o
 
 toolbar-context-menu-manage-extension =
     .label = Manage Extension
@@ -45,14 +48,17 @@ toolbar-context-menu-report-extension =
 toolbar-context-menu-pin-to-overflow-menu =
     .label = Pin to Overflow Menu
     .accesskey = P
-toolbar-context-menu-auto-hide-downloads-button =
-    .label = Auto-Hide in Toolbar
-    .accesskey = A
+toolbar-context-menu-auto-hide-downloads-button-2 =
+    .label = Hide Button When Empty
+    .accesskey = H
 toolbar-context-menu-remove-from-toolbar =
     .label = Remove from Toolbar
     .accesskey = R
 toolbar-context-menu-view-customize-toolbar =
     .label = Customize…
+    .accesskey = C
+toolbar-context-menu-view-customize-toolbar-2 =
+    .label = Customize Toolbar…
     .accesskey = C
 
 toolbar-context-menu-bookmarks-toolbar-always-show-2 =

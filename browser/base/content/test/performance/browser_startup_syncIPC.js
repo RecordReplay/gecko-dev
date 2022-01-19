@@ -9,7 +9,7 @@
 const LINUX = AppConstants.platform == "linux";
 const WIN = AppConstants.platform == "win";
 const MAC = AppConstants.platform == "macosx";
-const WEBRENDER = window.windowUtils.layerManagerType == "WebRender";
+const WEBRENDER = window.windowUtils.layerManagerType.startsWith("WebRender");
 const SKELETONUI = Services.prefs.getBoolPref(
   "browser.startup.preXulSkeletonUI",
   false
@@ -31,7 +31,7 @@ const startupPhases = {
   "before first paint": [
     {
       name: "PLayerTransaction::Msg_GetTextureFactoryIdentifier",
-      condition: (MAC && !WEBRENDER) || LINUX,
+      condition: (MAC || LINUX) && !WEBRENDER,
       maxCount: 1,
     },
     {
@@ -46,7 +46,7 @@ const startupPhases = {
     },
     {
       name: "PWebRenderBridge::Msg_EnsureConnected",
-      condition: MAC && WEBRENDER,
+      condition: (MAC || LINUX) && WEBRENDER,
       maxCount: 1,
     },
     {
@@ -242,7 +242,7 @@ const startupPhases = {
     },
     {
       name: "PWebRenderBridge::Msg_EnsureConnected",
-      condition: WIN && WEBRENDER,
+      condition: (WIN || LINUX) && WEBRENDER,
       ignoreIfUnused: true,
       maxCount: 1,
     },
@@ -316,6 +316,7 @@ add_task(async function() {
   {
     const nameCol = profile.markers.schema.name;
     const dataCol = profile.markers.schema.data;
+    const startTimeCol = profile.markers.schema.startTime;
 
     let markersForCurrentPhase = [];
     for (let m of profile.markers.data) {
@@ -331,14 +332,13 @@ add_task(async function() {
       let markerData = m[dataCol];
       if (
         !markerData ||
-        markerData.type != "IPC" ||
-        !markerData.sync ||
-        markerData.direction != "sending"
+        markerData.category != "Sync IPC" ||
+        !m[startTimeCol]
       ) {
         continue;
       }
 
-      markersForCurrentPhase.push(markerData.messageType);
+      markersForCurrentPhase.push(markerName);
     }
   }
 

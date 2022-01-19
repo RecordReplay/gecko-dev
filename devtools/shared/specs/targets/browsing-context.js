@@ -13,8 +13,7 @@ const {
 
 types.addDictType("browsingContextTarget.attach", {
   threadActor: "number",
-  cacheDisabled: "boolean",
-  javascriptEnabled: "boolean",
+  javascriptEnabled: "nullable:boolean",
   traits: "json",
 });
 
@@ -38,15 +37,24 @@ types.addDictType("browsingContextTarget.workers", {
   workers: "array:workerDescriptor",
 });
 
+// @backward-compat { version 91 }
+//                  BrowsingContextTarget reload should no longer be used within
+//                  DevTools. Remove this comment when version 91 hits release.
+// @backward-compat { legacy }
+//                  reload is preserved for third party tools. See Bug 1717837.
+//                  DevTools should use Descriptor::reloadDescriptor instead.
 types.addDictType("browsingContextTarget.reload", {
   force: "boolean",
 });
 
+// @backward-compat { version 87 } See backward-compat note for `reconfigure`.
 types.addDictType("browsingContextTarget.reconfigure", {
-  javascriptEnabled: "nullable:boolean",
   cacheDisabled: "nullable:boolean",
+  colorSchemeSimulation: "nullable:string",
+  paintFlashing: "nullable:boolean",
+  printSimulationEnabled: "nullable:boolean",
+  restoreFocus: "nullable:boolean",
   serviceWorkersTestingEnabled: "nullable:boolean",
-  performReload: "nullable:boolean",
 });
 
 const browsingContextTargetSpecPrototype = {
@@ -77,6 +85,13 @@ const browsingContextTargetSpecPrototype = {
       request: {},
       response: {},
     },
+    // @backward-compat { version 91 }
+    //                  BrowsingContextTarget reload should no longer be used within
+    //                  DevTools. Remove this comment when version 91 hits release.
+    // @backward-compat { legacy }
+    //                  reload is preserved for third party tools. See Bug 1717837.
+    //                  DevTools should use Descriptor::reloadDescriptor instead.
+
     reload: {
       request: {
         options: Option(0, "browsingContextTarget.reload"),
@@ -89,6 +104,10 @@ const browsingContextTargetSpecPrototype = {
       },
       response: {},
     },
+    // @backward-compat { version 87 } Starting with version 87, targets which
+    // support the watcher will rely on the configuration actor to update their
+    // configuration flags. However we need to keep this request until all
+    // browsing context targets support the watcher (eg webextensions).
     reconfigure: {
       request: {
         options: Option(0, "browsingContextTarget.reconfigure"),
@@ -132,12 +151,6 @@ const browsingContextTargetSpecPrototype = {
       frames: Option(0, "nullable:array:browsingContextTarget.window"),
       selected: Option(0, "nullable:number"),
       destroyAll: Option(0, "nullable:boolean"),
-    },
-    tabDetached: {
-      type: "tabDetached",
-      // This is to make browser_dbg_navigation.js to work as it expect to
-      // see a packet object when listening for tabDetached
-      from: Option(0, "string"),
     },
     workerListChanged: {
       type: "workerListChanged",

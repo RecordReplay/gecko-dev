@@ -60,7 +60,6 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
   using Document = mozilla::dom::Document;
   using LengthPercentage = mozilla::LengthPercentage;
   using LengthPercentageOrAuto = mozilla::LengthPercentageOrAuto;
-  using StyleExtremumLength = mozilla::StyleExtremumLength;
   using ComputedStyle = mozilla::ComputedStyle;
 
  public:
@@ -86,7 +85,8 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
   nsComputedDOMStyle(Element* aElement, const nsAString& aPseudoElt,
                      Document* aDocument, StyleType aStyleType);
 
-  nsINode* GetParentObject() override { return mElement; }
+  nsINode* GetAssociatedNode() const override { return mElement; }
+  nsINode* GetParentObject() const override { return mElement; }
 
   static already_AddRefed<ComputedStyle> GetComputedStyle(
       Element* aElement, nsAtom* aPseudo, StyleType aStyleType = eAll);
@@ -282,6 +282,9 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
   void SetValueToURLValue(const mozilla::StyleComputedUrl* aURL,
                           nsROCSSPrimitiveValue* aValue);
 
+  void SetValueFromFitContentFunction(nsROCSSPrimitiveValue* aValue,
+                                      const mozilla::LengthPercentage&);
+
   void SetValueToSize(nsROCSSPrimitiveValue* aValue, const mozilla::StyleSize&);
 
   void SetValueToLengthPercentageOrAuto(nsROCSSPrimitiveValue* aValue,
@@ -294,9 +297,6 @@ class nsComputedDOMStyle final : public nsDOMCSSDeclaration,
 
   void SetValueToMaxSize(nsROCSSPrimitiveValue* aValue,
                          const mozilla::StyleMaxSize&);
-
-  void SetValueToExtremumLength(nsROCSSPrimitiveValue* aValue,
-                                StyleExtremumLength);
 
   bool GetCBContentWidth(nscoord& aWidth);
   bool GetCBContentHeight(nscoord& aHeight);

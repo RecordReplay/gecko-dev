@@ -3,11 +3,6 @@
 
 "use strict";
 
-ChromeUtils.import(
-  "resource://testing-common/HandlerServiceTestUtils.jsm",
-  this
-);
-
 let gHandlerService = Cc["@mozilla.org/uriloader/handler-service;1"].getService(
   Ci.nsIHandlerService
 );
@@ -324,14 +319,8 @@ async function testCheckbox(
 ) {
   let checkbox = dialogEl.ownerDocument.getElementById("remember");
   if (typeof hasCheckbox == "boolean") {
-    let hiddenEl;
-    if (dialogType == "permission") {
-      hiddenEl = checkbox.parentElement;
-    } else {
-      hiddenEl = checkbox;
-    }
     is(
-      checkbox && !hiddenEl.hidden,
+      checkbox && BrowserTestUtils.is_visible(checkbox),
       hasCheckbox,
       "Dialog checkbox has correct visibility."
     );
@@ -342,8 +331,7 @@ async function testCheckbox(
   }
 
   if (typeof actionCheckbox == "boolean") {
-    checkbox.focus();
-    await EventUtils.synthesizeKey("VK_SPACE", undefined, dialogEl.ownerWindow);
+    checkbox.click();
   }
 }
 

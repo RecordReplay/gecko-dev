@@ -148,7 +148,7 @@ var closeRDM = async function(tab, options) {
  *     async function preTask({ message, browser }) {
  *       // Your pre-task goes here...
  *     },
- *     async function task({ ui, manager, message, browser, preTaskValue }) {
+ *     async function task({ ui, manager, message, browser, preTaskValue, tab }) {
  *       // Your task goes here...
  *     },
  *     async function postTask({ message, browser, preTaskValue, taskValue }) {
@@ -185,20 +185,7 @@ function addRDMTaskWithPreAndPost(url, preTask, task, postTask, options) {
       ui = rdmValues.ui;
       manager = rdmValues.manager;
 
-      // Always wait for the post-init message.
-      await message.wait(ui.toolWindow, "post-init");
-
-      // Always wait for the viewport to be added.
-      const { store } = ui.toolWindow;
-      await waitUntilState(store, state => state.viewports.length == 1);
-
-      if (waitForDeviceList) {
-        // Wait until the device list has been loaded.
-        await waitUntilState(
-          store,
-          state => state.devices.listState == localTypes.loadableState.LOADED
-        );
-      }
+      await waitForRDMLoaded(ui, { waitForDeviceList });
     }
 
     try {
@@ -208,6 +195,7 @@ function addRDMTaskWithPreAndPost(url, preTask, task, postTask, options) {
         message,
         browser,
         preTaskValue,
+        tab,
       });
     } catch (err) {
       ok(false, "Got an error: " + DevToolsUtils.safeErrorString(err));
@@ -230,6 +218,26 @@ function addRDMTaskWithPreAndPost(url, preTask, task, postTask, options) {
     // any changes made by the tasks.
     await SpecialPowers.flushPrefEnv();
   });
+}
+
+/**
+ * Wait for the RDM UI to be fully loaded
+ */
+async function waitForRDMLoaded(ui, { waitForDeviceList }) {
+  // Always wait for the post-init message.
+  await message.wait(ui.toolWindow, "post-init");
+
+  // Always wait for the viewport to be added.
+  const { store } = ui.toolWindow;
+  await waitUntilState(store, state => state.viewports.length == 1);
+
+  if (waitForDeviceList) {
+    // Wait until the device list has been loaded.
+    await waitUntilState(
+      store,
+      state => state.devices.listState == localTypes.loadableState.LOADED
+    );
+  }
 }
 
 /**
@@ -515,7 +523,6 @@ function getSessionHistory(browser) {
     const browsingContext = browser.browsingContext;
     const uri = browsingContext.currentWindowGlobal.documentURI.displaySpec;
     const history = browsingContext.sessionHistory;
-    const userContextId = browsingContext.originAttributes.userContextId;
     const body = ContentTask.spawn(browser, browsingContext, function(
       // eslint-disable-next-line no-shadow
       browsingContext
@@ -529,7 +536,7 @@ function getSessionHistory(browser) {
     const { SessionHistory } = ChromeUtils.import(
       "resource://gre/modules/sessionstore/SessionHistory.jsm"
     );
-    return SessionHistory.collectFromParent(uri, body, history, userContextId);
+    return SessionHistory.collectFromParent(uri, body, history);
     /* eslint-enable no-undef */
   }
   return ContentTask.spawn(browser, null, function() {
@@ -620,7 +627,7 @@ function addDeviceForTest(device) {
 
 async function waitForClientClose(ui) {
   info("Waiting for RDM devtools client to close");
-  await ui.client.once("closed");
+  await ui.commands.client.once("closed");
   info("RDM's devtools client is now closed");
 }
 
@@ -633,7 +640,8 @@ async function testTouchEventsOverride(ui, expected) {
   const { document } = ui.toolWindow;
   const touchButton = document.getElementById("touch-simulation-button");
 
-  const flag = await ui.responsiveFront.getTouchEventsOverride();
+  const flag = gBrowser.selectedBrowser.browsingContext.touchEventsOverride;
+
   is(
     flag === "enabled",
     expected,
@@ -844,16 +852,13 @@ function rotateViewport(ui) {
 
 // Call this to switch between on/off support for meta viewports.
 async function setTouchAndMetaViewportSupport(ui, value) {
-  const reloadNeeded = await ui.updateTouchSimulation(value);
-  if (reloadNeeded) {
-    info("Reload is needed -- waiting for it.");
-    const reload = waitForViewportLoad(ui);
-    const browser = ui.getViewportBrowser();
-    browser.reload();
-    await reload;
-    await promiseContentReflow(ui);
-  }
-  return reloadNeeded;
+  await ui.updateTouchSimulation(value);
+  info("Reload so the new configuration applies cleanly to the page");
+  const reload = waitForViewportLoad(ui);
+  const browser = ui.getViewportBrowser();
+  browser.reload();
+  await reload;
+  await promiseContentReflow(ui);
 }
 
 // This function checks that zoom, layout viewport width and height
@@ -924,6 +929,63 @@ async function waitForDeviceAndViewportState(ui) {
       state.viewports.length == 1 &&
       state.devices.listState == localTypes.loadableState.LOADED
   );
+}
+
+/**
+ * Wait for the content page to be rendered with the expected pixel ratio.
+ *
+ * @param {ResponsiveUI} ui
+ *        The ResponsiveUI instance.
+ * @param {Integer} expected
+ *        The expected dpr for the content page.
+ * @param {Object} options
+ * @param {Boolean} options.waitForTargetConfiguration
+ *        If set to true, the function will wait for the targetConfigurationCommand configuration
+ *        to reflect the ratio that was set. This can be used to prevent pending requests
+ *        to the actor.
+ */
+async function waitForDevicePixelRatio(
+  ui,
+  expected,
+  { waitForTargetConfiguration } = {}
+) {
+  const dpx = await SpecialPowers.spawn(
+    ui.getViewportBrowser(),
+    [{ expected }],
+    function(args) {
+      const initial = content.devicePixelRatio;
+      info(
+        `Listening for pixel ratio change ` +
+          `(current: ${initial}, expected: ${args.expected})`
+      );
+      return new Promise(resolve => {
+        const mql = content.matchMedia(`(resolution: ${args.expected}dppx)`);
+        if (mql.matches) {
+          info(`Ratio already changed to ${args.expected}dppx`);
+          resolve(content.devicePixelRatio);
+          return;
+        }
+        mql.addListener(function listener() {
+          info(`Ratio changed to ${args.expected}dppx`);
+          mql.removeListener(listener);
+          resolve(content.devicePixelRatio);
+        });
+      });
+    }
+  );
+
+  if (waitForTargetConfiguration) {
+    // Ensure the configuration was updated so we limit the risk of the client closing before
+    // the server sent back the result of the updateConfiguration call.
+    await waitFor(() => {
+      return (
+        ui.commands.targetConfigurationCommand.configuration.overrideDPPX ===
+        expected
+      );
+    });
+  }
+
+  return dpx;
 }
 
 /**

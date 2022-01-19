@@ -5,9 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 SOURCES += [
-    'Assembler.cpp',
     'Graphics.cpp',
-    'HashTable.cpp',
     'JSControl.cpp',
     'Network.cpp',
     'ProcessRecordReplay.cpp',

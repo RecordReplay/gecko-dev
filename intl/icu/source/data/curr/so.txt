@@ -1,5 +1,6 @@
 ﻿// © 2016 and later: Unicode, Inc. and others.
-// License & terms of use: http://www.unicode.org/copyright.html#License
+// License & terms of use: http://www.unicode.org/copyright.html
+// Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 so{
     Currencies{
         AED{
@@ -475,7 +476,7 @@ so{
             "Kinada Babua Niyuu Gini",
         }
         PHP{
-            "PHP",
+            "₱",
             "Biso Filibin",
         }
         PKR{
@@ -651,7 +652,7 @@ so{
             "Doolarka Iist Kaaribyan",
         }
         XOF{
-            "CFA",
+            "F CFA",
             "Faranka CFA Galbeedka Afrika",
         }
         XPF{
@@ -1355,5 +1356,4 @@ so{
             other{"Kawajada Sambiya"}
         }
     }
-    Version{"37"}
 }

@@ -2,7 +2,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from __future__ import absolute_import, print_function, unicode_literals
 
 import json
 import os
@@ -18,10 +17,11 @@ class AgainParser(BaseTryParser):
             ["--index"],
             {
                 "default": 0,
-                "type": int,
+                "const": "list",
+                "nargs": "?",
                 "help": "Index of entry in the history to re-push, "
                 "where '0' is the most recent (default 0). "
-                "Use --list to display indices.",
+                "Use --index without a value to display indices.",
             },
         ],
         [
@@ -59,6 +59,15 @@ class AgainParser(BaseTryParser):
 def run(
     index=0, purge=False, list_configs=False, list_tasks=0, message="{msg}", **pushargs
 ):
+    if index == "list":
+        list_configs = True
+    else:
+        try:
+            index = int(index)
+        except ValueError:
+            print("error: '--index' must be an integer")
+            return 1
+
     if purge:
         os.remove(history_path)
         return
@@ -67,15 +76,17 @@ def run(
         print("error: history file not found: {}".format(history_path))
         return 1
 
-    with open(history_path, "r") as fh:
+    with open(history_path) as fh:
         history = fh.readlines()
 
     if list_configs or list_tasks > 0:
         for i, data in enumerate(history):
             msg, config = json.loads(data)
             version = config.get("version", "1")
+            settings = {}
             if version == 1:
                 tasks = config["tasks"]
+                settings = config
             elif version == 2:
                 try_config = config.get("parameters", {}).get("try_task_config", {})
                 tasks = try_config.get("tasks")
@@ -83,13 +94,25 @@ def run(
                 tasks = None
 
             if tasks is not None:
-                n = len(tasks)
+                # Select only the things that are of interest to display.
+                settings = settings.copy()
+                env = settings.pop("env", {}).copy()
+                env.pop("TRY_SELECTOR", None)
+                for name in ("tasks", "version"):
+                    settings.pop(name, None)
 
-                print(
-                    "{index}. ({n} task{s}) {msg}".format(
-                        index=i, msg=msg, n=n, s="" if n == 1 else "s"
+                def pluralize(n, noun):
+                    return "{n} {noun}{s}".format(
+                        n=n, noun=noun, s="" if n == 1 else "s"
                     )
-                )
+
+                out = str(i) + ". (" + pluralize(len(tasks), "task")
+                if env:
+                    out += ", " + pluralize(len(env), "env var")
+                if settings:
+                    out += ", " + pluralize(len(settings), "setting")
+                out += ") " + msg
+                print(out)
 
                 if list_tasks > 0:
                     indent = " " * 4
@@ -102,6 +125,16 @@ def run(
                     num_hidden_tasks = len(tasks) - len(shown_tasks)
                     if num_hidden_tasks > 0:
                         print("{}... and {} more".format(indent, num_hidden_tasks))
+
+                if list_tasks and env:
+                    for line in ("env: " + json.dumps(env, indent=2)).splitlines():
+                        print("    " + line)
+
+                if list_tasks and settings:
+                    for line in (
+                        "settings: " + json.dumps(settings, indent=2)
+                    ).splitlines():
+                        print("    " + line)
             else:
                 print(
                     "{index}. {msg}".format(

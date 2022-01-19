@@ -207,13 +207,14 @@ class WebRTCChild extends JSWindowActorChild {
 }
 
 function getActorForWindow(window) {
-  let windowGlobal = window.windowGlobalChild;
   try {
+    let windowGlobal = window.windowGlobalChild;
     if (windowGlobal) {
       return windowGlobal.getActor("WebRTC");
     }
   } catch (ex) {
-    // There might not be an actor for a parent process chrome URL.
+    // There might not be an actor for a parent process chrome URL,
+    // and we may not even be allowed to access its windowGlobalChild.
   }
 
   return null;
@@ -265,40 +266,22 @@ function handleGUMRequest(aSubject, aTopic, aData) {
   GlobalMuteListener.init();
 
   let constraints = aSubject.getConstraints();
-  let secure = aSubject.isSecure;
-  let isHandlingUserInput = aSubject.isHandlingUserInput;
   let contentWindow = Services.wm.getOuterWindowWithId(aSubject.windowID);
 
-  contentWindow.navigator.mozGetUserMediaDevices(
+  prompt(
+    aSubject.type,
+    contentWindow,
+    aSubject.windowID,
+    aSubject.callID,
     constraints,
-    function(devices) {
-      // If the window has been closed while we were waiting for the list of
-      // devices, there's nothing to do in the callback anymore.
-      if (contentWindow.closed) {
-        return;
-      }
-
-      prompt(
-        contentWindow,
-        aSubject.windowID,
-        aSubject.callID,
-        constraints,
-        devices,
-        secure,
-        isHandlingUserInput
-      );
-    },
-    function(error) {
-      // Device enumeration is done ahead of handleGUMRequest, so we're not
-      // responsible for handling the NotFoundError spec case.
-      denyGUMRequest({ callID: aSubject.callID });
-    },
-    aSubject.innerWindowID,
-    aSubject.callID
+    aSubject.devices,
+    aSubject.isSecure,
+    aSubject.isHandlingUserInput
   );
 }
 
 function prompt(
+  aRequestType,
   aContentWindow,
   aWindowID,
   aCallID,
@@ -307,8 +290,9 @@ function prompt(
   aSecure,
   aIsHandlingUserInput
 ) {
-  let audioDevices = [];
-  let videoDevices = [];
+  let audioInputDevices = [];
+  let videoInputDevices = [];
+  let audioOutputDevices = [];
   let devices = [];
 
   // MediaStreamConstraints defines video as 'boolean or MediaTrackConstraints'.
@@ -320,18 +304,19 @@ function prompt(
     audio && typeof audio != "boolean" && audio.mediaSource != "microphone";
   for (let device of aDevices) {
     device = device.QueryInterface(Ci.nsIMediaDevice);
+    let deviceObject = {
+      name: device.rawName, // unfiltered device name to show to the user
+      deviceIndex: devices.length,
+      id: device.rawId,
+      mediaSource: device.mediaSource,
+    };
     switch (device.type) {
       case "audioinput":
         // Check that if we got a microphone, we have not requested an audio
         // capture, and if we have requested an audio capture, we are not
         // getting a microphone instead.
         if (audio && (device.mediaSource == "microphone") != sharingAudio) {
-          audioDevices.push({
-            name: device.rawName, // unfiltered device name to show to the user
-            deviceIndex: devices.length,
-            id: device.rawId,
-            mediaSource: device.mediaSource,
-          });
+          audioInputDevices.push(deviceObject);
           devices.push(device);
         }
         break;
@@ -339,16 +324,16 @@ function prompt(
         // Verify that if we got a camera, we haven't requested a screen share,
         // or that if we requested a screen share we aren't getting a camera.
         if (video && (device.mediaSource == "camera") != sharingScreen) {
-          let deviceObject = {
-            name: device.rawName, // unfiltered device name to show to the user
-            deviceIndex: devices.length,
-            id: device.rawId,
-            mediaSource: device.mediaSource,
-          };
           if (device.scary) {
             deviceObject.scary = true;
           }
-          videoDevices.push(deviceObject);
+          videoInputDevices.push(deviceObject);
+          devices.push(device);
+        }
+        break;
+      case "audiooutput":
+        if (aRequestType == "selectaudiooutput") {
+          audioOutputDevices.push(deviceObject);
           devices.push(device);
         }
         break;
@@ -356,11 +341,14 @@ function prompt(
   }
 
   let requestTypes = [];
-  if (videoDevices.length) {
+  if (videoInputDevices.length) {
     requestTypes.push(sharingScreen ? "Screen" : "Camera");
   }
-  if (audioDevices.length) {
+  if (audioInputDevices.length) {
     requestTypes.push(sharingAudio ? "AudioCapture" : "Microphone");
+  }
+  if (audioOutputDevices.length) {
+    requestTypes.push("Speaker");
   }
 
   if (!requestTypes.length) {
@@ -416,8 +404,9 @@ function prompt(
     requestTypes,
     sharingScreen,
     sharingAudio,
-    audioDevices,
-    videoDevices,
+    audioInputDevices,
+    videoInputDevices,
+    audioOutputDevices,
   };
 
   let actor = getActorForWindow(aContentWindow);

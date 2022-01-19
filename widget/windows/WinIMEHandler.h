@@ -207,6 +207,8 @@ class IMEHandler final {
   static bool IsTSFAvailable() { return sIsInTSFMode; }
   static bool IsIMMActive();
 
+  static bool IsOnScreenKeyboardSupported();
+
   static void MaybeShowOnScreenKeyboard(nsWindow* aWindow,
                                         const InputContext& aInputContext);
   enum class Sync { Yes, No };
@@ -231,12 +233,6 @@ class IMEHandler final {
    * Windows 8 and higher.
    */
   static void DismissOnScreenKeyboard(nsWindow* aWindow);
-
-  /**
-   * Get the HWND for the on-screen keyboard, if it's up. Only
-   * allowed for Windows 8 and higher.
-   */
-  static HWND GetOnScreenKeyboardWindow();
 };
 
 }  // namespace widget

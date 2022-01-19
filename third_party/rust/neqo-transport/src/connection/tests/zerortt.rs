@@ -4,11 +4,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::super::{Connection, FixedConnectionIdManager};
-use super::{connect, default_client, default_server, exchange_ticket};
+use super::super::Connection;
+use super::{
+    connect, default_client, default_server, exchange_ticket, new_server,
+    CountingConnectionIdGenerator,
+};
 use crate::events::ConnectionEvent;
-use crate::frame::StreamType;
-use crate::{ConnectionParameters, Error};
+use crate::{ConnectionParameters, Error, StreamType};
 
 use neqo_common::event::Provider;
 use neqo_crypto::{AllowZeroRtt, AntiReplay};
@@ -62,8 +64,13 @@ fn zero_rtt_send_recv() {
 
     let server_hs = server.process(client_hs.dgram(), now());
     assert!(server_hs.as_dgram_ref().is_some()); // ServerHello, etc...
+
+    let all_frames = server.stats().frame_tx.all;
+    let ack_frames = server.stats().frame_tx.ack;
     let server_process_0rtt = server.process(client_0rtt.dgram(), now());
-    assert!(server_process_0rtt.as_dgram_ref().is_none());
+    assert!(server_process_0rtt.as_dgram_ref().is_some());
+    assert_eq!(server.stats().frame_tx.all, all_frames + 1);
+    assert_eq!(server.stats().frame_tx.ack, ack_frames + 1);
 
     let server_stream_id = server
         .events()
@@ -132,8 +139,8 @@ fn zero_rtt_send_reject() {
     let mut server = Connection::new_server(
         test_fixture::DEFAULT_KEYS,
         test_fixture::DEFAULT_ALPN,
-        Rc::new(RefCell::new(FixedConnectionIdManager::new(10))),
-        &ConnectionParameters::default(),
+        Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
+        ConnectionParameters::default(),
     )
     .unwrap();
     // Using a freshly initialized anti-replay context
@@ -183,11 +190,69 @@ fn zero_rtt_send_reject() {
     let stream_id_after_reject = client.stream_create(StreamType::UniDi).unwrap();
     assert_eq!(stream_id, stream_id_after_reject);
     client.stream_send(stream_id_after_reject, MESSAGE).unwrap();
-    let client_after_reject = client.process(None, now());
-    assert!(client_after_reject.as_dgram_ref().is_some());
+    let client_after_reject = client.process(None, now()).dgram();
+    assert!(client_after_reject.is_some());
 
     // The server should receive new stream
-    let server_out = server.process(client_after_reject.dgram(), now());
-    assert!(server_out.as_dgram_ref().is_none()); // suppress the ack
+    server.process_input(client_after_reject.unwrap(), now());
     assert!(server.events().any(recvd_stream_evt));
+}
+
+#[test]
+fn zero_rtt_update_flow_control() {
+    const LOW: u64 = 3;
+    const HIGH: u64 = 10;
+    #[allow(clippy::cast_possible_truncation)]
+    const MESSAGE: &[u8] = &[0; HIGH as usize];
+
+    let mut client = default_client();
+    let mut server = new_server(
+        ConnectionParameters::default()
+            .max_stream_data(StreamType::UniDi, true, LOW)
+            .max_stream_data(StreamType::BiDi, true, LOW),
+    );
+    connect(&mut client, &mut server);
+
+    let token = exchange_ticket(&mut client, &mut server, now());
+    let mut client = default_client();
+    client
+        .enable_resumption(now(), token)
+        .expect("should set token");
+    let mut server = new_server(
+        ConnectionParameters::default()
+            .max_stream_data(StreamType::UniDi, true, HIGH)
+            .max_stream_data(StreamType::BiDi, true, HIGH),
+    );
+
+    // Stream limits should be low for 0-RTT.
+    let client_hs = client.process(None, now()).dgram();
+    let uni_stream = client.stream_create(StreamType::UniDi).unwrap();
+    assert!(!client.stream_send_atomic(uni_stream, MESSAGE).unwrap());
+    let bidi_stream = client.stream_create(StreamType::BiDi).unwrap();
+    assert!(!client.stream_send_atomic(bidi_stream, MESSAGE).unwrap());
+
+    // Now get the server transport parameters.
+    let server_hs = server.process(client_hs, now()).dgram();
+    client.process_input(server_hs.unwrap(), now());
+
+    // The streams should report a writeable event.
+    let mut uni_stream_event = false;
+    let mut bidi_stream_event = false;
+    for e in client.events() {
+        if let ConnectionEvent::SendStreamWritable { stream_id } = e {
+            if stream_id.is_uni() {
+                uni_stream_event = true;
+            } else {
+                bidi_stream_event = true;
+            }
+        }
+    }
+    assert!(uni_stream_event);
+    assert!(bidi_stream_event);
+    // But no MAX_STREAM_DATA frame was received.
+    assert_eq!(client.stats().frame_rx.max_stream_data, 0);
+
+    // And the new limit applies.
+    assert!(client.stream_send_atomic(uni_stream, MESSAGE).unwrap());
+    assert!(client.stream_send_atomic(bidi_stream, MESSAGE).unwrap());
 }

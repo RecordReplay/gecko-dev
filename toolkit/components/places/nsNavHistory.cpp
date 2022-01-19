@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 
+#include "mozilla/Components.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerPrintfMacros.h"
 
@@ -272,6 +273,9 @@ class FixAndDecayFrecencyRunnable final : public Runnable {
     mozStorageTransaction transaction(
         mDB->MainConn(), false, mozIStorageConnection::TRANSACTION_IMMEDIATE);
 
+    // XXX Handle the error, bug 1696133.
+    Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
+
     if (NS_WARN_IF(NS_FAILED(DecayFrecencies()))) {
       mDecayReason = mozIStorageStatementCallback::REASON_ERROR;
     }
@@ -386,8 +390,7 @@ nsNavHistory::nsNavHistory()
       mDecayFrecencyPendingCount(0),
       mTagsFolder(-1),
       mLastCachedStartOfDay(INT64_MAX),
-      mLastCachedEndOfDay(0),
-      mCanNotify(true)
+      mLastCachedEndOfDay(0)
 #ifdef XP_WIN
       ,
       mCryptoProviderInitialized(false)
@@ -827,7 +830,7 @@ nsNavHistory::MarkPageAsFollowedBookmark(nsIURI* aURI) {
   nsresult rv = aURI->GetSpec(uriString);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mRecentBookmark.Put(uriString, GetNow());
+  mRecentBookmark.InsertOrUpdate(uriString, GetNow());
 
   if (mRecentBookmark.Count() > RECENT_EVENT_QUEUE_MAX_LENGTH)
     ExpireNonrecentEvents(&mRecentBookmark);
@@ -1376,7 +1379,7 @@ nsresult PlacesSQLQueryBuilder::SelectAsDay() {
     }
 
     nsPrintfCString dateParam("dayTitle%d", i);
-    mAddParams.Put(dateParam, dateName);
+    mAddParams.InsertOrUpdate(dateParam, dateName);
 
     nsPrintfCString dayRange(
         "SELECT :%s AS dayTitle, "
@@ -1413,7 +1416,7 @@ nsresult PlacesSQLQueryBuilder::SelectAsSite() {
   NS_ENSURE_STATE(history);
 
   history->GetStringFromName("localhost", localFiles);
-  mAddParams.Put("localhost"_ns, localFiles);
+  mAddParams.InsertOrUpdate("localhost"_ns, localFiles);
 
   // If there are additional conditions the query has to join on visits too.
   nsAutoCString visitsJoin;
@@ -1499,18 +1502,18 @@ nsresult PlacesSQLQueryBuilder::SelectAsRoots() {
   nsAutoCString unfiledTitle;
 
   history->GetStringFromName("BookmarksToolbarFolderTitle", toolbarTitle);
-  mAddParams.Put("BookmarksToolbarFolderTitle"_ns, toolbarTitle);
+  mAddParams.InsertOrUpdate("BookmarksToolbarFolderTitle"_ns, toolbarTitle);
   history->GetStringFromName("BookmarksMenuFolderTitle", menuTitle);
-  mAddParams.Put("BookmarksMenuFolderTitle"_ns, menuTitle);
+  mAddParams.InsertOrUpdate("BookmarksMenuFolderTitle"_ns, menuTitle);
   history->GetStringFromName("OtherBookmarksFolderTitle", unfiledTitle);
-  mAddParams.Put("OtherBookmarksFolderTitle"_ns, unfiledTitle);
+  mAddParams.InsertOrUpdate("OtherBookmarksFolderTitle"_ns, unfiledTitle);
 
   nsAutoCString mobileString;
 
   if (Preferences::GetBool(MOBILE_BOOKMARKS_PREF, false)) {
     nsAutoCString mobileTitle;
     history->GetStringFromName("MobileBookmarksFolderTitle", mobileTitle);
-    mAddParams.Put("MobileBookmarksFolderTitle"_ns, mobileTitle);
+    mAddParams.InsertOrUpdate("MobileBookmarksFolderTitle"_ns, mobileTitle);
 
     mobileString = nsLiteralCString(
         ","
@@ -1547,13 +1550,13 @@ nsresult PlacesSQLQueryBuilder::SelectAsLeftPane() {
   nsAutoCString allBookmarksTitle;
 
   history->GetStringFromName("OrganizerQueryHistory", historyTitle);
-  mAddParams.Put("OrganizerQueryHistory"_ns, historyTitle);
+  mAddParams.InsertOrUpdate("OrganizerQueryHistory"_ns, historyTitle);
   history->GetStringFromName("OrganizerQueryDownloads", downloadsTitle);
-  mAddParams.Put("OrganizerQueryDownloads"_ns, downloadsTitle);
+  mAddParams.InsertOrUpdate("OrganizerQueryDownloads"_ns, downloadsTitle);
   history->GetStringFromName("TagsFolderTitle", tagsTitle);
-  mAddParams.Put("TagsFolderTitle"_ns, tagsTitle);
+  mAddParams.InsertOrUpdate("TagsFolderTitle"_ns, tagsTitle);
   history->GetStringFromName("OrganizerQueryAllBookmarks", allBookmarksTitle);
-  mAddParams.Put("OrganizerQueryAllBookmarks"_ns, allBookmarksTitle);
+  mAddParams.InsertOrUpdate("OrganizerQueryAllBookmarks"_ns, allBookmarksTitle);
 
   mQueryString = nsPrintfCString(
       "SELECT * FROM ("
@@ -1893,8 +1896,9 @@ nsresult nsNavHistory::GetQueryResults(
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  for (auto iter = addParams.Iter(); !iter.Done(); iter.Next()) {
-    nsresult rv = statement->BindUTF8StringByName(iter.Key(), iter.Data());
+  for (const auto& entry : addParams) {
+    nsresult rv =
+        statement->BindUTF8StringByName(entry.GetKey(), entry.GetData());
     if (NS_FAILED(rv)) {
       break;
     }
@@ -1911,48 +1915,6 @@ nsresult nsNavHistory::GetQueryResults(
   } else {
     rv = ResultsAsList(statement, aOptions, aResults);
     NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsNavHistory::AddObserver(nsINavHistoryObserver* aObserver, bool aOwnsWeak) {
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG(aObserver);
-
-  if (NS_WARN_IF(!mCanNotify)) return NS_ERROR_UNEXPECTED;
-
-  return mObservers.AppendWeakElementUnlessExists(aObserver, aOwnsWeak);
-}
-
-NS_IMETHODIMP
-nsNavHistory::RemoveObserver(nsINavHistoryObserver* aObserver) {
-  NS_ASSERTION(NS_IsMainThread(), "This can only be called on the main thread");
-  NS_ENSURE_ARG(aObserver);
-
-  return mObservers.RemoveWeakElement(aObserver);
-}
-
-NS_IMETHODIMP
-nsNavHistory::GetObservers(
-    nsTArray<RefPtr<nsINavHistoryObserver>>& aObservers) {
-  aObservers.Clear();
-
-  // Clear any cached value, cause it's very likely the consumer has made
-  // changes to history and is now trying to notify them.
-  InvalidateDaysOfHistory();
-
-  if (!mCanNotify) return NS_OK;
-
-  // Then add the other observers.
-  for (uint32_t i = 0; i < mObservers.Length(); ++i) {
-    nsCOMPtr<nsINavHistoryObserver> observer =
-        mObservers.ElementAt(i).GetValue();
-    // Skip nullified weak observers.
-    if (observer) {
-      aObservers.AppendElement(observer.forget());
-    }
   }
 
   return NS_OK;
@@ -1984,7 +1946,7 @@ nsNavHistory::MarkPageAsTyped(nsIURI* aURI) {
   nsresult rv = aURI->GetSpec(uriString);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mRecentTyped.Put(uriString, GetNow());
+  mRecentTyped.InsertOrUpdate(uriString, GetNow());
 
   if (mRecentTyped.Count() > RECENT_EVENT_QUEUE_MAX_LENGTH)
     ExpireNonrecentEvents(&mRecentTyped);
@@ -2009,7 +1971,7 @@ nsNavHistory::MarkPageAsFollowedLink(nsIURI* aURI) {
   nsresult rv = aURI->GetSpec(uriString);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mRecentLink.Put(uriString, GetNow());
+  mRecentLink.InsertOrUpdate(uriString, GetNow());
 
   if (mRecentLink.Count() > RECENT_EVENT_QUEUE_MAX_LENGTH)
     ExpireNonrecentEvents(&mRecentLink);
@@ -2127,8 +2089,9 @@ nsNavHistory::AsyncExecuteLegacyQuery(nsINavHistoryQuery* aQuery,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  for (auto iter = addParams.Iter(); !iter.Done(); iter.Next()) {
-    nsresult rv = statement->BindUTF8StringByName(iter.Key(), iter.Data());
+  for (const auto& entry : addParams) {
+    nsresult rv =
+        statement->BindUTF8StringByName(entry.GetKey(), entry.GetData());
     if (NS_FAILED(rv)) {
       break;
     }
@@ -2153,13 +2116,6 @@ nsNavHistory::Observe(nsISupports* aSubject, const char* aTopic,
     // These notifications are used by tests to simulate a Places shutdown.
     // They should just be forwarded to the Database handle.
     mDB->Observe(aSubject, aTopic, aData);
-  }
-
-  else if (strcmp(aTopic, TOPIC_PLACES_CONNECTION_CLOSED) == 0) {
-    // Don't even try to notify observers from this point on, the category
-    // cache would init services that could try to use our APIs.
-    mCanNotify = false;
-    mObservers.Clear();
   }
 
   else if (strcmp(aTopic, TOPIC_PREF_CHANGED) == 0) {
@@ -3295,7 +3251,7 @@ nsICollation* nsNavHistory::GetCollation() {
 nsIStringBundle* nsNavHistory::GetBundle() {
   if (!mBundle) {
     nsCOMPtr<nsIStringBundleService> bundleService =
-        services::GetStringBundleService();
+        components::StringBundle::Service();
     NS_ENSURE_TRUE(bundleService, nullptr);
     nsresult rv = bundleService->CreateBundle(
         "chrome://places/locale/places.properties", getter_AddRefs(mBundle));

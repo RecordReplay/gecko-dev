@@ -192,7 +192,7 @@ class WebPlatformTestsRunnerSetup(MozbuildObject):
         try:
             kwargs = run.setup_wptrunner(venv, **kwargs)
         except run.WptrunError as e:
-            print(e.message, file=sys.stderr)
+            print(e, file=sys.stderr)
             sys.exit(1)
 
         # This is kind of a hack; override the metadata paths so we don't use
@@ -370,6 +370,25 @@ class WebPlatformTestsTestPathsRunner(MozbuildObject):
         return True
 
 
+class WebPlatformTestsFissionRegressionsRunner(MozbuildObject):
+    def run(self, **kwargs):
+        import mozlog
+        import fissionregressions
+
+        src_root = self.topsrcdir
+        obj_root = self.topobjdir
+        logger = mozlog.structuredlog.StructuredLogger("web-platform-tests")
+
+        try:
+            return fissionregressions.run(logger, src_root, obj_root, **kwargs)
+        except Exception:
+            import traceback
+            import pdb
+
+            traceback.print_exc()
+            pdb.post_mortem()
+
+
 def create_parser_update():
     from update import updatecommandline
 
@@ -407,6 +426,12 @@ def create_parser_unittest():
     import unittestrunner
 
     return unittestrunner.get_parser()
+
+
+def create_parser_fission_regressions():
+    import fissionregressions
+
+    return fissionregressions.get_parser()
 
 
 def create_parser_testpaths():
@@ -455,7 +480,7 @@ class MachCommands(MachCommandBase):
         description="Run web-platform-tests.",
         parser=create_parser_wpt,
     )
-    def run_web_platform_tests(self, **params):
+    def run_web_platform_tests(self, command_context, **params):
         self.setup()
         if params["product"] is None:
             if conditions.is_android(self):
@@ -498,8 +523,8 @@ class MachCommands(MachCommandBase):
         description="Run web-platform-tests.",
         parser=create_parser_wpt,
     )
-    def run_wpt(self, **params):
-        return self.run_web_platform_tests(**params)
+    def run_wpt(self, command_context, **params):
+        return self.run_web_platform_tests(command_context, **params)
 
     @Command(
         "web-platform-tests-update",
@@ -507,7 +532,7 @@ class MachCommands(MachCommandBase):
         description="Update web-platform-test metadata.",
         parser=create_parser_update,
     )
-    def update_web_platform_tests(self, **params):
+    def update_web_platform_tests(self, command_context, **params):
         self.setup()
         self.virtualenv_manager.install_pip_package("html5lib==1.0.1")
         self.virtualenv_manager.install_pip_package("ujson")
@@ -523,8 +548,8 @@ class MachCommands(MachCommandBase):
         description="Update web-platform-test metadata.",
         parser=create_parser_update,
     )
-    def update_wpt(self, **params):
-        return self.update_web_platform_tests(**params)
+    def update_wpt(self, command_context, **params):
+        return self.update_web_platform_tests(command_context, **params)
 
     @Command(
         "wpt-manifest-update",
@@ -532,7 +557,7 @@ class MachCommands(MachCommandBase):
         description="Update web-platform-test manifests.",
         parser=create_parser_manifest_update,
     )
-    def wpt_manifest_update(self, **params):
+    def wpt_manifest_update(self, command_context, **params):
         self.setup()
         wpt_setup = self._spawn(WebPlatformTestsRunnerSetup)
         wpt_runner = WebPlatformTestsRunner(wpt_setup)
@@ -549,7 +574,7 @@ class MachCommands(MachCommandBase):
         description="Run the wpt server",
         parser=create_parser_serve,
     )
-    def wpt_serve(self, **params):
+    def wpt_serve(self, command_context, **params):
         self.setup()
         import logging
 
@@ -564,7 +589,7 @@ class MachCommands(MachCommandBase):
         description="Create a json summary of the wpt metadata",
         parser=create_parser_metadata_summary,
     )
-    def wpt_summary(self, **params):
+    def wpt_summary(self, command_context, **params):
         import metasummary
 
         wpt_setup = self._spawn(WebPlatformTestsRunnerSetup)
@@ -573,7 +598,7 @@ class MachCommands(MachCommandBase):
     @Command(
         "wpt-metadata-merge", category="testing", parser=create_parser_metadata_merge
     )
-    def wpt_meta_merge(self, **params):
+    def wpt_meta_merge(self, command_context, **params):
         import metamerge
 
         if params["dest"] is None:
@@ -586,7 +611,7 @@ class MachCommands(MachCommandBase):
         description="Run the wpt tools and wptrunner unit tests",
         parser=create_parser_unittest,
     )
-    def wpt_unittest(self, **params):
+    def wpt_unittest(self, command_context, **params):
         self.setup()
         self.virtualenv_manager.install_pip_package("tox")
         runner = self._spawn(WebPlatformTestsUnittestRunner)
@@ -598,7 +623,18 @@ class MachCommands(MachCommandBase):
         description="Get a mapping from test ids to files",
         parser=create_parser_testpaths,
     )
-    def wpt_test_paths(self, **params):
+    def wpt_test_paths(self, command_context, **params):
         runner = self._spawn(WebPlatformTestsTestPathsRunner)
+        runner.run(**params)
+        return 0
+
+    @Command(
+        "wpt-fission-regressions",
+        category="testing",
+        description="Dump a list of fission-specific regressions",
+        parser=create_parser_fission_regressions,
+    )
+    def wpt_fission_regressions(self, command_context, **params):
+        runner = self._spawn(WebPlatformTestsFissionRegressionsRunner)
         runner.run(**params)
         return 0

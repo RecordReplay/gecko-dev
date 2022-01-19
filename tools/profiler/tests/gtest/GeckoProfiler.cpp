@@ -21,10 +21,13 @@
 #include "json/json.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/BlocksRingBuffer.h"
+#include "mozilla/DataMutex.h"
 #include "mozilla/ProfileBufferEntrySerializationGeckoExtensions.h"
 #include "mozilla/ProfileJSONWriter.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/net/HttpBaseChannel.h"
+#include "nsIChannelEventSink.h"
 #include "nsIThread.h"
 #include "nsThreadUtils.h"
 
@@ -239,44 +242,43 @@ static void InactiveFeaturesAndParamsCheck() {
   double interval;
   uint32_t features;
   StrVec filters;
-  uint64_t activeBrowsingContextID;
+  uint64_t activeTabID;
 
   ASSERT_TRUE(!profiler_is_active());
   ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::MainThreadIO));
   ASSERT_TRUE(!profiler_feature_active(ProfilerFeature::NativeAllocations));
 
   profiler_get_start_params(&entries, &duration, &interval, &features, &filters,
-                            &activeBrowsingContextID);
+                            &activeTabID);
 
   ASSERT_TRUE(entries == 0);
   ASSERT_TRUE(duration == Nothing());
   ASSERT_TRUE(interval == 0);
   ASSERT_TRUE(features == 0);
   ASSERT_TRUE(filters.empty());
-  ASSERT_TRUE(activeBrowsingContextID == 0);
+  ASSERT_TRUE(activeTabID == 0);
 }
 
 static void ActiveParamsCheck(int aEntries, double aInterval,
                               uint32_t aFeatures, const char** aFilters,
-                              size_t aFiltersLen,
-                              uint64_t aActiveBrowsingContextID,
+                              size_t aFiltersLen, uint64_t aActiveTabID,
                               const Maybe<double>& aDuration = Nothing()) {
   int entries;
   Maybe<double> duration;
   double interval;
   uint32_t features;
   StrVec filters;
-  uint64_t activeBrowsingContextID;
+  uint64_t activeTabID;
 
   profiler_get_start_params(&entries, &duration, &interval, &features, &filters,
-                            &activeBrowsingContextID);
+                            &activeTabID);
 
   ASSERT_TRUE(entries == aEntries);
   ASSERT_TRUE(duration == aDuration);
   ASSERT_TRUE(interval == aInterval);
   ASSERT_TRUE(features == aFeatures);
   ASSERT_TRUE(filters.length() == aFiltersLen);
-  ASSERT_TRUE(activeBrowsingContextID == aActiveBrowsingContextID);
+  ASSERT_TRUE(activeTabID == aActiveTabID);
   for (size_t i = 0; i < aFiltersLen; i++) {
     ASSERT_TRUE(strcmp(filters[i], aFilters[i]) == 0);
   }
@@ -931,17 +933,19 @@ TEST(GeckoProfiler, Markers)
       net::kCacheHit,
       /* uint64_t aInnerWindowID */ 78
       /* const mozilla::net::TimingStruct* aTimings = nullptr */
-      /* nsIURI* aRedirectURI = nullptr */
       /* mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> aSource =
          nullptr */
       /* const mozilla::Maybe<nsDependentCString>& aContentType =
-         mozilla::Nothing() */);
+         mozilla::Nothing() */
+      /* nsIURI* aRedirectURI = nullptr */
+      /* uint64_t aRedirectChannelId = 0 */
+  );
 
   profiler_add_network_marker(
       /* nsIURI* aURI */ uri,
       /* const nsACString& aRequestMethod */ "GET"_ns,
       /* int32_t aPriority */ 34,
-      /* uint64_t aChannelId */ 12,
+      /* uint64_t aChannelId */ 2,
       /* NetworkLoadType aType */ NetworkLoadType::LOAD_STOP,
       /* mozilla::TimeStamp aStart */ ts1,
       /* mozilla::TimeStamp aEnd */ ts2,
@@ -950,13 +954,14 @@ TEST(GeckoProfiler, Markers)
       net::kCacheUnresolved,
       /* uint64_t aInnerWindowID */ 78,
       /* const mozilla::net::TimingStruct* aTimings = nullptr */ nullptr,
-      /* nsIURI* aRedirectURI = nullptr */ nullptr,
       /* mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> aSource =
          nullptr */
       nullptr,
       /* const mozilla::Maybe<nsDependentCString>& aContentType =
          mozilla::Nothing() */
-      Some(nsDependentCString("text/html")));
+      Some(nsDependentCString("text/html")),
+      /* nsIURI* aRedirectURI = nullptr */ nullptr,
+      /* uint64_t aRedirectChannelId = 0 */ 0);
 
   nsCOMPtr<nsIURI> redirectURI;
   ASSERT_TRUE(NS_SUCCEEDED(
@@ -965,7 +970,7 @@ TEST(GeckoProfiler, Markers)
       /* nsIURI* aURI */ uri,
       /* const nsACString& aRequestMethod */ "GET"_ns,
       /* int32_t aPriority */ 34,
-      /* uint64_t aChannelId */ 123,
+      /* uint64_t aChannelId */ 3,
       /* NetworkLoadType aType */ NetworkLoadType::LOAD_REDIRECT,
       /* mozilla::TimeStamp aStart */ ts1,
       /* mozilla::TimeStamp aEnd */ ts2,
@@ -974,11 +979,87 @@ TEST(GeckoProfiler, Markers)
       net::kCacheUnresolved,
       /* uint64_t aInnerWindowID */ 78,
       /* const mozilla::net::TimingStruct* aTimings = nullptr */ nullptr,
-      /* nsIURI* aRedirectURI = nullptr */ redirectURI
       /* mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> aSource =
          nullptr */
+      nullptr,
       /* const mozilla::Maybe<nsDependentCString>& aContentType =
-         mozilla::Nothing() */);
+         mozilla::Nothing() */
+      mozilla::Nothing(),
+      /* nsIURI* aRedirectURI = nullptr */ redirectURI,
+      /* uint32_t aRedirectFlags = 0 */
+      nsIChannelEventSink::REDIRECT_TEMPORARY,
+      /* uint64_t aRedirectChannelId = 0 */ 103);
+
+  profiler_add_network_marker(
+      /* nsIURI* aURI */ uri,
+      /* const nsACString& aRequestMethod */ "GET"_ns,
+      /* int32_t aPriority */ 34,
+      /* uint64_t aChannelId */ 4,
+      /* NetworkLoadType aType */ NetworkLoadType::LOAD_REDIRECT,
+      /* mozilla::TimeStamp aStart */ ts1,
+      /* mozilla::TimeStamp aEnd */ ts2,
+      /* int64_t aCount */ 56,
+      /* mozilla::net::CacheDisposition aCacheDisposition */
+      net::kCacheUnresolved,
+      /* uint64_t aInnerWindowID */ 78,
+      /* const mozilla::net::TimingStruct* aTimings = nullptr */ nullptr,
+      /* mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> aSource =
+         nullptr */
+      nullptr,
+      /* const mozilla::Maybe<nsDependentCString>& aContentType =
+         mozilla::Nothing() */
+      mozilla::Nothing(),
+      /* nsIURI* aRedirectURI = nullptr */ redirectURI,
+      /* uint32_t aRedirectFlags = 0 */
+      nsIChannelEventSink::REDIRECT_PERMANENT,
+      /* uint64_t aRedirectChannelId = 0 */ 104);
+
+  profiler_add_network_marker(
+      /* nsIURI* aURI */ uri,
+      /* const nsACString& aRequestMethod */ "GET"_ns,
+      /* int32_t aPriority */ 34,
+      /* uint64_t aChannelId */ 5,
+      /* NetworkLoadType aType */ NetworkLoadType::LOAD_REDIRECT,
+      /* mozilla::TimeStamp aStart */ ts1,
+      /* mozilla::TimeStamp aEnd */ ts2,
+      /* int64_t aCount */ 56,
+      /* mozilla::net::CacheDisposition aCacheDisposition */
+      net::kCacheUnresolved,
+      /* uint64_t aInnerWindowID */ 78,
+      /* const mozilla::net::TimingStruct* aTimings = nullptr */ nullptr,
+      /* mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> aSource =
+         nullptr */
+      nullptr,
+      /* const mozilla::Maybe<nsDependentCString>& aContentType =
+         mozilla::Nothing() */
+      mozilla::Nothing(),
+      /* nsIURI* aRedirectURI = nullptr */ redirectURI,
+      /* uint32_t aRedirectFlags = 0 */ nsIChannelEventSink::REDIRECT_INTERNAL,
+      /* uint64_t aRedirectChannelId = 0 */ 105);
+
+  profiler_add_network_marker(
+      /* nsIURI* aURI */ uri,
+      /* const nsACString& aRequestMethod */ "GET"_ns,
+      /* int32_t aPriority */ 34,
+      /* uint64_t aChannelId */ 6,
+      /* NetworkLoadType aType */ NetworkLoadType::LOAD_REDIRECT,
+      /* mozilla::TimeStamp aStart */ ts1,
+      /* mozilla::TimeStamp aEnd */ ts2,
+      /* int64_t aCount */ 56,
+      /* mozilla::net::CacheDisposition aCacheDisposition */
+      net::kCacheUnresolved,
+      /* uint64_t aInnerWindowID */ 78,
+      /* const mozilla::net::TimingStruct* aTimings = nullptr */ nullptr,
+      /* mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> aSource =
+         nullptr */
+      nullptr,
+      /* const mozilla::Maybe<nsDependentCString>& aContentType =
+         mozilla::Nothing() */
+      mozilla::Nothing(),
+      /* nsIURI* aRedirectURI = nullptr */ redirectURI,
+      /* uint32_t aRedirectFlags = 0 */ nsIChannelEventSink::REDIRECT_INTERNAL |
+          nsIChannelEventSink::REDIRECT_STS_UPGRADE,
+      /* uint64_t aRedirectChannelId = 0 */ 106);
 
   MOZ_RELEASE_ASSERT(profiler_add_marker(
       "Text in main thread with stack", geckoprofiler::category::OTHER,
@@ -1059,7 +1140,11 @@ TEST(GeckoProfiler, Markers)
     S_SpecialMarker,
     S_NetworkMarkerPayload_start,
     S_NetworkMarkerPayload_stop,
-    S_NetworkMarkerPayload_redirect,
+    S_NetworkMarkerPayload_redirect_temporary,
+    S_NetworkMarkerPayload_redirect_permanent,
+    S_NetworkMarkerPayload_redirect_internal,
+    S_NetworkMarkerPayload_redirect_internal_sts,
+
     S_TextWithStack,
     S_TextToMTWithStack,
     S_RegThread_TextToMTWithStack,
@@ -1349,30 +1434,36 @@ TEST(GeckoProfiler, Markers)
                   EXPECT_EQ_JSON(payload["count"], Int64, 56);
                   EXPECT_EQ_JSON(payload["cache"], String, "Hit");
                   EXPECT_TRUE(payload["RedirectURI"].isNull());
+                  EXPECT_TRUE(payload["redirectType"].isNull());
+                  EXPECT_TRUE(payload["isHttpToHttpsRedirect"].isNull());
+                  EXPECT_TRUE(payload["redirectId"].isNull());
                   EXPECT_TRUE(payload["contentType"].isNull());
 
-                } else if (nameString == "Load 12: http://mozilla.org/") {
+                } else if (nameString == "Load 2: http://mozilla.org/") {
                   EXPECT_EQ(state, S_NetworkMarkerPayload_stop);
                   state = State(S_NetworkMarkerPayload_stop + 1);
                   EXPECT_EQ(typeString, "Network");
                   EXPECT_EQ_JSON(payload["startTime"], Double, ts1Double);
                   EXPECT_EQ_JSON(payload["endTime"], Double, ts2Double);
-                  EXPECT_EQ_JSON(payload["id"], Int64, 12);
+                  EXPECT_EQ_JSON(payload["id"], Int64, 2);
                   EXPECT_EQ_JSON(payload["URI"], String, "http://mozilla.org/");
                   EXPECT_EQ_JSON(payload["requestMethod"], String, "GET");
                   EXPECT_EQ_JSON(payload["pri"], Int64, 34);
                   EXPECT_EQ_JSON(payload["count"], Int64, 56);
                   EXPECT_EQ_JSON(payload["cache"], String, "Unresolved");
                   EXPECT_TRUE(payload["RedirectURI"].isNull());
+                  EXPECT_TRUE(payload["redirectType"].isNull());
+                  EXPECT_TRUE(payload["isHttpToHttpsRedirect"].isNull());
+                  EXPECT_TRUE(payload["redirectId"].isNull());
                   EXPECT_EQ_JSON(payload["contentType"], String, "text/html");
 
-                } else if (nameString == "Load 123: http://mozilla.org/") {
-                  EXPECT_EQ(state, S_NetworkMarkerPayload_redirect);
-                  state = State(S_NetworkMarkerPayload_redirect + 1);
+                } else if (nameString == "Load 3: http://mozilla.org/") {
+                  EXPECT_EQ(state, S_NetworkMarkerPayload_redirect_temporary);
+                  state = State(S_NetworkMarkerPayload_redirect_temporary + 1);
                   EXPECT_EQ(typeString, "Network");
                   EXPECT_EQ_JSON(payload["startTime"], Double, ts1Double);
                   EXPECT_EQ_JSON(payload["endTime"], Double, ts2Double);
-                  EXPECT_EQ_JSON(payload["id"], Int64, 123);
+                  EXPECT_EQ_JSON(payload["id"], Int64, 3);
                   EXPECT_EQ_JSON(payload["URI"], String, "http://mozilla.org/");
                   EXPECT_EQ_JSON(payload["requestMethod"], String, "GET");
                   EXPECT_EQ_JSON(payload["pri"], Int64, 34);
@@ -1380,6 +1471,68 @@ TEST(GeckoProfiler, Markers)
                   EXPECT_EQ_JSON(payload["cache"], String, "Unresolved");
                   EXPECT_EQ_JSON(payload["RedirectURI"], String,
                                  "http://example.com/");
+                  EXPECT_EQ_JSON(payload["redirectType"], String, "Temporary");
+                  EXPECT_EQ_JSON(payload["isHttpToHttpsRedirect"], Bool, false);
+                  EXPECT_EQ_JSON(payload["redirectId"], Int64, 103);
+                  EXPECT_TRUE(payload["contentType"].isNull());
+
+                } else if (nameString == "Load 4: http://mozilla.org/") {
+                  EXPECT_EQ(state, S_NetworkMarkerPayload_redirect_permanent);
+                  state = State(S_NetworkMarkerPayload_redirect_permanent + 1);
+                  EXPECT_EQ(typeString, "Network");
+                  EXPECT_EQ_JSON(payload["startTime"], Double, ts1Double);
+                  EXPECT_EQ_JSON(payload["endTime"], Double, ts2Double);
+                  EXPECT_EQ_JSON(payload["id"], Int64, 4);
+                  EXPECT_EQ_JSON(payload["URI"], String, "http://mozilla.org/");
+                  EXPECT_EQ_JSON(payload["requestMethod"], String, "GET");
+                  EXPECT_EQ_JSON(payload["pri"], Int64, 34);
+                  EXPECT_EQ_JSON(payload["count"], Int64, 56);
+                  EXPECT_EQ_JSON(payload["cache"], String, "Unresolved");
+                  EXPECT_EQ_JSON(payload["RedirectURI"], String,
+                                 "http://example.com/");
+                  EXPECT_EQ_JSON(payload["redirectType"], String, "Permanent");
+                  EXPECT_EQ_JSON(payload["isHttpToHttpsRedirect"], Bool, false);
+                  EXPECT_EQ_JSON(payload["redirectId"], Int64, 104);
+                  EXPECT_TRUE(payload["contentType"].isNull());
+
+                } else if (nameString == "Load 5: http://mozilla.org/") {
+                  EXPECT_EQ(state, S_NetworkMarkerPayload_redirect_internal);
+                  state = State(S_NetworkMarkerPayload_redirect_internal + 1);
+                  EXPECT_EQ(typeString, "Network");
+                  EXPECT_EQ_JSON(payload["startTime"], Double, ts1Double);
+                  EXPECT_EQ_JSON(payload["endTime"], Double, ts2Double);
+                  EXPECT_EQ_JSON(payload["id"], Int64, 5);
+                  EXPECT_EQ_JSON(payload["URI"], String, "http://mozilla.org/");
+                  EXPECT_EQ_JSON(payload["requestMethod"], String, "GET");
+                  EXPECT_EQ_JSON(payload["pri"], Int64, 34);
+                  EXPECT_EQ_JSON(payload["count"], Int64, 56);
+                  EXPECT_EQ_JSON(payload["cache"], String, "Unresolved");
+                  EXPECT_EQ_JSON(payload["RedirectURI"], String,
+                                 "http://example.com/");
+                  EXPECT_EQ_JSON(payload["redirectType"], String, "Internal");
+                  EXPECT_EQ_JSON(payload["isHttpToHttpsRedirect"], Bool, false);
+                  EXPECT_EQ_JSON(payload["redirectId"], Int64, 105);
+                  EXPECT_TRUE(payload["contentType"].isNull());
+
+                } else if (nameString == "Load 6: http://mozilla.org/") {
+                  EXPECT_EQ(state,
+                            S_NetworkMarkerPayload_redirect_internal_sts);
+                  state =
+                      State(S_NetworkMarkerPayload_redirect_internal_sts + 1);
+                  EXPECT_EQ(typeString, "Network");
+                  EXPECT_EQ_JSON(payload["startTime"], Double, ts1Double);
+                  EXPECT_EQ_JSON(payload["endTime"], Double, ts2Double);
+                  EXPECT_EQ_JSON(payload["id"], Int64, 6);
+                  EXPECT_EQ_JSON(payload["URI"], String, "http://mozilla.org/");
+                  EXPECT_EQ_JSON(payload["requestMethod"], String, "GET");
+                  EXPECT_EQ_JSON(payload["pri"], Int64, 34);
+                  EXPECT_EQ_JSON(payload["count"], Int64, 56);
+                  EXPECT_EQ_JSON(payload["cache"], String, "Unresolved");
+                  EXPECT_EQ_JSON(payload["RedirectURI"], String,
+                                 "http://example.com/");
+                  EXPECT_EQ_JSON(payload["redirectType"], String, "Internal");
+                  EXPECT_EQ_JSON(payload["isHttpToHttpsRedirect"], Bool, true);
+                  EXPECT_EQ_JSON(payload["redirectId"], Int64, 106);
                   EXPECT_TRUE(payload["contentType"].isNull());
 
                 } else if (nameString == "Text in main thread with stack") {
@@ -1985,19 +2138,21 @@ class GTestStackCollector final : public ProfilerStackCollector {
   int mFrames;
 };
 
-void DoSuspendAndSample(int aTid, nsIThread* aThread) {
-  aThread->Dispatch(
-      NS_NewRunnableFunction("GeckoProfiler_SuspendAndSample_Test::TestBody",
-                             [&]() {
-                               uint32_t features = ProfilerFeature::Leaf;
-                               GTestStackCollector collector;
-                               profiler_suspend_and_sample_thread(
-                                   aTid, features, collector,
-                                   /* sampleNative = */ true);
+void DoSuspendAndSample(int aTidToSample, nsIThread* aSamplingThread) {
+  aSamplingThread->Dispatch(
+      NS_NewRunnableFunction(
+          "GeckoProfiler_SuspendAndSample_Test::TestBody",
+          [&]() {
+            uint32_t features = ProfilerFeature::Leaf;
+            GTestStackCollector collector;
+            profiler_suspend_and_sample_thread(aTidToSample, features,
+                                               collector,
+                                               /* sampleNative = */ true);
 
-                               ASSERT_TRUE(collector.mSetIsMainThread == 1);
-                               ASSERT_TRUE(collector.mFrames > 0);
-                             }),
+            ASSERT_TRUE(collector.mSetIsMainThread ==
+                        (aTidToSample == profiler_main_thread_id()));
+            ASSERT_TRUE(collector.mFrames > 0);
+          }),
       NS_DISPATCH_SYNC);
 }
 
@@ -2014,6 +2169,8 @@ TEST(GeckoProfiler, SuspendAndSample)
   // Suspend and sample while the profiler is inactive.
   DoSuspendAndSample(tid, thread);
 
+  DoSuspendAndSample(0, thread);
+
   uint32_t features = ProfilerFeature::JS | ProfilerFeature::Threads;
   const char* filters[] = {"GeckoMain", "Compositor"};
 
@@ -2024,6 +2181,8 @@ TEST(GeckoProfiler, SuspendAndSample)
 
   // Suspend and sample while the profiler is active.
   DoSuspendAndSample(tid, thread);
+
+  DoSuspendAndSample(0, thread);
 
   profiler_stop();
 
@@ -2127,6 +2286,106 @@ TEST(GeckoProfiler, PostSamplingCallback)
       [&](SamplingState) { ASSERT_TRUE(false); }));
 }
 
+TEST(GeckoProfiler, ProfilingStateCallback)
+{
+  const char* filters[] = {"GeckoMain"};
+
+  ASSERT_TRUE(!profiler_is_active());
+
+  struct ProfilingStateAndId {
+    ProfilingState mProfilingState;
+    int mId;
+  };
+  DataMutex<Vector<ProfilingStateAndId>> states{"Profiling states"};
+  auto CreateCallback = [&states](int id) {
+    return [id, &states](ProfilingState aProfilingState) {
+      auto lockedStates = states.Lock();
+      ASSERT_TRUE(
+          lockedStates->append(ProfilingStateAndId{aProfilingState, id}));
+    };
+  };
+  auto CheckStatesIsEmpty = [&states]() {
+    auto lockedStates = states.Lock();
+    EXPECT_TRUE(lockedStates->empty());
+  };
+  auto CheckStatesOnlyContains = [&states](ProfilingState aProfilingState,
+                                           int aId) {
+    auto lockedStates = states.Lock();
+    EXPECT_EQ(lockedStates->length(), 1u);
+    if (lockedStates->length() >= 1u) {
+      EXPECT_EQ((*lockedStates)[0].mProfilingState, aProfilingState);
+      EXPECT_EQ((*lockedStates)[0].mId, aId);
+    }
+    lockedStates->clear();
+  };
+
+  profiler_add_state_change_callback(AllProfilingStates(), CreateCallback(1),
+                                     1);
+  // This is in case of error, and it also exercises the (allowed) removal of
+  // unknown callback ids.
+  auto cleanup1 = mozilla::MakeScopeExit(
+      []() { profiler_remove_state_change_callback(1); });
+  CheckStatesIsEmpty();
+
+  profiler_start(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
+                 ProfilerFeature::StackWalk, filters, MOZ_ARRAY_LENGTH(filters),
+                 0);
+
+  CheckStatesOnlyContains(ProfilingState::Started, 1);
+
+  profiler_add_state_change_callback(AllProfilingStates(), CreateCallback(2),
+                                     2);
+  // This is in case of error, and it also exercises the (allowed) removal of
+  // unknown callback ids.
+  auto cleanup2 = mozilla::MakeScopeExit(
+      []() { profiler_remove_state_change_callback(2); });
+  CheckStatesOnlyContains(ProfilingState::AlreadyActive, 2);
+
+  profiler_remove_state_change_callback(2);
+  CheckStatesOnlyContains(ProfilingState::RemovingCallback, 2);
+  // Note: The actual removal is effectively tested below, by not seeing any
+  // more invocations of the 2nd callback.
+
+  ASSERT_EQ(WaitForSamplingState(), SamplingState::SamplingCompleted);
+  UniquePtr<char[]> profileCompleted = profiler_get_profile();
+  CheckStatesOnlyContains(ProfilingState::GeneratingProfile, 1);
+  JSONOutputCheck(profileCompleted.get(), [](const Json::Value& aRoot) {});
+
+  profiler_pause();
+  CheckStatesOnlyContains(ProfilingState::Pausing, 1);
+  UniquePtr<char[]> profilePaused = profiler_get_profile();
+  CheckStatesOnlyContains(ProfilingState::GeneratingProfile, 1);
+  JSONOutputCheck(profilePaused.get(), [](const Json::Value& aRoot) {});
+
+  profiler_resume();
+  CheckStatesOnlyContains(ProfilingState::Resumed, 1);
+  ASSERT_EQ(WaitForSamplingState(), SamplingState::SamplingCompleted);
+  UniquePtr<char[]> profileResumed = profiler_get_profile();
+  CheckStatesOnlyContains(ProfilingState::GeneratingProfile, 1);
+  JSONOutputCheck(profileResumed.get(), [](const Json::Value& aRoot) {});
+
+  // This effectively stops the profiler before restarting it, but
+  // ProfilingState::Stopping is not notified. See `profiler_start` for details.
+  profiler_start(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
+                 ProfilerFeature::StackWalk | ProfilerFeature::NoStackSampling,
+                 filters, MOZ_ARRAY_LENGTH(filters), 0);
+  CheckStatesOnlyContains(ProfilingState::Started, 1);
+  ASSERT_EQ(WaitForSamplingState(), SamplingState::NoStackSamplingCompleted);
+  UniquePtr<char[]> profileNoStacks = profiler_get_profile();
+  CheckStatesOnlyContains(ProfilingState::GeneratingProfile, 1);
+  JSONOutputCheck(profileNoStacks.get(), [](const Json::Value& aRoot) {});
+
+  profiler_stop();
+  CheckStatesOnlyContains(ProfilingState::Stopping, 1);
+  ASSERT_TRUE(!profiler_is_active());
+
+  profiler_remove_state_change_callback(1);
+  CheckStatesOnlyContains(ProfilingState::RemovingCallback, 1);
+
+  // Note: ProfilingState::ShuttingDown cannot be tested here, and the profiler
+  // can only be shut down once per process.
+}
+
 TEST(GeckoProfiler, BaseProfilerHandOff)
 {
   const char* filters[] = {"GeckoMain"};
@@ -2191,94 +2450,160 @@ TEST(GeckoProfiler, CPUUsage)
 {
   const char* filters[] = {"GeckoMain"};
 
-  ASSERT_TRUE(!profiler_is_active());
-  ASSERT_TRUE(!profiler_callback_after_sampling(
-      [&](SamplingState) { ASSERT_TRUE(false); }));
+  // We want to ensure that CPU usage numbers are present whether or not we are
+  // collecting stack samples.
+  static constexpr bool scTestsWithOrWithoutStackSampling[] = {false, true};
+  for (const bool testWithNoStackSampling : scTestsWithOrWithoutStackSampling) {
+    ASSERT_TRUE(!profiler_is_active());
+    ASSERT_TRUE(!profiler_callback_after_sampling(
+        [&](SamplingState) { ASSERT_TRUE(false); }));
 
-  profiler_start(PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
-                 ProfilerFeature::StackWalk | ProfilerFeature::CPUUtilization,
-                 filters, MOZ_ARRAY_LENGTH(filters), 0);
-  // Grab a few samples.
-  static constexpr unsigned MinSamplings = 10;
-  for (unsigned i = MinSamplings; i != 0; --i) {
-    ASSERT_EQ(WaitForSamplingState(), SamplingState::SamplingCompleted);
-  }
-  UniquePtr<char[]> profile = profiler_get_profile();
-  JSONOutputCheck(profile.get(), [](const Json::Value& aRoot) {
-    // Check that the "cpu" feature is present.
-    GET_JSON(meta, aRoot["meta"], Object);
-    {
-      GET_JSON(configuration, meta["configuration"], Object);
-      {
-        GET_JSON(features, configuration["features"], Array);
-        { EXPECT_JSON_ARRAY_CONTAINS(features, String, "cpu"); }
+    profiler_start(
+        PROFILER_DEFAULT_ENTRIES, PROFILER_DEFAULT_INTERVAL,
+        ProfilerFeature::StackWalk | ProfilerFeature::CPUUtilization |
+            (testWithNoStackSampling ? ProfilerFeature::NoStackSampling : 0),
+        filters, MOZ_ARRAY_LENGTH(filters), 0);
+    // Grab a few samples, each with a different label on the stack.
+#define SAMPLE_LABEL_PREFIX "CPUUsage sample label "
+    static constexpr const char* scSampleLabels[] = {
+        SAMPLE_LABEL_PREFIX "0", SAMPLE_LABEL_PREFIX "1",
+        SAMPLE_LABEL_PREFIX "2", SAMPLE_LABEL_PREFIX "3",
+        SAMPLE_LABEL_PREFIX "4", SAMPLE_LABEL_PREFIX "5",
+        SAMPLE_LABEL_PREFIX "6", SAMPLE_LABEL_PREFIX "7",
+        SAMPLE_LABEL_PREFIX "8", SAMPLE_LABEL_PREFIX "9"};
+    static constexpr size_t scSampleLabelCount =
+        (sizeof(scSampleLabels) / sizeof(scSampleLabels[0]));
+    // We'll do two samplings for each label.
+    static constexpr size_t scMinSamplings = scSampleLabelCount * 2;
+
+    for (const char* sampleLabel : scSampleLabels) {
+      AUTO_PROFILER_LABEL(sampleLabel, OTHER);
+      ASSERT_EQ(WaitForSamplingState(), SamplingState::SamplingCompleted);
+      // Note: There could have been a delay before this label above, where the
+      // profiler could have sampled the stack and missed the label. By forcing
+      // another sampling now, the label is guaranteed to be present.
+      ASSERT_EQ(WaitForSamplingState(), SamplingState::SamplingCompleted);
+    }
+
+    UniquePtr<char[]> profile = profiler_get_profile();
+
+    if (testWithNoStackSampling) {
+      // If we are testing nostacksampling, we shouldn't find this label prefix
+      // in the profile.
+      EXPECT_FALSE(strstr(profile.get(), SAMPLE_LABEL_PREFIX));
+    } else {
+      // In normal sampling mode, we should find all labels.
+      for (const char* sampleLabel : scSampleLabels) {
+        EXPECT_TRUE(strstr(profile.get(), sampleLabel));
       }
     }
 
-    {
-      GET_JSON(sampleUnits, meta["sampleUnits"], Object);
+    JSONOutputCheck(profile.get(), [testWithNoStackSampling](
+                                       const Json::Value& aRoot) {
+      // Check that the "cpu" feature is present.
+      GET_JSON(meta, aRoot["meta"], Object);
       {
-        EXPECT_EQ_JSON(sampleUnits["time"], String, "ms");
-        EXPECT_EQ_JSON(sampleUnits["eventDelay"], String, "ms");
+        GET_JSON(configuration, meta["configuration"], Object);
+        {
+          GET_JSON(features, configuration["features"], Array);
+          { EXPECT_JSON_ARRAY_CONTAINS(features, String, "cpu"); }
+        }
+      }
+
+      {
+        GET_JSON(sampleUnits, meta["sampleUnits"], Object);
+        {
+          EXPECT_EQ_JSON(sampleUnits["time"], String, "ms");
+          EXPECT_EQ_JSON(sampleUnits["eventDelay"], String, "ms");
 #if defined(GP_OS_windows) || defined(GP_OS_darwin) || defined(GP_OS_linux) || \
     defined(GP_OS_android) || defined(GP_OS_freebsd)
-        // Note: The exact string is not important here.
-        EXPECT_TRUE(sampleUnits["threadCPUDelta"].isString())
-            << "There should be a sampleUnits.threadCPUDelta on this platform";
+          // Note: The exact string is not important here.
+          EXPECT_TRUE(sampleUnits["threadCPUDelta"].isString())
+              << "There should be a sampleUnits.threadCPUDelta on this "
+                 "platform";
 #else
         EXPECT_FALSE(sampleUnits.isMember("threadCPUDelta"))
             << "Unexpected sampleUnits.threadCPUDelta on this platform";;
 #endif
+        }
       }
-    }
 
-    // Check that the sample schema contains "threadCPUDelta".
-    GET_JSON(threads, aRoot["threads"], Array);
-    {
-      GET_JSON(thread0, threads[0], Object);
+      // Check that the sample schema contains "threadCPUDelta".
+      GET_JSON(threads, aRoot["threads"], Array);
       {
-        GET_JSON(samples, thread0["samples"], Object);
+        GET_JSON(thread0, threads[0], Object);
         {
-          Json::ArrayIndex threadCPUDeltaIndex = 0;
-          GET_JSON(schema, samples["schema"], Object);
+          GET_JSON(samples, thread0["samples"], Object);
           {
-            GET_JSON(index, schema["threadCPUDelta"], UInt);
-            threadCPUDeltaIndex = index.asUInt();
-          }
+            Json::ArrayIndex stackIndex = 0;
+            Json::ArrayIndex threadCPUDeltaIndex = 0;
+            GET_JSON(schema, samples["schema"], Object);
+            {
+              GET_JSON(jsonStackIndex, schema["stack"], UInt);
+              stackIndex = jsonStackIndex.asUInt();
+              GET_JSON(jsonThreadCPUDeltaIndex, schema["threadCPUDelta"], UInt);
+              threadCPUDeltaIndex = jsonThreadCPUDeltaIndex.asUInt();
+            }
 
-          unsigned threadCPUDeltaCount = 0;
-          GET_JSON(data, samples["data"], Array);
-          EXPECT_GE(data.size(), MinSamplings);
-          for (const Json::Value& sample : data) {
-            ASSERT_TRUE(sample.isArray());
-            if (sample.isValidIndex(threadCPUDeltaIndex)) {
-              if (!sample[threadCPUDeltaIndex].isNull()) {
-                EXPECT_TRUE(sample[threadCPUDeltaIndex].isUInt64());
-                ++threadCPUDeltaCount;
+            std::set<uint64_t> stackLeaves;  // To count distinct leaves.
+            unsigned threadCPUDeltaCount = 0;
+            GET_JSON(data, samples["data"], Array);
+            if (testWithNoStackSampling) {
+              // When not sampling stacks, the first sampling loop will have no
+              // running times, so it won't output anything.
+              EXPECT_GE(data.size(), scMinSamplings - 1);
+            } else {
+              EXPECT_GE(data.size(), scMinSamplings);
+            }
+            for (const Json::Value& sample : data) {
+              ASSERT_TRUE(sample.isArray());
+              if (sample.isValidIndex(stackIndex)) {
+                if (!sample[stackIndex].isNull()) {
+                  GET_JSON(stack, sample[stackIndex], UInt64);
+                  stackLeaves.insert(stack.asUInt64());
+                }
+              }
+              if (sample.isValidIndex(threadCPUDeltaIndex)) {
+                if (!sample[threadCPUDeltaIndex].isNull()) {
+                  EXPECT_TRUE(sample[threadCPUDeltaIndex].isUInt64());
+                  ++threadCPUDeltaCount;
+                }
               }
             }
-          }
+
+            if (testWithNoStackSampling) {
+              // in nostacksampling mode, there should only be one kind of stack
+              // leaf (the root).
+              EXPECT_EQ(stackLeaves.size(), 1u);
+            } else {
+              // in normal sampling mode, there should be at least one kind of
+              // stack leaf for each distinct label.
+              EXPECT_GE(stackLeaves.size(), scSampleLabelCount);
+            }
 
 #if defined(GP_OS_windows) || defined(GP_OS_darwin) || defined(GP_OS_linux) || \
     defined(GP_OS_android) || defined(GP_OS_freebsd)
-          EXPECT_GE(threadCPUDeltaCount, data.size() - 1u)
-              << "There should be 'threadCPUDelta' values in all but 1 samples";
+            EXPECT_GE(threadCPUDeltaCount, data.size() - 1u)
+                << "There should be 'threadCPUDelta' values in all but 1 "
+                   "samples";
 #else
           // All "threadCPUDelta" data should be absent or null on unsupported
           // platforms.
           EXPECT_EQ(threadCPUDeltaCount, 0u);
 #endif
+          }
         }
       }
-    }
-  });
+    });
 
-  // Note: There is no non-racy way to test for SamplingState::JustStopped, as
-  // it would require coordination between `profiler_stop()` and another thread
-  // doing `profiler_callback_after_sampling()` at just the right moment.
+    // Note: There is no non-racy way to test for SamplingState::JustStopped, as
+    // it would require coordination between `profiler_stop()` and another
+    // thread doing `profiler_callback_after_sampling()` at just the right
+    // moment.
 
-  profiler_stop();
-  ASSERT_TRUE(!profiler_is_active());
-  ASSERT_TRUE(!profiler_callback_after_sampling(
-      [&](SamplingState) { ASSERT_TRUE(false); }));
+    profiler_stop();
+    ASSERT_TRUE(!profiler_is_active());
+    ASSERT_TRUE(!profiler_callback_after_sampling(
+        [&](SamplingState) { ASSERT_TRUE(false); }));
+  }
 }

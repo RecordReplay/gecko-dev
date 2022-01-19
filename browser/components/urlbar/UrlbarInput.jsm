@@ -13,13 +13,16 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   BrowserSearchTelemetry: "resource:///modules/BrowserSearchTelemetry.jsm",
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.jsm",
+  CONTEXTUAL_SERVICES_PING_TYPES:
+    "resource:///modules/PartnerLinkAttribution.jsm",
   ExtensionSearchHandler: "resource://gre/modules/ExtensionSearchHandler.jsm",
   ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
   ReaderMode: "resource://gre/modules/ReaderMode.jsm",
   PartnerLinkAttribution: "resource:///modules/PartnerLinkAttribution.jsm",
+  SearchUIUtils: "resource:///modules/SearchUIUtils.jsm",
   SearchUtils: "resource://gre/modules/SearchUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
   UrlbarController: "resource:///modules/UrlbarController.jsm",
@@ -43,6 +46,9 @@ XPCOMUtils.defineLazyServiceGetter(
 
 const DEFAULT_FORM_HISTORY_NAME = "searchbar-history";
 const SEARCH_BUTTON_ID = "urlbar-search-button";
+
+// The scalar category of TopSites click for Contextual Services
+const SCALAR_CATEGORY_TOPSITES = "contextual.services.topsites.click";
 
 let getBoundsWithoutFlushing = element =>
   element.ownerGlobal.windowUtils.getBoundsWithoutFlushing(element);
@@ -79,7 +85,6 @@ class UrlbarInput {
             </html:div>
           </html:div>
           <hbox class="search-one-offs"
-                compact="true"
                 includecurrentengine="true"
                 disabletab="true"/>
         </vbox>
@@ -171,7 +176,7 @@ class UrlbarInput {
           return this.inputField[property];
         },
         set(val) {
-          return (this.inputField[property] = val);
+          this.inputField[property] = val;
         },
       });
     }
@@ -193,6 +198,10 @@ class UrlbarInput {
 
     XPCOMUtils.defineLazyGetter(this, "valueFormatter", () => {
       return new UrlbarValueFormatter(this);
+    });
+
+    XPCOMUtils.defineLazyGetter(this, "addSearchEngineHelper", () => {
+      return new AddSearchEngineHelper(this);
     });
 
     // If the toolbar is not visible in this window or the urlbar is readonly,
@@ -316,10 +325,11 @@ class UrlbarInput {
     let value = this.window.gBrowser.userTypedValue;
     let valid = false;
 
-    // Explicitly check for nulled out value. We don't want to reset the URL
-    // bar if the user has deleted the URL and we'd just put the same URL
-    // back. See bug 304198.
-    if (value === null) {
+    // Restore the selected browser's current URI if `value` is null or if it's
+    // an empty string and we're switching tabs. In the latter case, when the
+    // user makes the input empty, switches tabs, and switches back, we want the
+    // URI to become visible again so the user knows what URI they're viewing.
+    if (value === null || (!value && dueToTabSwitch)) {
       uri = uri || this.window.gBrowser.currentURI;
       // Strip off usernames and passwords for the location bar
       try {
@@ -330,7 +340,7 @@ class UrlbarInput {
       // only if there's no opener (bug 370555).
       if (
         this.window.isInitialPage(uri) &&
-        BrowserUtils.checkEmptyPageOrigin(
+        BrowserUIUtils.checkEmptyPageOrigin(
           this.window.gBrowser.selectedBrowser,
           uri
         )
@@ -349,7 +359,7 @@ class UrlbarInput {
         !this.window.isBlankPageURL(uri.spec) || uri.schemeIs("moz-extension");
     } else if (
       this.window.isInitialPage(value) &&
-      BrowserUtils.checkEmptyPageOrigin(this.window.gBrowser.selectedBrowser)
+      BrowserUIUtils.checkEmptyPageOrigin(this.window.gBrowser.selectedBrowser)
     ) {
       value = "";
       valid = true;
@@ -694,16 +704,31 @@ class UrlbarInput {
       return;
     }
 
+    let urlOverride;
+    if (element?.classList.contains("urlbarView-help")) {
+      urlOverride = result.payload.helpUrl;
+    }
+
     let originalUntrimmedValue = this.untrimmedValue;
-    let isCanonized = this.setValueFromResult(result, event);
+    let isCanonized = this.setValueFromResult({ result, event, urlOverride });
     let where = this._whereToOpen(event);
     let openParams = {
       allowInheritPrincipal: false,
     };
 
+    if (
+      urlOverride &&
+      result.type != UrlbarUtils.RESULT_TYPE.TIP &&
+      where == "current"
+    ) {
+      // Open non-tip help links in a new tab unless the user held a modifier.
+      // TODO (bug 1696232): Do this for tip help links, too.
+      where = "tab";
+    }
+
     let selIndex = result.rowIndex;
     if (!result.payload.providesSearchMode) {
-      this.view.close(/* elementPicked */ true);
+      this.view.close({ elementPicked: true });
     }
 
     this.controller.recordSelectedResult(event, result);
@@ -719,7 +744,9 @@ class UrlbarInput {
       return;
     }
 
-    let { url, postData } = UrlbarUtils.getUrlFromResult(result);
+    let { url, postData } = urlOverride
+      ? { url: urlOverride, postData: null }
+      : UrlbarUtils.getUrlFromResult(result);
     openParams.postData = postData;
 
     switch (result.type) {
@@ -850,7 +877,7 @@ class UrlbarInput {
       }
       case UrlbarUtils.RESULT_TYPE.TIP: {
         let scalarName;
-        if (element.classList.contains("urlbarView-tip-help")) {
+        if (element.classList.contains("urlbarView-help")) {
           url = result.payload.helpUrl;
           if (!url) {
             Cu.reportError("helpUrl not specified");
@@ -960,6 +987,25 @@ class UrlbarInput {
           "browser.partnerlink.campaign.topsites"
         ),
       });
+      if (!this.isPrivate && result.providerName === "UrlbarProviderTopSites") {
+        // The position is 1-based for telemetry
+        const position = selIndex + 1;
+        Services.telemetry.keyedScalarAdd(
+          SCALAR_CATEGORY_TOPSITES,
+          `urlbar_${position}`,
+          1
+        );
+        PartnerLinkAttribution.sendContextualServicesPing(
+          {
+            position,
+            source: "urlbar",
+            tile_id: result.payload.sponsoredTileId || -1,
+            reporting_url: result.payload.sponsoredClickUrl,
+            advertiser: result.payload.title.toLocaleLowerCase(),
+          },
+          CONTEXTUAL_SERVICES_PING_TYPES.TOPSITES_SELECTION
+        );
+      }
     }
 
     this._loadURL(
@@ -986,10 +1032,13 @@ class UrlbarInput {
    *   The result that was selected or picked, null if no result was selected.
    * @param {Event} [event]
    *   The event that picked the result.
+   * @param {string} [urlOverride]
+   *   Normally the URL is taken from `result.payload.url`, but if `urlOverride`
+   *   is specified, it's used instead.
    * @returns {boolean}
    *   Whether the value has been canonized
    */
-  setValueFromResult(result = null, event = null) {
+  setValueFromResult({ result = null, event = null, urlOverride = null } = {}) {
     // Usually this is set by a previous input event, but in certain cases, like
     // when opening Top Sites on a loaded page, it wouldn't happen. To avoid
     // confusing the user, we always enforce it when a result changes our value.
@@ -1074,21 +1123,25 @@ class UrlbarInput {
     // it would end up executing a search instead of visiting it.
     let allowTrim = true;
     if (
-      result.type == UrlbarUtils.RESULT_TYPE.URL &&
-      UrlbarPrefs.get("trimURLs") &&
-      result.payload.url.startsWith(BrowserUtils.trimURLProtocol)
+      (urlOverride || result.type == UrlbarUtils.RESULT_TYPE.URL) &&
+      UrlbarPrefs.get("trimURLs")
     ) {
-      let fixupInfo = this._getURIFixupInfo(
-        BrowserUtils.trimURL(result.payload.url)
-      );
-      if (fixupInfo?.keywordAsSent) {
-        allowTrim = false;
+      let url = urlOverride || result.payload.url;
+      if (url.startsWith(BrowserUIUtils.trimURLProtocol)) {
+        let fixupInfo = this._getURIFixupInfo(BrowserUIUtils.trimURL(url));
+        if (fixupInfo?.keywordAsSent) {
+          allowTrim = false;
+        }
       }
     }
 
     if (!result.autofill) {
-      setValueAndRestoreActionType(this._getValueFromResult(result), allowTrim);
+      setValueAndRestoreActionType(
+        this._getValueFromResult(result, urlOverride),
+        allowTrim
+      );
     }
+
     this.setResultForCurrentValue(result);
     return false;
   }
@@ -1140,7 +1193,7 @@ class UrlbarInput {
       return;
     }
 
-    this.setValueFromResult(result);
+    this.setValueFromResult({ result });
   }
 
   /**
@@ -1276,7 +1329,7 @@ class UrlbarInput {
    * @param {string} value
    *   The input's value will be set to this value, and the search will
    *   use it as its query.
-   * @param {UrlbarUtils.WEB_ENGINE_NAMES} [options.searchEngine]
+   * @param {nsISearchEngine} [options.searchEngine]
    *   Search engine to use when the search is using a known alias.
    * @param {UrlbarUtils.SEARCH_MODE_ENTRY} [options.searchModeEntry]
    *   If provided, we will record this parameter as the search mode entry point
@@ -1354,12 +1407,18 @@ class UrlbarInput {
   /**
    * Restore focus styles.
    * This is used by Activity Stream and about:privatebrowsing for search hand-off.
+   *
+   * @param {Browser} forceSuppressFocusBorder
+   *   Set true to suppress-focus-border attribute if this flag is true.
    */
-  removeHiddenFocus() {
+  removeHiddenFocus(forceSuppressFocusBorder = false) {
     this._hideFocus = false;
     if (this.focused) {
       this.setAttribute("focused", "true");
-      this.startLayoutExtend();
+
+      if (forceSuppressFocusBorder) {
+        this.toggleAttribute("suppress-focus-border", true);
+      }
     }
   }
 
@@ -1419,11 +1478,12 @@ class UrlbarInput {
       ObjectUtils.deepEqual(currentSearchMode, searchMode);
 
     // Exit search mode if the passed-in engine is invalid or hidden.
+    let engine;
     if (searchMode?.engineName) {
       if (!Services.search.isInitialized) {
         await Services.search.init();
       }
-      let engine = Services.search.getEngineByName(searchMode.engineName);
+      engine = Services.search.getEngineByName(searchMode.engineName);
       if (!engine || engine.hidden) {
         searchMode = null;
       }
@@ -1434,10 +1494,13 @@ class UrlbarInput {
     searchMode = null;
 
     if (engineName) {
-      searchMode = { engineName };
+      searchMode = {
+        engineName,
+        isGeneralPurposeEngine: engine.isGeneralPurposeEngine,
+      };
       if (source) {
         searchMode.source = source;
-      } else if (UrlbarUtils.WEB_ENGINE_NAMES.has(engineName)) {
+      } else if (searchMode.isGeneralPurposeEngine) {
         // History results for general-purpose search engines are often not
         // useful, so we hide them in search mode. See bug 1658646 for
         // discussion.
@@ -1560,7 +1623,7 @@ class UrlbarInput {
   }
 
   set value(val) {
-    return this._setValue(val, true);
+    this._setValue(val, true);
   }
 
   get lastSearchString() {
@@ -1593,7 +1656,6 @@ class UrlbarInput {
       return;
     }
     await this._updateLayoutBreakoutDimensions();
-    this.startLayoutExtend();
   }
 
   startLayoutExtend() {
@@ -1605,18 +1667,7 @@ class UrlbarInput {
     ) {
       return;
     }
-    // The Urlbar is unfocused or reduce motion is on and the view is closed.
-    // gReduceMotion is accurate in most cases, but it is automatically set to
-    // true when windows are loaded. We check `prefers-reduced-motion: reduce`
-    // to ensure the user actually set prefers-reduced-motion. We check
-    // gReduceMotion first to save work in the common case of having
-    // prefers-reduced-motion disabled.
-    if (
-      !this.view.isOpen &&
-      (this.getAttribute("focused") != "true" ||
-        (this.window.gReduceMotion &&
-          this.window.matchMedia("(prefers-reduced-motion: reduce)").matches))
-    ) {
+    if (!this.view.isOpen) {
       return;
     }
 
@@ -1646,15 +1697,10 @@ class UrlbarInput {
     // If reduce motion is enabled, we want to collapse the Urlbar here so the
     // user sees only sees two states: not expanded, and expanded with the view
     // open.
-    if (
-      !this.hasAttribute("breakout-extend") ||
-      this.view.isOpen ||
-      (this.getAttribute("focused") == "true" &&
-        (!this.window.gReduceMotion ||
-          !this.window.matchMedia("(prefers-reduced-motion: reduce)").matches))
-    ) {
+    if (!this.hasAttribute("breakout-extend") || this.view.isOpen) {
       return;
     }
+
     this.removeAttribute("breakout-extend");
     this._toolbar.removeAttribute("urlbar-exceeds-toolbar-bounds");
   }
@@ -1878,7 +1924,7 @@ class UrlbarInput {
     return val;
   }
 
-  _getValueFromResult(result) {
+  _getValueFromResult(result, urlOverride = null) {
     switch (result.type) {
       case UrlbarUtils.RESULT_TYPE.KEYWORD:
         return result.payload.input;
@@ -1892,10 +1938,12 @@ class UrlbarInput {
       }
       case UrlbarUtils.RESULT_TYPE.OMNIBOX:
         return result.payload.content;
+      case UrlbarUtils.RESULT_TYPE.DYNAMIC:
+        return result.payload.input || "";
     }
 
     try {
-      let uri = Services.io.newURI(result.payload.url);
+      let uri = Services.io.newURI(urlOverride || result.payload.url);
       if (uri) {
         return losslessDecodeURI(uri);
       }
@@ -1939,10 +1987,7 @@ class UrlbarInput {
     // if the caret isn't at the end of the input.
     if (
       !allowAutofill ||
-      this._autofillPlaceholder.length <= value.length ||
-      !this._autofillPlaceholder
-        .toLocaleLowerCase()
-        .startsWith(value.toLocaleLowerCase())
+      !UrlbarUtils.canAutofillURL(this._autofillPlaceholder, value)
     ) {
       this._autofillPlaceholder = "";
     } else if (
@@ -2089,12 +2134,12 @@ class UrlbarInput {
     // url. First check for a trimmed value.
 
     if (
-      !selectedVal.startsWith(BrowserUtils.trimURLProtocol) &&
+      !selectedVal.startsWith(BrowserUIUtils.trimURLProtocol) &&
       // Note _trimValue may also trim a trailing slash, thus we can't just do
       // a straight string compare to tell if the protocol was trimmed.
       !displaySpec.startsWith(this._trimValue(displaySpec))
     ) {
-      selectedVal = BrowserUtils.trimURLProtocol + selectedVal;
+      selectedVal = BrowserUIUtils.trimURLProtocol + selectedVal;
     }
 
     return selectedVal;
@@ -2176,7 +2221,7 @@ class UrlbarInput {
    *   The trimmed string
    */
   _trimValue(val) {
-    return UrlbarPrefs.get("trimURLs") ? BrowserUtils.trimURL(val) : val;
+    return UrlbarPrefs.get("trimURLs") ? BrowserUIUtils.trimURL(val) : val;
   }
 
   /**
@@ -2331,7 +2376,7 @@ class UrlbarInput {
         browser.currentURI &&
         url === browser.currentURI.spec
       ) {
-        this.window.SitePermissions.clearTemporaryPermissions(browser);
+        this.window.SitePermissions.clearTemporaryBlockPermissions(browser);
       }
     }
 
@@ -2379,7 +2424,9 @@ class UrlbarInput {
       }
     }
 
-    this.view.close();
+    // If we show the focus border after closing the view, it would appear to
+    // flash since this._on_blur would remove it immediately after.
+    this.view.close({ showFocusBorder: false });
   }
 
   /**
@@ -2559,7 +2606,7 @@ class UrlbarInput {
    *   See setSearchMode documentation.  If null, then search mode is exited.
    */
   _updateSearchModeUI(searchMode) {
-    let { engineName, source } = searchMode || {};
+    let { engineName, source, isGeneralPurposeEngine } = searchMode || {};
 
     // As an optimization, bail if the given search mode is null but search mode
     // is already inactive.  Otherwise browser_preferences_usage.js fails due to
@@ -2593,7 +2640,7 @@ class UrlbarInput {
       this._searchModeLabel.textContent = engineName;
       this.document.l10n.setAttributes(
         this.inputField,
-        UrlbarUtils.WEB_ENGINE_NAMES.has(engineName)
+        isGeneralPurposeEngine
           ? "urlbar-placeholder-search-mode-web-2"
           : "urlbar-placeholder-search-mode-other-engine",
         { name: engineName }
@@ -2664,7 +2711,6 @@ class UrlbarInput {
     });
 
     this.removeAttribute("focused");
-    this.endLayoutExtend();
 
     if (this._autofillPlaceholder && this.window.gBrowser.userTypedValue) {
       // If we were autofilling, remove the autofilled portion, by restoring
@@ -2741,6 +2787,8 @@ class UrlbarInput {
   }
 
   _on_contextmenu(event) {
+    this.addSearchEngineHelper.refreshContextMenu(event);
+
     // Context menu opened via keyboard shortcut.
     if (!event.button) {
       return;
@@ -2773,8 +2821,6 @@ class UrlbarInput {
         this.inputField.value = this._focusUntrimmedValue = this._untrimmedValue;
       }
     }
-
-    this.startLayoutExtend();
 
     if (this.focusedViaMousedown) {
       this.view.autoOpen({ event });
@@ -2822,6 +2868,9 @@ class UrlbarInput {
         this.focusedViaMousedown = !this.focused;
         this._preventClickSelectsAll = this.focused;
 
+        // Keep the focus status, since the attribute may be changed
+        // upon calling this.focus().
+        const hasFocus = this.hasAttribute("focused");
         if (event.target != this.inputField) {
           this.focus();
         }
@@ -2841,7 +2890,13 @@ class UrlbarInput {
           this._preventClickSelectsAll = true;
           this.search(UrlbarTokenizer.RESTRICT.SEARCH);
         } else {
-          this.view.autoOpen({ event });
+          // Do not suppress the focus border if we are already focused. If we
+          // did, we'd hide the focus border briefly then show it again if the
+          // user has Top Sites disabled, creating a flashing effect.
+          this.view.autoOpen({
+            event,
+            suppressFocusBorder: !hasFocus,
+          });
         }
         break;
       case this.window:
@@ -2921,7 +2976,7 @@ class UrlbarInput {
     // We should do nothing during composition or if composition was canceled
     // and we didn't close the popup on composition start.
     if (
-      UrlbarPrefs.get("imeCompositionClosesPanel") &&
+      !UrlbarPrefs.get("keepPanelOpenDuringImeComposition") &&
       (compositionState == UrlbarUtils.COMPOSITION.COMPOSING ||
         (compositionState == UrlbarUtils.COMPOSITION.CANCELED &&
           !compositionClosedPopup))
@@ -2931,7 +2986,9 @@ class UrlbarInput {
 
     // Autofill only when text is inserted (i.e., event.data is not empty) and
     // it's not due to pasting.
-    let allowAutofill =
+    const allowAutofill =
+      (!UrlbarPrefs.get("keepPanelOpenDuringImeComposition") ||
+        compositionState !== UrlbarUtils.COMPOSITION.COMPOSING) &&
       !!event.data &&
       !UrlbarUtils.isPasteEvent(event) &&
       this._maybeAutofillOnInput(value);
@@ -3021,7 +3078,26 @@ class UrlbarInput {
     }
     let oldEnd = oldValue.substring(this.selectionEnd);
 
-    let pasteData = UrlbarUtils.stripUnsafeProtocolOnPaste(originalPasteData);
+    let isURLAssumed = true;
+    try {
+      const { keywordAsSent } = Services.uriFixup.getFixupURIInfo(
+        originalPasteData,
+        Ci.nsIURIFixup.FIXUP_FLAG_FIX_SCHEME_TYPOS |
+          Ci.nsIURIFixup.FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP
+      );
+      isURLAssumed = !keywordAsSent;
+    } catch (e) {}
+
+    // In some cases, the data pasted will contain newline codes. In order to
+    // achive the behavior expected by user, remove newline codes when URL is
+    // assumed. When keywords are assumed, replace all whitespace characters
+    // including newline with a space.
+    let pasteData = isURLAssumed
+      ? originalPasteData.replace(/[\r\n]/g, "")
+      : originalPasteData.replace(/\s/g, " ");
+
+    pasteData = UrlbarUtils.stripUnsafeProtocolOnPaste(pasteData);
+
     if (originalPasteData != pasteData) {
       // Unfortunately we're not allowed to set the bits being pasted
       // so cancel this event:
@@ -3029,10 +3105,19 @@ class UrlbarInput {
       event.stopImmediatePropagation();
 
       this.inputField.value = oldStart + pasteData + oldEnd;
+      this._untrimmedValue = this.inputField.value;
+
       // Fix up cursor/selection:
       let newCursorPos = oldStart.length + pasteData.length;
       this.selectionStart = newCursorPos;
       this.selectionEnd = newCursorPos;
+
+      this.startQuery({
+        searchString: this.inputField.value,
+        allowAutofill: false,
+        resetSearchState: false,
+        event,
+      });
     }
   }
 
@@ -3106,7 +3191,7 @@ class UrlbarInput {
     }
     this._compositionState = UrlbarUtils.COMPOSITION.COMPOSING;
 
-    if (!UrlbarPrefs.get("imeCompositionClosesPanel")) {
+    if (UrlbarPrefs.get("keepPanelOpenDuringImeComposition")) {
       return;
     }
 
@@ -3136,7 +3221,7 @@ class UrlbarInput {
       throw new Error("Trying to stop a non existing composition?");
     }
 
-    if (UrlbarPrefs.get("imeCompositionClosesPanel")) {
+    if (!UrlbarPrefs.get("keepPanelOpenDuringImeComposition")) {
       // Clear the selection and the cached result, since they refer to the
       // state before this composition. A new input even will be generated
       // after this.
@@ -3257,10 +3342,11 @@ function getDroppableData(event) {
     }
 
     try {
-      // If this throws, urlSecurityCheck would also throw, as that's what it
-      // does with things that don't pass the IO service's newURI constructor
-      // without fixup. It's conceivable we may want to relax this check in
-      // the future (so e.g. www.foo.com gets fixed up), but not right now.
+      // If this throws, checkLoadURStrWithPrincipal would also throw,
+      // as that's what it does with things that don't pass the IO
+      // service's newURI constructor without fixup. It's conceivable we
+      // may want to relax this check in the future (so e.g. www.foo.com
+      // gets fixed up), but not right now.
       let url = new URL(href);
       // If we succeed, try to pass security checks. If this works, return the
       // URL object. If the *security checks* fail, return null.
@@ -3268,9 +3354,9 @@ function getDroppableData(event) {
         let principal = Services.droppedLinkHandler.getTriggeringPrincipal(
           event
         );
-        BrowserUtils.urlSecurityCheck(
-          url,
+        Services.scriptSecurityManager.checkLoadURIStrWithPrincipal(
           principal,
+          url.href,
           Ci.nsIScriptSecurityManager.DISALLOW_INHERIT_PRINCIPAL
         );
         return url;
@@ -3440,4 +3526,145 @@ class CopyCutController {
   }
 
   onEvent() {}
+}
+
+/**
+ * Manages the Add Search Engine contextual menu entries.
+ *
+ * @note setEnginesFromBrowser must be invoked from the outside when the
+ *       page provided engines list changes.
+ *       refreshContextMenu must be invoked when the context menu is opened.
+ */
+class AddSearchEngineHelper {
+  constructor(input) {
+    this.input = input;
+    this.shortcutButtons = input.view.oneOffSearchButtons;
+  }
+
+  /**
+   * If there's more than this number of engines, the context menu offers
+   * them in a submenu.
+   */
+  get maxInlineEngines() {
+    return this.shortcutButtons._maxInlineAddEngines;
+  }
+
+  /**
+   * Invoked by browser when the list of available engines changes.
+   * @param {object} browser The invoking browser.
+   */
+  setEnginesFromBrowser(browser) {
+    this.browsingContext = browser.browsingContext;
+    // Make a copy of the array for state comparison.
+    let engines = browser.engines?.slice() || [];
+    if (!this._sameEngines(this.engines, engines)) {
+      this.engines = engines;
+      this.shortcutButtons.updateWebEngines(engines);
+    }
+  }
+
+  _sameEngines(engines1, engines2) {
+    if (engines1?.length != engines2?.length) {
+      return false;
+    }
+    return ObjectUtils.deepEqual(
+      engines1.map(e => e.title),
+      engines2.map(e => e.title)
+    );
+  }
+
+  _createMenuitem(engine, index) {
+    let elt = this.input.document.createXULElement("menuitem");
+    elt.setAttribute("anonid", `add-engine-${index}`);
+    elt.classList.add("menuitem-iconic");
+    elt.classList.add("context-menu-add-engine");
+    elt.setAttribute("data-l10n-id", "search-one-offs-add-engine");
+    elt.setAttribute(
+      "data-l10n-args",
+      JSON.stringify({ engineName: engine.title })
+    );
+    elt.setAttribute("uri", engine.uri);
+    if (engine.icon) {
+      elt.setAttribute("image", engine.icon);
+    } else {
+      elt.removeAttribute("image", engine.icon);
+    }
+    elt.addEventListener("command", this._onCommand.bind(this));
+    return elt;
+  }
+
+  _createMenu(engine) {
+    let elt = this.input.document.createXULElement("menu");
+    elt.setAttribute("anonid", "add-engine-menu");
+    elt.classList.add("menu-iconic");
+    elt.classList.add("context-menu-add-engine");
+    elt.setAttribute("data-l10n-id", "search-one-offs-add-engine-menu");
+    if (engine.icon) {
+      elt.setAttribute("image", engine.icon);
+    }
+    let popup = this.input.document.createXULElement("menupopup");
+    elt.appendChild(popup);
+    return elt;
+  }
+
+  refreshContextMenu() {
+    let engines = this.engines;
+
+    // Certain operations, like customization, destroy and recreate widgets,
+    // so we cannot rely on cached elements.
+    if (!this.input.querySelector(".menuseparator-add-engine")) {
+      this.contextSeparator = this.input.document.createXULElement(
+        "menuseparator"
+      );
+      this.contextSeparator.setAttribute("anonid", "add-engine-separator");
+      this.contextSeparator.classList.add("menuseparator-add-engine");
+      this.contextSeparator.collapsed = true;
+      let contextMenu = this.input.querySelector("moz-input-box").menupopup;
+      contextMenu.appendChild(this.contextSeparator);
+    }
+
+    this.contextSeparator.collapsed = !engines.length;
+    let curElt = this.contextSeparator;
+    // Remove the previous items, if any.
+    for (let elt = curElt.nextElementSibling; elt; ) {
+      let nextElementSibling = elt.nextElementSibling;
+      elt.remove();
+      elt = nextElementSibling;
+    }
+
+    // If the page provides too many engines, we only show a single menu entry
+    // with engines in a submenu.
+    if (engines.length > this.maxInlineEngines) {
+      // Set the menu button's image to the image of the first engine.  The
+      // offered engines may have differing images, so there's no perfect
+      // choice here.
+      let elt = this._createMenu(engines[0]);
+      this.contextSeparator.insertAdjacentElement("afterend", elt);
+      curElt = elt.lastElementChild;
+    }
+
+    // Insert the engines, either in the contextual menu or the sub menu.
+    for (let i = 0; i < engines.length; ++i) {
+      let elt = this._createMenuitem(engines[i], i);
+      if (curElt.localName == "menupopup") {
+        curElt.appendChild(elt);
+      } else {
+        curElt.insertAdjacentElement("afterend", elt);
+      }
+      curElt = elt;
+    }
+  }
+
+  async _onCommand(event) {
+    let added = await SearchUIUtils.addOpenSearchEngine(
+      event.target.getAttribute("uri"),
+      event.target.getAttribute("image"),
+      this.browsingContext
+    ).catch(console.error);
+    if (added) {
+      // Remove the offered engine from the list. The browser updated the
+      // engines list at this point, so we just have to refresh the menu.)
+      this.refreshContextMenu();
+    }
+  }
 }

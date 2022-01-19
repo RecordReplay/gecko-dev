@@ -29,18 +29,13 @@ linux64-gn:
 macosx64-gn:
     treeherder:
         symbol: TM(gn)
-    worker:
-        env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/macosx64/cross-releng.manifest"
     run:
         script: build-gn-macosx.sh
-        resources:
-            - 'taskcluster/scripts/misc/tooltool-download.sh'
-        tooltool-downloads: internal
     fetches:
         toolchain:
             - linux64-cctools-port-clang-11
             - linux64-clang-11
+            - macosx64-sdk-10.12
 
 win32-gn:
     treeherder:
@@ -49,7 +44,7 @@ win32-gn:
     worker:
         max-run-time: 3600
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/vs2017.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         script: build-gn-win32.sh
         resources:

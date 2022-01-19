@@ -9,19 +9,24 @@
 
 #include "mozilla/Maybe.h"
 
-#include "jsfriendapi.h"
+#include "jstypes.h"  // for JS_PUBLIC_API, JS_PUBLIC_DATA
 
 #include "js/Array.h"  // JS::IsArrayAnswer
 #include "js/CallNonGenericMethod.h"
 #include "js/Class.h"
+#include "js/HeapAPI.h"        // for ObjectIsMarkedBlack
+#include "js/Id.h"             // for jsid
 #include "js/Object.h"         // JS::GetClass
+#include "js/RootingAPI.h"     // for Handle, MutableHandle (ptr only)
 #include "js/shadow/Object.h"  // JS::shadow::Object
+#include "js/TypeDecls.h"  // for HandleObject, HandleId, HandleValue, MutableHandleIdVector, MutableHandleValue, MutableHand...
+#include "js/Value.h"  // for Value, AssertValueIsNotGray, UndefinedValue, ObjectOrNullValue
 
 namespace js {
 
 class RegExpShared;
 
-class JS_FRIEND_API Wrapper;
+class JS_PUBLIC_API Wrapper;
 
 /*
  * [SMDOC] Proxy Objects
@@ -151,7 +156,7 @@ class JS_FRIEND_API Wrapper;
  * explicit override for the method in SecurityWrapper. See bug 945826 comment
  * 0.
  */
-class JS_FRIEND_API BaseProxyHandler {
+class JS_PUBLIC_API BaseProxyHandler {
   /*
    * Sometimes it's desirable to designate groups of proxy handlers as
    * "similar". For this, we use the notion of a "family": A consumer-provided
@@ -254,7 +259,7 @@ class JS_FRIEND_API BaseProxyHandler {
   /* Standard internal methods. */
   virtual bool getOwnPropertyDescriptor(
       JSContext* cx, JS::HandleObject proxy, JS::HandleId id,
-      JS::MutableHandle<JS::PropertyDescriptor> desc) const = 0;
+      JS::MutableHandle<mozilla::Maybe<JS::PropertyDescriptor>> desc) const = 0;
   virtual bool defineProperty(JSContext* cx, JS::HandleObject proxy,
                               JS::HandleId id,
                               JS::Handle<JS::PropertyDescriptor> desc,
@@ -368,10 +373,10 @@ class JS_FRIEND_API BaseProxyHandler {
   virtual bool isScripted() const { return false; }
 };
 
-extern JS_FRIEND_DATA const JSClass ProxyClass;
+extern JS_PUBLIC_DATA const JSClass ProxyClass;
 
 inline bool IsProxy(const JSObject* obj) {
-  return JS::GetClass(obj)->isProxy();
+  return JS::GetClass(obj)->isProxyObject();
 }
 
 namespace detail {
@@ -464,7 +469,11 @@ struct ProxyDataLayout {
   }
 };
 
-const uint32_t ProxyDataOffset = 2 * sizeof(void*);
+#ifdef JS_64BIT
+constexpr uint32_t ProxyDataOffset = 1 * sizeof(void*);
+#else
+constexpr uint32_t ProxyDataOffset = 2 * sizeof(void*);
+#endif
 
 inline ProxyDataLayout* GetProxyDataLayout(JSObject* obj) {
   MOZ_ASSERT(IsProxy(obj));
@@ -478,7 +487,7 @@ inline const ProxyDataLayout* GetProxyDataLayout(const JSObject* obj) {
       reinterpret_cast<const uint8_t*>(obj) + ProxyDataOffset);
 }
 
-JS_FRIEND_API void SetValueInProxy(JS::Value* slot, const JS::Value& value);
+JS_PUBLIC_API void SetValueInProxy(JS::Value* slot, const JS::Value& value);
 
 inline void SetProxyReservedSlotUnchecked(JSObject* obj, size_t n,
                                           const JS::Value& extra) {
@@ -508,7 +517,7 @@ inline const JS::Value& GetProxyExpando(const JSObject* obj) {
   return detail::GetProxyDataLayout(obj)->values()->expandoSlot;
 }
 
-inline JSObject* GetProxyTargetObject(JSObject* obj) {
+inline JSObject* GetProxyTargetObject(const JSObject* obj) {
   return GetProxyPrivate(obj).toObjectOrNull();
 }
 
@@ -579,14 +588,14 @@ class MOZ_STACK_CLASS ProxyOptions {
   const JSClass* clasp_;
 };
 
-JS_FRIEND_API JSObject* NewProxyObject(
+JS_PUBLIC_API JSObject* NewProxyObject(
     JSContext* cx, const BaseProxyHandler* handler, JS::HandleValue priv,
     JSObject* proto, const ProxyOptions& options = ProxyOptions());
 
 JSObject* RenewProxyObject(JSContext* cx, JSObject* obj,
                            BaseProxyHandler* handler, const JS::Value& priv);
 
-class JS_FRIEND_API AutoEnterPolicy {
+class JS_PUBLIC_API AutoEnterPolicy {
  public:
   typedef BaseProxyHandler::Action Action;
   AutoEnterPolicy(JSContext* cx, const BaseProxyHandler* handler,
@@ -644,7 +653,7 @@ class JS_FRIEND_API AutoEnterPolicy {
                    Action act);
   void recordLeave();
 
-  friend JS_FRIEND_API void assertEnteredPolicy(JSContext* cx, JSObject* proxy,
+  friend JS_PUBLIC_API void assertEnteredPolicy(JSContext* cx, JSObject* proxy,
                                                 jsid id, Action act);
 #else
   inline void recordEnter(JSContext* cx, JSObject* proxy, jsid id, Action act) {
@@ -664,7 +673,7 @@ class JS_FRIEND_API AutoEnterPolicy {
 };
 
 #ifdef JS_DEBUG
-class JS_FRIEND_API AutoWaivePolicy : public AutoEnterPolicy {
+class JS_PUBLIC_API AutoWaivePolicy : public AutoEnterPolicy {
  public:
   AutoWaivePolicy(JSContext* cx, JS::HandleObject proxy, JS::HandleId id,
                   BaseProxyHandler::Action act) {
@@ -673,7 +682,7 @@ class JS_FRIEND_API AutoWaivePolicy : public AutoEnterPolicy {
   }
 };
 #else
-class JS_FRIEND_API AutoWaivePolicy {
+class JS_PUBLIC_API AutoWaivePolicy {
  public:
   AutoWaivePolicy(JSContext* cx, JS::HandleObject proxy, JS::HandleId id,
                   BaseProxyHandler::Action act) {}
@@ -681,7 +690,7 @@ class JS_FRIEND_API AutoWaivePolicy {
 #endif
 
 #ifdef JS_DEBUG
-extern JS_FRIEND_API void assertEnteredPolicy(JSContext* cx, JSObject* obj,
+extern JS_PUBLIC_API void assertEnteredPolicy(JSContext* cx, JSObject* obj,
                                               jsid id,
                                               BaseProxyHandler::Action act);
 #else
@@ -689,9 +698,9 @@ inline void assertEnteredPolicy(JSContext* cx, JSObject* obj, jsid id,
                                 BaseProxyHandler::Action act) {}
 #endif
 
-extern JS_FRIEND_DATA const JSClassOps ProxyClassOps;
-extern JS_FRIEND_DATA const js::ClassExtension ProxyClassExtension;
-extern JS_FRIEND_DATA const js::ObjectOps ProxyObjectOps;
+extern JS_PUBLIC_DATA const JSClassOps ProxyClassOps;
+extern JS_PUBLIC_DATA const js::ClassExtension ProxyClassExtension;
+extern JS_PUBLIC_DATA const js::ObjectOps ProxyObjectOps;
 
 template <unsigned Flags>
 constexpr unsigned CheckProxyFlags() {
@@ -736,11 +745,11 @@ constexpr unsigned CheckProxyFlags() {
 // Converts a proxy into a DeadObjectProxy that will throw exceptions on all
 // access. This will run the proxy's finalizer to perform clean-up before the
 // conversion happens.
-JS_FRIEND_API void NukeNonCCWProxy(JSContext* cx, JS::HandleObject proxy);
+JS_PUBLIC_API void NukeNonCCWProxy(JSContext* cx, JS::HandleObject proxy);
 
 // This is a variant of js::NukeNonCCWProxy() for CCWs. It should only be called
 // on CCWs that have been removed from CCW tables.
-JS_FRIEND_API void NukeRemovedCrossCompartmentWrapper(JSContext* cx,
+JS_PUBLIC_API void NukeRemovedCrossCompartmentWrapper(JSContext* cx,
                                                       JSObject* wrapper);
 
 } /* namespace js */

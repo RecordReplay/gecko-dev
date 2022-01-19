@@ -4,6 +4,9 @@
 "use strict";
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
 const { actionTypes: at, actionCreators: ac } = ChromeUtils.import(
   "resource://activity-stream/common/Actions.jsm"
 );
@@ -11,37 +14,34 @@ const { actionTypes: at, actionCreators: ac } = ChromeUtils.import(
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const PREFERENCES_LOADED_EVENT = "home-pane-loaded";
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
+});
+
 // These "section" objects are formatted in a way to be similar to the ones from
 // SectionsManager to construct the preferences view.
-const PREFS_BEFORE_SECTIONS = [
+const PREFS_BEFORE_SECTIONS = ({
+  newNewtabExperienceEnabled,
+  customizationMenuEnabled,
+}) => [
   {
     id: "search",
     pref: {
       feed: "showSearch",
       titleString: "home-prefs-search-header",
     },
-    icon: "chrome://browser/skin/search-glass.svg",
+    icon: "chrome://global/skin/icons/search-glass.svg",
   },
   {
     id: "topsites",
     pref: {
       feed: "feeds.topsites",
       titleString:
-        Services.prefs.getBoolPref(
-          "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
-        ) ||
-        Services.prefs.getBoolPref(
-          "browser.newtabpage.activity-stream.customizationMenu.enabled"
-        )
+        newNewtabExperienceEnabled || customizationMenuEnabled
           ? "home-prefs-shortcuts-header"
           : "home-prefs-topsites-header",
       descString:
-        Services.prefs.getBoolPref(
-          "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
-        ) ||
-        Services.prefs.getBoolPref(
-          "browser.newtabpage.activity-stream.customizationMenu.enabled"
-        )
+        newNewtabExperienceEnabled || customizationMenuEnabled
           ? "home-prefs-shortcuts-description"
           : "home-prefs-topsites-description",
       get nestedPrefs() {
@@ -50,12 +50,7 @@ const PREFS_BEFORE_SECTIONS = [
               {
                 name: "showSponsoredTopSites",
                 titleString:
-                  Services.prefs.getBoolPref(
-                    "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
-                  ) ||
-                  Services.prefs.getBoolPref(
-                    "browser.newtabpage.activity-stream.customizationMenu.enabled"
-                  )
+                  newNewtabExperienceEnabled || customizationMenuEnabled
                     ? "home-prefs-shortcuts-by-option-sponsored"
                     : "home-prefs-topsites-by-option-sponsored",
                 eventSource: "SPONSORED_TOP_SITES",
@@ -71,23 +66,21 @@ const PREFS_BEFORE_SECTIONS = [
   },
 ];
 
-const PREFS_AFTER_SECTIONS = [
+const PREFS_AFTER_SECTIONS = ({
+  newNewtabExperienceEnabled,
+  customizationMenuEnabled,
+}) => [
   {
     id: "snippets",
     pref: {
       feed: "feeds.snippets",
       titleString: "home-prefs-snippets-header",
       descString:
-        Services.prefs.getBoolPref(
-          "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
-        ) ||
-        Services.prefs.getBoolPref(
-          "browser.newtabpage.activity-stream.customizationMenu.enabled"
-        )
+        newNewtabExperienceEnabled || customizationMenuEnabled
           ? "home-prefs-snippets-description-new"
           : "home-prefs-snippets-description",
     },
-    icon: "info",
+    icon: "chrome://global/skin/icons/info.svg",
     eventSource: "SNIPPETS",
   },
 ];
@@ -155,10 +148,12 @@ this.AboutPreferences = class AboutPreferences {
       sections = this.handleDiscoverySettings(sections);
     }
 
+    const featureConfig = NimbusFeatures.newtab.getValue() || {};
+
     this.renderPreferences(window, [
-      ...PREFS_BEFORE_SECTIONS,
+      ...PREFS_BEFORE_SECTIONS(featureConfig),
       ...sections,
-      ...PREFS_AFTER_SECTIONS,
+      ...PREFS_AFTER_SECTIONS(featureConfig),
     ]);
   }
 

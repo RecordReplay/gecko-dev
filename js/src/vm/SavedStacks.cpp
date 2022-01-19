@@ -678,7 +678,7 @@ static SavedFrame* GetFirstSubsumedFrame(JSContext* cx,
                               frame, selfHosted, skippedAsync);
 }
 
-JS_FRIEND_API JSObject* GetFirstSubsumedSavedFrame(
+JS_PUBLIC_API JSObject* GetFirstSubsumedSavedFrame(
     JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
     JS::SavedFrameSelfHosted selfHosted) {
   if (!savedFrame) {
@@ -701,9 +701,9 @@ JS_FRIEND_API JSObject* GetFirstSubsumedSavedFrame(
                               skippedAsync);
 }
 
-static MOZ_MUST_USE bool SavedFrame_checkThis(JSContext* cx, CallArgs& args,
-                                              const char* fnName,
-                                              MutableHandleObject frame) {
+[[nodiscard]] static bool SavedFrame_checkThis(JSContext* cx, CallArgs& args,
+                                               const char* fnName,
+                                               MutableHandleObject frame) {
   const Value& thisValue = args.thisv();
 
   if (!thisValue.isObject()) {
@@ -1106,7 +1106,7 @@ JS_PUBLIC_API bool BuildStackString(JSContext* cx, JSPrincipals* principals,
           }
           break;
         case js::StackFormat::Default:
-          MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Unexpected value");
+          MOZ_CRASH("Unexpected value");
           break;
       }
 

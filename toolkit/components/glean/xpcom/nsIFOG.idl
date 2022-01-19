@@ -14,8 +14,13 @@ interface nsIFOG : nsISupports
    *
    * To be scheduled at some opportune time after the bulk of Firefox startup
    * has completed.
+   *
+   * @param aDataPathOverride - The path of a custom Glean data path to use
+   *        instead of the profile dir.
+   * @param aAppIdOverride - The application_id to use instead of
+   *        "firefox.desktop".
    */
-  void initializeFOG();
+  void initializeFOG([optional] in AUTF8String aDataPathOverride, [optional] in AUTF8String aAppIdOverride);
 
   /**
    * Enable or Disable the logging of pings in the Glean SDK.
@@ -47,4 +52,14 @@ interface nsIFOG : nsISupports
    *                    (e.g if it is empty), no ping will be sent.
    */
   void sendPing(in ACString aPingName);
+
+  /**
+   * ** Test-only Method **
+   *
+   * Flush all data from all child processes.
+   *
+   * @returns A promise that resolves when the data's been stored.
+   */
+  [implicit_jscontext]
+  Promise testFlushAllChildren();
 };

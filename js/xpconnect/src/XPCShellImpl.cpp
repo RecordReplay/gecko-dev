@@ -15,6 +15,7 @@
 #include "js/PropertySpec.h"
 #include "js/SourceText.h"  // JS::SourceText
 #include "mozilla/ChaosMode.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/IOInterposer.h"
 #include "mozilla/Preferences.h"
@@ -48,9 +49,11 @@
 
 #ifdef ANDROID
 #  include <android/log.h>
+#  include "XREShellData.h"
 #endif
 
 #ifdef XP_WIN
+#  include "mozilla/mscom/ProcessRuntime.h"
 #  include "mozilla/ScopeExit.h"
 #  include "mozilla/widget/AudioSession.h"
 #  include "mozilla/WinDllServices.h"
@@ -78,6 +81,14 @@
 #ifdef ENABLE_TESTS
 #  include "xpctest_private.h"
 #endif
+
+// Fuzzing support for XPC runtime fuzzing
+#ifdef FUZZING_INTERFACES
+#  include "xpcrtfuzzing/xpcrtfuzzing.h"
+#  include "XREShellData.h"
+static bool fuzzDoDebug = !!getenv("MOZ_FUZZ_DEBUG");
+static bool fuzzHaveModule = !!getenv("FUZZER");
+#endif  // FUZZING_INTERFACES
 
 using namespace mozilla;
 using namespace JS;
@@ -276,6 +287,15 @@ static bool ReadLine(JSContext* cx, unsigned argc, Value* vp) {
 static bool Print(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   args.rval().setUndefined();
+
+#ifdef FUZZING_INTERFACES
+  if (fuzzHaveModule && !fuzzDoDebug) {
+    // When fuzzing and not debugging, suppress any print() output,
+    // as it slows down fuzzing and makes libFuzzer's output hard
+    // to read.
+    return true;
+  }
+#endif  // FUZZING_INTERFACES
 
   RootedString str(cx);
   nsAutoCString utf8output;
@@ -1039,8 +1059,13 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
   int result = 0;
   nsresult rv;
 
-  gErrFile = stderr;
+#ifdef ANDROID
+  gOutFile = aShellData->outFile;
+  gErrFile = aShellData->errFile;
+#else
   gOutFile = stdout;
+  gErrFile = stderr;
+#endif
   gInFile = stdin;
 
   NS_LogInit();
@@ -1074,6 +1099,14 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
     printf_stderr(
         "*** You are running in chaos test mode. See ChaosMode.h. ***\n");
   }
+
+#ifdef XP_WIN
+  // Some COM settings are global to the process and must be set before any non-
+  // trivial COM is run in the application. Since these settings may affect
+  // stability, we should instantiate COM ASAP so that we can ensure that these
+  // global settings are configured before anything can interfere.
+  mscom::ProcessRuntime mscom;
+#endif
 
   // The provider needs to outlive the call to shutting down XPCOM.
   XPCShellDirProvider dirprovider;
@@ -1194,8 +1227,7 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
       argv += 2;
     }
 
-    nsCOMPtr<nsIServiceManager> servMan;
-    rv = NS_InitXPCOM(getter_AddRefs(servMan), appDir, &dirprovider);
+    rv = NS_InitXPCOM(nullptr, appDir, &dirprovider);
     if (NS_FAILED(rv)) {
       printf("NS_InitXPCOM failed!\n");
       return 1;
@@ -1337,22 +1369,39 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
                         0);
 
       {
-        // We are almost certainly going to run script here, so we need an
-        // AutoEntryScript. This is Gecko-specific and not in any spec.
-        AutoEntryScript aes(backstagePass, "xpcshell argument processing");
+#ifdef FUZZING_INTERFACES
+        if (fuzzHaveModule) {
+#  ifdef LIBFUZZER
+          // argv[0] was removed previously, but libFuzzer expects it
+          argc++;
+          argv--;
 
-        // If an exception is thrown, we'll set our return code
-        // appropriately, and then let the AutoEntryScript destructor report
-        // the error to the console.
-        if (!ProcessArgs(aes, argv, argc, &dirprovider)) {
-          if (gExitCode) {
-            result = gExitCode;
-          } else if (gQuitting) {
-            result = 0;
-          } else {
-            result = EXITCODE_RUNTIME_ERROR;
+          result = FuzzXPCRuntimeStart(&jsapi, &argc, &argv,
+                                       aShellData->fuzzerDriver);
+#  elif __AFL_COMPILER
+          MOZ_CRASH("AFL is unsupported for XPC runtime fuzzing integration");
+#  endif
+        } else {
+#endif
+          // We are almost certainly going to run script here, so we need an
+          // AutoEntryScript. This is Gecko-specific and not in any spec.
+          AutoEntryScript aes(backstagePass, "xpcshell argument processing");
+
+          // If an exception is thrown, we'll set our return code
+          // appropriately, and then let the AutoEntryScript destructor report
+          // the error to the console.
+          if (!ProcessArgs(aes, argv, argc, &dirprovider)) {
+            if (gExitCode) {
+              result = gExitCode;
+            } else if (gQuitting) {
+              result = 0;
+            } else {
+              result = EXITCODE_RUNTIME_ERROR;
+            }
           }
+#ifdef FUZZING_INTERFACES
         }
+#endif
       }
 
       // Signal that we're now shutting down.

@@ -29,12 +29,6 @@ struct IMEState;
 }  // namespace widget
 }  // namespace mozilla
 
-enum nsLinkState {
-  eLinkState_Unvisited = 1,
-  eLinkState_Visited = 2,
-  eLinkState_NotLink = 3
-};
-
 // IID for the nsIContent interface
 // Must be kept in sync with xpcom/rust/xpcom/src/interfaces/nonidl.rs
 #define NS_ICONTENT_IID                              \
@@ -321,20 +315,6 @@ class nsIContent : public nsINode {
    */
   bool IsFocusable(int32_t* aTabIndex = nullptr, bool aWithMouse = false);
   virtual bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse);
-
-  /**
-   * The method focuses (or activates) element that accesskey is bound to. It is
-   * called when accesskey is activated.
-   *
-   * @param aKeyCausesActivation - if true then element should be activated
-   * @param aIsTrustedEvent - if true then event that is cause of accesskey
-   *                          execution is trusted.
-   * @return true if the focus was changed.
-   */
-  MOZ_CAN_RUN_SCRIPT virtual bool PerformAccesskey(bool aKeyCausesActivation,
-                                                   bool aIsTrustedEvent) {
-    return false;
-  }
 
   /*
    * Get desired IME state for the content.
@@ -790,7 +770,11 @@ class nsIContent : public nsINode {
   ~nsIContent() = default;
 
  public:
-#ifdef DEBUG
+#if defined(DEBUG) || defined(MOZ_DUMP_PAINTING)
+#  define MOZ_DOM_LIST
+#endif
+
+#ifdef MOZ_DOM_LIST
   /**
    * List the content (and anything it contains) out to the given
    * file stream. Use aIndent as the base indent during formatting.

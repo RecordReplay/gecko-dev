@@ -30,6 +30,9 @@ namespace layers {
 
 class NativeLayer;
 class NativeLayerCA;
+class NativeLayerWayland;
+class NativeLayerRootCA;
+class NativeLayerRootWayland;
 class NativeLayerRootSnapshotter;
 class SurfacePoolHandle;
 
@@ -43,6 +46,9 @@ class NativeLayerRoot {
  public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(NativeLayerRoot)
 
+  virtual NativeLayerRootCA* AsNativeLayerRootCA() { return nullptr; }
+  virtual NativeLayerRootWayland* AsNativeLayerRootWayland() { return nullptr; }
+
   virtual already_AddRefed<NativeLayer> CreateLayer(
       const gfx::IntSize& aSize, bool aIsOpaque,
       SurfacePoolHandle* aSurfacePoolHandle) = 0;
@@ -52,6 +58,8 @@ class NativeLayerRoot {
   virtual void AppendLayer(NativeLayer* aLayer) = 0;
   virtual void RemoveLayer(NativeLayer* aLayer) = 0;
   virtual void SetLayers(const nsTArray<RefPtr<NativeLayer>>& aLayers) = 0;
+  virtual void PauseCompositor(){};
+  virtual bool ResumeCompositor() { return true; };
 
   // Publish the layer changes to the screen. Returns whether the commit was
   // successful.
@@ -117,6 +125,7 @@ class NativeLayer {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(NativeLayer)
 
   virtual NativeLayerCA* AsNativeLayerCA() { return nullptr; }
+  virtual NativeLayerWayland* AsNativeLayerWayland() { return nullptr; }
 
   // The size and opaqueness of a layer are supplied during layer creation and
   // never change.

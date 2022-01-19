@@ -13,7 +13,6 @@
 #include "SharedPrefMap.h"
 
 #include "base/basictypes.h"
-#include "GeckoProfiler.h"
 #include "MainThreadUtils.h"
 #include "mozilla/ArenaAllocatorExtensions.h"
 #include "mozilla/ArenaAllocator.h"
@@ -28,10 +27,11 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
-#include "mozilla/Services.h"
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticMutex.h"
@@ -49,7 +49,7 @@
 #include "nsCOMPtr.h"
 #include "nsComponentManagerUtils.h"
 #include "nsCRT.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsIConsoleService.h"
 #include "nsIFile.h"
@@ -86,6 +86,9 @@
 #include "plstr.h"
 #include "prlink.h"
 #include "xpcpublic.h"
+#ifdef MOZ_BACKGROUNDTASKS
+#  include "mozilla/BackgroundTasks.h"
+#endif
 
 #ifdef DEBUG
 #  include <map>
@@ -1221,7 +1224,7 @@ static CallbackNode* gLastPriorityNode = nullptr;
 #endif
 
 #ifdef ACCESS_COUNTS
-using AccessCountsHashTable = nsDataHashtable<nsCStringHashKey, uint32_t>;
+using AccessCountsHashTable = nsTHashMap<nsCStringHashKey, uint32_t>;
 static AccessCountsHashTable* gAccessCounts = nullptr;
 
 static void AddAccessCount(const nsACString& aPrefName) {
@@ -1229,7 +1232,7 @@ static void AddAccessCount(const nsACString& aPrefName) {
   // 1474789), and triggers assertions here if we try to add usage count entries
   // from background threads.
   if (NS_IsMainThread()) {
-    uint32_t& count = gAccessCounts->GetOrInsert(aPrefName);
+    uint32_t& count = gAccessCounts->LookupOrInsert(aPrefName);
     count++;
   }
 }
@@ -2580,7 +2583,7 @@ nsPrefBranch::GetChildList(const char* aStartingAt,
 NS_IMETHODIMP
 nsPrefBranch::AddObserverImpl(const nsACString& aDomain, nsIObserver* aObserver,
                               bool aHoldWeak) {
-  PrefCallback* pCallback;
+  UniquePtr<PrefCallback> pCallback;
 
   NS_ENSURE_ARG(aObserver);
 
@@ -2597,28 +2600,27 @@ nsPrefBranch::AddObserverImpl(const nsACString& aDomain, nsIObserver* aObserver,
     }
 
     // Construct a PrefCallback with a weak reference to the observer.
-    pCallback = new PrefCallback(prefName, weakRefFactory, this);
+    pCallback = MakeUnique<PrefCallback>(prefName, weakRefFactory, this);
 
   } else {
     // Construct a PrefCallback with a strong reference to the observer.
-    pCallback = new PrefCallback(prefName, aObserver, this);
+    pCallback = MakeUnique<PrefCallback>(prefName, aObserver, this);
   }
 
-  auto p = mObservers.LookupForAdd(pCallback);
-  if (p) {
-    NS_WARNING("Ignoring duplicate observer.");
-    delete pCallback;
-    return NS_OK;
-  }
+  mObservers.WithEntryHandle(pCallback.get(), [&](auto&& p) {
+    if (p) {
+      NS_WARNING("Ignoring duplicate observer.");
+    } else {
+      // We must pass a fully qualified preference name to the callback
+      // aDomain == nullptr is the only possible failure, and we trapped it with
+      // NS_ENSURE_ARG above.
+      Preferences::RegisterCallback(NotifyObserver, prefName, pCallback.get(),
+                                    Preferences::PrefixMatch,
+                                    /* isPriority */ false);
 
-  p.OrInsert([&pCallback]() { return pCallback; });
-
-  // We must pass a fully qualified preference name to the callback
-  // aDomain == nullptr is the only possible failure, and we trapped it with
-  // NS_ENSURE_ARG above.
-  Preferences::RegisterCallback(NotifyObserver, prefName, pCallback,
-                                Preferences::PrefixMatch,
-                                /* isPriority */ false);
+      p.Insert(std::move(pCallback));
+    }
+  });
 
   return NS_OK;
 }
@@ -2694,8 +2696,8 @@ size_t nsPrefBranch::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
   n += mPrefRoot.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 
   n += mObservers.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto iter = mObservers.ConstIter(); !iter.Done(); iter.Next()) {
-    const PrefCallback* data = iter.UserData();
+  for (const auto& entry : mObservers) {
+    const PrefCallback* data = entry.GetWeak();
     n += data->SizeOfIncludingThis(aMallocSizeOf);
   }
 
@@ -2741,7 +2743,7 @@ nsresult nsPrefBranch::GetDefaultFromPropertiesFile(const char* aPrefName,
   }
 
   nsCOMPtr<nsIStringBundleService> bundleService =
-      services::GetStringBundleService();
+      components::StringBundle::Service();
   if (!bundleService) {
     return NS_ERROR_FAILURE;
   }
@@ -3186,10 +3188,10 @@ PreferenceServiceReporter::CollectReports(
   size_t numWeakDead = 0;
   nsTArray<nsCString> suspectPreferences;
   // Count of the number of referents for each preference.
-  nsDataHashtable<nsCStringHashKey, uint32_t> prefCounter;
+  nsTHashMap<nsCStringHashKey, uint32_t> prefCounter;
 
-  for (auto iter = rootBranch->mObservers.Iter(); !iter.Done(); iter.Next()) {
-    auto callback = iter.UserData();
+  for (const auto& entry : rootBranch->mObservers) {
+    auto* callback = entry.GetWeak();
 
     if (callback->IsWeak()) {
       nsCOMPtr<nsIObserver> callbackRef = do_QueryReferent(callback->mWeakRef);
@@ -3202,10 +3204,8 @@ PreferenceServiceReporter::CollectReports(
       numStrong++;
     }
 
-    uint32_t oldCount = 0;
-    prefCounter.Get(callback->GetDomain(), &oldCount);
-    uint32_t currentCount = oldCount + 1;
-    prefCounter.Put(callback->GetDomain(), currentCount);
+    const uint32_t currentCount = prefCounter.Get(callback->GetDomain()) + 1;
+    prefCounter.InsertOrUpdate(callback->GetDomain(), currentCount);
 
     // Keep track of preferences that have a suspiciously large number of
     // referents (a symptom of a leak).
@@ -3216,8 +3216,7 @@ PreferenceServiceReporter::CollectReports(
 
   for (uint32_t i = 0; i < suspectPreferences.Length(); i++) {
     nsCString& suspect = suspectPreferences[i];
-    uint32_t totalReferentCount = 0;
-    prefCounter.Get(suspect, &totalReferentCount);
+    const uint32_t totalReferentCount = prefCounter.Get(suspect);
 
     nsPrintfCString suspectPath(
         "preference-service-suspect/"
@@ -3904,8 +3903,8 @@ Preferences::GetDefaultBranch(const char* aPrefRoot, nsIPrefBranch** aRetVal) {
 NS_IMETHODIMP
 Preferences::ReadStats(nsIPrefStatsCallback* aCallback) {
 #ifdef ACCESS_COUNTS
-  for (auto iter = gAccessCounts->Iter(); !iter.Done(); iter.Next()) {
-    aCallback->Visit(iter.Key(), iter.Data());
+  for (const auto& entry : *gAccessCounts) {
+    aCallback->Visit(entry.GetKey(), entry.GetData());
   }
 
   return NS_OK;
@@ -3922,6 +3921,71 @@ Preferences::ResetStats() {
 #else
   return NS_ERROR_NOT_IMPLEMENTED;
 #endif
+}
+
+// We would much prefer to use C++ lambdas, but we cannot convert
+// lambdas that capture (here, the underlying observer) to C pointer
+// to functions.  So, here we are, with icky C callbacks.  Be aware
+// that nothing is thread-safe here because there's a single global
+// `nsIPrefObserver` instance.  Use this from the main thread only.
+nsIPrefObserver* PrefObserver = nullptr;
+
+void HandlePref(const char* aPrefName, PrefType aType, PrefValueKind aKind,
+                PrefValue aValue, bool aIsSticky, bool aIsLocked) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!PrefObserver) {
+    return;
+  }
+
+  const char* kind = aKind == PrefValueKind::Default ? "Default" : "User";
+
+  switch (aType) {
+    case PrefType::String:
+      PrefObserver->OnStringPref(kind, aPrefName, aValue.mStringVal, aIsSticky,
+                                 aIsLocked);
+      break;
+    case PrefType::Int:
+      PrefObserver->OnIntPref(kind, aPrefName, aValue.mIntVal, aIsSticky,
+                              aIsLocked);
+      break;
+    case PrefType::Bool:
+      PrefObserver->OnBoolPref(kind, aPrefName, aValue.mBoolVal, aIsSticky,
+                               aIsLocked);
+      break;
+    default:
+      PrefObserver->OnError("Unexpected pref type.");
+  }
+}
+
+void HandleError(const char* aMsg) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!PrefObserver) {
+    return;
+  }
+
+  PrefObserver->OnError(aMsg);
+}
+
+NS_IMETHODIMP
+Preferences::ParsePrefsFromBuffer(const nsTArray<uint8_t>& aBytes,
+                                  nsIPrefObserver* aObserver,
+                                  const char* aPathLabel) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // We need a null-terminated buffer.
+  nsTArray<uint8_t> data = aBytes.Clone();
+  data.AppendElement(0);
+
+  // Parsing as default handles both `pref` and `user_pref`.
+  PrefObserver = aObserver;
+  prefs_parser_parse(aPathLabel ? aPathLabel : "<ParsePrefsFromBuffer data>",
+                     PrefValueKind::Default, (const char*)data.Elements(),
+                     data.Length() - 1, HandlePref, HandleError);
+  PrefObserver = nullptr;
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -4296,7 +4360,6 @@ static nsresult pref_ReadDefaultPrefs(const RefPtr<nsZipArchive> jarReader,
   return NS_OK;
 }
 
-#ifdef MOZ_GECKO_PROFILER
 static nsCString PrefValueToString(const bool* b) {
   return nsCString(*b ? "true" : "false");
 }
@@ -4310,7 +4373,6 @@ static nsCString PrefValueToString(const float* f) {
   return nsPrintfCString("%f", *f);
 }
 static nsCString PrefValueToString(const nsACString& s) { return nsCString(s); }
-#endif
 
 // These preference getter wrappers allow us to look up the value for static
 // preferences based on their native types, rather than manually mapping them to
@@ -4318,7 +4380,6 @@ static nsCString PrefValueToString(const nsACString& s) { return nsCString(s); }
 // We define these methods in a struct which is made friend of Preferences in
 // order to access private members.
 struct Internals {
-#ifdef MOZ_GECKO_PROFILER
   struct PreferenceReadMarker {
     static constexpr Span<const char> MarkerTypeName() {
       return MakeStringSpan("PreferenceRead");
@@ -4369,7 +4430,6 @@ struct Internals {
       }
     }
   };
-#endif  // MOZ_GECKO_PROFILER
 
   template <typename T>
   static nsresult GetPrefValue(const char* aPrefName, T&& aResult,
@@ -4380,7 +4440,6 @@ struct Internals {
     if (Maybe<PrefWrapper> pref = pref_Lookup(aPrefName)) {
       rv = pref->GetValue(aKind, std::forward<T>(aResult));
 
-#ifdef MOZ_GECKO_PROFILER
       if (profiler_feature_active(ProfilerFeature::PreferenceReads)) {
         profiler_add_marker(
             "PreferenceRead", baseprofiler::category::OTHER_PreferenceRead, {},
@@ -4388,7 +4447,6 @@ struct Internals {
             ProfilerString8View::WrapNullTerminatedString(aPrefName),
             Some(aKind), pref->Type(), PrefValueToString(aResult));
       }
-#endif
     }
 
     return rv;
@@ -4401,7 +4459,6 @@ struct Internals {
     if (Maybe<PrefWrapper> pref = pref_SharedLookup(aName)) {
       rv = pref->GetValue(PrefValueKind::User, aResult);
 
-#ifdef MOZ_GECKO_PROFILER
       if (profiler_feature_active(ProfilerFeature::PreferenceReads)) {
         profiler_add_marker(
             "PreferenceRead", baseprofiler::category::OTHER_PreferenceRead, {},
@@ -4410,7 +4467,6 @@ struct Internals {
             Nothing() /* indicates Shared */, pref->Type(),
             PrefValueToString(aResult));
       }
-#endif
     }
 
     return rv;
@@ -4530,6 +4586,13 @@ nsresult Preferences::InitInitialObjects(bool aIsStartup) {
     rv = pref_ReadDefaultPrefs(jarReader, "defaults/pref/*.js$");
     NS_ENSURE_SUCCESS(rv, rv);
 
+#ifdef MOZ_BACKGROUNDTASKS
+    if (BackgroundTasks::IsBackgroundTaskMode()) {
+      rv = pref_ReadDefaultPrefs(jarReader, "defaults/backgroundtasks/*.js$");
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+#endif
+
 #ifdef MOZ_WIDGET_ANDROID
     // Load jar:$gre/omni.jar!/defaults/pref/$MOZ_ANDROID_CPU_ABI/*.js.
     nsAutoCString path;
@@ -4609,6 +4672,25 @@ nsresult Preferences::InitInitialObjects(bool aIsStartup) {
         NS_WARNING("Error parsing preferences.");
       }
     }
+
+#ifdef MOZ_BACKGROUNDTASKS
+    if (BackgroundTasks::IsBackgroundTaskMode()) {
+      rv = appJarReader->FindInit("defaults/backgroundtasks/*.js$",
+                                  getter_Transfers(find));
+      NS_ENSURE_SUCCESS(rv, rv);
+      prefEntries.Clear();
+      while (NS_SUCCEEDED(find->FindNext(&entryName, &entryNameLen))) {
+        prefEntries.AppendElement(Substring(entryName, entryNameLen));
+      }
+      prefEntries.Sort();
+      for (uint32_t i = prefEntries.Length(); i--;) {
+        rv = pref_ReadPrefFromJar(appJarReader, prefEntries[i].get());
+        if (NS_FAILED(rv)) {
+          NS_WARNING("Error parsing preferences.");
+        }
+      }
+    }
+#endif
   }
 
   nsCOMPtr<nsIProperties> dirSvc(

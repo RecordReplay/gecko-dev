@@ -19,6 +19,7 @@
 #include "X11UndefineNone.h"
 #include "IMContextWrapper.h"
 #include "WidgetUtils.h"
+#include "WidgetUtilsGtk.h"
 #include "keysym2ucs.h"
 #include "nsContentUtils.h"
 #include "nsGtkUtils.h"
@@ -27,7 +28,6 @@
 #include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsWindow.h"
-#include "gfxPlatformGtk.h"
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/MouseEvents.h"
@@ -346,7 +346,7 @@ KeymapWrapper::KeymapWrapper()
 
   g_object_ref(mGdkKeymap);
 
-  if (gfxPlatformGtk::GetPlatform()->IsX11Display()) {
+  if (GdkIsX11Display()) {
     InitXKBExtension();
   }
 
@@ -365,7 +365,7 @@ void KeymapWrapper::Init() {
   mModifierKeys.Clear();
   memset(mModifierMasks, 0, sizeof(mModifierMasks));
 
-  if (gfxPlatformGtk::GetPlatform()->IsX11Display()) {
+  if (GdkIsX11Display()) {
     InitBySystemSettingsX11();
   }
 #ifdef MOZ_WAYLAND
@@ -1024,6 +1024,41 @@ uint32_t KeymapWrapper::ComputeKeyModifiers(guint aModifierState) {
     keyModifiers |= MODIFIER_SCROLLLOCK;
   }
   return keyModifiers;
+}
+
+/* static */
+guint KeymapWrapper::ConvertWidgetModifierToGdkState(
+    nsIWidget::Modifiers aNativeModifiers) {
+  if (!aNativeModifiers) {
+    return 0;
+  }
+  struct ModifierMapEntry {
+    nsIWidget::Modifiers mWidgetModifier;
+    Modifier mModifier;
+  };
+  // TODO: Currently, we don't treat L/R of each modifier on Linux.
+  // TODO: No proper native modifier for Level5.
+  static constexpr ModifierMapEntry sModifierMap[] = {
+      {nsIWidget::CAPS_LOCK, Modifier::CAPS_LOCK},
+      {nsIWidget::NUM_LOCK, Modifier::NUM_LOCK},
+      {nsIWidget::SHIFT_L, Modifier::SHIFT},
+      {nsIWidget::SHIFT_R, Modifier::SHIFT},
+      {nsIWidget::CTRL_L, Modifier::CTRL},
+      {nsIWidget::CTRL_R, Modifier::CTRL},
+      {nsIWidget::ALT_L, Modifier::ALT},
+      {nsIWidget::ALT_R, Modifier::ALT},
+      {nsIWidget::ALTGRAPH, Modifier::LEVEL3},
+      {nsIWidget::COMMAND_L, Modifier::SUPER},
+      {nsIWidget::COMMAND_R, Modifier::SUPER}};
+
+  guint state = 0;
+  KeymapWrapper* instance = GetInstance();
+  for (const ModifierMapEntry& entry : sModifierMap) {
+    if (aNativeModifiers & entry.mWidgetModifier) {
+      state |= instance->GetModifierMask(entry.mModifier);
+    }
+  }
+  return state;
 }
 
 /* static */
@@ -1726,7 +1761,7 @@ void KeymapWrapper::InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
   // key release events, the result isn't what we want.
   guint modifierState = aGdkKeyEvent->state;
   GdkDisplay* gdkDisplay = gdk_display_get_default();
-  if (aGdkKeyEvent->is_modifier && GDK_IS_X11_DISPLAY(gdkDisplay)) {
+  if (aGdkKeyEvent->is_modifier && GdkIsX11Display(gdkDisplay)) {
     Display* display = gdk_x11_display_get_xdisplay(gdkDisplay);
     if (XEventsQueued(display, QueuedAfterReading)) {
       XEvent nextEvent;

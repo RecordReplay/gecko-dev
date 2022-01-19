@@ -115,6 +115,14 @@ static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
 static void (*gInvalidateRecording)(const char* aFormat, ...);
 static void (*gSetCrashNote)(const char* aNote);
 static void (*gNotifyActivity)();
+static void (*gNewStableHashTable)(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate);
+static void (*gMoveStableHashTable)(const void* aTableSrc, const void* aTableDst);
+static void (*gDeleteStableHashTable)(const void* aTable);
+static uint32_t (*gLookupStableHashCode)(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
+                                         bool* aFoundMatch);
+static void (*gStableHashTableAddEntryForLastLookup)(const void* aTable, const void* aEntry);
+static void (*gStableHashTableMoveEntry)(const void* aTable, const void* aEntrySrc, const void* aEntryDst);
+static void (*gStableHashTableDeleteEntry)(const void* aTable, const void* aEntry);
 
 #ifndef XP_WIN
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
@@ -400,6 +408,13 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayInvalidateRecording", gInvalidateRecording);
   LoadSymbol("RecordReplaySetCrashNote", gSetCrashNote, /* aOptional */ true);
   LoadSymbol("RecordReplayNotifyActivity", gNotifyActivity);
+  LoadSymbol("RecordReplayNewStableHashTable", gNewStableHashTable);
+  LoadSymbol("RecordReplayMoveStableHashTable", gMoveStableHashTable);
+  LoadSymbol("RecordReplayDeleteStableHashTable", gDeleteStableHashTable);
+  LoadSymbol("RecordReplayLookupStableHashCode", gLookupStableHashCode);
+  LoadSymbol("RecordReplayStableHashTableAddEntryForLastLookup", gStableHashTableAddEntryForLastLookup);
+  LoadSymbol("RecordReplayStableHashTableMoveEntry", gStableHashTableMoveEntry);
+  LoadSymbol("RecordReplayStableHashTableDeleteEntry", gStableHashTableDeleteEntry);
 
   if (apiKey) {
     gSetApiKey(apiKey->c_str());
@@ -776,7 +791,7 @@ static bool FilterMatches(const InfallibleVector<JSFilter>& aFilters,
 }
 
 const char* CurrentFirefoxVersion() {
-  return "86.0";
+  return "91.0";
 }
 
 static bool gHasCheckpoint = false;
@@ -928,6 +943,48 @@ static void RecordingIdCallback(const char* aRecordingId) {
   AutoPassThroughThreadEvents pt;
   const char* url = getenv("RECORD_REPLAY_URL");
   fprintf(stderr, "CreateRecording %s %s\n", aRecordingId, url ? url : "");
+}
+
+void NewStableHashTable(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate) {
+  if (IsRecordingOrReplaying()) {
+    gNewStableHashTable(aTable, aKeyEqualsEntry, aPrivate);
+  }
+}
+
+void MoveStableHashTable(const void* aTableSrc, const void* aTableDst) {
+  if (IsRecordingOrReplaying()) {
+    gMoveStableHashTable(aTableSrc, aTableDst);
+  }
+}
+
+void DeleteStableHashTable(const void* aTable) {
+  if (IsRecordingOrReplaying()) {
+    gDeleteStableHashTable(aTable);
+  }
+}
+
+uint32_t LookupStableHashCode(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
+                              bool* aFoundMatch) {
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
+  return gLookupStableHashCode(aTable, aKey, aUnstableHashCode, aFoundMatch);
+}
+
+void StableHashTableAddEntryForLastLookup(const void* aTable, const void* aEntry) {
+  if (IsRecordingOrReplaying()) {
+    gStableHashTableAddEntryForLastLookup(aTable, aEntry);
+  }
+}
+
+void StableHashTableMoveEntry(const void* aTable, const void* aEntrySrc, const void* aEntryDst) {
+  if (IsRecordingOrReplaying()) {
+    gStableHashTableMoveEntry(aTable, aEntrySrc, aEntryDst);
+  }
+}
+
+void StableHashTableDeleteEntry(const void* aTable, const void* aEntry) {
+  if (IsRecordingOrReplaying()) {
+    gStableHashTableDeleteEntry(aTable, aEntry);
+  }
 }
 
 }  // namespace recordreplay

@@ -1,10 +1,7 @@
 "use strict";
 
 const { ExperimentAPI } = ChromeUtils.import(
-  "resource://messaging-system/experiments/ExperimentAPI.jsm"
-);
-const { ExperimentFakes } = ChromeUtils.import(
-  "resource://testing-common/MSTestUtils.jsm"
+  "resource://nimbus/ExperimentAPI.jsm"
 );
 
 /**
@@ -18,11 +15,12 @@ const { ExperimentFakes } = ChromeUtils.import(
 async function testWithExperimentFeatureValue(slug, featureValue, test) {
   test_newtab({
     async before() {
-      let updatePromise = ExperimentFakes.waitForExperimentUpdate(
-        ExperimentAPI,
-        {
-          slug,
-        }
+      Services.prefs.setBoolPref(
+        "browser.newtabpage.activity-stream.newNewtabExperience.enabled",
+        false
+      );
+      let updatePromise = new Promise(resolve =>
+        ExperimentAPI._store.once(`update:${slug}`, resolve)
       );
 
       ExperimentAPI._store.addExperiment({
@@ -42,6 +40,9 @@ async function testWithExperimentFeatureValue(slug, featureValue, test) {
     },
     test,
     async after() {
+      Services.prefs.clearUserPref(
+        "browser.newtabpage.activity-stream.newNewtabExperience.enabled"
+      );
       ExperimentAPI._store._deleteForTests(slug);
       is(ExperimentAPI._store.getAll().includes(slug), false, "Cleanup done");
     },

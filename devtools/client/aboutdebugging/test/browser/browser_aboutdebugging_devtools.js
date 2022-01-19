@@ -30,7 +30,7 @@ add_task(async function() {
 
   info("DevTools starts workers, wait for requests to settle");
   const store = window.AboutDebugging.store;
-  await waitForRequestsToSettle(store);
+  await waitForAboutDebuggingRequests(store);
 
   info("Click on the Connect item in the sidebar");
   connectLink.click();

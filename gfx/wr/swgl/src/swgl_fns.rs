@@ -15,8 +15,11 @@ macro_rules! debug {
 }
 
 #[repr(C)]
-struct LockedTexture { _private: [u8; 0] }
+struct LockedTexture {
+    _private: [u8; 0],
+}
 
+#[allow(dead_code)]
 extern "C" {
     fn ActiveTexture(texture: GLenum);
     fn BindTexture(target: GLenum, texture: GLuint);
@@ -62,37 +65,13 @@ extern "C" {
         level: GLint,
     );
     fn CheckFramebufferStatus(target: GLenum) -> GLenum;
-    fn InvalidateFramebuffer(
-        target: GLenum,
-        num_attachments: GLsizei,
-        attachments: *const GLenum,
-    );
-    fn TexStorage3D(
-        target: GLenum,
-        levels: GLint,
-        internal_format: GLenum,
-        width: GLsizei,
-        height: GLsizei,
-        depth: GLsizei,
-    );
+    fn InvalidateFramebuffer(target: GLenum, num_attachments: GLsizei, attachments: *const GLenum);
     fn TexImage2D(
         target: GLenum,
         level: GLint,
         internal_format: GLint,
         width: GLsizei,
         height: GLsizei,
-        border: GLint,
-        format: GLenum,
-        ty: GLenum,
-        data: *const c_void,
-    );
-    fn TexImage3D(
-        target: GLenum,
-        level: GLint,
-        internal_format: GLint,
-        width: GLsizei,
-        height: GLsizei,
-        depth: GLsizei,
         border: GLint,
         format: GLenum,
         ty: GLenum,
@@ -105,19 +84,6 @@ extern "C" {
         yoffset: GLint,
         width: GLsizei,
         height: GLsizei,
-        format: GLenum,
-        ty: GLenum,
-        data: *const c_void,
-    );
-    fn TexSubImage3D(
-        target: GLenum,
-        level: GLint,
-        xoffset: GLint,
-        yoffset: GLint,
-        zoffset: GLint,
-        width: GLsizei,
-        height: GLsizei,
-        depth: GLsizei,
         format: GLenum,
         ty: GLenum,
         data: *const c_void,
@@ -166,13 +132,6 @@ extern "C" {
     fn GetLinkStatus(program: GLuint) -> GLint;
     fn UseProgram(program: GLuint);
     fn SetViewport(x: GLint, y: GLint, width: GLsizei, height: GLsizei);
-    fn FramebufferTextureLayer(
-        target: GLenum,
-        attachment: GLenum,
-        texture: GLuint,
-        level: GLint,
-        layer: GLint,
-    );
     fn FramebufferRenderbuffer(
         target: GLenum,
         attachment: GLenum,
@@ -186,6 +145,31 @@ extern "C" {
     fn ClearColor(r: GLfloat, g: GLfloat, b: GLfloat, a: GLfloat);
     fn ClearDepth(depth: GLdouble);
     fn Clear(mask: GLbitfield);
+    fn ClearTexSubImage(
+        target: GLenum,
+        level: GLint,
+        xoffset: GLint,
+        yoffset: GLint,
+        zoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        depth: GLsizei,
+        format: GLenum,
+        ty: GLenum,
+        data: *const c_void,
+    );
+    fn ClearTexImage(target: GLenum, level: GLint, format: GLenum, ty: GLenum, data: *const c_void);
+    fn ClearColorRect(
+        fbo: GLuint,
+        xoffset: GLint,
+        yoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        r: GLfloat,
+        g: GLfloat,
+        b: GLfloat,
+        a: GLfloat,
+    );
     fn PixelStorei(name: GLenum, param: GLint);
     fn ReadPixels(
         x: GLint,
@@ -226,17 +210,6 @@ extern "C" {
         width: GLsizei,
         height: GLsizei,
     );
-    fn CopyTexSubImage3D(
-        target: GLenum,
-        level: GLint,
-        xoffset: GLint,
-        yoffset: GLint,
-        zoffset: GLint,
-        x: GLint,
-        y: GLint,
-        width: GLsizei,
-        height: GLsizei,
-    );
     fn BlitFramebuffer(
         src_x0: GLint,
         src_y0: GLint,
@@ -269,6 +242,7 @@ extern "C" {
         height: *mut i32,
         stride: *mut i32,
     ) -> *mut c_void;
+    fn ResolveFramebuffer(fbo: GLuint);
     fn SetTextureBuffer(
         tex: GLuint,
         internal_format: GLenum,
@@ -322,7 +296,7 @@ extern "C" {
         locked_y: *mut LockedTexture,
         locked_u: *mut LockedTexture,
         locked_v: *mut LockedTexture,
-        color_space: YUVColorSpace,
+        color_space: YuvRangedColorSpace,
         color_depth: GLuint,
         src_x: GLint,
         src_y: GLint,
@@ -342,6 +316,7 @@ extern "C" {
     fn ReferenceContext(ctx: *mut c_void);
     fn DestroyContext(ctx: *mut c_void);
     fn MakeCurrent(ctx: *mut c_void);
+    fn ReportMemory(ctx: *mut c_void, size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize) -> usize;
 }
 
 #[derive(Clone, Copy)]
@@ -389,8 +364,37 @@ impl Context {
             let mut width: i32 = 0;
             let mut height: i32 = 0;
             let mut stride: i32 = 0;
-            let data_ptr = GetColorBuffer(fbo, flush as GLboolean, &mut width, &mut height, &mut stride);
+            let data_ptr = GetColorBuffer(
+                fbo,
+                flush as GLboolean,
+                &mut width,
+                &mut height,
+                &mut stride,
+            );
             (data_ptr, width, height, stride)
+        }
+    }
+
+    pub fn resolve_framebuffer(&self, fbo: GLuint) {
+        unsafe {
+            ResolveFramebuffer(fbo);
+        }
+    }
+
+    pub fn clear_color_rect(
+        &self,
+        fbo: GLuint,
+        xoffset: GLint,
+        yoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        unsafe {
+            ClearColorRect(fbo, xoffset, yoffset, width, height, r, g, b, a);
         }
     }
 
@@ -445,6 +449,10 @@ impl Context {
                 None
             }
         }
+    }
+
+    pub fn report_memory(&self, size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize) -> usize {
+        unsafe { ReportMemory(self.0, size_of_op) }
     }
 }
 
@@ -555,8 +563,8 @@ impl Gl for Context {
             let u = str::from_utf8(s).unwrap();
             const PREFIX: &'static str = "// shader: ";
             if let Some(start) = u.find(PREFIX) {
-                if let Some(end) = u[start ..].find('\n') {
-                    let name = u[start + PREFIX.len() .. start + end].trim();
+                if let Some(end) = u[start..].find('\n') {
+                    let name = u[start + PREFIX.len()..start + end].trim();
                     debug!("shader name: {}", name);
                     unsafe {
                         let c_string = CString::new(name).unwrap();
@@ -1025,7 +1033,6 @@ impl Gl for Context {
         panic!();
     }
 
-    // FIXME: Does not verify buffer size -- unsafe!
     fn tex_image_3d(
         &self,
         target: GLenum,
@@ -1039,24 +1046,7 @@ impl Gl for Context {
         ty: GLenum,
         opt_data: Option<&[u8]>,
     ) {
-        unsafe {
-            let pdata = match opt_data {
-                Some(data) => data.as_ptr() as *const GLvoid,
-                None => ptr::null(),
-            };
-            TexImage3D(
-                target,
-                level,
-                internal_format,
-                width,
-                height,
-                depth,
-                border,
-                format,
-                ty,
-                pdata,
-            );
-        }
+        panic!();
     }
 
     fn copy_tex_image_2d(
@@ -1101,11 +1091,7 @@ impl Gl for Context {
         width: GLsizei,
         height: GLsizei,
     ) {
-        unsafe {
-            CopyTexSubImage3D(
-                target, level, xoffset, yoffset, zoffset, x, y, width, height,
-            );
-        }
+        panic!();
     }
 
     fn tex_sub_image_2d(
@@ -1187,22 +1173,7 @@ impl Gl for Context {
         data: &[u8],
     ) {
         debug!("tex_sub_image_3d");
-        //panic!();
-        unsafe {
-            TexSubImage3D(
-                target,
-                level,
-                xoffset,
-                yoffset,
-                zoffset,
-                width,
-                height,
-                depth,
-                format,
-                ty,
-                data.as_ptr() as *const c_void,
-            );
-        }
+        panic!();
     }
 
     fn tex_sub_image_3d_pbo(
@@ -1219,21 +1190,7 @@ impl Gl for Context {
         ty: GLenum,
         offset: usize,
     ) {
-        unsafe {
-            TexSubImage3D(
-                target,
-                level,
-                xoffset,
-                yoffset,
-                zoffset,
-                width,
-                height,
-                depth,
-                format,
-                ty,
-                offset as *const c_void,
-            );
-        }
+        panic!();
     }
 
     fn tex_storage_2d(
@@ -1259,10 +1216,7 @@ impl Gl for Context {
         height: GLsizei,
         depth: GLsizei,
     ) {
-        //panic!();
-        unsafe {
-            TexStorage3D(target, levels, internal_format, width, height, depth);
-        }
+        panic!();
     }
 
     fn get_tex_image_into_buffer(
@@ -1422,10 +1376,7 @@ impl Gl for Context {
             "framebuffer_texture_layer {} {} {} {} {}",
             target, attachment, texture, level, layer
         );
-        //panic!();
-        unsafe {
-            FramebufferTextureLayer(target, attachment, texture, level, layer);
-        }
+        panic!();
     }
 
     fn blit_framebuffer(
@@ -1548,13 +1499,7 @@ impl Gl for Context {
 
     fn draw_arrays(&self, mode: GLenum, first: GLint, count: GLsizei) {
         unsafe {
-            DrawElementsInstanced(
-                mode,
-                count,
-                NONE,
-                first as GLintptr,
-                1,
-            );
+            DrawElementsInstanced(mode, count, NONE, first as GLintptr, 1);
         }
     }
 
@@ -1566,13 +1511,7 @@ impl Gl for Context {
         primcount: GLsizei,
     ) {
         unsafe {
-            DrawElementsInstanced(
-                mode,
-                count,
-                NONE,
-                first as GLintptr,
-                primcount,
-            );
+            DrawElementsInstanced(mode, count, NONE, first as GLintptr, primcount);
         }
     }
 
@@ -1589,13 +1528,7 @@ impl Gl for Context {
         );
         //panic!();
         unsafe {
-            DrawElementsInstanced(
-                mode,
-                count,
-                element_type,
-                indices_offset as GLintptr,
-                1,
-            );
+            DrawElementsInstanced(mode, count, element_type, indices_offset as GLintptr, 1);
         }
     }
 
@@ -2258,7 +2191,7 @@ impl Gl for Context {
 
     // GL_KHR_blend_equation_advanced
     fn blend_barrier_khr(&self) {
-        panic!();
+        // No barrier required, so nothing to do
     }
 
     // GL_CHROMIUM_copy_texture
@@ -2362,12 +2295,15 @@ pub struct LockedResource(*mut LockedTexture);
 unsafe impl Send for LockedResource {}
 unsafe impl Sync for LockedResource {}
 
-#[repr(C)]
-pub enum YUVColorSpace {
-    Rec601 = 0,
-    Rec709,
-    Rec2020,
-    Identity,
+#[repr(u8)]
+pub enum YuvRangedColorSpace {
+    Rec601Narrow = 0,
+    Rec601Full,
+    Rec709Narrow,
+    Rec709Full,
+    Rec2020Narrow,
+    Rec2020Full,
+    GbrIdentity,
 }
 
 impl LockedResource {
@@ -2422,7 +2358,7 @@ impl LockedResource {
         locked_y: &LockedResource,
         locked_u: &LockedResource,
         locked_v: &LockedResource,
-        color_space: YUVColorSpace,
+        color_space: YuvRangedColorSpace,
         color_depth: GLuint,
         src_x: GLint,
         src_y: GLint,
@@ -2477,14 +2413,17 @@ impl LockedResource {
 
 impl Clone for LockedResource {
     fn clone(&self) -> Self {
-        unsafe { LockResource(self.0); }
+        unsafe {
+            LockResource(self.0);
+        }
         LockedResource(self.0)
     }
 }
 
 impl Drop for LockedResource {
     fn drop(&mut self) {
-        unsafe { UnlockResource(self.0); }
+        unsafe {
+            UnlockResource(self.0);
+        }
     }
 }
-

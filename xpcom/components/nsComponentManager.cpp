@@ -46,11 +46,12 @@
 #include "nsIMutableArray.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/FileUtils.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/URLPreloader.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Variant.h"
-#include "nsDataHashtable.h"
 
 #include <new>  // for placement new
 
@@ -394,7 +395,6 @@ nsresult nsComponentManagerImpl::Init() {
     // process types, but presumably only the default (parent) and content
     // processes really need chrome manifests...?
     case GeckoProcessType_Default:
-    case GeckoProcessType_Plugin:
     case GeckoProcessType_Content:
     case GeckoProcessType_IPDLUnitTest:
     case GeckoProcessType_GMPlugin:
@@ -595,26 +595,27 @@ void nsComponentManagerImpl::RegisterCIDEntryLocked(
   }
 #endif
 
-  if (auto entry = mFactories.LookupForAdd(aEntry->cid)) {
-    nsFactoryEntry* f = entry.Data();
-    NS_WARNING("Re-registering a CID?");
+  mFactories.WithEntryHandle(aEntry->cid, [&](auto&& entry) {
+    if (entry) {
+      nsFactoryEntry* f = entry.Data();
+      NS_WARNING("Re-registering a CID?");
 
-    nsCString existing;
-    if (f->mModule) {
-      existing = f->mModule->Description();
+      nsCString existing;
+      if (f->mModule) {
+        existing = f->mModule->Description();
+      } else {
+        existing = "<unknown module>";
+      }
+      MonitorAutoUnlock unlock(mLock);
+      LogMessage(
+          "While registering XPCOM module %s, trying to re-register CID '%s' "
+          "already registered by %s.",
+          aModule->Description().get(), AutoIDString(*aEntry->cid).get(),
+          existing.get());
     } else {
-      existing = "<unknown module>";
+      entry.Insert(new nsFactoryEntry(aEntry, aModule));
     }
-    MonitorAutoUnlock unlock(mLock);
-    LogMessage(
-        "While registering XPCOM module %s, trying to re-register CID '%s' "
-        "already registered by %s.",
-        aModule->Description().get(), AutoIDString(*aEntry->cid).get(),
-        existing.get());
-  } else {
-    entry.OrInsert(
-        [aEntry, aModule]() { return new nsFactoryEntry(aEntry, aModule); });
-  }
+  });
 }
 
 void nsComponentManagerImpl::RegisterContractIDLocked(
@@ -653,7 +654,7 @@ void nsComponentManagerImpl::RegisterContractIDLocked(
     return;
   }
 
-  mContractIDs.Put(AsLiteralCString(aEntry->contractid), f);
+  mContractIDs.InsertOrUpdate(AsLiteralCString(aEntry->contractid), f);
 }
 
 static void CutExtension(nsCString& aPath) {
@@ -723,13 +724,7 @@ void nsComponentManagerImpl::ManifestComponent(ManifestProcessingContext& aCx,
     return;
   }
 
-  KnownModule* km;
-
-  km = mKnownModules.Get(hash);
-  if (!km) {
-    km = new KnownModule(fl);
-    mKnownModules.Put(hash, km);
-  }
+  KnownModule* const km = mKnownModules.GetOrInsertNew(hash, fl);
 
   void* place = mArena.Allocate(sizeof(nsCID));
   nsID* permanentCID = static_cast<nsID*>(place);
@@ -739,7 +734,7 @@ void nsComponentManagerImpl::ManifestComponent(ManifestProcessingContext& aCx,
   auto* e = new (KnownNotNull, place) mozilla::Module::CIDEntry();
   e->cid = permanentCID;
 
-  mFactories.Put(permanentCID, new nsFactoryEntry(e, km));
+  mFactories.InsertOrUpdate(permanentCID, new nsFactoryEntry(e, km));
 }
 
 void nsComponentManagerImpl::ManifestContract(ManifestProcessingContext& aCx,
@@ -768,7 +763,7 @@ void nsComponentManagerImpl::ManifestContract(ManifestProcessingContext& aCx,
 
   nsDependentCString contractString(contract);
   StaticComponents::InvalidateContractID(nsDependentCString(contractString));
-  mContractIDs.Put(contractString, f);
+  mContractIDs.InsertOrUpdate(contractString, f);
 }
 
 void nsComponentManagerImpl::ManifestCategory(ManifestProcessingContext& aCx,
@@ -1169,8 +1164,7 @@ nsresult nsComponentManagerImpl::FreeServices() {
     return NS_ERROR_FAILURE;
   }
 
-  for (auto iter = mFactories.Iter(); !iter.Done(); iter.Next()) {
-    nsFactoryEntry* entry = iter.UserData();
+  for (nsFactoryEntry* entry : mFactories.Values()) {
     entry->mFactory = nullptr;
     entry->mServiceObject = nullptr;
   }
@@ -1488,7 +1482,7 @@ nsComponentManagerImpl::RegisterFactory(const nsCID& aClass, const char* aName,
     nsFactoryEntry* oldf = mFactories.Get(&aClass);
     if (oldf) {
       StaticComponents::InvalidateContractID(contractID);
-      mContractIDs.Put(contractID, oldf);
+      mContractIDs.InsertOrUpdate(contractID, oldf);
       return NS_OK;
     }
 
@@ -1507,24 +1501,24 @@ nsComponentManagerImpl::RegisterFactory(const nsCID& aClass, const char* aName,
   auto f = MakeUnique<nsFactoryEntry>(aClass, aFactory);
 
   MonitorAutoLock lock(mLock);
-  if (auto entry = mFactories.LookupForAdd(f->mCIDEntry->cid)) {
-    return NS_ERROR_FACTORY_EXISTS;
-  } else {
+  return mFactories.WithEntryHandle(f->mCIDEntry->cid, [&](auto&& entry) {
+    if (entry) {
+      return NS_ERROR_FACTORY_EXISTS;
+    }
     if (StaticComponents::LookupByCID(*f->mCIDEntry->cid)) {
-      entry.OrRemove();
       return NS_ERROR_FACTORY_EXISTS;
     }
     if (aContractID) {
       nsDependentCString contractID(aContractID);
-      mContractIDs.Put(contractID, f.get());
+      mContractIDs.InsertOrUpdate(contractID, f.get());
       // We allow dynamically-registered contract IDs to override static
       // entries, so invalidate any static entry for this contract ID.
       StaticComponents::InvalidateContractID(contractID);
     }
-    entry.OrInsert([&f]() { return f.release(); });
-  }
+    entry.Insert(f.release());
 
-  return NS_OK;
+    return NS_OK;
+  });
 }
 
 NS_IMETHODIMP
@@ -1604,11 +1598,7 @@ nsComponentManagerImpl::IsContractIDRegistered(const char* aClass,
 
 NS_IMETHODIMP
 nsComponentManagerImpl::GetContractIDs(nsTArray<nsCString>& aResult) {
-  aResult.Clear();
-
-  for (auto iter = mContractIDs.Iter(); !iter.Done(); iter.Next()) {
-    aResult.AppendElement(iter.Key());
-  }
+  aResult = ToTArray<nsTArray<nsCString>>(mContractIDs.Keys());
 
   for (const auto& entry : gContractEntries) {
     if (!entry.Invalid()) {
@@ -1659,15 +1649,15 @@ size_t nsComponentManagerImpl::SizeOfIncludingThis(
   size_t n = aMallocSizeOf(this);
 
   n += mFactories.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto iter = mFactories.ConstIter(); !iter.Done(); iter.Next()) {
-    n += iter.Data()->SizeOfIncludingThis(aMallocSizeOf);
+  for (const auto& data : mFactories.Values()) {
+    n += data->SizeOfIncludingThis(aMallocSizeOf);
   }
 
   n += mContractIDs.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto iter = mContractIDs.ConstIter(); !iter.Done(); iter.Next()) {
+  for (const auto& key : mContractIDs.Keys()) {
     // We don't measure the nsFactoryEntry data because it's owned by
     // mFactories (which is measured above).
-    n += iter.Key().SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+    n += key.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
   }
 
   n += sExtraStaticModules->ShallowSizeOfIncludingThis(aMallocSizeOf);

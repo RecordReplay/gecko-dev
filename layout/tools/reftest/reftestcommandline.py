@@ -308,7 +308,10 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
             "tests",
             metavar="TEST_PATH",
             nargs="*",
-            help="Path to test file, manifest file, or directory containing tests",
+            help="Path to test file, manifest file, or directory containing "
+            "tests. For jstestbrowser, the relative path can be either from "
+            "topsrcdir or the staged area "
+            "($OBJDIR/dist/test-stage/jsreftest/tests)",
         )
 
         self.add_argument(
@@ -434,10 +437,7 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
                 reftestExtensionPath = os.path.join(here, "reftest")
             options.reftestExtensionPath = os.path.normpath(reftestExtensionPath)
 
-        if options.specialPowersExtensionPath is None and options.suite in [
-            "crashtest",
-            "jstestbrowser",
-        ]:
+        if options.specialPowersExtensionPath is None:
             if self.build_obj is not None:
                 specialPowersExtensionPath = os.path.join(
                     self.build_obj.distdir, "xpi-stage", "specialpowers"
@@ -600,14 +600,6 @@ class RemoteArgumentsParser(ReftestArgumentsParser):
             type=str,
             dest="httpdPath",
             help="Path to the httpd.js file.",
-        )
-
-        self.add_argument(
-            "--no-device-info",
-            action="store_false",
-            dest="printDeviceInfo",
-            default=True,
-            help="Do not display verbose diagnostics about the remote device.",
         )
 
         self.add_argument(

@@ -192,16 +192,12 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
-      "-moz-gtk-info-bar",
       "-moz-mac-active-source-list-selection",
       "-moz-mac-disclosure-button-closed",
       "-moz-mac-disclosure-button-open",
-      "-moz-mac-fullscreen-button",
       "-moz-mac-help-button",
       "-moz-mac-source-list",
       "-moz-mac-source-list-selection",
-      "-moz-mac-vibrancy-dark",
-      "-moz-mac-vibrancy-light",
       "-moz-mac-vibrant-titlebar-dark",
       "-moz-mac-vibrant-titlebar-light",
       "-moz-menulist-arrow-button",
@@ -678,35 +674,6 @@ exports.CSS_PROPERTIES = {
       "unset"
     ]
   },
-  "-moz-context-properties": {
-    "isInherited": true,
-    "subproperties": [
-      "-moz-context-properties"
-    ],
-    "supports": [],
-    "values": [
-      "inherit",
-      "initial",
-      "none",
-      "revert",
-      "unset"
-    ]
-  },
-  "-moz-control-character-visibility": {
-    "isInherited": true,
-    "subproperties": [
-      "-moz-control-character-visibility"
-    ],
-    "supports": [],
-    "values": [
-      "hidden",
-      "inherit",
-      "initial",
-      "revert",
-      "unset",
-      "visible"
-    ]
-  },
   "-moz-float-edge": {
     "isInherited": false,
     "subproperties": [
@@ -839,74 +806,6 @@ exports.CSS_PROPERTIES = {
       "vertical"
     ]
   },
-  "-moz-outline-radius": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-outline-radius-topleft",
-      "-moz-outline-radius-topright",
-      "-moz-outline-radius-bottomright",
-      "-moz-outline-radius-bottomleft"
-    ],
-    "supports": [],
-    "values": [
-      "inherit",
-      "initial",
-      "revert",
-      "unset"
-    ]
-  },
-  "-moz-outline-radius-bottomleft": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-outline-radius-bottomleft"
-    ],
-    "supports": [],
-    "values": [
-      "inherit",
-      "initial",
-      "revert",
-      "unset"
-    ]
-  },
-  "-moz-outline-radius-bottomright": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-outline-radius-bottomright"
-    ],
-    "supports": [],
-    "values": [
-      "inherit",
-      "initial",
-      "revert",
-      "unset"
-    ]
-  },
-  "-moz-outline-radius-topleft": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-outline-radius-topleft"
-    ],
-    "supports": [],
-    "values": [
-      "inherit",
-      "initial",
-      "revert",
-      "unset"
-    ]
-  },
-  "-moz-outline-radius-topright": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-outline-radius-topright"
-    ],
-    "supports": [],
-    "values": [
-      "inherit",
-      "initial",
-      "revert",
-      "unset"
-    ]
-  },
   "-moz-padding-end": {
     "isInherited": false,
     "subproperties": [
@@ -968,7 +867,7 @@ exports.CSS_PROPERTIES = {
   "-moz-tab-size": {
     "isInherited": true,
     "subproperties": [
-      "-moz-tab-size"
+      "tab-size"
     ],
     "supports": [],
     "values": [
@@ -1502,16 +1401,12 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
-      "-moz-gtk-info-bar",
       "-moz-mac-active-source-list-selection",
       "-moz-mac-disclosure-button-closed",
       "-moz-mac-disclosure-button-open",
-      "-moz-mac-fullscreen-button",
       "-moz-mac-help-button",
       "-moz-mac-source-list",
       "-moz-mac-source-list-selection",
-      "-moz-mac-vibrancy-dark",
-      "-moz-mac-vibrancy-light",
       "-moz-mac-vibrant-titlebar-dark",
       "-moz-mac-vibrant-titlebar-light",
       "-moz-menulist-arrow-button",
@@ -1969,10 +1864,9 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -1990,10 +1884,9 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -2699,6 +2592,29 @@ exports.CSS_PROPERTIES = {
       "unset"
     ]
   },
+  "accent-color": {
+    "isInherited": true,
+    "subproperties": [
+      "accent-color"
+    ],
+    "supports": [
+      "color"
+    ],
+    "values": [
+      "COLOR",
+      "auto",
+      "currentColor",
+      "hsl",
+      "hsla",
+      "inherit",
+      "initial",
+      "revert",
+      "rgb",
+      "rgba",
+      "transparent",
+      "unset"
+    ]
+  },
   "align-content": {
     "isInherited": false,
     "subproperties": [
@@ -3035,7 +2951,7 @@ exports.CSS_PROPERTIES = {
       "text-emphasis-style",
       "text-emphasis-position",
       "text-emphasis-color",
-      "-moz-tab-size",
+      "tab-size",
       "line-break",
       "-webkit-text-fill-color",
       "-webkit-text-stroke-color",
@@ -3054,6 +2970,7 @@ exports.CSS_PROPERTIES = {
       "-moz-user-modify",
       "-moz-user-focus",
       "caret-color",
+      "accent-color",
       "scrollbar-color",
       "list-style-position",
       "list-style-type",
@@ -3071,11 +2988,8 @@ exports.CSS_PROPERTIES = {
       "outline-color",
       "outline-style",
       "outline-width",
-      "-moz-outline-radius-topleft",
-      "-moz-outline-radius-topright",
-      "-moz-outline-radius-bottomright",
-      "-moz-outline-radius-bottomleft",
       "outline-offset",
+      "size",
       "padding-top",
       "padding-right",
       "padding-bottom",
@@ -3150,6 +3064,7 @@ exports.CSS_PROPERTIES = {
       "rx",
       "ry",
       "r",
+      "d",
       "table-layout",
       "text-overflow",
       "text-decoration-line",
@@ -3353,16 +3268,12 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
-      "-moz-gtk-info-bar",
       "-moz-mac-active-source-list-selection",
       "-moz-mac-disclosure-button-closed",
       "-moz-mac-disclosure-button-open",
-      "-moz-mac-fullscreen-button",
       "-moz-mac-help-button",
       "-moz-mac-source-list",
       "-moz-mac-source-list-selection",
-      "-moz-mac-vibrancy-dark",
-      "-moz-mac-vibrancy-light",
       "-moz-mac-vibrant-titlebar-dark",
       "-moz-mac-vibrant-titlebar-light",
       "-moz-menulist-arrow-button",
@@ -3806,9 +3717,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -5740,6 +5650,7 @@ exports.CSS_PROPERTIES = {
       "close-quote",
       "counter",
       "counters",
+      "image-set",
       "inherit",
       "initial",
       "no-close-quote",
@@ -5819,6 +5730,7 @@ exports.CSS_PROPERTIES = {
       "grab",
       "grabbing",
       "help",
+      "image-set",
       "inherit",
       "initial",
       "move",
@@ -5870,6 +5782,21 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "revert",
+      "unset"
+    ]
+  },
+  "d": {
+    "isInherited": false,
+    "subproperties": [
+      "d"
+    ],
+    "supports": [],
+    "values": [
+      "inherit",
+      "initial",
+      "none",
+      "path",
       "revert",
       "unset"
     ]
@@ -6063,10 +5990,9 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -6084,10 +6010,9 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
       "content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -6407,6 +6332,10 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "cap-height",
+      "ch-width",
+      "ic-height",
+      "ic-width",
       "inherit",
       "initial",
       "none",
@@ -7006,9 +6935,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -7093,9 +7021,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -7426,8 +7353,21 @@ exports.CSS_PROPERTIES = {
       "list-style-image",
       "list-style-type"
     ],
-    "supports": [],
+    "supports": [
+      "gradient"
+    ],
     "values": [
+      "-moz-element",
+      "-moz-image-rect",
+      "-moz-linear-gradient",
+      "-moz-radial-gradient",
+      "-moz-repeating-linear-gradient",
+      "-moz-repeating-radial-gradient",
+      "-webkit-gradient",
+      "-webkit-linear-gradient",
+      "-webkit-radial-gradient",
+      "-webkit-repeating-linear-gradient",
+      "-webkit-repeating-radial-gradient",
       "arabic-indic",
       "armenian",
       "bengali",
@@ -7437,6 +7377,7 @@ exports.CSS_PROPERTIES = {
       "cjk-earthly-branch",
       "cjk-heavenly-stem",
       "cjk-ideographic",
+      "conic-gradient",
       "decimal",
       "decimal-leading-zero",
       "devanagari",
@@ -7464,6 +7405,7 @@ exports.CSS_PROPERTIES = {
       "korean-hanja-formal",
       "korean-hanja-informal",
       "lao",
+      "linear-gradient",
       "lower-alpha",
       "lower-armenian",
       "lower-greek",
@@ -7476,6 +7418,10 @@ exports.CSS_PROPERTIES = {
       "oriya",
       "outside",
       "persian",
+      "radial-gradient",
+      "repeating-conic-gradient",
+      "repeating-linear-gradient",
+      "repeating-radial-gradient",
       "revert",
       "simp-chinese-formal",
       "simp-chinese-informal",
@@ -7500,11 +7446,31 @@ exports.CSS_PROPERTIES = {
     "subproperties": [
       "list-style-image"
     ],
-    "supports": [],
+    "supports": [
+      "gradient"
+    ],
     "values": [
+      "-moz-element",
+      "-moz-image-rect",
+      "-moz-linear-gradient",
+      "-moz-radial-gradient",
+      "-moz-repeating-linear-gradient",
+      "-moz-repeating-radial-gradient",
+      "-webkit-gradient",
+      "-webkit-linear-gradient",
+      "-webkit-radial-gradient",
+      "-webkit-repeating-linear-gradient",
+      "-webkit-repeating-radial-gradient",
+      "conic-gradient",
+      "image-set",
       "inherit",
       "initial",
+      "linear-gradient",
       "none",
+      "radial-gradient",
+      "repeating-conic-gradient",
+      "repeating-linear-gradient",
+      "repeating-radial-gradient",
       "revert",
       "unset",
       "url"
@@ -8138,6 +8104,7 @@ exports.CSS_PROPERTIES = {
       "-moz-fit-content",
       "-moz-max-content",
       "-moz-min-content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8158,6 +8125,7 @@ exports.CSS_PROPERTIES = {
       "-moz-fit-content",
       "-moz-max-content",
       "-moz-min-content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8178,6 +8146,7 @@ exports.CSS_PROPERTIES = {
       "-moz-fit-content",
       "-moz-max-content",
       "-moz-min-content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8198,6 +8167,7 @@ exports.CSS_PROPERTIES = {
       "-moz-fit-content",
       "-moz-max-content",
       "-moz-min-content",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8216,9 +8186,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8236,9 +8205,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8256,9 +8224,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -8276,9 +8243,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -9281,6 +9247,7 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "alternate",
       "inherit",
       "initial",
       "over",
@@ -9973,6 +9940,19 @@ exports.CSS_PROPERTIES = {
     "supports": [],
     "values": [
       "context-value",
+      "inherit",
+      "initial",
+      "revert",
+      "unset"
+    ]
+  },
+  "tab-size": {
+    "isInherited": true,
+    "subproperties": [
+      "tab-size"
+    ],
+    "supports": [],
+    "values": [
       "inherit",
       "initial",
       "revert",
@@ -10787,9 +10767,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "-moz-available",
       "-moz-fit-content",
-      "-moz-max-content",
-      "-moz-min-content",
       "auto",
+      "fit-content",
       "inherit",
       "initial",
       "max-content",
@@ -10978,6 +10957,10 @@ exports.PREFERENCES = [
     "layout.css.math-style.enabled"
   ],
   [
+    "-moz-control-character-visibility",
+    "layout.css.moz-control-character-visibility.enabled"
+  ],
+  [
     "-moz-osx-font-smoothing",
     "layout.css.osx-font-smoothing.enabled"
   ],
@@ -11030,6 +11013,10 @@ exports.PREFERENCES = [
     "layout.css.overscroll-behavior.enabled"
   ],
   [
+    "accent-color",
+    "layout.css.accent-color.enabled"
+  ],
+  [
     "align-tracks",
     "layout.css.grid-template-masonry-value.enabled"
   ],
@@ -11038,12 +11025,20 @@ exports.PREFERENCES = [
     "layout.css.backdrop-filter.enabled"
   ],
   [
+    "d",
+    "layout.css.d-property.enabled"
+  ],
+  [
     "font-variation-settings",
     "layout.css.font-variations.enabled"
   ],
   [
     "justify-tracks",
     "layout.css.grid-template-masonry-value.enabled"
+  ],
+  [
+    "-moz-context-properties",
+    "svg.context-properties.content.enabled"
   ],
   [
     "offset-anchor",
@@ -11060,6 +11055,10 @@ exports.PREFERENCES = [
   [
     "scale",
     "layout.css.individual-transform.enabled"
+  ],
+  [
+    "size",
+    "layout.css.page-size.enabled"
   ],
   [
     "translate",

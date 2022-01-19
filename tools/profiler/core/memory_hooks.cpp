@@ -367,6 +367,7 @@ static void AllocCallback(void* aPtr, size_t aReqSize) {
   // The next part of the function requires allocations, so block the memory
   // hooks from recursing on any new allocations coming in.
   AutoBlockIntercepts block(threadIntercept.ref());
+  AUTO_PROFILER_LABEL("AllocCallback", PROFILER);
 
   // Perform a bernoulli trial, which will return true or false based on its
   // configured probability. It takes into account the byte size so that
@@ -412,6 +413,7 @@ static void FreeCallback(void* aPtr) {
   // The next part of the function requires allocations, so block the memory
   // hooks from recursing on any new allocations coming in.
   AutoBlockIntercepts block(threadIntercept.ref());
+  AUTO_PROFILER_LABEL("FreeCallback", PROFILER);
 
   // Perform a bernoulli trial, which will return true or false based on its
   // configured probability. It takes into account the byte size so that
@@ -538,15 +540,18 @@ namespace mozilla::profiler {
 // Initialization
 //---------------------------------------------------------------------------
 
-void install_memory_hooks() {
+BaseProfilerCount* install_memory_hooks() {
   if (!sCounter) {
     sCounter = new ProfilerCounterTotal("malloc", "Memory",
                                         "Amount of allocated memory");
     // Also initialize the ThreadIntercept, even if native allocation tracking
     // won't be turned on. This way the TLS will be initialized.
     ThreadIntercept::Init();
+  } else {
+    sCounter->Clear();
   }
   jemalloc_replace_dynamic(replace_init);
+  return sCounter;
 }
 
 // Remove the hooks, but leave the sCounter machinery. Deleting the counter

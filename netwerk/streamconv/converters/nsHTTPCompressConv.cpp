@@ -8,6 +8,7 @@
 #include "nsMemory.h"
 #include "plstr.h"
 #include "nsCOMPtr.h"
+#include "nsCRT.h"
 #include "nsError.h"
 #include "nsStreamUtils.h"
 #include "nsStringStream.h"
@@ -17,8 +18,11 @@
 #include "mozilla/Logging.h"
 #include "nsIForcePendingChannel.h"
 #include "nsIRequest.h"
+#include "mozilla/UniquePtrExtensions.h"
 
 // brotli headers
+#undef assert
+#include "assert.h"
 #include "state.h"
 #include "brotli/decode.h"
 
@@ -29,29 +33,30 @@ extern LazyLogModule gHttpLog;
 #define LOG(args) \
   MOZ_LOG(mozilla::net::gHttpLog, mozilla::LogLevel::Debug, args)
 
+class BrotliWrapper {
+ public:
+  BrotliWrapper() {
+    BrotliDecoderStateInit(&mState, nullptr, nullptr, nullptr);
+  }
+  ~BrotliWrapper() { BrotliDecoderStateCleanup(&mState); }
+
+  BrotliDecoderState mState{};
+  Atomic<size_t, Relaxed> mTotalOut{0};
+  nsresult mStatus = NS_OK;
+  Atomic<bool, Relaxed> mBrotliStateIsStreamEnd{false};
+
+  nsIRequest* mRequest{nullptr};
+  nsISupports* mContext{nullptr};
+  uint64_t mSourceOffset{0};
+};
+
 // nsISupports implementation
 NS_IMPL_ISUPPORTS(nsHTTPCompressConv, nsIStreamConverter, nsIStreamListener,
                   nsIRequestObserver, nsICompressConvStats,
                   nsIThreadRetargetableStreamListener)
 
 // nsFTPDirListingConv methods
-nsHTTPCompressConv::nsHTTPCompressConv()
-    : mMode(HTTP_COMPRESS_IDENTITY),
-      mOutBuffer(nullptr),
-      mInpBuffer(nullptr),
-      mOutBufferLen(0),
-      mInpBufferLen(0),
-      mCheckHeaderDone(false),
-      mStreamEnded(false),
-      mStreamInitialized(false),
-      mDummyStreamInitialised(false),
-      d_stream{},
-      mLen(0),
-      hMode(0),
-      mSkipCount(0),
-      mFlags(0),
-      mDecodedDataLength(0),
-      mMutex("nsHTTPCompressConv", /* aOrdered */ true) {
+nsHTTPCompressConv::nsHTTPCompressConv() {
   LOG(("nsHttpCompresssConv %p ctor\n", this));
   if (NS_IsMainThread()) {
     mFailUncleanStops =
@@ -88,21 +93,21 @@ NS_IMETHODIMP
 nsHTTPCompressConv::AsyncConvertData(const char* aFromType, const char* aToType,
                                      nsIStreamListener* aListener,
                                      nsISupports* aCtxt) {
-  if (!PL_strncasecmp(aFromType, HTTP_COMPRESS_TYPE,
-                      sizeof(HTTP_COMPRESS_TYPE) - 1) ||
-      !PL_strncasecmp(aFromType, HTTP_X_COMPRESS_TYPE,
-                      sizeof(HTTP_X_COMPRESS_TYPE) - 1)) {
+  if (!nsCRT::strncasecmp(aFromType, HTTP_COMPRESS_TYPE,
+                          sizeof(HTTP_COMPRESS_TYPE) - 1) ||
+      !nsCRT::strncasecmp(aFromType, HTTP_X_COMPRESS_TYPE,
+                          sizeof(HTTP_X_COMPRESS_TYPE) - 1)) {
     mMode = HTTP_COMPRESS_COMPRESS;
-  } else if (!PL_strncasecmp(aFromType, HTTP_GZIP_TYPE,
-                             sizeof(HTTP_GZIP_TYPE) - 1) ||
-             !PL_strncasecmp(aFromType, HTTP_X_GZIP_TYPE,
-                             sizeof(HTTP_X_GZIP_TYPE) - 1)) {
+  } else if (!nsCRT::strncasecmp(aFromType, HTTP_GZIP_TYPE,
+                                 sizeof(HTTP_GZIP_TYPE) - 1) ||
+             !nsCRT::strncasecmp(aFromType, HTTP_X_GZIP_TYPE,
+                                 sizeof(HTTP_X_GZIP_TYPE) - 1)) {
     mMode = HTTP_COMPRESS_GZIP;
-  } else if (!PL_strncasecmp(aFromType, HTTP_DEFLATE_TYPE,
-                             sizeof(HTTP_DEFLATE_TYPE) - 1)) {
+  } else if (!nsCRT::strncasecmp(aFromType, HTTP_DEFLATE_TYPE,
+                                 sizeof(HTTP_DEFLATE_TYPE) - 1)) {
     mMode = HTTP_COMPRESS_DEFLATE;
-  } else if (!PL_strncasecmp(aFromType, HTTP_BROTLI_TYPE,
-                             sizeof(HTTP_BROTLI_TYPE) - 1)) {
+  } else if (!nsCRT::strncasecmp(aFromType, HTTP_BROTLI_TYPE,
+                                 sizeof(HTTP_BROTLI_TYPE) - 1)) {
     mMode = HTTP_COMPRESS_BROTLI;
   }
   LOG(("nsHttpCompresssConv %p AsyncConvertData %s %s mode %d\n", this,
@@ -366,7 +371,8 @@ nsHTTPCompressConv::OnDataAvailable(nsIRequest* request, nsIInputStream* iStr,
             inflateEnd(&d_stream);
             mStreamEnded = true;
             break;
-          } else if (code == Z_OK) {
+          }
+          if (code == Z_OK) {
             if (bytesWritten) {
               rv = do_OnDataAvailable(request, nullptr, aSourceOffset,
                                       (char*)mOutBuffer, bytesWritten);
@@ -448,7 +454,8 @@ nsHTTPCompressConv::OnDataAvailable(nsIRequest* request, nsIInputStream* iStr,
             inflateEnd(&d_stream);
             mStreamEnded = true;
             break;
-          } else if (code == Z_OK) {
+          }
+          if (code == Z_OK) {
             if (bytesWritten) {
               rv = do_OnDataAvailable(request, nullptr, aSourceOffset,
                                       (char*)mOutBuffer, bytesWritten);

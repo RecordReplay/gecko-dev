@@ -22,6 +22,14 @@ var EXPORTED_SYMBOLS = [
   "ContentDispatchChooserTelemetry",
 ];
 
+const gPrefs = {};
+XPCOMUtils.defineLazyPreferenceGetter(
+  gPrefs,
+  "promptForExternal",
+  "network.protocol-handler.prompt-from-external",
+  true
+);
+
 const PROTOCOL_HANDLER_OPEN_PERM_KEY = "open-protocol-handler";
 const PERMISSION_KEY_DELIMITER = "^";
 
@@ -351,8 +359,16 @@ class nsContentDispatchChooser {
    * @param {nsIURI} aURI - URI to be handled.
    * @param {nsIPrincipal} [aPrincipal] - Principal which triggered the load.
    * @param {BrowsingContext} [aBrowsingContext] - Context of the load.
+   * @param {bool} [aTriggeredExternally] - Whether the load came from outside
+   * this application.
    */
-  async handleURI(aHandler, aURI, aPrincipal, aBrowsingContext) {
+  async handleURI(
+    aHandler,
+    aURI,
+    aPrincipal,
+    aBrowsingContext,
+    aTriggeredExternally = false
+  ) {
     // [Replay] - Patching in support for replay:// URL Scheme
     if (mayRedirectToReplayBrowser(aURI, aPrincipal, aBrowsingContext)) {
       return;
@@ -362,6 +378,20 @@ class nsContentDispatchChooser {
       aHandler.type,
       aPrincipal
     );
+
+    // Force showing the dialog for links passed from outside the application.
+    // This avoids infinite loops, see bug 1678255, bug 1667468, etc.
+    if (
+      aTriggeredExternally &&
+      gPrefs.promptForExternal &&
+      // ... unless we intend to open the link with a website or extension:
+      !(
+        aHandler.preferredAction == Ci.nsIHandlerInfo.useHelperApp &&
+        aHandler.preferredApplicationHandler instanceof Ci.nsIWebHandlerApp
+      )
+    ) {
+      aHandler.alwaysAskBeforeHandling = true;
+    }
 
     // Skip the dialog if a preferred application is set and the caller has
     // permission.
@@ -629,7 +659,7 @@ class nsContentDispatchChooser {
           keepOpenSameOriginNav: true,
         },
         aDialogArgs
-      );
+      ).closedPromise;
     }
 
     // If we don't have a BrowsingContext, we need to show a standalone window.

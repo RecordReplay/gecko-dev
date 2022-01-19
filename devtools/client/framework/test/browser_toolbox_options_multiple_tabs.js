@@ -19,8 +19,7 @@ add_task(async function() {
 
 async function openToolboxOptionsInNewTab() {
   const tab = await addTab(URL);
-  const target = await TargetFactory.forTab(tab);
-  const toolbox = await gDevTools.showToolbox(target);
+  const toolbox = await gDevTools.showToolboxForTab(tab);
   const doc = toolbox.doc;
   const panel = await toolbox.selectTool("options");
   const { id } = panel.panelDoc.querySelector(
@@ -75,7 +74,7 @@ async function toggleTool({ doc, panelWin, checkbox, tab }, toolId) {
   const onToggleTool = gDevTools.once(
     `tool-${prevChecked ? "unregistered" : "registered"}`
   );
-  await EventUtils.sendMouseEvent({ type: "click" }, checkbox, panelWin);
+  EventUtils.sendMouseEvent({ type: "click" }, checkbox, panelWin);
   const id = await onToggleTool;
 
   is(id, toolId, `Correct event for ${toolId} was fired`);

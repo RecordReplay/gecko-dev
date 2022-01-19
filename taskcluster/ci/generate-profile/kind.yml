@@ -70,7 +70,7 @@ jobs:
             env:
                 NEED_XVFB: "true"
             max-run-time: 1200
-            docker-image: {in-tree: debian10-amd64-build}
+            docker-image: {in-tree: ubuntu1804-test}
             artifacts:
                 - type: directory
                   name: public/build
@@ -85,15 +85,15 @@ jobs:
                 - linux64-clang
                 - linux64-minidump-stackwalk
 
-    android-api-16-shippable/opt:
-        description: "Android 4.0 api-16+ Profile Generation"
+    android-arm-shippable/opt:
+        description: "Android 4.0 Arm Profile Generation"
         shipping-phase: build
         shipping-product: fennec
         index:
             product: mobile
-            job-name: android-api-16-profile
+            job-name: android-arm-profile
         treeherder:
-            platform: android-4-0-armv7-api16/pgo
+            platform: android-4-0-armv7/pgo
         worker-type: t-linux-xlarge-pgo
         worker:
             chain-of-trust: true
@@ -148,7 +148,7 @@ jobs:
             command: ./taskcluster/scripts/misc/run-profileserver.sh
         fetches:
             toolchain:
-                - win64-clang-cl-2stage
+                - win64-clang-2stage
                 - win32-minidump-stackwalk
 
     win64-shippable/opt:
@@ -177,7 +177,7 @@ jobs:
             command: ./taskcluster/scripts/misc/run-profileserver.sh
         fetches:
             toolchain:
-                - win64-clang-cl-2stage
+                - win64-clang-2stage
                 - win32-minidump-stackwalk
 
     macosx64-shippable/opt:

@@ -24,7 +24,7 @@
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "nsServiceManagerUtils.h"
-#include "prnetdb.h"
+#include "mozilla/net/DNS.h"
 
 namespace etld_dafsa {
 
@@ -314,9 +314,7 @@ nsresult nsEffectiveTLDService::GetBaseDomainInternal(
   }
 
   // Check if we're dealing with an IPv4/IPv6 hostname, and return
-  PRNetAddr addr;
-  PRStatus result = PR_StringToNetAddr(aHostname.get(), &addr);
-  if (result == PR_SUCCESS) {
+  if (mozilla::net::HostIsIPLiteral(aHostname)) {
     // Update the MRU table if in use.
     if (entry) {
       entry->Set(TLDCacheEntry{aHostname, ""_ns, NS_ERROR_HOST_IS_IP_ADDRESS});
@@ -465,28 +463,5 @@ nsresult nsEffectiveTLDService::NormalizeHostname(nsCString& aHostname) {
 NS_IMETHODIMP
 nsEffectiveTLDService::HasRootDomain(const nsACString& aInput,
                                      const nsACString& aHost, bool* aResult) {
-  if (NS_WARN_IF(!aResult)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  *aResult = false;
-
-  // If the strings are the same, we obviously have a match.
-  if (aInput == aHost) {
-    *aResult = true;
-    return NS_OK;
-  }
-
-  // If aHost is not found, we know we do not have it as a root domain.
-  int32_t index = nsAutoCString(aInput).Find(aHost.BeginReading());
-  if (index == kNotFound) {
-    return NS_OK;
-  }
-
-  // Otherwise, we have aHost as our root domain iff the index of aHost is
-  // aHost.length subtracted from our length and (since we do not have an
-  // exact match) the character before the index is a dot or slash.
-  *aResult = index > 0 && (uint32_t)index == aInput.Length() - aHost.Length() &&
-             (aInput[index - 1] == '.' || aInput[index - 1] == '/');
-  return NS_OK;
+  return NS_HasRootDomain(aInput, aHost, aResult);
 }

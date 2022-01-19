@@ -89,6 +89,7 @@ locales = [
     "ro",
     "ru",
     "scn",
+    "sco",
     "si",
     "sk",
     "sl",
@@ -99,6 +100,7 @@ locales = [
     "szl",
     "ta",
     "te",
+    "tg",
     "th",
     "tl",
     "tr",
@@ -128,10 +130,6 @@ locales = [
 [[paths]]
     reference = "browser/extensions/formautofill/locales/en-US/**"
     l10n = "{l}browser/extensions/formautofill/**"
-
-[[paths]]
-    reference = "browser/extensions/fxmonitor/locales/en-US/**"
-    l10n = "{l}browser/extensions/fxmonitor/**"
 
 [[paths]]
     reference = "browser/extensions/report-site-issue/locales/en-US/**"

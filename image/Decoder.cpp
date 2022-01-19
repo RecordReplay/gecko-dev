@@ -6,12 +6,12 @@
 #include "Decoder.h"
 
 #include "DecodePool.h"
-#include "GeckoProfiler.h"
 #include "IDecodingTask.h"
 #include "ISurfaceProvider.h"
 #include "gfxPlatform.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Point.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/Telemetry.h"
 #include "nsComponentManagerUtils.h"
 #include "nsProxyRelease.h"
@@ -97,7 +97,7 @@ void Decoder::SetSurfaceFlags(SurfaceFlags aSurfaceFlags) {
   MOZ_ASSERT(!mInitialized);
   mSurfaceFlags = aSurfaceFlags;
   if (mSurfaceFlags & SurfaceFlags::NO_COLORSPACE_CONVERSION) {
-    mCMSMode = eCMSMode_Off;
+    mCMSMode = CMSMode::Off;
   }
 }
 
@@ -113,6 +113,10 @@ qcms_transform* Decoder::GetCMSsRGBTransform(SurfaceFormat aFormat) const {
     // We want a transform to convert from sRGB to device space, but we are
     // already using sRGB as our device space. That means we can skip
     // color management entirely.
+    return nullptr;
+  }
+  if (qcms_profile_is_sRGB(gfxPlatform::GetCMSOutputProfile())) {
+    // Device space is sRGB so we can skip color management as well.
     return nullptr;
   }
 
@@ -447,13 +451,13 @@ nsresult Decoder::FinishWithErrorInternal() {
  */
 
 void Decoder::PostSize(int32_t aWidth, int32_t aHeight,
-                       Orientation aOrientation /* = Orientation()*/) {
+                       Orientation aOrientation, Resolution aResolution) {
   // Validate.
   MOZ_ASSERT(aWidth >= 0, "Width can't be negative!");
   MOZ_ASSERT(aHeight >= 0, "Height can't be negative!");
 
   // Set our intrinsic size.
-  mImageMetadata.SetSize(aWidth, aHeight, aOrientation);
+  mImageMetadata.SetSize(aWidth, aHeight, aOrientation, aResolution);
 
   // Verify it is the expected size, if given. Note that this is only used by
   // the ICO decoder for embedded image types, so only its subdecoders are

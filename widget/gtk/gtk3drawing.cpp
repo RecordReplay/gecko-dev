@@ -373,7 +373,7 @@ static void CalculateToolbarButtonSpacing(WidgetNodeType aAppearance,
   g_object_get(GetWidget(MOZ_GTK_HEADER_BAR), "spacing", &buttonSpacing,
                nullptr);
 
-  // We apply spacing as a margin equaly to both adjacent buttons.
+  // We apply spacing as a margin equally to both adjacent buttons.
   buttonSpacing /= 2;
 
   if (!aMetrics->firstButton) {
@@ -517,7 +517,8 @@ static gint moz_gtk_button_paint(cairo_t* cr, const GdkRectangle* rect,
   StyleContextSetScale(style, state->scale);
   gtk_style_context_set_state(style, state_flags);
 
-  if (state->isDefault && relief == GTK_RELIEF_NORMAL) {
+  if (state->isDefault && relief == GTK_RELIEF_NORMAL && !state->focused &&
+      !(state_flags & GTK_STATE_FLAG_PRELIGHT)) {
     /* handle default borders both outside and inside the button */
     gint default_top, default_left, default_bottom, default_right;
     moz_gtk_button_get_default_overflow(&default_top, &default_left,
@@ -593,13 +594,8 @@ static gint moz_gtk_header_bar_button_paint(cairo_t* cr,
         GetToolbarButtonMetrics(buttonWidgetType);
 
     /* This is available since Gtk+ 3.10 as well as GtkHeaderBar */
-    static auto sGtkRenderIconSurfacePtr =
-        (void (*)(GtkStyleContext*, cairo_t*, cairo_surface_t*, gdouble,
-                  gdouble))dlsym(RTLD_DEFAULT, "gtk_render_icon_surface");
-
-    sGtkRenderIconSurfacePtr(style, cr, surface,
-                             rect.x + metrics->iconXPosition,
-                             rect.y + metrics->iconYPosition);
+    gtk_render_icon_surface(style, cr, surface, rect.x + metrics->iconXPosition,
+                            rect.y + metrics->iconYPosition);
     gtk_style_context_restore(style);
   }
 
@@ -2177,17 +2173,6 @@ static gint moz_gtk_check_menu_item_paint(WidgetNodeType widgetType,
   return MOZ_GTK_SUCCESS;
 }
 
-static gint moz_gtk_info_bar_paint(cairo_t* cr, GdkRectangle* rect,
-                                   GtkWidgetState* state) {
-  GtkStyleContext* style =
-      GetStyleContext(MOZ_GTK_INFO_BAR, state->scale, GTK_TEXT_DIR_LTR,
-                      GetStateFlagsFromGtkWidgetState(state));
-  gtk_render_background(style, cr, rect->x, rect->y, rect->width, rect->height);
-  gtk_render_frame(style, cr, rect->x, rect->y, rect->width, rect->height);
-
-  return MOZ_GTK_SUCCESS;
-}
-
 static gint moz_gtk_header_bar_paint(WidgetNodeType widgetType, cairo_t* cr,
                                      GdkRectangle* rect,
                                      GtkWidgetState* state) {
@@ -2390,9 +2375,6 @@ gint moz_gtk_get_widget_border(WidgetNodeType widget, gint* left, gint* top,
       }
       return MOZ_GTK_SUCCESS;
     }
-    case MOZ_GTK_INFO_BAR:
-      w = GetWidget(MOZ_GTK_INFO_BAR);
-      break;
     case MOZ_GTK_TOOLTIP: {
       // In GTK 3 there are 6 pixels of additional margin around the box.
       // See details there:
@@ -3194,8 +3176,6 @@ gint moz_gtk_widget_paint(WidgetNodeType widget, cairo_t* cr,
       return moz_gtk_hpaned_paint(cr, rect, state);
     case MOZ_GTK_WINDOW:
       return moz_gtk_window_paint(cr, rect, direction);
-    case MOZ_GTK_INFO_BAR:
-      return moz_gtk_info_bar_paint(cr, rect, state);
     case MOZ_GTK_HEADER_BAR:
     case MOZ_GTK_HEADER_BAR_MAXIMIZED:
       return moz_gtk_header_bar_paint(widget, cr, rect, state);

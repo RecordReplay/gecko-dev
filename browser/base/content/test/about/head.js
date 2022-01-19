@@ -2,7 +2,10 @@
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   FormHistory: "resource://gre/modules/FormHistory.jsm",
+  SearchTestUtils: "resource://testing-common/SearchTestUtils.jsm",
 });
+
+SearchTestUtils.init(this);
 
 function getSecurityInfo(securityInfoAsString) {
   const serhelper = Cc[
@@ -210,32 +213,6 @@ async function promiseContentSearchChange(browser, searchEngineChangeFn) {
   );
 }
 
-/**
- * Wait for the search engine to be added.
- */
-async function promiseNewEngine(basename) {
-  info("Waiting for engine to be added: " + basename);
-  let url = getRootDirectory(gTestPath) + basename;
-  let engine;
-  try {
-    engine = await Services.search.addOpenSearchEngine(url, "");
-  } catch (errCode) {
-    ok(false, "addEngine failed with error code " + errCode);
-    throw errCode;
-  }
-
-  info("Search engine added: " + basename);
-  registerCleanupFunction(async () => {
-    try {
-      await Services.search.removeEngine(engine);
-    } catch (ex) {
-      /* Can't remove the engine more than once */
-    }
-  });
-
-  return engine;
-}
-
 async function waitForBookmarksToolbarVisibility({
   win = window,
   visible,
@@ -252,27 +229,4 @@ async function waitForBookmarksToolbarVisibility({
 function isBookmarksToolbarVisible(win = window) {
   let toolbar = win.document.getElementById("PersonalToolbar");
   return !toolbar.collapsed;
-}
-
-async function waitForBookmarksToolbarVisibilityWithExitConditions({
-  win = window,
-  exitConditions,
-  message,
-}) {
-  let result = await TestUtils.waitForCondition(() => {
-    if (exitConditions.earlyExit) {
-      return exitConditions.earlyExit;
-    }
-    let toolbar = win.document.getElementById("PersonalToolbar");
-    return (
-      toolbar &&
-      (exitConditions.visible ? !toolbar.collapsed : toolbar.collapsed)
-    );
-  }, message || "waiting for toolbar to become " + (exitConditions.visible ? "visible" : "hidden"));
-  if (exitConditions.earlyExit) {
-    ok(true, "Early exit condition met");
-  } else {
-    ok(false, message);
-  }
-  return exitConditions.earlyExit || result;
 }

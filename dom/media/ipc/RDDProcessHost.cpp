@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "RDDProcessHost.h"
 
-#include "ProcessUtils.h"
+#include "mozilla/ipc/ProcessUtils.h"
 #include "RDDChild.h"
 #include "chrome/common/process_watcher.h"
 #include "mozilla/Preferences.h"
@@ -167,8 +167,8 @@ void RDDProcessHost::InitAfterConnect(bool aSucceeded) {
   }
   mProcessToken = ++sRDDProcessTokenCounter;
   mRDDChild = MakeUnique<RDDChild>(this);
-  DebugOnly<bool> rv =
-      mRDDChild->Open(TakeChannel(), base::GetProcId(GetChildProcessHandle()));
+  DebugOnly<bool> rv = mRDDChild->Open(
+      TakeInitialPort(), base::GetProcId(GetChildProcessHandle()));
   MOZ_ASSERT(rv);
 
   // Only clear mPrefSerializer in the success case to avoid a

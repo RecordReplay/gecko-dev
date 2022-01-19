@@ -45,7 +45,6 @@
 #include "TrustOverrideUtils.h"
 #include "TrustOverride-SymantecData.inc"
 #include "TrustOverride-AppleGoogleDigiCertData.inc"
-#include "TrustOverride-TestImminentDistrustData.inc"
 
 using namespace mozilla;
 using namespace mozilla::pkix;
@@ -262,9 +261,10 @@ OCSPRequest::Run() {
     priorityChannel->AdjustPriority(nsISupportsPriority::PRIORITY_HIGHEST);
   }
 
-  channel->SetLoadFlags(nsIRequest::LOAD_ANONYMOUS |
-                        nsIChannel::LOAD_BYPASS_SERVICE_WORKER |
-                        nsIChannel::LOAD_BYPASS_URL_CLASSIFIER);
+  channel->SetLoadFlags(
+      nsIRequest::LOAD_ANONYMOUS | nsIRequest::LOAD_BYPASS_CACHE |
+      nsIRequest::INHIBIT_CACHING | nsIChannel::LOAD_BYPASS_SERVICE_WORKER |
+      nsIChannel::LOAD_BYPASS_URL_CLASSIFIER);
 
   nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
 
@@ -321,6 +321,10 @@ OCSPRequest::Run() {
     return NotifyDone(rv, lock);
   }
   rv = internalChannel->SetAllowHttp3(false);
+  if (NS_FAILED(rv)) {
+    return NotifyDone(rv, lock);
+  }
+  rv = internalChannel->SetIsOCSP(true);
   if (NS_FAILED(rv)) {
     return NotifyDone(rv, lock);
   }
@@ -1092,23 +1096,20 @@ static void RebuildVerifiedCertificateInformation(PRFileDesc* fd,
     flags |= CertVerifier::FLAG_TLS_IGNORE_STATUS_REQUEST;
   }
 
-  SECOidTag evOidPolicy;
+  EVStatus evStatus;
   CertificateTransparencyInfo certificateTransparencyInfo;
   UniqueCERTCertList builtChain;
-  const bool saveIntermediates = false;
   bool isBuiltCertChainRootBuiltInRoot = false;
   mozilla::pkix::Result rv = certVerifier->VerifySSLServerCert(
       cert, mozilla::pkix::Now(), infoObject, infoObject->GetHostName(),
       builtChain, flags, maybePeerCertsBytes, stapledOCSPResponse,
       sctsFromTLSExtension, Nothing(), infoObject->GetOriginAttributes(),
-      saveIntermediates, &evOidPolicy,
+      &evStatus,
       nullptr,  // OCSP stapling telemetry
       nullptr,  // key size telemetry
       nullptr,  // SHA-1 telemetry
       nullptr,  // pinning telemetry
-      &certificateTransparencyInfo,
-      nullptr,  // CRLite telemetry,
-      &isBuiltCertChainRootBuiltInRoot);
+      &certificateTransparencyInfo, &isBuiltCertChainRootBuiltInRoot);
 
   if (rv != Success) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
@@ -1116,7 +1117,7 @@ static void RebuildVerifiedCertificateInformation(PRFileDesc* fd,
   }
 
   RefPtr<nsNSSCertificate> nssc(nsNSSCertificate::Create(cert.get()));
-  if (rv == Success && evOidPolicy != SEC_OID_UNKNOWN) {
+  if (rv == Success && evStatus == EVStatus::EV) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
             ("HandshakeCallback using NEW cert %p (is EV)", nssc.get()));
     infoObject->SetServerCert(nssc, EVStatus::EV);
@@ -1137,57 +1138,6 @@ static void RebuildVerifiedCertificateInformation(PRFileDesc* fd,
     infoObject->SetIsBuiltCertChainRootBuiltInRoot(
         isBuiltCertChainRootBuiltInRoot);
   }
-}
-
-nsresult IsCertificateDistrustImminent(
-    const nsTArray<RefPtr<nsIX509Cert>>& aCertArray,
-    /* out */ bool& isDistrusted) {
-  if (aCertArray.IsEmpty()) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  nsCOMPtr<nsIX509Cert> rootCert;
-  nsTArray<RefPtr<nsIX509Cert>> intCerts;
-  nsCOMPtr<nsIX509Cert> eeCert;
-
-  nsresult rv = nsNSSCertificate::SegmentCertificateChain(aCertArray, rootCert,
-                                                          intCerts, eeCert);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  // Check the test certificate condition first; this is a special certificate
-  // that gets the 'imminent distrust' treatment; this is so that the distrust
-  // UX code does not become stale, as it will need regular use. See Bug 1409257
-  // for context. Please do not remove this when adjusting the rest of the
-  // method.
-  UniqueCERTCertificate nssEECert(eeCert->GetCert());
-  if (!nssEECert) {
-    return NS_ERROR_FAILURE;
-  }
-  isDistrusted =
-      CertDNIsInList(nssEECert.get(), TestImminentDistrustEndEntityDNs);
-  if (isDistrusted) {
-    // Exit early
-    return NS_OK;
-  }
-
-  UniqueCERTCertificate nssRootCert(rootCert->GetCert());
-  if (!nssRootCert) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Proceed with the Symantec imminent distrust algorithm. This algorithm is
-  // to be removed in Firefox 63, when the validity period check will also be
-  // removed from the code in NSSCertDBTrustDomain.
-  if (CertDNIsInList(nssRootCert.get(), RootSymantecDNs)) {
-    rv = CheckForSymantecDistrust(intCerts, RootAppleAndGoogleSPKIs,
-                                  isDistrusted);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-  return NS_OK;
 }
 
 void HandshakeCallback(PRFileDesc* fd, void* client_data) {
@@ -1332,20 +1282,6 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
     } else {
       RebuildVerifiedCertificateInformation(fd, infoObject);
     }
-  }
-
-  nsTArray<RefPtr<nsIX509Cert>> succeededCertArray;
-  // The list could be empty. Bug 731478 will reduce the incidence of empty
-  // succeeded cert chains through better caching.
-  nsresult srv = infoObject->GetSucceededCertChain(succeededCertArray);
-
-  bool distrustImminent;
-  if (NS_SUCCEEDED(srv)) {
-    srv = IsCertificateDistrustImminent(succeededCertArray, distrustImminent);
-  }
-
-  if (NS_SUCCEEDED(srv) && distrustImminent) {
-    state |= nsIWebProgressListener::STATE_CERT_DISTRUST_IMMINENT;
   }
 
   bool domainMismatch;

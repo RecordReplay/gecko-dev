@@ -126,9 +126,15 @@ imgRequestProxy::imgRequestProxy()
   if (recordreplay::IsRecordingOrReplaying()) {
     NS_ADDREF(this);
   }
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  recordreplay::RegisterThing(static_cast<imgIRequest*>(this));
 }
 
 imgRequestProxy::~imgRequestProxy() {
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  recordreplay::UnregisterThing(static_cast<imgIRequest*>(this));
+
   /* destructor code */
   MOZ_ASSERT(!mListener, "Someone forgot to properly cancel this request!");
 
@@ -548,6 +554,10 @@ imgRequestProxy::LockImage() {
 
 NS_IMETHODIMP
 imgRequestProxy::UnlockImage() {
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  recordreplay::RecordReplayAssert("RequestBehaviour::GetImage %zu",
+                                   recordreplay::ThingIndex(static_cast<imgIRequest*>(this)));
+
   MOZ_ASSERT(mLockCount > 0, "calling unlock but no locks!");
 
   mLockCount--;

@@ -37,6 +37,10 @@
 #  include "BaseProfiler.h"
 #endif
 
+#ifdef LIBFUZZER
+#  include "FuzzerDefs.h"
+#endif
+
 int main(int argc, char** argv, char** envp) {
 #ifdef MOZ_WIDGET_GTK
   // A default display may or may not be required for xpcshell tests, and so
@@ -68,10 +72,16 @@ int main(int argc, char** argv, char** envp) {
       mozilla::sandboxing::GetInitializedBrokerServices();
 #endif
 
-  mozilla::Bootstrap::UniquePtr bootstrap = mozilla::GetBootstrap();
-  if (!bootstrap) {
+  auto bootstrapResult = mozilla::GetBootstrap();
+  if (bootstrapResult.isErr()) {
     return 2;
   }
+
+  mozilla::Bootstrap::UniquePtr bootstrap = bootstrapResult.unwrap();
+
+#ifdef LIBFUZZER
+  shellData.fuzzerDriver = fuzzer::FuzzerDriver;
+#endif
 
   int result = bootstrap->XRE_XPCShellMain(argc, argv, envp, &shellData);
 

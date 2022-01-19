@@ -2503,9 +2503,9 @@ function* testContinuousTrustedEvents()
       wheel: {
         expected: true, preventDefault: false,
         skipDeltaModeCheck: true,
-        deltaX: SpecialPowers.getIntPref("dom.event.wheel-deltaMode-lines-to-pixel-scale"),
-        deltaY: SpecialPowers.getIntPref("dom.event.wheel-deltaMode-lines-to-pixel-scale"),
-        deltaZ: SpecialPowers.getIntPref("dom.event.wheel-deltaMode-lines-to-pixel-scale"),
+        deltaX: gHorizontalLine,
+        deltaY: gLineHeight,
+        deltaZ: Math.max(gHorizontalLine, gLineHeight),
       },
       DOMMouseScroll: {
         horizontal: { expected: true,  preventDefault: false, detail: 1 },
@@ -3262,6 +3262,8 @@ function runTests()
     ["layout.css.devPixelsPerPx", 1.0],
 
     ["dom.event.wheel-deltaMode-lines.disabled", true],
+
+    ["mousewheel.system_scroll_override.enabled", false],
 
     ["mousewheel.transaction.timeout", 100000],
     ["mousewheel.default.delta_multiplier_x", 100],

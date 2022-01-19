@@ -216,6 +216,17 @@ void LIRGeneratorARM::lowerForMulInt64(LMulI64* ins, MMul* mir,
   defineInt64ReuseInput(ins, mir, 0);
 }
 
+void LIRGeneratorARM::lowerForCompareI64AndBranch(MTest* mir, MCompare* comp,
+                                                  JSOp op, MDefinition* left,
+                                                  MDefinition* right,
+                                                  MBasicBlock* ifTrue,
+                                                  MBasicBlock* ifFalse) {
+  LCompareI64AndBranch* lir = new (alloc())
+      LCompareI64AndBranch(comp, op, useInt64Register(left),
+                           useInt64OrConstant(right), ifTrue, ifFalse);
+  add(lir, mir);
+}
+
 void LIRGeneratorARM::lowerForFPU(LInstructionHelper<1, 1, 0>* ins,
                                   MDefinition* mir, MDefinition* input) {
   ins->setOperand(0, useRegisterAtStart(input));
@@ -357,6 +368,22 @@ void LIRGeneratorARM::lowerDivI(MDiv* div) {
   defineReturn(lir, div);
 }
 
+void LIRGeneratorARM::lowerNegI(MInstruction* ins, MDefinition* input) {
+  define(new (alloc()) LNegI(useRegisterAtStart(input)), ins);
+}
+
+void LIRGeneratorARM::lowerNegI64(MInstruction* ins, MDefinition* input) {
+  // Reuse the input.  Define + use-at-start would create risk that the output
+  // uses the same register pair as the input but in reverse order.  Reusing
+  // probably has less spilling than the alternative, define + use.
+  defineInt64ReuseInput(new (alloc()) LNegI64(useInt64RegisterAtStart(input)),
+                        ins, 0);
+}
+
+void LIRGenerator::visitAbs(MAbs* ins) {
+  define(allocateAbs(ins, useRegisterAtStart(ins->input())), ins);
+}
+
 void LIRGeneratorARM::lowerMulI(MMul* mul, MDefinition* lhs, MDefinition* rhs) {
   LMulI* lir = new (alloc()) LMulI;
   if (mul->fallible()) {
@@ -469,6 +496,20 @@ void LIRGenerator::visitPowHalf(MPowHalf* ins) {
   MOZ_ASSERT(input->type() == MIRType::Double);
   LPowHalfD* lir = new (alloc()) LPowHalfD(useRegisterAtStart(input));
   defineReuseInput(lir, ins, 0);
+}
+
+void LIRGeneratorARM::lowerWasmSelectI(MWasmSelect* select) {
+  auto* lir = new (alloc())
+      LWasmSelect(useRegisterAtStart(select->trueExpr()),
+                  useAny(select->falseExpr()), useRegister(select->condExpr()));
+  defineReuseInput(lir, select, LWasmSelect::TrueExprIndex);
+}
+
+void LIRGeneratorARM::lowerWasmSelectI64(MWasmSelect* select) {
+  auto* lir = new (alloc()) LWasmSelectI64(
+      useInt64RegisterAtStart(select->trueExpr()),
+      useInt64(select->falseExpr()), useRegister(select->condExpr()));
+  defineInt64ReuseInput(lir, select, LWasmSelectI64::TrueExprIndex);
 }
 
 LTableSwitch* LIRGeneratorARM::newLTableSwitch(const LAllocation& in,
@@ -641,37 +682,6 @@ void LIRGenerator::visitWasmLoad(MWasmLoad* ins) {
 
   LAllocation ptr = useRegisterAtStart(base);
 
-  if (IsUnaligned(ins->access())) {
-    MOZ_ASSERT(!ins->access().isAtomic());
-
-    // Unaligned access expected! Revert to a byte load.
-    LDefinition ptrCopy = tempCopy(base, 0);
-
-    LDefinition noTemp = LDefinition::BogusTemp();
-    if (ins->type() == MIRType::Int64) {
-      auto* lir = new (alloc())
-          LWasmUnalignedLoadI64(ptr, ptrCopy, temp(), noTemp, noTemp);
-      defineInt64(lir, ins);
-      return;
-    }
-
-    LDefinition temp2 = noTemp;
-    LDefinition temp3 = noTemp;
-    if (IsFloatingPointType(ins->type())) {
-      // For putting the low value in a GPR.
-      temp2 = temp();
-      // For putting the high value in a GPR.
-      if (ins->type() == MIRType::Double) {
-        temp3 = temp();
-      }
-    }
-
-    auto* lir =
-        new (alloc()) LWasmUnalignedLoad(ptr, ptrCopy, temp(), temp2, temp3);
-    define(lir, ins);
-    return;
-  }
-
   if (ins->type() == MIRType::Int64) {
     auto* lir = new (alloc()) LWasmLoadI64(ptr);
     if (ins->access().offset() || ins->access().type() == Scalar::Int64) {
@@ -704,32 +714,6 @@ void LIRGenerator::visitWasmStore(MWasmStore* ins) {
 
   LAllocation ptr = useRegisterAtStart(base);
 
-  if (IsUnaligned(ins->access())) {
-    MOZ_ASSERT(!ins->access().isAtomic());
-
-    // Unaligned access expected! Revert to a byte store.
-    LDefinition ptrCopy = tempCopy(base, 0);
-
-    MIRType valueType = ins->value()->type();
-    if (valueType == MIRType::Int64) {
-      LInt64Allocation value = useInt64RegisterAtStart(ins->value());
-      auto* lir =
-          new (alloc()) LWasmUnalignedStoreI64(ptr, value, ptrCopy, temp());
-      add(lir, ins);
-      return;
-    }
-
-    LAllocation value = useRegisterAtStart(ins->value());
-    LDefinition valueHelper = IsFloatingPointType(valueType)
-                                  ? temp()  // to do a FPU -> GPR move.
-                                  : tempCopy(base, 1);  // to clobber the value.
-
-    auto* lir =
-        new (alloc()) LWasmUnalignedStore(ptr, value, ptrCopy, valueHelper);
-    add(lir, ins);
-    return;
-  }
-
   if (ins->value()->type() == MIRType::Int64) {
     LInt64Allocation value = useInt64RegisterAtStart(ins->value());
     auto* lir = new (alloc()) LWasmStoreI64(ptr, value);
@@ -751,8 +735,6 @@ void LIRGenerator::visitWasmStore(MWasmStore* ins) {
 }
 
 void LIRGenerator::visitAsmJSLoadHeap(MAsmJSLoadHeap* ins) {
-  MOZ_ASSERT(ins->offset() == 0);
-
   MDefinition* base = ins->base();
   MOZ_ASSERT(base->type() == MIRType::Int32);
 
@@ -778,8 +760,6 @@ void LIRGenerator::visitAsmJSLoadHeap(MAsmJSLoadHeap* ins) {
 }
 
 void LIRGenerator::visitAsmJSStoreHeap(MAsmJSStoreHeap* ins) {
-  MOZ_ASSERT(ins->offset() == 0);
-
   MDefinition* base = ins->base();
   MOZ_ASSERT(base->type() == MIRType::Int32);
 
@@ -824,18 +804,32 @@ void LIRGeneratorARM::lowerTruncateFToInt32(MTruncateToInt32* ins) {
 void LIRGenerator::visitAtomicExchangeTypedArrayElement(
     MAtomicExchangeTypedArrayElement* ins) {
   MOZ_ASSERT(HasLDSTREXBHD());
-  MOZ_ASSERT(ins->arrayType() <= Scalar::Uint32);
 
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
-  MOZ_ASSERT(ins->index()->type() == MIRType::Int32);
+  MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
 
   const LUse elements = useRegister(ins->elements());
-  const LAllocation index = useRegisterOrConstant(ins->index());
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->arrayType());
+  const LAllocation value = useRegister(ins->value());
+
+  if (Scalar::isBigIntType(ins->arrayType())) {
+    // The two register pairs must be distinct.
+    LInt64Definition temp1 = tempInt64Fixed(Register64(IntArgReg3, IntArgReg2));
+    LDefinition temp2 = tempFixed(IntArgReg1);
+
+    auto* lir = new (alloc()) LAtomicExchangeTypedArrayElement64(
+        elements, index, value, temp1, temp2);
+    defineFixed(lir, ins, LAllocation(AnyRegister(IntArgReg0)));
+    assignSafepoint(lir, ins);
+    return;
+  }
+
+  MOZ_ASSERT(ins->arrayType() <= Scalar::Uint32);
 
   // If the target is a floating register then we need a temp at the
   // CodeGenerator level for creating the result.
 
-  const LAllocation value = useRegister(ins->value());
   LDefinition tempDef = LDefinition::BogusTemp();
   if (ins->arrayType() == Scalar::Uint32) {
     MOZ_ASSERT(ins->type() == MIRType::Double);
@@ -855,13 +849,36 @@ void LIRGenerator::visitAtomicTypedArrayElementBinop(
   MOZ_ASSERT(ins->arrayType() != Scalar::Float64);
 
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
-  MOZ_ASSERT(ins->index()->type() == MIRType::Int32);
+  MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
 
   const LUse elements = useRegister(ins->elements());
-  const LAllocation index = useRegisterOrConstant(ins->index());
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->arrayType());
   const LAllocation value = useRegister(ins->value());
 
-  if (!ins->hasUses()) {
+  if (Scalar::isBigIntType(ins->arrayType())) {
+    // Wasm additionally pins the value register to `FetchOpVal64`, but it's
+    // unclear why this was deemed necessary.
+    LInt64Definition temp1 = tempInt64();
+    LInt64Definition temp2 = tempInt64Fixed(FetchOpTmp64);
+
+    if (ins->isForEffect()) {
+      auto* lir = new (alloc()) LAtomicTypedArrayElementBinopForEffect64(
+          elements, index, value, temp1, temp2);
+      add(lir, ins);
+      return;
+    }
+
+    LInt64Definition temp3 = tempInt64Fixed(FetchOpOut64);
+
+    auto* lir = new (alloc()) LAtomicTypedArrayElementBinop64(
+        elements, index, value, temp1, temp2, temp3);
+    define(lir, ins);
+    assignSafepoint(lir, ins);
+    return;
+  }
+
+  if (ins->isForEffect()) {
     LAtomicTypedArrayElementBinopForEffect* lir = new (alloc())
         LAtomicTypedArrayElementBinopForEffect(elements, index, value,
                                                /* flagTemp= */ temp());
@@ -896,10 +913,27 @@ void LIRGenerator::visitCompareExchangeTypedArrayElement(
   MOZ_ASSERT(ins->arrayType() != Scalar::Float64);
 
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
-  MOZ_ASSERT(ins->index()->type() == MIRType::Int32);
+  MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
 
   const LUse elements = useRegister(ins->elements());
-  const LAllocation index = useRegisterOrConstant(ins->index());
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->arrayType());
+
+  const LAllocation newval = useRegister(ins->newval());
+  const LAllocation oldval = useRegister(ins->oldval());
+
+  if (Scalar::isBigIntType(ins->arrayType())) {
+    // The three register pairs must be distinct.
+    LInt64Definition temp1 = tempInt64Fixed(CmpXchgOld64);
+    LInt64Definition temp2 = tempInt64Fixed(CmpXchgNew64);
+    LInt64Definition temp3 = tempInt64Fixed(CmpXchgOut64);
+
+    auto* lir = new (alloc()) LCompareExchangeTypedArrayElement64(
+        elements, index, oldval, newval, temp1, temp2, temp3);
+    define(lir, ins);
+    assignSafepoint(lir, ins);
+    return;
+  }
 
   // If the target is a floating register then we need a temp at the
   // CodeGenerator level for creating the result.
@@ -908,8 +942,6 @@ void LIRGenerator::visitCompareExchangeTypedArrayElement(
   // allowing oldval to remain an immediate, if it is small enough
   // to fit in an instruction.
 
-  const LAllocation newval = useRegister(ins->newval());
-  const LAllocation oldval = useRegister(ins->oldval());
   LDefinition tempDef = LDefinition::BogusTemp();
   if (ins->arrayType() == Scalar::Uint32 && IsFloatingPointType(ins->type())) {
     tempDef = temp();
@@ -920,6 +952,29 @@ void LIRGenerator::visitCompareExchangeTypedArrayElement(
                                                       newval, tempDef);
 
   define(lir, ins);
+}
+
+void LIRGeneratorARM::lowerAtomicLoad64(MLoadUnboxedScalar* ins) {
+  const LUse elements = useRegister(ins->elements());
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->storageType());
+
+  auto* lir = new (alloc())
+      LAtomicLoad64(elements, index, temp(),
+                    tempInt64Fixed(Register64(IntArgReg1, IntArgReg0)));
+  define(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGeneratorARM::lowerAtomicStore64(MStoreUnboxedScalar* ins) {
+  LUse elements = useRegister(ins->elements());
+  LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->writeType());
+  LAllocation value = useRegister(ins->value());
+  LInt64Definition temp1 = tempInt64Fixed(Register64(IntArgReg1, IntArgReg0));
+  LInt64Definition temp2 = tempInt64Fixed(Register64(IntArgReg3, IntArgReg2));
+
+  add(new (alloc()) LAtomicStore64(elements, index, value, temp1, temp2), ins);
 }
 
 void LIRGenerator::visitWasmCompareExchangeHeap(MWasmCompareExchangeHeap* ins) {
@@ -1086,6 +1141,13 @@ void LIRGenerator::visitWasmBinarySimd128(MWasmBinarySimd128* ins) {
   MOZ_CRASH("binary SIMD NYI");
 }
 
+#ifdef ENABLE_WASM_SIMD
+bool MWasmBitselectSimd128::specializeConstantMaskAsShuffle(
+    int8_t shuffle[16]) {
+  return false;
+}
+#endif
+
 bool MWasmBinarySimd128::specializeForConstantRhs() {
   // Probably many we want to do here
   return false;
@@ -1118,4 +1180,12 @@ void LIRGenerator::visitWasmUnarySimd128(MWasmUnarySimd128* ins) {
 
 void LIRGenerator::visitWasmReduceSimd128(MWasmReduceSimd128* ins) {
   MOZ_CRASH("reduce-SIMD NYI");
+}
+
+void LIRGenerator::visitWasmLoadLaneSimd128(MWasmLoadLaneSimd128* ins) {
+  MOZ_CRASH("load-lane SIMD NYI");
+}
+
+void LIRGenerator::visitWasmStoreLaneSimd128(MWasmStoreLaneSimd128* ins) {
+  MOZ_CRASH("store-lane SIMD NYI");
 }

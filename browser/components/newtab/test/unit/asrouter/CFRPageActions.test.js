@@ -36,9 +36,6 @@ describe("CFRPageActions", () => {
     "cfr-notification-footer-users",
     "cfr-notification-footer-spacer",
     "cfr-notification-footer-learn-more-link",
-    "cfr-notification-footer-pintab-animation-container",
-    "cfr-notification-footer-animation-button",
-    "cfr-notification-footer-animation-label",
   ];
   const elementClassNames = ["popup-notification-body-container"];
 
@@ -131,25 +128,6 @@ describe("CFRPageActions", () => {
           message_id: "foo",
           bucket_id: "bar",
           event: "IMPRESSION",
-        });
-      });
-      it("should include modelVersion if presented in the message", () => {
-        const recommendation = {
-          id: "foo",
-          content: { bucket_id: "bar" },
-          personalizedModelVersion: "model_version_1",
-        };
-        sandbox.spy(pageAction, "_sendTelemetry");
-
-        pageAction.addImpression(recommendation);
-
-        assert.calledWith(pageAction._sendTelemetry, {
-          message_id: "foo",
-          bucket_id: "bar",
-          event: "IMPRESSION",
-          event_context: {
-            modelVersion: "model_version_1",
-          },
         });
       });
     });
@@ -607,32 +585,6 @@ describe("CFRPageActions", () => {
           },
         });
       });
-      it("should send modelVersion if presented in the message", async () => {
-        const recommendationWithModelVersion = {
-          ...fakeRecommendation,
-          personalizedModelVersion: "model_version_1",
-        };
-        CFRPageActions.clearRecommendations();
-        await CFRPageActions.addRecommendation(
-          fakeBrowser,
-          fakeHost,
-          recommendationWithModelVersion,
-          dispatchStub
-        );
-        await pageAction._cfrUrlbarButtonClick();
-
-        assert.calledWith(dispatchStub, {
-          type: "DOORHANGER_TELEMETRY",
-          data: {
-            action: "cfr_user_event",
-            source: "CFR",
-            message_id: fakeRecommendation.id,
-            bucket_id: fakeRecommendation.content.bucket_id,
-            event: "CLICK_DOORHANGER",
-            event_context: { modelVersion: "model_version_1" },
-          },
-        });
-      });
       it("should set the main action correctly", async () => {
         sinon
           .stub(CFRPageActions, "_fetchLatestAddonVersion")
@@ -776,59 +728,6 @@ describe("CFRPageActions", () => {
             eventCallback: pageAction._popupStateChange,
             persistent: false,
           }
-        );
-      });
-      it("should show the bullet list details", async () => {
-        fakeRecommendation.content.layout = "message_and_animation";
-        await pageAction._cfrUrlbarButtonClick();
-
-        assert.ok(
-          fakeRemoteL10n.createElement.args.find(
-            /* eslint-disable-next-line max-nested-callbacks */
-            ([doc, el, args]) => el === "span" && args && args.content
-          )
-        );
-      });
-      it("should set the data-l10n-id on the list element", async () => {
-        fakeRecommendation.content.layout = "message_and_animation";
-        await pageAction._cfrUrlbarButtonClick();
-
-        for (let step of fakeRecommendation.content.descriptionDetails.steps) {
-          fakeRemoteL10n.createElement.args.find(
-            /* eslint-disable-next-line max-nested-callbacks */
-            ([doc, el, args]) => el === "span" && args && args.content === step
-          );
-        }
-      });
-      it("should set the correct data-notification-category", async () => {
-        fakeRecommendation.content.layout = "message_and_animation";
-        await pageAction._cfrUrlbarButtonClick();
-
-        assert.equal(
-          elements["contextual-feature-recommendation-notification"].dataset
-            .notificationCategory,
-          fakeRecommendation.content.layout
-        );
-      });
-      it("should send PIN event on primary action click", async () => {
-        fakeRecommendation.content.layout = "message_and_animation";
-        sandbox.stub(pageAction, "_sendTelemetry");
-        await pageAction._cfrUrlbarButtonClick();
-
-        const [
-          ,
-          ,
-          ,
-          ,
-          { callback },
-        ] = global.PopupNotifications.show.firstCall.args;
-        callback();
-
-        // First call is triggered by `_cfrUrlbarButtonClick`
-        assert.propertyVal(
-          pageAction._sendTelemetry.secondCall.args[0],
-          "event",
-          "PIN"
         );
       });
     });

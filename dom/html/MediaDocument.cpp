@@ -18,7 +18,7 @@
 #include "nsDocElementCreatedNotificationRunner.h"
 #include "mozilla/Encoding.h"
 #include "mozilla/PresShell.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIPrincipal.h"
 #include "nsIMultiPartChannel.h"
@@ -183,7 +183,6 @@ nsresult MediaDocument::CreateSyntheticDocument() {
   MOZ_ASSERT(!InitialSetupHasBeenDone());
 
   // Synthesize an empty html document
-  nsresult rv;
 
   RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(
@@ -193,8 +192,11 @@ nsresult MediaDocument::CreateSyntheticDocument() {
   NS_ENSURE_TRUE(root, NS_ERROR_OUT_OF_MEMORY);
 
   NS_ASSERTION(GetChildCount() == 0, "Shouldn't have any kids");
-  rv = AppendChildTo(root, false);
-  NS_ENSURE_SUCCESS(rv, rv);
+  ErrorResult rv;
+  AppendChildTo(root, false, rv);
+  if (rv.Failed()) {
+    return rv.StealNSResult();
+  }
 
   nodeInfo = mNodeInfoManager->GetNodeInfo(
       nsGkAtoms::head, nullptr, kNameSpaceID_XHTML, nsINode::ELEMENT_NODE);
@@ -214,9 +216,9 @@ nsresult MediaDocument::CreateSyntheticDocument() {
 
   metaContent->SetAttr(kNameSpaceID_None, nsGkAtoms::content,
                        u"width=device-width; height=device-height;"_ns, true);
-  head->AppendChildTo(metaContent, false);
+  head->AppendChildTo(metaContent, false, IgnoreErrors());
 
-  root->AppendChildTo(head, false);
+  root->AppendChildTo(head, false, IgnoreErrors());
 
   nodeInfo = mNodeInfoManager->GetNodeInfo(
       nsGkAtoms::body, nullptr, kNameSpaceID_XHTML, nsINode::ELEMENT_NODE);
@@ -224,7 +226,7 @@ nsresult MediaDocument::CreateSyntheticDocument() {
   RefPtr<nsGenericHTMLElement> body = NS_NewHTMLBodyElement(nodeInfo.forget());
   NS_ENSURE_TRUE(body, NS_ERROR_OUT_OF_MEMORY);
 
-  root->AppendChildTo(body, false);
+  root->AppendChildTo(body, false, IgnoreErrors());
 
   return NS_OK;
 }
@@ -290,8 +292,10 @@ nsresult MediaDocument::LinkStylesheet(const nsAString& aStylesheet) {
 
   link->SetAttr(kNameSpaceID_None, nsGkAtoms::href, aStylesheet, true);
 
+  ErrorResult rv;
   Element* head = GetHeadElement();
-  return head->AppendChildTo(link, false);
+  head->AppendChildTo(link, false, rv);
+  return rv.StealNSResult();
 }
 
 nsresult MediaDocument::LinkScript(const nsAString& aScript) {
@@ -308,8 +312,10 @@ nsresult MediaDocument::LinkScript(const nsAString& aScript) {
 
   script->SetAttr(kNameSpaceID_None, nsGkAtoms::src, aScript, true);
 
+  ErrorResult rv;
   Element* head = GetHeadElement();
-  return head->AppendChildTo(script, false);
+  head->AppendChildTo(script, false, rv);
+  return rv.StealNSResult();
 }
 
 void MediaDocument::FormatStringFromName(const char* aName,
@@ -319,7 +325,7 @@ void MediaDocument::FormatStringFromName(const char* aName,
   if (!spoofLocale) {
     if (!mStringBundle) {
       nsCOMPtr<nsIStringBundleService> stringService =
-          mozilla::services::GetStringBundleService();
+          mozilla::components::StringBundle::Service();
       if (stringService) {
         stringService->CreateBundle(NSMEDIADOCUMENT_PROPERTIES_URI,
                                     getter_AddRefs(mStringBundle));
@@ -331,7 +337,7 @@ void MediaDocument::FormatStringFromName(const char* aName,
   } else {
     if (!mStringBundleEnglish) {
       nsCOMPtr<nsIStringBundleService> stringService =
-          mozilla::services::GetStringBundleService();
+          mozilla::components::StringBundle::Service();
       if (stringService) {
         stringService->CreateBundle(NSMEDIADOCUMENT_PROPERTIES_URI_en_US,
                                     getter_AddRefs(mStringBundleEnglish));

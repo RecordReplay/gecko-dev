@@ -1,4 +1,5 @@
 const PRINT_DOCUMENT_URI = "chrome://global/content/print.html";
+const DEFAULT_PRINTER_NAME = "Mozilla Save to PDF";
 const { MockFilePicker } = SpecialPowers;
 
 let pickerMocked = false;
@@ -56,6 +57,7 @@ class PrintHelper {
       Services.prefs.clearUserPref(name);
     }
     Services.prefs.clearUserPref("print_printer");
+    Services.prefs.clearUserPref("print.more-settings.open");
   }
 
   static getTestPageUrl(pathName) {
@@ -77,13 +79,18 @@ class PrintHelper {
         name: "Regular Size",
         width: 612,
         height: 792,
-        unwriteableMargin: {
-          marginTop: 0.1,
-          marginBottom: 0.1,
-          marginLeft: 0.1,
-          marginRight: 0.1,
-          QueryInterface: ChromeUtils.generateQI([Ci.nsIPaperMargin]),
-        },
+        unwriteableMargin: Promise.resolve(
+          Object.assign(
+            {
+              top: 0.1,
+              bottom: 0.1,
+              left: 0.1,
+              right: 0.1,
+              QueryInterface: ChromeUtils.generateQI([Ci.nsIPaperMargin]),
+            },
+            paperProperties.unwriteableMargin
+          )
+        ),
         QueryInterface: ChromeUtils.generateQI([Ci.nsIPaper]),
       },
       paperProperties
@@ -115,6 +122,10 @@ class PrintHelper {
     this.sourceBrowser.ownerGlobal.document
       .getElementById("cmd_print")
       .doCommand();
+    return this.waitForDialog(condition);
+  }
+
+  async waitForDialog(condition = {}) {
     let dialog = await TestUtils.waitForCondition(
       () => this.dialog,
       "Wait for dialog"
@@ -123,8 +134,10 @@ class PrintHelper {
 
     if (Object.keys(condition).length === 0) {
       await this.win._initialized;
+      // Wait a frame so the rendering spinner is hidden.
+      await new Promise(resolve => requestAnimationFrame(resolve));
     } else if (condition.waitFor == "loadComplete") {
-      await BrowserTestUtils.waitForAttributeRemoval("loading", document.body);
+      await BrowserTestUtils.waitForAttributeRemoval("loading", this.doc.body);
     }
   }
 
@@ -236,18 +249,45 @@ class PrintHelper {
     }
     let {
       name = "Mock Printer",
-      paperList = [],
+      paperList,
       printerInfoPromise = Promise.resolve(),
+      paperSizeUnit = Ci.nsIPrintSettings.kPaperSizeInches,
+      paperId,
     } = opts;
     let PSSVC = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(
       Ci.nsIPrintSettingsService
     );
+    // Use the fallbackPaperList as the default for mock printers
+    if (!paperList) {
+      info("addMockPrinter, using the fallbackPaperList");
+      paperList = Cc["@mozilla.org/gfx/printerlist;1"].createInstance(
+        Ci.nsIPrinterList
+      ).fallbackPaperList;
+    }
 
     let defaultSettings = PSSVC.newPrintSettings;
     defaultSettings.printerName = name;
     defaultSettings.toFileName = "";
     defaultSettings.outputFormat = Ci.nsIPrintSettings.kOutputFormatNative;
     defaultSettings.printToFile = false;
+    defaultSettings.paperSizeUnit = paperSizeUnit;
+    if (paperId) {
+      defaultSettings.paperId = paperId;
+    }
+
+    if (
+      defaultSettings.paperId &&
+      Array.from(paperList).find(p => p.id == defaultSettings.paperId)
+    ) {
+      info(
+        `addMockPrinter, using paperId: ${defaultSettings.paperId} from the paperList`
+      );
+    } else if (paperList.length) {
+      defaultSettings.paperId = paperList[0].id;
+      info(
+        `addMockPrinter, corrected default paperId setting value: ${defaultSettings.paperId}`
+      );
+    }
 
     let printer = {
       name,
@@ -290,6 +330,18 @@ class PrintHelper {
     );
   }
 
+  get paginationElem() {
+    return this.dialog._box.querySelector(".printPreviewNavigation");
+  }
+
+  get paginationSheetIndicator() {
+    return this.paginationElem.shadowRoot.querySelector("#sheetIndicator");
+  }
+
+  get currentPrintPreviewBrowser() {
+    return this.win.PrintEventHandler.printPreviewEl.lastPreviewBrowser;
+  }
+
   get _printBrowser() {
     return this.dialog._frame;
   }
@@ -306,8 +358,39 @@ class PrintHelper {
     return this.doc.getElementById(id);
   }
 
+  get sheetCount() {
+    return this.doc.l10n.getAttributes(this.get("sheet-count")).args.sheetCount;
+  }
+
   get sourceURI() {
-    return this.win.PrintEventHandler.originalSourceCurrentURI;
+    return this.win.PrintEventHandler.activeCurrentURI;
+  }
+
+  async waitForReaderModeReady() {
+    if (gBrowser.selectedBrowser.isArticle) {
+      return;
+    }
+    await new Promise(resolve => {
+      let onReaderModeChange = {
+        receiveMessage(message) {
+          if (
+            message.data &&
+            message.data.isArticle !== undefined &&
+            gBrowser.selectedBrowser.isArticle
+          ) {
+            AboutReaderParent.removeMessageListener(
+              "Reader:UpdateReaderButton",
+              onReaderModeChange
+            );
+            resolve();
+          }
+        },
+      };
+      AboutReaderParent.addMessageListener(
+        "Reader:UpdateReaderButton",
+        onReaderModeChange
+      );
+    });
   }
 
   async waitForPreview(changeFn) {
@@ -392,6 +475,22 @@ class PrintHelper {
     }
   }
 
+  get _lastPrintPreviewSettings() {
+    return this.win.PrintEventHandler._lastPrintPreviewSettings;
+  }
+
+  assertPreviewedWithSettings(expected) {
+    let settings = this._lastPrintPreviewSettings;
+    ok(settings, "Last preview settings are available");
+    for (let [setting, value] of Object.entries(expected)) {
+      this._assertMatches(
+        settings[setting],
+        value,
+        `${setting} matches previewed setting`
+      );
+    }
+  }
+
   async assertSettingsChanged(from, to, changeFn) {
     is(
       Object.keys(from).length,
@@ -441,4 +540,11 @@ class PrintHelper {
     MockFilePicker.setFiles([file]);
     return file;
   }
+}
+
+function waitForPreviewVisible() {
+  return BrowserTestUtils.waitForCondition(function() {
+    let preview = document.querySelector(".printPreviewBrowser");
+    return preview && BrowserTestUtils.is_visible(preview);
+  });
 }

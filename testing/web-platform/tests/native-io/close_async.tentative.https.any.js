@@ -6,6 +6,8 @@
 'use strict';
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   assert_equals(await file.close(), undefined);
 
@@ -13,6 +15,8 @@ promise_test(async testCase => {
 }, 'NativeIOFile.close is idempotent');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   const closePromise = file.close();
 
@@ -21,50 +25,56 @@ promise_test(async testCase => {
 }, 'NativeIOFile.close is idempotent when called immediately');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   assert_equals(await file.close(), undefined);
 
-  const readSharedArrayBuffer = new SharedArrayBuffer(4);
-  const readBytes = new Uint8Array(readSharedArrayBuffer);
+  const readBuffer = new Uint8Array(4);
   await promise_rejects_dom(testCase, 'InvalidStateError',
-                            file.read(readBytes, 4));
+                            file.read(readBuffer, 4));
 }, 'NativeIOFile.read fails after NativeIOFile.close settles');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   const closePromise = file.close();
 
-  const readSharedArrayBuffer = new SharedArrayBuffer(4);
-  const readBytes = new Uint8Array(readSharedArrayBuffer);
+  const readBuffer = new Uint8Array(4);
   await promise_rejects_dom(testCase, 'InvalidStateError',
-                            file.read(readBytes, 4));
+                            file.read(readBuffer, 4));
   assert_equals(await closePromise, undefined);
 }, 'NativeIOFile.read fails immediately after calling NativeIOFile.close');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   assert_equals(await file.close(), undefined);
 
-  const writeSharedArrayBuffer = new SharedArrayBuffer(4);
-  const writtenBytes = new Uint8Array(writeSharedArrayBuffer);
-  writtenBytes.set([96, 97, 98, 99]);
+  const writeBuffer = new Uint8Array(4);
+  writeBuffer.set([96, 97, 98, 99]);
   await promise_rejects_dom(testCase, 'InvalidStateError',
-                            file.write(writtenBytes, 4));
+                            file.write(writeBuffer, 4));
 }, 'NativeIOFile.write fails after NativeIOFile.close settles');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   const closePromise = file.close();
 
-  const writeSharedArrayBuffer = new SharedArrayBuffer(4);
-  const writtenBytes = new Uint8Array(writeSharedArrayBuffer);
-  writtenBytes.set([96, 97, 98, 99]);
+  const writeBuffer = new Uint8Array(4);
+  writeBuffer.set([96, 97, 98, 99]);
   await promise_rejects_dom(testCase, 'InvalidStateError',
-                            file.write(writtenBytes, 4));
+                            file.write(writeBuffer, 4));
   assert_equals(await closePromise, undefined);
 }, 'NativeIOFile.write fails immediately after calling NativeIOFile.close');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   assert_equals(await file.close(), undefined);
 
@@ -72,6 +82,8 @@ promise_test(async testCase => {
 }, 'NativeIOFile.getLength fails after NativeIOFile.close settles');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   const closePromise = file.close();
 
@@ -80,6 +92,8 @@ promise_test(async testCase => {
 }, 'NativeIOFile.getLength fails immediately after calling NativeIOFile.close');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   assert_equals(await file.close(), undefined);
 
@@ -87,6 +101,8 @@ promise_test(async testCase => {
 }, 'NativeIOFile.flush fails after NativeIOFile.close settles');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   const closePromise = file.close();
 
@@ -95,6 +111,8 @@ promise_test(async testCase => {
 }, 'NativeIOFile.flush fails immediately after calling NativeIOFile.close');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   assert_equals(await file.close(), undefined);
 
@@ -102,6 +120,8 @@ promise_test(async testCase => {
 }, 'NativeIOFile.setLength fails after NativeIOFile.close settles');
 
 promise_test(async testCase => {
+  await reserveAndCleanupCapacity(testCase);
+
   const file = await createFile(testCase, 'file_name');
   const closePromise = file.close();
 

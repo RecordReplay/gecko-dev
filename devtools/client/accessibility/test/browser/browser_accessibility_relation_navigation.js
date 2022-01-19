@@ -42,13 +42,22 @@ const tests = [
         keyboardShortcut: "",
         childCount: 2,
         indexInParent: 0,
-        states: ["readonly", "focusable", "opaque", "enabled", "sensitive"],
+        states: [
+          // The focused state is an outdated state, since the toolbox should now
+          // have the focus and not the content page. See Bug 1702709.
+          "focused",
+          "readonly",
+          "focusable",
+          "opaque",
+          "enabled",
+          "sensitive",
+        ],
       },
     },
   },
   {
     desc: "Expand first tree node.",
-    setup: async ({ doc }) => toggleRow(doc, 0),
+    setup: ({ doc }) => toggleRow(doc, 0),
     expected: {
       tree: [
         {
@@ -68,9 +77,7 @@ const tests = [
   },
   {
     desc: "Select second tree node.",
-    setup: async ({ doc }) => {
-      await selectRow(doc, 1);
-    },
+    setup: ({ doc }) => selectRow(doc, 1),
     expected: {
       sidebar: {
         name: "Top level header",
@@ -100,7 +107,7 @@ const tests = [
         // keys.
         mustHaveAccessibleRule: false,
       });
-      await EventUtils.sendMouseEvent(
+      EventUtils.sendMouseEvent(
         { type: "click" },
         relations.querySelector(".arrow"),
         win
@@ -115,7 +122,7 @@ const tests = [
         // activated.
         nonNegativeTabIndexRule: false,
       });
-      await EventUtils.sendMouseEvent(
+      EventUtils.sendMouseEvent(
         { type: "click" },
         containingDocRelation.querySelector(".open-accessibility-inspector"),
         win

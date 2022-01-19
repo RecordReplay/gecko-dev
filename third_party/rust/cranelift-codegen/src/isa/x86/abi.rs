@@ -144,8 +144,13 @@ impl ArgAssigner for Args {
             return ValueConversion::VectorSplit.into();
         }
 
-        // Small integers are extended to the size of a pointer register.
-        if ty.is_int() && ty.bits() < u16::from(self.pointer_bits) {
+        // Small integers are extended to the size of a pointer register, but
+        // only in ABIs that require this. The Baldrdash (SpiderMonkey) ABI
+        // does, but our other supported ABIs on x86 do not.
+        if ty.is_int()
+            && ty.bits() < u16::from(self.pointer_bits)
+            && self.call_conv.extends_baldrdash()
+        {
             match arg.extension {
                 ArgumentExtension::None => {}
                 ArgumentExtension::Uext => return ValueConversion::Uext(self.pointer_type).into(),
@@ -498,15 +503,18 @@ fn callee_saved_regs_used(isa: &dyn TargetIsa, func: &ir::Function) -> RegisterS
 pub fn prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> CodegenResult<()> {
     match func.signature.call_conv {
         // For now, just translate fast and cold as system_v.
-        CallConv::Fast | CallConv::Cold | CallConv::SystemV => {
+        CallConv::Fast | CallConv::Cold | CallConv::SystemV | CallConv::WasmtimeSystemV => {
             system_v_prologue_epilogue(func, isa)
         }
-        CallConv::WindowsFastcall => fastcall_prologue_epilogue(func, isa),
+        CallConv::WindowsFastcall | CallConv::WasmtimeFastcall => {
+            fastcall_prologue_epilogue(func, isa)
+        }
         CallConv::BaldrdashSystemV | CallConv::BaldrdashWindows => {
             baldrdash_prologue_epilogue(func, isa)
         }
         CallConv::Probestack => unimplemented!("probestack calling convention"),
         CallConv::Baldrdash2020 => unimplemented!("Baldrdash ABI 2020"),
+        CallConv::AppleAarch64 => unreachable!(),
     }
 }
 
@@ -1078,16 +1086,17 @@ pub fn create_unwind_info(
     isa: &dyn TargetIsa,
 ) -> CodegenResult<Option<crate::isa::unwind::UnwindInfo>> {
     use crate::isa::unwind::UnwindInfo;
+    use crate::machinst::UnwindInfoKind;
 
     // Assumption: RBP is being used as the frame pointer for both calling conventions
     // In the future, we should be omitting frame pointer as an optimization, so this will change
-    Ok(match func.signature.call_conv {
-        CallConv::Fast | CallConv::Cold | CallConv::SystemV => {
+    Ok(match isa.unwind_info_kind() {
+        UnwindInfoKind::SystemV => {
             super::unwind::systemv::create_unwind_info(func, isa)?.map(|u| UnwindInfo::SystemV(u))
         }
-        CallConv::WindowsFastcall => {
+        UnwindInfoKind::Windows => {
             super::unwind::winx64::create_unwind_info(func, isa)?.map(|u| UnwindInfo::WindowsX64(u))
         }
-        _ => None,
+        UnwindInfoKind::None => None,
     })
 }

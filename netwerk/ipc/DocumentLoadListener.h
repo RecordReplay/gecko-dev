@@ -36,10 +36,12 @@
 namespace mozilla {
 namespace dom {
 class CanonicalBrowsingContext;
-}
+struct RemotenessChangeOptions;
+}  // namespace dom
 namespace net {
 using ChildEndpointPromise =
-    MozPromise<ipc::Endpoint<extensions::PStreamFilterChild>, bool, true>;
+    MozPromise<mozilla::ipc::Endpoint<extensions::PStreamFilterChild>, bool,
+               true>;
 
 // If we've been asked to attach a stream filter to our channel,
 // then we return this promise and defer until we know the final
@@ -57,8 +59,8 @@ struct StreamFilterRequest {
     }
   }
   RefPtr<ChildEndpointPromise::Private> mPromise;
-  base::ProcessId mChildProcessId;
-  ipc::Endpoint<extensions::PStreamFilterChild> mChildEndpoint;
+  base::ProcessId mChildProcessId = 0;
+  mozilla::ipc::Endpoint<extensions::PStreamFilterChild> mChildEndpoint;
 };
 }  // namespace net
 }  // namespace mozilla
@@ -102,7 +104,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
                        bool aIsDocumentLoad);
 
   struct OpenPromiseSucceededType {
-    nsTArray<ipc::Endpoint<extensions::PStreamFilterParent>>
+    nsTArray<mozilla::ipc::Endpoint<extensions::PStreamFilterParent>>
         mStreamFilterEndpoints;
     uint32_t mRedirectFlags;
     uint32_t mLoadFlags;
@@ -117,9 +119,8 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
     bool mSwitchedProcess = false;
   };
 
-  typedef MozPromise<OpenPromiseSucceededType, OpenPromiseFailedType,
-                     true /* isExclusive */>
-      OpenPromise;
+  using OpenPromise =
+      MozPromise<OpenPromiseSucceededType, OpenPromiseFailedType, true>;
 
   // Interface which may be provided when performing an <object> or <embed> load
   // with `DocumentLoadListener`, to allow upgrading the Object load to a proper
@@ -167,7 +168,7 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
       nsDOMNavigationTiming* aTiming, Maybe<dom::ClientInfo>&& aInfo,
       uint64_t aInnerWindowId, nsLoadFlags aLoadFlags,
       nsContentPolicyType aContentPolicyType, bool aUrgentStart,
-      base::ProcessId aPid, ObjectUpgradeHandler* aUpgradeHandler,
+      base::ProcessId aPid, ObjectUpgradeHandler* aObjectUpgradeHandler,
       nsresult* aRv);
 
   // Creates a DocumentLoadListener entirely in the parent process and opens it,
@@ -194,7 +195,8 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
 
   // Looks up aLoadIdent to find the associated, cleans up the registration
   static RefPtr<OpenPromise> ClaimParentLoad(DocumentLoadListener** aListener,
-                                             uint64_t aLoadIdent);
+                                             uint64_t aLoadIdent,
+                                             Maybe<uint64_t> aChannelId);
 
   // Called by the DocumentChannelParent if actor got destroyed or the parent
   // channel got deleted.
@@ -320,14 +322,13 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   // and that the new remote type will be something other than NOT_REMOTE
   bool MaybeTriggerProcessSwitch(bool* aWillSwitchToRemote);
   void TriggerProcessSwitch(dom::CanonicalBrowsingContext* aContext,
-                            const nsCString& aRemoteType,
-                            bool aReplaceBrowsingContext,
-                            uint64_t aSpecificGroupId);
+                            const dom::RemotenessChangeOptions& aOptions);
 
   // A helper for TriggerRedirectToRealChannel that abstracts over
   // the same-process and cross-process switch cases and returns
   // a single promise to wait on.
-  using ParentEndpoint = ipc::Endpoint<extensions::PStreamFilterParent>;
+  using ParentEndpoint =
+      mozilla::ipc::Endpoint<extensions::PStreamFilterParent>;
   RefPtr<PDocumentChannelParent::RedirectToRealChannelPromise>
   RedirectToRealChannel(uint32_t aRedirectFlags, uint32_t aLoadFlags,
                         const Maybe<uint64_t>& aDestinationProcess,
@@ -399,10 +400,9 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
     bool mIsThirdParty;
   };
 
-  typedef mozilla::Variant<
+  using IParentChannelFunction = mozilla::Variant<
       nsIHttpChannel::FlashPluginState, ClassifierMatchedInfoParams,
-      ClassifierMatchedTrackingInfoParams, ClassificationFlagsParams>
-      IParentChannelFunction;
+      ClassifierMatchedTrackingInfoParams, ClassificationFlagsParams>;
 
   // Store a list of all the attribute setters that have been called on this
   // channel, so that we can repeat them on the real channel that we redirect
@@ -425,15 +425,14 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
 
   struct LogMimeTypeMismatchParams {
     nsCString mMessageName;
-    bool mWarning;
+    bool mWarning = false;
     nsString mURL;
     nsString mContentType;
   };
 
-  typedef mozilla::Variant<ReportSecurityMessageParams,
-                           LogBlockedCORSRequestParams,
-                           LogMimeTypeMismatchParams>
-      SecurityWarningFunction;
+  using SecurityWarningFunction =
+      mozilla::Variant<ReportSecurityMessageParams, LogBlockedCORSRequestParams,
+                       LogMimeTypeMismatchParams>;
   nsTArray<SecurityWarningFunction> mSecurityWarningFunctions;
 
   struct OnStartRequestParams {
@@ -452,9 +451,9 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   struct OnAfterLastPartParams {
     nsresult status;
   };
-  typedef mozilla::Variant<OnStartRequestParams, OnDataAvailableParams,
-                           OnStopRequestParams, OnAfterLastPartParams>
-      StreamListenerFunction;
+  using StreamListenerFunction =
+      mozilla::Variant<OnStartRequestParams, OnDataAvailableParams,
+                       OnStopRequestParams, OnAfterLastPartParams>;
   // TODO Backtrack this.
   // The set of nsIStreamListener functions that got called on this
   // listener, so that we can replay them onto the replacement channel's
@@ -464,6 +463,8 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
   nsTArray<StreamListenerFunction> mStreamListenerFunctions;
 
   nsCOMPtr<nsIChannel> mChannel;
+
+  Maybe<uint64_t> mDocumentChannelId;
 
   // An instance of ParentChannelListener that we use as a listener
   // between mChannel (and any future redirected mChannels) and us.
@@ -507,7 +508,8 @@ class DocumentLoadListener : public nsIInterfaceRequestor,
 
   // Flags from nsDocShellLoadState::LoadFlags/Type that we want to make
   // available to the new docshell if we switch processes.
-  uint32_t mLoadStateLoadFlags = 0;
+  uint32_t mLoadStateExternalLoadFlags = 0;
+  uint32_t mLoadStateInternalLoadFlags = 0;
   uint32_t mLoadStateLoadType = 0;
 
   // Corresponding redirect channel registrar Id for the final channel that

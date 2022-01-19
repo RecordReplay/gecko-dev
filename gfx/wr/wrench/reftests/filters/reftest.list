@@ -4,11 +4,11 @@ platform(linux,mac) == draw_calls(7) color_targets(7) alpha_targets(0) filter-bl
 == invisible.yaml invisible-ref.yaml
 fuzzy-if(platform(swgl),1,10000) == opacity.yaml opacity-ref.yaml
 fuzzy-range(<=1,*10000) == opacity-combined.yaml opacity-combined-ref.yaml
-== opacity-overlap.yaml opacity-overlap-ref.yaml
+fuzzy-if(platform(swgl),1,10000) == opacity-overlap.yaml opacity-overlap-ref.yaml
 == filter-brightness.yaml filter-brightness-ref.yaml
 == filter-brightness-2.yaml filter-brightness-2-ref.yaml
 == filter-brightness-3.yaml filter-brightness-3-ref.yaml
-== filter-brightness-4.yaml filter-brightness-4-ref.yaml
+fuzzy-if(platform(swgl),1,10000) == filter-brightness-4.yaml filter-brightness-4-ref.yaml
 == filter-component-transfer.yaml filter-component-transfer-ref.yaml
 skip_on(android,device) == filter-color-matrix.yaml filter-color-matrix-ref.yaml  # fails on Pixel2
 == filter-contrast-gray-alpha-1.yaml filter-contrast-gray-alpha-1-ref.yaml
@@ -36,7 +36,7 @@ platform(linux,mac) == filter-drop-shadow-on-viewport-edge.yaml filter-drop-shad
 platform(linux,mac) == blend-clipped.yaml blend-clipped.png
 platform(linux,mac) == filter-drop-shadow-clip.yaml filter-drop-shadow-clip.png
 fuzzy(2,10) platform(linux,mac) == filter-drop-shadow-clip-2.yaml filter-drop-shadow-clip-2.png
-fuzzy(1,23) platform(linux) == filter-drop-shadow-clip-3.yaml filter-drop-shadow-clip-3.png
+fuzzy(1,26) platform(linux) == filter-drop-shadow-clip-3.yaml filter-drop-shadow-clip-3.png
 fuzzy(5,100000) == filter-drop-shadow-scaled.yaml filter-drop-shadow-scaled-ref.yaml
 == filter-segments.yaml filter-segments-ref.yaml
 == iframe-dropshadow.yaml iframe-dropshadow-ref.yaml
@@ -66,3 +66,5 @@ platform(linux,mac) == backdrop-filter-perspective.yaml backdrop-filter-perspect
 platform(linux,max) == svg-filter-offset.yaml svg-filter-offset-ref.yaml
 skip_on(android,device) == fuzzy(1,100) svg-filter-composite.yaml svg-filter-composite-ref.yaml
 skip_on(android,device) == filter-mix-blend-scaling.yaml filter-mix-blend-scaling-ref.yaml
+platform(linux) == blend-clipped-raster-root.yaml blend-clipped-raster-root.png
+== drop-shadow-inverse-scale.yaml blank.yaml

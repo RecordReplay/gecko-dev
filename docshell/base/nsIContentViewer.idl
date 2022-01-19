@@ -203,6 +203,11 @@ interface nsIContentViewer : nsISupports
                              in nsIPrintSettings aPrintSettings);
 
   /**
+   * Sets the print settings for print / print-previewing a subdocument.
+   */
+  [can_run_script] void setPrintSettingsForSubdocument(in nsIPrintSettings aPrintSettings);
+
+  /**
    * Get the history entry that this viewer will save itself into when
    * destroyed.  Can return null
    */
@@ -258,27 +263,10 @@ interface nsIContentViewer : nsISupports
   readonly attribute float deviceFullZoomForTest;
 
   /**
-   * The value used to override devicePixelRatio and media queries dppx.
-   * Default is 0.0, that means no overriding is done (only a positive value
-   * is applied).
-   */
-  attribute float overrideDPPX;
-
-  /**
    * Disable entire author style level (including HTML presentation hints),
    * for this viewer but not any child viewers.
    */
   attribute boolean authorStyleDisabled;
-
-  /**
-   * XXX comm-central only: bug 829543.
-   */
-  attribute ACString hintCharacterSet;
-
-  /**
-   * XXX comm-central only: bug 829543.
-   */
-  attribute int32_t hintCharacterSetSource;
 
   /**
    * Requests the size of the content to the container.
@@ -295,45 +283,9 @@ interface nsIContentViewer : nsISupports
   void getContentSizeConstrained(in long maxWidth, in long maxHeight,
                                  out long width, out long height);
 
-  /**
-   * Instruct the refresh driver to discontinue painting until further
-   * notice.
-   */
-  void pausePainting();
-
-  /**
-   * Instruct the refresh driver to resume painting after a previous call to
-   * pausePainting().
-   */
-  void resumePainting();
-
-  /*
-   * Render the document as if being viewed on a device with the specified
-   * media type. This will cause a reflow.
-   *
-   * @param mediaType The media type to be emulated
-   */
-  void emulateMedium(in AString aMediaType);
-
-  /*
-   * Restore the viewer's natural media type
-   */
-  void stopEmulatingMedium();
-
-  cenum PrefersColorScheme : 8 {
-    PREFERS_COLOR_SCHEME_LIGHT,
-    PREFERS_COLOR_SCHEME_DARK,
-    PREFERS_COLOR_SCHEME_NONE, /* This clears the override. */
-  };
-
-  /*
-   * Emulate or stop emulating the prefers color scheme on this page and
-   * subdocuments.
-   */
-  void emulatePrefersColorScheme(in nsIContentViewer_PrefersColorScheme aPrefersColorScheme);
-
-  [noscript, notxpcom] Encoding getHintCharset();
-  [noscript, notxpcom] void setHintCharset(in Encoding aEncoding);
+  [noscript, notxpcom] Encoding getReloadEncodingAndSource(out int32_t aSource);
+  [noscript, notxpcom] void setReloadEncodingAndSource(in Encoding aEncoding, in int32_t aSource);
+  [noscript, notxpcom] void forgetReloadEncoding();
 };
 
 %{C++

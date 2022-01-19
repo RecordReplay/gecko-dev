@@ -283,6 +283,14 @@ NativeLayerRootCA::Representation::~Representation() {
 
 void NativeLayerRootCA::Representation::Commit(WhichRepresentation aRepresentation,
                                                const nsTArray<RefPtr<NativeLayerCA>>& aSublayers) {
+  if (!mMutated &&
+      std::none_of(aSublayers.begin(), aSublayers.end(), [=](const RefPtr<NativeLayerCA>& layer) {
+        return layer->HasUpdate(aRepresentation);
+      })) {
+    // No updates, skip creating the CATransaction altogether.
+    return;
+  }
+
   AutoCATransaction transaction;
 
   // Call ApplyChanges on our sublayers first, and then update the root layer's
@@ -603,7 +611,7 @@ NativeLayerCA::Representation::~Representation() {
   [mWrappingCALayer release];
 }
 
-void NativeLayerCA::InvalidateRegionThroughoutSwapchain(const MutexAutoLock&,
+void NativeLayerCA::InvalidateRegionThroughoutSwapchain(const MutexAutoLock& aProofOfLock,
                                                         const IntRegion& aRegion) {
   IntRegion r = aRegion;
   if (mInProgressSurface) {
@@ -617,7 +625,7 @@ void NativeLayerCA::InvalidateRegionThroughoutSwapchain(const MutexAutoLock&,
   }
 }
 
-bool NativeLayerCA::NextSurface(const MutexAutoLock& aLock) {
+bool NativeLayerCA::NextSurface(const MutexAutoLock& aProofOfLock) {
   if (mSize.IsEmpty()) {
     gfxCriticalError() << "NextSurface returning false because of invalid mSize (" << mSize.width
                        << ", " << mSize.height << ").";
@@ -629,22 +637,22 @@ bool NativeLayerCA::NextSurface(const MutexAutoLock& aLock) {
       "ERROR: Do not call NextSurface twice in sequence. Call NotifySurfaceReady before the "
       "next call to NextSurface.");
 
-  Maybe<SurfaceWithInvalidRegion> surf = GetUnusedSurfaceAndCleanUp(aLock);
+  Maybe<SurfaceWithInvalidRegion> surf = GetUnusedSurfaceAndCleanUp(aProofOfLock);
   if (!surf) {
     CFTypeRefPtr<IOSurfaceRef> newSurf = mSurfacePoolHandle->ObtainSurfaceFromPool(mSize);
     MOZ_RELEASE_ASSERT(newSurf, "NextSurface IOSurfaceCreate failed to create the surface.");
     surf = Some(SurfaceWithInvalidRegion{newSurf, IntRect({}, mSize)});
   }
 
-  MOZ_RELEASE_ASSERT(surf);
   mInProgressSurface = std::move(surf);
   IOSurfaceIncrementUseCount(mInProgressSurface->mSurface.get());
   return true;
 }
 
 template <typename F>
-void NativeLayerCA::HandlePartialUpdate(const MutexAutoLock& aLock, const IntRect& aDisplayRect,
-                                        const IntRegion& aUpdateRegion, F&& aCopyFn) {
+void NativeLayerCA::HandlePartialUpdate(const MutexAutoLock& aProofOfLock,
+                                        const IntRect& aDisplayRect, const IntRegion& aUpdateRegion,
+                                        F&& aCopyFn) {
   MOZ_RELEASE_ASSERT(IntRect({}, mSize).Contains(aUpdateRegion.GetBounds()),
                      "The update region should be within the surface bounds.");
   MOZ_RELEASE_ASSERT(IntRect({}, mSize).Contains(aDisplayRect),
@@ -655,7 +663,7 @@ void NativeLayerCA::HandlePartialUpdate(const MutexAutoLock& aLock, const IntRec
   mInProgressUpdateRegion = Some(aUpdateRegion);
   mInProgressDisplayRect = Some(aDisplayRect);
 
-  InvalidateRegionThroughoutSwapchain(aLock, aUpdateRegion);
+  InvalidateRegionThroughoutSwapchain(aProofOfLock, aUpdateRegion);
 
   if (mFrontSurface) {
     // Copy not-overwritten valid content from mFrontSurface so that valid content never gets lost.
@@ -805,6 +813,11 @@ void NativeLayerCA::ApplyChanges(WhichRepresentation aRepresentation) {
                     mSurfaceIsFlipped, mSamplingFilter, surface);
 }
 
+bool NativeLayerCA::HasUpdate(WhichRepresentation aRepresentation) {
+  MutexAutoLock lock(mMutex);
+  return GetRepresentation(aRepresentation).HasUpdate();
+}
+
 CALayer* NativeLayerCA::UnderlyingCALayer(WhichRepresentation aRepresentation) {
   MutexAutoLock lock(mMutex);
   return GetRepresentation(aRepresentation).UnderlyingCALayer();
@@ -821,12 +834,14 @@ void NativeLayerCA::Representation::ApplyChanges(
     mWrappingCALayer.bounds = NSZeroRect;
     mWrappingCALayer.anchorPoint = NSZeroPoint;
     mWrappingCALayer.contentsGravity = kCAGravityTopLeft;
+    mWrappingCALayer.edgeAntialiasingMask = 0;
     mContentCALayer = [[CALayer layer] retain];
     mContentCALayer.position = NSZeroPoint;
     mContentCALayer.anchorPoint = NSZeroPoint;
     mContentCALayer.contentsGravity = kCAGravityTopLeft;
     mContentCALayer.contentsScale = 1;
     mContentCALayer.bounds = CGRectMake(0, 0, aSize.width, aSize.height);
+    mContentCALayer.edgeAntialiasingMask = 0;
     mContentCALayer.opaque = aIsOpaque;
     if ([mContentCALayer respondsToSelector:@selector(setContentsOpaque:)]) {
       // The opaque property seems to not be enough when using IOSurface contents.
@@ -959,9 +974,19 @@ void NativeLayerCA::Representation::ApplyChanges(
   mMutatedSamplingFilter = false;
 }
 
+bool NativeLayerCA::Representation::HasUpdate() {
+  if (!mWrappingCALayer) {
+    return true;
+  }
+
+  return mMutatedPosition || mMutatedTransform || mMutatedDisplayRect || mMutatedClipRect ||
+         mMutatedBackingScale || mMutatedSize || mMutatedSurfaceIsFlipped || mMutatedFrontSurface ||
+         mMutatedSamplingFilter;
+}
+
 // Called when mMutex is already being held by the current thread.
 Maybe<NativeLayerCA::SurfaceWithInvalidRegion> NativeLayerCA::GetUnusedSurfaceAndCleanUp(
-    const MutexAutoLock&) {
+    const MutexAutoLock& aProofOfLock) {
   std::vector<SurfaceWithInvalidRegionAndCheckCount> usedSurfaces;
   Maybe<SurfaceWithInvalidRegion> unusedSurface;
 

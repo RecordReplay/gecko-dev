@@ -31,7 +31,6 @@ pub use decoder::QPackDecoder;
 pub use encoder::QPackEncoder;
 pub use stats::Stats;
 
-pub type Header = (String, String);
 type Res<T> = Result<T, Error>;
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone, Copy)]
@@ -47,7 +46,7 @@ pub enum Error {
     EncoderStream,
     DecoderStream,
     ClosedCriticalStream,
-    InternalError,
+    InternalError(u16),
 
     // These are internal errors, they will be transformed into one of the above.
     NeedMoreData, // Return when an input stream does not have more data that a decoder needs.(It does not mean that a stream is closed.)
@@ -83,13 +82,13 @@ impl Error {
     /// # Errors
     ///   Any error is mapped to the indicated type.
     fn map_error<R>(r: Result<R, Self>, err: Self) -> Result<R, Self> {
-        Ok(r.map_err(|e| {
+        r.map_err(|e| {
             if matches!(e, Self::ClosedCriticalStream) {
                 e
             } else {
                 err
             }
-        })?)
+        })
     }
 }
 

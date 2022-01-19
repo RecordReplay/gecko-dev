@@ -19,6 +19,7 @@
 #include "mozilla/dom/PBrowser.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/dom/CustomEvent.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/StaticPrefs_print.h"
@@ -252,6 +253,14 @@ static void BuildNestedPrintObjects(const UniquePtr<nsPrintObject>& aParentPO,
   for (auto& bc : aParentPO->mDocShell->GetBrowsingContext()->Children()) {
     nsCOMPtr<nsIDocShell> docShell = bc->GetDocShell();
     if (!docShell) {
+      if (auto* cc = dom::ContentChild::GetSingleton()) {
+        nsCOMPtr<nsIPrintSettingsService> printSettingsService =
+            do_GetService(sPrintSettingsServiceContractID);
+        embedding::PrintData printData;
+        printSettingsService->SerializeToPrintData(aPrintData->mPrintSettings,
+                                                   &printData);
+        Unused << cc->SendUpdateRemotePrintSettings(bc, printData);
+      }
       continue;
     }
 
@@ -542,6 +551,12 @@ nsresult nsPrintJob::DoCommonPrint(bool aIsPrintPreview,
   nsCOMPtr<nsIDocShell> docShell(do_QueryReferent(mDocShell, &rv));
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // if they don't pass in a PrintSettings, then get the Global PS
+  printData->mPrintSettings = aPrintSettings;
+  if (!printData->mPrintSettings) {
+    MOZ_TRY(GetDefaultPrintSettings(getter_AddRefs(printData->mPrintSettings)));
+  }
+
   {
     nsAutoScriptBlocker scriptBlocker;
     printData->mPrintObject = MakeUnique<nsPrintObject>();
@@ -570,12 +585,6 @@ nsresult nsPrintJob::DoCommonPrint(bool aIsPrintPreview,
   if (!printData->mPrintObject->mDocument ||
       !printData->mPrintObject->mDocument->GetRootElement())
     return NS_ERROR_GFX_PRINTER_STARTDOC;
-
-  // if they don't pass in a PrintSettings, then get the Global PS
-  printData->mPrintSettings = aPrintSettings;
-  if (!printData->mPrintSettings) {
-    MOZ_TRY(GetDefaultPrintSettings(getter_AddRefs(printData->mPrintSettings)));
-  }
 
   MOZ_TRY(EnsureSettingsHasPrinterNameSet(printData->mPrintSettings));
 
@@ -613,7 +622,7 @@ nsresult nsPrintJob::DoCommonPrint(bool aIsPrintPreview,
       !mDisallowSelectionPrint && printData->mSelectionRoot);
 
   bool printingViaParent =
-      XRE_IsContentProcess() && Preferences::GetBool("print.print_via_parent");
+      XRE_IsContentProcess() && StaticPrefs::print_print_via_parent();
   nsCOMPtr<nsIDeviceContextSpec> devspec;
   if (printingViaParent) {
     devspec = new nsDeviceContextSpecProxy();
@@ -775,8 +784,7 @@ nsresult nsPrintJob::DoCommonPrint(bool aIsPrintPreview,
         [self](nsresult aResult) { self->PageDone(aResult); });
   }
 
-  if (!mozilla::StaticPrefs::print_tab_modal_enabled() &&
-      mIsCreatingPrintPreview) {
+  if (!StaticPrefs::print_tab_modal_enabled() && mIsCreatingPrintPreview) {
     // In legacy print-preview mode, override any UI that wants to PrintPreview
     // any selection or page range.  The legacy print-preview intends to view
     // every page in PrintPreview each time.
@@ -840,7 +848,9 @@ nsresult nsPrintJob::Print(Document* aSourceDoc,
       nsCOMPtr<nsIPrintSettingsService> printSettingsService =
           do_GetService("@mozilla.org/gfx/printsettings-service;1");
       printSettingsService->SavePrintSettingsToPrefs(
-          aPrintSettings, true, nsIPrintSettings::kInitSaveAll);
+          aPrintSettings, true,
+          nsIPrintSettings::kInitSaveAll &
+              ~nsIPrintSettings::kInitSaveToFileName);
       printSettingsService->SavePrintSettingsToPrefs(
           aPrintSettings, false, nsIPrintSettings::kInitSavePrinterName);
     }
@@ -988,7 +998,7 @@ void nsPrintJob::GetDisplayTitleAndURL(Document& aDoc,
       } else {
         nsCOMPtr<nsIStringBundle> brandBundle;
         nsCOMPtr<nsIStringBundleService> svc =
-            mozilla::services::GetStringBundleService();
+            mozilla::components::StringBundle::Service();
         if (svc) {
           svc->CreateBundle("chrome://branding/locale/brand.properties",
                             getter_AddRefs(brandBundle));
@@ -1991,7 +2001,7 @@ struct MOZ_STACK_CLASS SelectionRangeState {
 
   // A map from subtree root (document or shadow root) to the start position of
   // the non-selected content (so far).
-  nsDataHashtable<nsPtrHashKey<nsINode>, Position> mPositions;
+  nsTHashMap<nsPtrHashKey<nsINode>, Position> mPositions;
 
   // The selection we're adding the ranges to.
   const RefPtr<Selection> mSelection;
@@ -2029,9 +2039,10 @@ void SelectionRangeState::SelectNodesExceptInSubtree(const Position& aStart,
   static constexpr auto kEllipsis = u"\x2026"_ns;
 
   nsINode* root = aStart.mNode->SubtreeRoot();
-  auto& start = mPositions.LookupForAdd(root).OrInsert([&] {
-    return Position{root, 0};
-  });
+  auto& start =
+      mPositions.WithEntryHandle(root, [&](auto&& entry) -> Position& {
+        return entry.OrInsertWith([&] { return Position{root, 0}; });
+      });
 
   bool ellipsizedStart = false;
   if (auto* text = Text::FromNode(aStart.mNode)) {
@@ -2120,6 +2131,9 @@ nsresult nsPrintJob::DoPrint(const UniquePtr<nsPrintObject>& aPO) {
   // because it might be cleared if other modules called from here may fire
   // events, notifying observers and/or listeners.
   RefPtr<nsPrintData> printData = mPrt;
+  if (NS_WARN_IF(!printData)) {
+    return NS_ERROR_FAILURE;
+  }
 
   if (printData->mPrintProgressParams) {
     SetURLAndTitleOnProgressParams(aPO, printData->mPrintProgressParams);
@@ -2738,9 +2752,9 @@ void nsPrintJob::DisconnectPagePrintTimer() {
 //---------------------------------------------------------------
 //---------------------------------------------------------------
 #if defined(XP_WIN) && defined(EXTENDED_DEBUG_PRINTING)
-#  include "windows.h"
-#  include "process.h"
-#  include "direct.h"
+#  include <windows.h>
+#  include <process.h>
+#  include <direct.h>
 
 #  define MY_FINDFIRST(a, b) FindFirstFile(a, b)
 #  define MY_FINDNEXT(a, b) FindNextFile(a, b)

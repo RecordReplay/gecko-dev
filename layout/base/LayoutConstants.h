@@ -45,14 +45,6 @@ enum class ComputeSizeFlag : uint8_t {
   ShrinkWrap,
 
   /**
-   * Set if we'd like to compute our 'auto' isize, regardless of our actual
-   * corresponding computed value. (e.g. to get an intrinsic isize for flex
-   * items when resolving automatic minimum size in the main axis during flexbox
-   * layout.)
-   */
-  UseAutoISize,
-
-  /**
    * Set if we'd like to compute our 'auto' bsize, regardless of our actual
    * corresponding computed value. (e.g. to get an intrinsic bsize for flex
    * items when resolving automatic minimum size in the main axis during flexbox
@@ -76,14 +68,6 @@ enum class ComputeSizeFlag : uint8_t {
    * https://drafts.csswg.org/css-align-3/#valdef-justify-self-stretch
    */
   IApplyAutoMinSize,  // only has an effect when eShrinkWrap is false
-
-  /**
-   * Indicates that we shouldn't take aspect ratio into account.
-   * This flag is only used to ignore aspect-ratio when computing intrinsic
-   * sizes in ComputeISizeValue(). (For now, only internal table boxes use this
-   * flag.)
-   */
-  SkipAspectRatio,
 };
 using ComputeSizeFlags = mozilla::EnumSet<ComputeSizeFlag>;
 

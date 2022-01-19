@@ -21,6 +21,17 @@ void GMPContentChild::CheckThread() {
   MOZ_ASSERT(mGMPChild->mGMPMessageLoop == MessageLoop::current());
 }
 
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+mozilla::ipc::IPCResult GMPContentChild::RecvInitSandboxTesting(
+    Endpoint<PSandboxTestingChild>&& aEndpoint) {
+  if (!SandboxTestingChild::Initialize(std::move(aEndpoint))) {
+    return IPC_FAIL(
+        this, "InitSandboxTesting failed to initialise the child process.");
+  }
+  return IPC_OK();
+}
+#endif
+
 void GMPContentChild::ActorDestroy(ActorDestroyReason aWhy) {
   mGMPChild->GMPContentChildActorDestroy(this);
 }
@@ -98,19 +109,19 @@ void GMPContentChild::CloseActive() {
   // Invalidate and remove any remaining API objects.
   const ManagedContainer<PGMPVideoDecoderChild>& videoDecoders =
       ManagedPGMPVideoDecoderChild();
-  for (auto iter = videoDecoders.ConstIter(); !iter.Done(); iter.Next()) {
-    iter.Get()->GetKey()->SendShutdown();
+  for (const auto& key : videoDecoders) {
+    key->SendShutdown();
   }
 
   const ManagedContainer<PGMPVideoEncoderChild>& videoEncoders =
       ManagedPGMPVideoEncoderChild();
-  for (auto iter = videoEncoders.ConstIter(); !iter.Done(); iter.Next()) {
-    iter.Get()->GetKey()->SendShutdown();
+  for (const auto& key : videoEncoders) {
+    key->SendShutdown();
   }
 
   const ManagedContainer<PChromiumCDMChild>& cdms = ManagedPChromiumCDMChild();
-  for (auto iter = cdms.ConstIter(); !iter.Done(); iter.Next()) {
-    iter.Get()->GetKey()->SendShutdown();
+  for (const auto& key : cdms) {
+    key->SendShutdown();
   }
 }
 

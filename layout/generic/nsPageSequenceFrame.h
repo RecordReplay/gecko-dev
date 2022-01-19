@@ -149,12 +149,7 @@ class nsPageSequenceFrame final : public nsContainerFrame {
   // user's settings
   bool HonorPrintBackgroundSettings() const override { return false; }
 
-  bool HasTransformGetter() const override { return true; }
-
-  /**
-   * Return our first sheet frame.
-   */
-  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
+  ComputeTransformFunction GetTransformGetter() const override;
 
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override;

@@ -10,8 +10,8 @@
 
 var EXPORTED_SYMBOLS = ["PromiseTestUtils"];
 
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
-ChromeUtils.import("resource://testing-common/Assert.jsm", this);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { Assert } = ChromeUtils.import("resource://testing-common/Assert.jsm");
 
 // Keep "JSMPromise" separate so "Promise" still refers to DOM Promises.
 let JSMPromise = ChromeUtils.import("resource://gre/modules/Promise.jsm", {})
@@ -128,7 +128,10 @@ var PromiseTestUtils = {
 
     PromiseDebugging.addUncaughtRejectionObserver(observer);
     Promise.reject(this._ensureDOMPromiseRejectionsProcessedReason);
-    Services.tm.spinEventLoopUntil(() => observed);
+    Services.tm.spinEventLoopUntil(
+      "Test(PromiseTestUtils.jsm:ensureDOMPromiseRejectionsProcessed)",
+      () => observed
+    );
     PromiseDebugging.removeUncaughtRejectionObserver(observer);
   },
   _ensureDOMPromiseRejectionsProcessedReason: {},

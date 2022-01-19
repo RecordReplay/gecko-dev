@@ -18,6 +18,7 @@
 #include <algorithm>
 #include "mozilla/Telemetry.h"
 #include "CubebUtils.h"
+#include "nsNativeCharsetUtils.h"
 #include "nsPrintfCString.h"
 #include "AudioConverter.h"
 #include "UnderrunHandler.h"
@@ -141,13 +142,7 @@ AudioStream::AudioStream(DataSource& aSource)
       mDataSource(aSource),
       mPrefillQuirk(false),
       mAudioThreadId(0),
-      mSandboxed(CubebUtils::SandboxEnabled()) {
-#if defined(XP_WIN)
-  if (XRE_IsContentProcess()) {
-    audio::AudioNotificationReceiver::Register(this);
-  }
-#endif
-}
+      mSandboxed(CubebUtils::SandboxEnabled()) {}
 
 AudioStream::~AudioStream() {
   LOG("deleted, state %d", mState);
@@ -156,11 +151,6 @@ AudioStream::~AudioStream() {
   if (mTimeStretcher) {
     soundtouch::destroySoundTouchObj(mTimeStretcher);
   }
-#if defined(XP_WIN)
-  if (XRE_IsContentProcess()) {
-    audio::AudioNotificationReceiver::Unregister(this);
-  }
-#endif
 }
 
 size_t AudioStream::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
@@ -362,6 +352,22 @@ void AudioStream::SetVolume(double aVolume) {
   }
 }
 
+void AudioStream::SetStreamName(const nsAString& aStreamName) {
+  TRACE();
+
+  nsAutoCString aRawStreamName;
+  nsresult rv = NS_CopyUnicodeToNative(aStreamName, aRawStreamName);
+
+  if (NS_FAILED(rv) || aStreamName.IsEmpty()) {
+    return;
+  }
+
+  if (cubeb_stream_set_name(mCubebStream.get(), aRawStreamName.get()) !=
+      CUBEB_OK) {
+    LOGE("Could not set cubeb stream name.");
+  }
+}
+
 Result<already_AddRefed<MediaSink::EndedPromise>, nsresult>
 AudioStream::Start() {
   TRACE();
@@ -447,22 +453,6 @@ void AudioStream::Shutdown() {
   mState = SHUTDOWN;
   mEndedPromise.ResolveIfExists(true, __func__);
 }
-
-#if defined(XP_WIN)
-void AudioStream::ResetDefaultDevice() {
-  TRACE();
-  MonitorAutoLock mon(mMonitor);
-  if (mState != STARTED && mState != STOPPED) {
-    return;
-  }
-
-  MOZ_ASSERT(mCubebStream);
-  auto r = InvokeCubeb(cubeb_stream_reset_default_device);
-  if (!(r == CUBEB_OK || r == CUBEB_ERROR_NOT_SUPPORTED)) {
-    mState = ERRORED;
-  }
-}
-#endif
 
 int64_t AudioStream::GetPosition() {
   TRACE();

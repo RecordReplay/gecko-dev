@@ -22,6 +22,7 @@ bugzilla-components:
     description: Generate metadata about source files and Bugzilla
     treeherder:
         symbol: Bugzilla
+        tier: 2
     index:
         product: source
         job-name: source-bugzilla-info
@@ -43,7 +44,7 @@ test-info-fission:
         product: source
         job-name: test-info-fission
     worker:
-        docker-image: {in-tree: debian8-amd64-build}
+        docker-image: {in-tree: debian10-amd64-build}
     run-on-projects: ['mozilla-central']
     fetches:
         toolchain:
@@ -53,6 +54,7 @@ test-info-fission:
             - linux64-cbindgen
             - linux64-nasm
             - linux64-node
+            - linux64-sysroot
     run:
         using: run-task
         cwd: '{checkout}'
@@ -69,7 +71,7 @@ test-info-xorigin:
         product: source
         job-name: test-info-xorigin
     worker:
-        docker-image: {in-tree: debian8-amd64-build}
+        docker-image: {in-tree: debian10-amd64-build}
     run-on-projects: ['mozilla-central']
     fetches:
         toolchain:
@@ -79,6 +81,7 @@ test-info-xorigin:
             - linux64-cbindgen
             - linux64-nasm
             - linux64-node
+            - linux64-sysroot
     run:
         using: run-task
         cwd: '{checkout}'
@@ -95,7 +98,7 @@ test-info-disabled-by-os:
         product: source
         job-name: test-info-disabled-by-os
     worker:
-        docker-image: {in-tree: debian8-amd64-build}
+        docker-image: {in-tree: debian10-amd64-build}
     run-on-projects: ['mozilla-central']
     fetches:
         toolchain:
@@ -105,6 +108,7 @@ test-info-disabled-by-os:
             - linux64-cbindgen
             - linux64-nasm
             - linux64-node
+            - linux64-sysroot
     run:
         using: run-task
         cwd: '{checkout}'
@@ -124,7 +128,7 @@ test-info-all:
         product: source
         job-name: test-info-all
     worker:
-        docker-image: {in-tree: debian8-amd64-build}
+        docker-image: {in-tree: debian10-amd64-build}
         max-run-time: 5400
     run-on-projects: ['mozilla-central']
     fetches:
@@ -135,10 +139,11 @@ test-info-all:
             - linux64-cbindgen
             - linux64-nasm
             - linux64-node
+            - linux64-sysroot
     run:
         using: run-task
         cwd: '{checkout}'
         command: >-
             source taskcluster/scripts/misc/source-test-common.sh &&
-            ./mach test-info report --show-tests --show-summary --show-activedata --verbose --output-file /builds/worker/artifacts/test-info-all-tests.json &&
+            ./mach test-info report --show-tests --show-summary --verbose --output-file /builds/worker/artifacts/test-info-all-tests.json &&
             ./mach test-info report --show-annotations --output-file /builds/worker/artifacts/test-info-manifest-conditions.json

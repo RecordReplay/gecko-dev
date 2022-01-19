@@ -202,7 +202,8 @@ class nsTextFrame : public nsIFrame {
         mNextContinuation(nullptr),
         mContentOffset(0),
         mContentLengthHint(0),
-        mAscent(0) {}
+        mAscent(0),
+        mIsSelected(SelectionState::Unknown) {}
 
   NS_DECL_FRAMEARENA_HELPERS(nsTextFrame)
 
@@ -301,8 +302,7 @@ class nsTextFrame : public nsIFrame {
             ListFlags aFlags = ListFlags()) const final;
   nsresult GetFrameName(nsAString& aResult) const final;
   void ToCString(nsCString& aBuf, int32_t* aTotalContentLength) const;
-  void ListTextRuns(FILE* out,
-                    nsTHashtable<nsVoidPtrHashKey>& aSeen) const final;
+  void ListTextRuns(FILE* out, nsTHashSet<const void*>& aSeen) const final;
 #endif
 
   // Returns this text frame's content's text fragment.
@@ -348,7 +348,7 @@ class nsTextFrame : public nsIFrame {
   void SetLength(int32_t aLength, nsLineLayout* aLineLayout,
                  uint32_t aSetLengthFlags = 0);
 
-  nsresult GetOffsets(int32_t& start, int32_t& end) const final;
+  std::pair<int32_t, int32_t> GetOffsets() const final;
 
   void AdjustOffsetsForBidi(int32_t start, int32_t end) final;
 
@@ -398,13 +398,13 @@ class nsTextFrame : public nsIFrame {
                          InlineMinISizeData* aData) override;
   void AddInlinePrefISize(gfxContext* aRenderingContext,
                           InlinePrefISizeData* aData) override;
-  SizeComputationResult ComputeSize(gfxContext* aRenderingContext,
-                                    mozilla::WritingMode aWM,
-                                    const mozilla::LogicalSize& aCBSize,
-                                    nscoord aAvailableISize,
-                                    const mozilla::LogicalSize& aMargin,
-                                    const mozilla::LogicalSize& aBorderPadding,
-                                    mozilla::ComputeSizeFlags aFlags) final;
+  SizeComputationResult ComputeSize(
+      gfxContext* aRenderingContext, mozilla::WritingMode aWM,
+      const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
+      const mozilla::LogicalSize& aMargin,
+      const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
+      mozilla::ComputeSizeFlags aFlags) final;
   nsRect ComputeTightBounds(DrawTarget* aDrawTarget) const final;
   nsresult GetPrefWidthTightBounds(gfxContext* aContext, nscoord* aX,
                                    nscoord* aXMost) final;
@@ -802,11 +802,21 @@ class nsTextFrame : public nsIFrame {
   int32_t mContentLengthHint;
   nscoord mAscent;
 
+  // Cached selection state.
+  enum class SelectionState : uint8_t {
+    Unknown,
+    Selected,
+    NotSelected,
+  };
+  mutable SelectionState mIsSelected;
+
   /**
    * Return true if the frame is part of a Selection.
    * Helper method to implement the public IsSelected() API.
    */
   bool IsFrameSelected() const final;
+
+  void InvalidateSelectionState() { mIsSelected = SelectionState::Unknown; }
 
   mozilla::UniquePtr<SelectionDetails> GetSelectionDetails();
 

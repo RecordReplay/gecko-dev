@@ -557,16 +557,7 @@ interface nsINavHistoryResult : nsISupports
    * are done with a result, since that will avoid unwanted performance hits.
    */
   readonly attribute nsINavHistoryContainerResultNode root;
-};
 
-
-/**
- * DANGER! If you are in the middle of a batch transaction, there may be a
- * database transaction active. You can still access the DB, but be careful.
- */
-[scriptable, uuid(0f0f45b0-13a1-44ae-a0ab-c6046ec6d4da)]
-interface nsINavHistoryObserver : nsISupports
-{
   /**
    * Notifies you that a bunch of things are about to change, don't do any
    * heavy-duty processing until onEndUpdateBatch is called.
@@ -578,62 +569,6 @@ interface nsINavHistoryObserver : nsISupports
    * ahead and update UI, etc.
    */
   void onEndUpdateBatch();
-
-  /**
-   * Removed by the user.
-   */
-  const unsigned short REASON_DELETED = 0;
-  /**
-   * Removed by automatic expiration.
-   */
-  const unsigned short REASON_EXPIRED = 1;
-
-  /**
-   * This page and all of its visits are being deleted. Note: the page may not
-   * necessarily have actually existed for this function to be called.
-   *
-   * Delete notifications are only 99.99% accurate. Batch delete operations
-   * must be done in two steps, so first come notifications, then a bulk
-   * delete. If there is some error in the middle (for example, out of memory)
-   * then you'll get a notification and it won't get deleted. There's no easy
-   * way around this.
-   *
-   * @param aURI
-   *        The URI that was deleted.
-   * @param aGUID
-   *        The unique ID associated with the page.
-   * @param aReason
-   *        Indicates the reason for the removal.  see REASON_* constants.
-   */
-  void onDeleteURI(in nsIURI aURI,
-                   in ACString aGUID,
-                   in unsigned short aReason);
-
-  /**
-   * Called when some visits of an history entry are expired.
-   *
-   * @param aURI
-   *        The page whose visits have been expired.
-   * @param aPartialRemoval
-   *        Set to true if only some of the visits for the page have been removed.
-   * @param aGUID
-   *        The unique ID associated with the page.
-   *
-   * @note: when all visits for a page are expired and also the full page entry
-   *        is expired, you will only get an onDeleteURI notification.  If a
-   *        page entry is removed, then you can be sure that we don't have
-   *        anymore visits for it.
-   * @param aReason
-   *        Indicates the reason for the removal.  see REASON_* constants.
-   * @param aTransitionType
-   *        If it's a valid TRANSITION_* value, all visits of the specified type
-   *        have been removed.
-   */
-  void onDeleteVisits(in nsIURI aURI,
-                      in boolean aPartialRemoval,
-                      in ACString aGUID,
-                      in unsigned short aReason,
-                      in unsigned long aTransitionType);
 };
 
 
@@ -1158,25 +1093,6 @@ interface nsINavHistoryService : nsISupports
    */
   AUTF8String queryToQueryString(in nsINavHistoryQuery aQuery,
                                  in nsINavHistoryQueryOptions options);
-
-  /**
-   * Adds a history observer. If ownsWeak is false, the history service will
-   * keep an owning reference to the observer.  If ownsWeak is true, then
-   * aObserver must implement nsISupportsWeakReference, and the history service
-   * will keep a weak reference to the observer.
-   */
-  void addObserver(in nsINavHistoryObserver observer,
-                   [optional] in boolean ownsWeak);
-
-  /**
-   * Removes a history observer.
-   */
-  void removeObserver(in nsINavHistoryObserver observer);
-
-  /**
-   * Gets an array of registered nsINavHistoryObserver objects.
-   */
-  Array<nsINavHistoryObserver> getObservers();
 
   /**
    * True if history is disabled. currently,

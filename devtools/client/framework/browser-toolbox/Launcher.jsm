@@ -4,6 +4,8 @@
 
 "use strict";
 
+// Keep this synchronized with the value of the same name in
+// toolkit/xre/nsAppRunner.cpp.
 const BROWSER_TOOLBOX_WINDOW_URL =
   "chrome://devtools/content/framework/browser-toolbox/window.html";
 const CHROME_DEBUGGER_PROFILE_NAME = "chrome_debugger_profile";
@@ -163,6 +165,7 @@ BrowserToolboxLauncher.prototype = {
       "devtools.debugger.chrome-debugging-websocket"
     );
     const socketOptions = {
+      fromBrowserToolbox: true,
       portOrPath: -1,
       webSocket: chromeDebuggingWebSocket,
     };

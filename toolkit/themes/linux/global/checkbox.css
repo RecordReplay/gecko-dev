@@ -8,6 +8,52 @@
 
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 
+%include ../../shared/checkbox.inc.css
+
+@media (-moz-proton) {
+/* ::::: checkbox ::::: */
+
+checkbox[native] {
+  appearance: auto;
+  -moz-default-appearance: checkbox-container;
+  -moz-box-align: center;
+  margin: 2px 4px;
+}
+
+.checkbox-label-box[native] {
+  appearance: auto;
+  -moz-default-appearance: checkbox-label;
+}
+
+.checkbox-label[native] {
+  margin: 0;
+}
+
+/* ..... focused state ..... */
+
+checkbox[native]:-moz-focusring > .checkbox-label-box {
+  /* Native theming should take care of this but it appears to be broken with
+     some Gtk themes. Bug 1312169. */
+  outline: 1px dotted;
+}
+
+/* ..... disabled state ..... */
+
+checkbox[native][disabled="true"] {
+  color: GrayText;
+}
+
+/* ::::: checkmark image ::::: */
+
+.checkbox-check[native] {
+  appearance: auto;
+  -moz-default-appearance: checkbox;
+  margin: 2px;
+  margin-inline-end: 4px;
+}
+} /** END Proton **/
+
+@media not (-moz-proton) {
 /* ::::: checkbox ::::: */
 
 checkbox {
@@ -20,10 +66,6 @@ checkbox {
 .checkbox-label-box {
   appearance: auto;
   -moz-default-appearance: checkbox-label;
-}
-
-.checkbox-icon[src] {
-  margin-inline-end: 2px;
 }
 
 .checkbox-label {
@@ -51,3 +93,4 @@ checkbox[disabled="true"] {
   -moz-default-appearance: checkbox;
   margin: 2px;
 }
+} /** END not Proton **/

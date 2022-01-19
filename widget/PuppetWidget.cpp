@@ -87,8 +87,6 @@ PuppetWidget::PuppetWidget(BrowserChild* aBrowserChild)
       mDPI(-1),
       mRounding(1),
       mDefaultScale(-1),
-      mCursorHotspotX(0),
-      mCursorHotspotY(0),
       mEnabled(false),
       mVisible(false),
       mNeedIMEStateInit(false),
@@ -268,10 +266,10 @@ void PuppetWidget::Invalidate(const LayoutDeviceIntRect& aRect) {
     return;
   }
 
-  if (mBrowserChild && !aRect.IsEmpty()) {
-    if (RefPtr<nsRefreshDriver> refreshDriver = GetTopLevelRefreshDriver()) {
-      refreshDriver->ScheduleViewManagerFlush();
-    }
+  if (mBrowserChild && !aRect.IsEmpty() && !mWidgetPaintTask.IsPending()) {
+    mWidgetPaintTask = new WidgetPaintTask(this);
+    nsCOMPtr<nsIRunnable> event(mWidgetPaintTask.get());
+    SchedulerGroup::Dispatch(TaskCategory::Other, event.forget());
   }
 }
 
@@ -382,15 +380,16 @@ nsresult PuppetWidget::DispatchEvent(WidgetGUIEvent* aEvent,
   return NS_OK;
 }
 
-nsEventStatus PuppetWidget::DispatchInputEvent(WidgetInputEvent* aEvent) {
+nsIWidget::ContentAndAPZEventStatus PuppetWidget::DispatchInputEvent(
+    WidgetInputEvent* aEvent) {
+  ContentAndAPZEventStatus status;
   if (!AsyncPanZoomEnabled()) {
-    nsEventStatus status = nsEventStatus_eIgnore;
-    DispatchEvent(aEvent, status);
+    DispatchEvent(aEvent, status.mContentStatus);
     return status;
   }
 
   if (!mBrowserChild) {
-    return nsEventStatus_eIgnore;
+    return status;
   }
 
   switch (aEvent->mClass) {
@@ -404,11 +403,14 @@ nsEventStatus PuppetWidget::DispatchInputEvent(WidgetInputEvent* aEvent) {
       Unused << mBrowserChild->SendDispatchKeyboardEvent(
           *aEvent->AsKeyboardEvent());
       break;
+    case eTouchEventClass:
+      Unused << mBrowserChild->SendDispatchTouchEvent(*aEvent->AsTouchEvent());
+      break;
     default:
       MOZ_ASSERT_UNREACHABLE("unsupported event type");
   }
 
-  return nsEventStatus_eIgnore;
+  return status;
 }
 
 nsresult PuppetWidget::SynthesizeNativeKeyEvent(
@@ -427,14 +429,17 @@ nsresult PuppetWidget::SynthesizeNativeKeyEvent(
 }
 
 nsresult PuppetWidget::SynthesizeNativeMouseEvent(
-    mozilla::LayoutDeviceIntPoint aPoint, uint32_t aNativeMessage,
-    uint32_t aModifierFlags, nsIObserver* aObserver) {
+    mozilla::LayoutDeviceIntPoint aPoint, NativeMouseMessage aNativeMessage,
+    MouseButton aButton, nsIWidget::Modifiers aModifierFlags,
+    nsIObserver* aObserver) {
   AutoObserverNotifier notifier(aObserver, "mouseevent");
   if (!mBrowserChild) {
     return NS_ERROR_FAILURE;
   }
   mBrowserChild->SendSynthesizeNativeMouseEvent(
-      aPoint, aNativeMessage, aModifierFlags, notifier.SaveObserver());
+      aPoint, static_cast<uint32_t>(aNativeMessage),
+      static_cast<int16_t>(aButton), static_cast<uint32_t>(aModifierFlags),
+      notifier.SaveObserver());
   return NS_OK;
 }
 
@@ -476,6 +481,17 @@ nsresult PuppetWidget::SynthesizeNativeTouchPoint(
   return NS_OK;
 }
 
+nsresult PuppetWidget::SynthesizeNativeTouchPadPinch(
+    TouchpadPinchPhase aEventPhase, float aScale, LayoutDeviceIntPoint aPoint,
+    int32_t aModifierFlags) {
+  if (!mBrowserChild) {
+    return NS_ERROR_FAILURE;
+  }
+  mBrowserChild->SendSynthesizeNativeTouchPadPinch(aEventPhase, aScale, aPoint,
+                                                   aModifierFlags);
+  return NS_OK;
+}
+
 nsresult PuppetWidget::SynthesizeNativeTouchTap(LayoutDeviceIntPoint aPoint,
                                                 bool aLongTap,
                                                 nsIObserver* aObserver) {
@@ -495,6 +511,43 @@ nsresult PuppetWidget::ClearNativeTouchSequence(nsIObserver* aObserver) {
   }
   mBrowserChild->SendClearNativeTouchSequence(notifier.SaveObserver());
   return NS_OK;
+}
+
+nsresult PuppetWidget::SynthesizeNativePenInput(
+    uint32_t aPointerId, TouchPointerState aPointerState,
+    LayoutDeviceIntPoint aPoint, double aPressure, uint32_t aRotation,
+    int32_t aTiltX, int32_t aTiltY, nsIObserver* aObserver) {
+  AutoObserverNotifier notifier(aObserver, "peninput");
+  if (!mBrowserChild) {
+    return NS_ERROR_FAILURE;
+  }
+  mBrowserChild->SendSynthesizeNativePenInput(aPointerId, aPointerState, aPoint,
+                                              aPressure, aRotation, aTiltX,
+                                              aTiltY, notifier.SaveObserver());
+  return NS_OK;
+}
+
+nsresult PuppetWidget::SynthesizeNativeTouchpadDoubleTap(
+    LayoutDeviceIntPoint aPoint, uint32_t aModifierFlags) {
+  if (!mBrowserChild) {
+    return NS_ERROR_FAILURE;
+  }
+  mBrowserChild->SendSynthesizeNativeTouchpadDoubleTap(aPoint, aModifierFlags);
+  return NS_OK;
+}
+
+void PuppetWidget::LockNativePointer() {
+  if (!mBrowserChild) {
+    return;
+  }
+  mBrowserChild->SendLockNativePointer();
+}
+
+void PuppetWidget::UnlockNativePointer() {
+  if (!mBrowserChild) {
+    return;
+  }
+  mBrowserChild->SendUnlockNativePointer();
 }
 
 void PuppetWidget::SetConfirmedTargetAPZC(
@@ -520,6 +573,7 @@ bool PuppetWidget::AsyncPanZoomEnabled() const {
 bool PuppetWidget::GetEditCommands(NativeKeyBindingsType aType,
                                    const WidgetKeyboardEvent& aEvent,
                                    nsTArray<CommandInt>& aCommands) {
+  MOZ_ASSERT(!aEvent.mFlags.mIsSynthesizedForTests);
   // Validate the arguments.
   if (NS_WARN_IF(!nsIWidget::GetEditCommands(aType, aEvent, aCommands))) {
     return false;
@@ -855,21 +909,15 @@ struct CursorSurface {
   IntSize mSize;
 };
 
-void PuppetWidget::SetCursor(nsCursor aCursor, imgIContainer* aCursorImage,
-                             uint32_t aHotspotX, uint32_t aHotspotY) {
+void PuppetWidget::SetCursor(const Cursor& aCursor) {
   if (!mBrowserChild) {
     return;
   }
 
-  // Don't cache on windows, Windowless flash breaks this via async cursor
-  // updates.
-#if !defined(XP_WIN)
-  if (!mUpdateCursor && mCursor == aCursor && mCustomCursor == aCursorImage &&
-      (!aCursorImage ||
-       (mCursorHotspotX == aHotspotX && mCursorHotspotY == aHotspotY))) {
+  const bool force = mUpdateCursor;
+  if (!force && mCursor == aCursor) {
     return;
   }
-#endif
 
   bool hasCustomCursor = false;
   UniquePtr<char[]> customCursorData;
@@ -877,12 +925,28 @@ void PuppetWidget::SetCursor(nsCursor aCursor, imgIContainer* aCursorImage,
   IntSize customCursorSize;
   int32_t stride = 0;
   auto format = SurfaceFormat::B8G8R8A8;
-  bool force = mUpdateCursor;
-
-  if (aCursorImage) {
-    RefPtr<SourceSurface> surface = aCursorImage->GetFrame(
-        imgIContainer::FRAME_CURRENT,
-        imgIContainer::FLAG_SYNC_DECODE | imgIContainer::FLAG_ASYNC_NOTIFY);
+  ImageResolution resolution = aCursor.mResolution;
+  if (aCursor.IsCustom()) {
+    int32_t width = 0, height = 0;
+    aCursor.mContainer->GetWidth(&width);
+    aCursor.mContainer->GetHeight(&height);
+    const int32_t flags =
+        imgIContainer::FLAG_SYNC_DECODE | imgIContainer::FLAG_ASYNC_NOTIFY;
+    RefPtr<SourceSurface> surface;
+    if (width && height &&
+        aCursor.mContainer->GetType() == imgIContainer::TYPE_VECTOR) {
+      // For vector images, scale to device pixels.
+      resolution.ScaleBy(GetDefaultScale().scale);
+      resolution.ApplyInverseTo(width, height);
+      surface = aCursor.mContainer->GetFrameAtSize(
+          {width, height}, imgIContainer::FRAME_CURRENT, flags);
+    } else {
+      // NOTE(emilio): We get the frame at the full size, ignoring resolution,
+      // because we're going to rasterize it, and we'd effectively lose the
+      // extra pixels if we rasterized to CustomCursorSize.
+      surface =
+          aCursor.mContainer->GetFrame(imgIContainer::FRAME_CURRENT, flags);
+    }
     if (surface) {
       if (RefPtr<DataSourceSurface> dataSurface = surface->GetDataSurface()) {
         hasCustomCursor = true;
@@ -894,27 +958,16 @@ void PuppetWidget::SetCursor(nsCursor aCursor, imgIContainer* aCursorImage,
     }
   }
 
-  mCustomCursor = nullptr;
-
   nsDependentCString cursorData(customCursorData ? customCursorData.get() : "",
                                 length);
-  if (!mBrowserChild->SendSetCursor(aCursor, hasCustomCursor, cursorData,
-                                    customCursorSize.width,
-                                    customCursorSize.height, stride, format,
-                                    aHotspotX, aHotspotY, force)) {
+  if (!mBrowserChild->SendSetCursor(
+          aCursor.mDefaultCursor, hasCustomCursor, cursorData,
+          customCursorSize.width, customCursorSize.height, resolution.mX,
+          resolution.mY, stride, format, aCursor.mHotspotX, aCursor.mHotspotY,
+          force)) {
     return;
   }
-
   mCursor = aCursor;
-  mCustomCursor = aCursorImage;
-  mCursorHotspotX = aHotspotX;
-  mCursorHotspotY = aHotspotY;
-  mUpdateCursor = false;
-}
-
-void PuppetWidget::ClearCachedCursor() {
-  nsBaseWidget::ClearCachedCursor();
-  mCustomCursor = nullptr;
 }
 
 void PuppetWidget::SetChild(PuppetWidget* aChild) {
@@ -925,11 +978,31 @@ void PuppetWidget::SetChild(PuppetWidget* aChild) {
   mChild = aChild;
 }
 
+NS_IMETHODIMP
+PuppetWidget::WidgetPaintTask::Run() {
+  if (mWidget) {
+    mWidget->Paint();
+  }
+  return NS_OK;
+}
+
+void PuppetWidget::Paint() {
+  if (!GetCurrentWidgetListener()) return;
+
+  mWidgetPaintTask.Revoke();
+
+  RefPtr<PuppetWidget> strongThis(this);
+
+  GetCurrentWidgetListener()->WillPaintWindow(this);
+
+  if (GetCurrentWidgetListener()) {
+    GetCurrentWidgetListener()->DidPaintWindow();
+  }
+}
+
 void PuppetWidget::PaintNowIfNeeded() {
-  if (IsVisible()) {
-    if (RefPtr<nsRefreshDriver> refreshDriver = GetTopLevelRefreshDriver()) {
-      refreshDriver->DoTick();
-    }
+  if (IsVisible() && mWidgetPaintTask.IsPending()) {
+    Paint();
   }
 }
 
@@ -958,52 +1031,6 @@ float PuppetWidget::GetDPI() { return mDPI; }
 double PuppetWidget::GetDefaultScaleInternal() { return mDefaultScale; }
 
 int32_t PuppetWidget::RoundsWidgetCoordinatesTo() { return mRounding; }
-
-void* PuppetWidget::GetNativeData(uint32_t aDataType) {
-  switch (aDataType) {
-    case NS_NATIVE_SHAREABLE_WINDOW: {
-      // NOTE: We can not have a tab child in some situations, such as when
-      // we're rendering to a fake widget for thumbnails.
-      if (!mBrowserChild) {
-        NS_WARNING("Need BrowserChild to get the nativeWindow from!");
-      }
-      mozilla::WindowsHandle nativeData = 0;
-      if (mBrowserChild) {
-        nativeData = mBrowserChild->WidgetNativeData();
-      }
-      return (void*)nativeData;
-    }
-    case NS_NATIVE_WINDOW:
-    case NS_NATIVE_WIDGET:
-    case NS_NATIVE_DISPLAY:
-      // These types are ignored (see bug 1183828, bug 1240891).
-      break;
-    case NS_RAW_NATIVE_IME_CONTEXT:
-      MOZ_CRASH("You need to call GetNativeIMEContext() instead");
-    case NS_NATIVE_PLUGIN_PORT:
-    case NS_NATIVE_GRAPHIC:
-    case NS_NATIVE_SHELLWIDGET:
-    default:
-      NS_WARNING("nsWindow::GetNativeData called with bad value");
-      break;
-  }
-  return nullptr;
-}
-
-#if defined(XP_WIN)
-void PuppetWidget::SetNativeData(uint32_t aDataType, uintptr_t aVal) {
-  switch (aDataType) {
-    case NS_NATIVE_CHILD_OF_SHAREABLE_WINDOW:
-      MOZ_ASSERT(mBrowserChild, "Need BrowserChild to send the message.");
-      if (mBrowserChild) {
-        mBrowserChild->SendSetNativeChildOfShareableWindow(aVal);
-      }
-      break;
-    default:
-      NS_WARNING("SetNativeData called with unsupported data type.");
-  }
-}
-#endif
 
 LayoutDeviceIntPoint PuppetWidget::GetChromeOffset() {
   if (!GetOwningBrowserChild()) {
@@ -1182,31 +1209,6 @@ bool PuppetWidget::HasPendingInputEvent() {
       });
 
   return ret;
-}
-
-void PuppetWidget::HandledWindowedPluginKeyEvent(
-    const NativeEventData& aKeyEventData, bool aIsConsumed) {
-  if (NS_WARN_IF(mKeyEventInPluginCallbacks.IsEmpty())) {
-    return;
-  }
-  nsCOMPtr<nsIKeyEventInPluginCallback> callback =
-      mKeyEventInPluginCallbacks[0];
-  MOZ_ASSERT(callback);
-  mKeyEventInPluginCallbacks.RemoveElementAt(0);
-  callback->HandledWindowedPluginKeyEvent(aKeyEventData, aIsConsumed);
-}
-
-nsresult PuppetWidget::OnWindowedPluginKeyEvent(
-    const NativeEventData& aKeyEventData,
-    nsIKeyEventInPluginCallback* aCallback) {
-  if (NS_WARN_IF(!mBrowserChild)) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-  if (NS_WARN_IF(!mBrowserChild->SendOnWindowedPluginKeyEvent(aKeyEventData))) {
-    return NS_ERROR_FAILURE;
-  }
-  mKeyEventInPluginCallbacks.AppendElement(aCallback);
-  return NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY;
 }
 
 // TextEventDispatcherListener

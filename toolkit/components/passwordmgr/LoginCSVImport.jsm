@@ -68,10 +68,6 @@ class ImportFailedException extends Error {
  * Provides an object that has a method to import login-related data CSV files
  */
 class LoginCSVImport {
-  static get MIGRATION_HISTOGRAM_KEY() {
-    return "login_csv";
-  }
-
   /**
    * Returns a map that has the csv column name as key and the value the field name.
    *
@@ -125,80 +121,80 @@ class LoginCSVImport {
 
     return vanillaLogin;
   }
-
+  static _recordHistogramTelemetry(histogram, report) {
+    for (let reportRow of report) {
+      let { result } = reportRow;
+      if (result.includes("error")) {
+        histogram.add("error");
+      } else {
+        histogram.add(result);
+      }
+    }
+  }
   /**
    * Imports logins from a CSV file (comma-separated values file).
    * Existing logins may be updated in the process.
    *
    * @param {string} filePath
+   * @returns {Object[]} An array of rows where each is mapped to a row in the CSV and it's import information.
    */
   static async importFromCSV(filePath) {
-    TelemetryStopwatch.startKeyed(
-      "FX_MIGRATION_LOGINS_IMPORT_MS",
-      LoginCSVImport.MIGRATION_HISTOGRAM_KEY
-    );
+    TelemetryStopwatch.start("PWMGR_IMPORT_LOGINS_FROM_FILE_MS");
     let responsivenessMonitor = new ResponsivenessMonitor();
     let csvColumnToFieldMap = LoginCSVImport._getCSVColumnToFieldMap();
+    let csvFieldToColumnMap = new Map();
     let csvString;
     try {
       csvString = await OS.File.read(filePath, { encoding: "utf-8" });
     } catch (ex) {
+      TelemetryStopwatch.cancel("PWMGR_IMPORT_LOGINS_FROM_FILE_MS");
       Cu.reportError(ex);
       throw new ImportFailedException(
         ImportFailedErrorType.FILE_PERMISSIONS_ERROR
       );
     }
     let parsedLines;
+    let headerLine;
     if (filePath.endsWith(".csv")) {
+      headerLine = d3.csv.parseRows(csvString)[0];
       parsedLines = d3.csv.parse(csvString);
     } else if (filePath.endsWith(".tsv")) {
+      headerLine = d3.tsv.parseRows(csvString)[0];
       parsedLines = d3.tsv.parse(csvString);
     }
 
-    let fieldsInFile = new Set();
-    if (parsedLines && parsedLines[0]) {
-      for (const columnName in parsedLines[0]) {
+    if (parsedLines && headerLine) {
+      for (const columnName of headerLine) {
         const fieldName = csvColumnToFieldMap.get(
           columnName.toLocaleLowerCase()
         );
         if (fieldName) {
-          fieldsInFile.add(fieldName);
+          if (!csvFieldToColumnMap.has(fieldName)) {
+            csvFieldToColumnMap.set(fieldName, columnName);
+          } else {
+            TelemetryStopwatch.cancel("PWMGR_IMPORT_LOGINS_FROM_FILE_MS");
+            throw new ImportFailedException(
+              ImportFailedErrorType.CONFLICTING_VALUES_ERROR
+            );
+          }
         }
       }
     }
-    if (fieldsInFile.size === 0) {
+    if (csvFieldToColumnMap.size === 0) {
+      TelemetryStopwatch.cancel("PWMGR_IMPORT_LOGINS_FROM_FILE_MS");
       throw new ImportFailedException(ImportFailedErrorType.FILE_FORMAT_ERROR);
     }
     if (
       parsedLines[0] &&
-      (!fieldsInFile.has("origin") ||
-        !fieldsInFile.has("username") ||
-        !fieldsInFile.has("password"))
+      (!csvFieldToColumnMap.has("origin") ||
+        !csvFieldToColumnMap.has("username") ||
+        !csvFieldToColumnMap.has("password"))
     ) {
       // The username *value* can be empty but we require a username column to
       // ensure that we don't import logins without their usernames due to the
       // username column not being recognized.
-      TelemetryStopwatch.cancelKeyed(
-        "FX_MIGRATION_LOGINS_IMPORT_MS",
-        LoginCSVImport.MIGRATION_HISTOGRAM_KEY
-      );
+      TelemetryStopwatch.cancel("PWMGR_IMPORT_LOGINS_FROM_FILE_MS");
       throw new ImportFailedException(ImportFailedErrorType.FILE_FORMAT_ERROR);
-    }
-
-    const uniqueLoginIdentifiers = new Set();
-    for (const csvObject of parsedLines) {
-      // TODO: handle duplicates without guid column. Bug 1687852
-
-      if (csvObject.guid) {
-        if (uniqueLoginIdentifiers.has(csvObject.guid)) {
-          throw new ImportFailedException(
-            ImportFailedErrorType.CONFLICTING_VALUES_ERROR,
-            csvObject.guid
-          );
-        } else {
-          uniqueLoginIdentifiers.add(csvObject.guid);
-        }
-      }
     }
 
     let loginsToImport = parsedLines.map(csvObject => {
@@ -208,24 +204,29 @@ class LoginCSVImport {
       );
     });
 
-    let summary = await LoginHelper.maybeImportLogins(loginsToImport);
+    let report = await LoginHelper.maybeImportLogins(loginsToImport);
+
+    for (const reportRow of report) {
+      if (reportRow.result === "error_missing_field") {
+        reportRow.field_name = csvFieldToColumnMap.get(reportRow.field_name);
+      }
+    }
 
     // Record quantity, jank, and duration telemetry.
     try {
-      Services.telemetry
-        .getKeyedHistogramById("FX_MIGRATION_LOGINS_QUANTITY")
-        .add(LoginCSVImport.MIGRATION_HISTOGRAM_KEY, summary.length);
+      let histogram = Services.telemetry.getHistogramById(
+        "PWMGR_IMPORT_LOGINS_FROM_FILE_CATEGORICAL"
+      );
+      this._recordHistogramTelemetry(histogram, report);
       let accumulatedDelay = responsivenessMonitor.finish();
       Services.telemetry
-        .getKeyedHistogramById("FX_MIGRATION_LOGINS_JANK_MS")
-        .add(LoginCSVImport.MIGRATION_HISTOGRAM_KEY, accumulatedDelay);
-      TelemetryStopwatch.finishKeyed(
-        "FX_MIGRATION_LOGINS_IMPORT_MS",
-        LoginCSVImport.MIGRATION_HISTOGRAM_KEY
-      );
+        .getHistogramById("PWMGR_IMPORT_LOGINS_FROM_FILE_JANK_MS")
+        .add(accumulatedDelay);
+      TelemetryStopwatch.finish("PWMGR_IMPORT_LOGINS_FROM_FILE_MS");
     } catch (ex) {
       Cu.reportError(ex);
     }
-    return summary;
+    LoginCSVImport.lastImportReport = report;
+    return report;
   }
 }

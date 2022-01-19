@@ -19,7 +19,6 @@
 #include "rrIConnection.h"
 #include "rrIModule.h"
 #include "xpcprivate.h"
-#include "nsMediaFeatures.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -145,10 +144,6 @@ void EnsureModuleInitialized() {
   if (IsModuleInitialized()) {
     return;
   }
-
-  // Initialization so we can repaint at the first checkpoint without having
-  // an unhandled recording divergence.
-  nsMediaFeatures::InitSystemMetrics();
 
   AutoSafeJSContext cx;
   JSAutoRealm ar(cx, xpc::PrivilegedJunkScope());

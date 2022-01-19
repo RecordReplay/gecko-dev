@@ -121,6 +121,7 @@ function storeCertOverride(port, cert) {
   certOverrideService.rememberValidityOverride(
     "127.0.0.1",
     port,
+    {},
     cert,
     overrideBits,
     true
@@ -135,6 +136,7 @@ function startClient(port, cert, expectingAlert, tlsVersion) {
     ["ssl"],
     "127.0.0.1",
     port,
+    null,
     null
   );
   let input;

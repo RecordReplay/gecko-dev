@@ -9,9 +9,11 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["TelemetryEventPing"];
+var EXPORTED_SYMBOLS = ["TelemetryEventPing", "Policy"];
 
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   TelemetrySession: "resource://gre/modules/TelemetrySession.jsm",

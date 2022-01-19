@@ -10,6 +10,7 @@
 
 #include "gfxContext.h"
 #include "gfxUtils.h"
+#include "Layers.h"
 #include "nsContainerFrame.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsCSSRendering.h"
@@ -144,7 +145,8 @@ nsresult nsCanvasFrame::CreateAnonymousContent(
       parent->RemoveChildNode(&anonContent->ContentNode(), false);
     }
 
-    mCustomContentContainer->AppendChildTo(&anonContent->ContentNode(), false);
+    mCustomContentContainer->AppendChildTo(&anonContent->ContentNode(), false,
+                                           IgnoreErrors());
   }
 
   // Create a popupgroup element for system privileged non-XUL documents to
@@ -498,8 +500,6 @@ void nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
         dependentFrame = nullptr;
       }
     }
-    aLists.BorderBackground()->AppendNewToTop<nsDisplayCanvasBackgroundColor>(
-        aBuilder, this);
 
     if (isThemed) {
       aLists.BorderBackground()
@@ -606,6 +606,25 @@ void nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
             thisItemASR, true);
       }
       aLists.BorderBackground()->AppendToTop(&thisItemList);
+    }
+
+    bool hasFixedBottomLayer =
+        layers.mImageCount > 0 &&
+        layers.mLayers[0].mAttachment == StyleImageLayerAttachment::Fixed;
+
+    if (!hasFixedBottomLayer || needBlendContainer) {
+      // Put a scrolled background color item in place, at the bottom of the
+      // list. The color of this item will be filled in during
+      // PresShell::AddCanvasBackgroundColorItem.
+      // Do not add this item if there's a fixed background image at the bottom
+      // (unless we have to, for correct blending); with a fixed background,
+      // it's better to allow the fixed background image to combine itself with
+      // a non-scrolled background color directly underneath, rather than
+      // interleaving the two with a scrolled background color.
+      // PresShell::AddCanvasBackgroundColorItem makes sure there always is a
+      // non-scrolled background color item at the bottom.
+      aLists.BorderBackground()
+          ->AppendNewToBottom<nsDisplayCanvasBackgroundColor>(aBuilder, this);
     }
 
     if (needBlendContainer) {
@@ -721,27 +740,39 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
   // unconstrained; that's ok.  Consumers should watch out for that.
   SetSize(nsSize(aReflowInput.ComputedWidth(), aReflowInput.ComputedHeight()));
 
-  // Reflow our one and only normal child frame. It's either the root
+  // Reflow our children.  Typically, we only have one child - the root
   // element's frame or a placeholder for that frame, if the root element
-  // is abs-pos or fixed-pos. We may have additional children which
-  // are placeholders for continuations of fixed-pos content, but those
-  // don't need to be reflowed. The normal child is always comes before
-  // the fixed-pos placeholders, because we insert it at the start
-  // of the child list, above.
-  ReflowOutput kidDesiredSize(aReflowInput);
-  if (mFrames.IsEmpty()) {
-    // We have no child frame, so return an empty size
-    aDesiredSize.Width() = aDesiredSize.Height() = 0;
-  } else if (mFrames.FirstChild() != mPopupSetFrame) {
-    nsIFrame* kidFrame = mFrames.FirstChild();
-    bool kidDirty = kidFrame->HasAnyStateBits(NS_FRAME_IS_DIRTY);
+  // is abs-pos or fixed-pos.  Note that this child might be missing though
+  // if that frame was Complete in one of our earlier continuations.  This
+  // happens when we create additional pages purely to make room for painting
+  // overflow (painted by BuildPreviousPageOverflow in nsPageFrame.cpp).
+  // We may have additional children which are placeholders for continuations
+  // of fixed-pos content, see nsCSSFrameConstructor::ReplicateFixedFrames.
+  // We may also have a nsPopupSetFrame child (mPopupSetFrame).
+  const WritingMode wm = aReflowInput.GetWritingMode();
+  aDesiredSize.SetSize(wm, aReflowInput.ComputedSize());
+  if (aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE) {
+    // Set the block-size to zero for now in case we don't have any non-
+    // placeholder children that would update the size in the loop below.
+    aDesiredSize.BSize(wm) = nscoord(0);
+  }
+  aDesiredSize.SetOverflowAreasToDesiredBounds();
+  nsIFrame* nextKid = nullptr;
+  for (auto* kidFrame = mFrames.FirstChild(); kidFrame; kidFrame = nextKid) {
+    nextKid = kidFrame->GetNextSibling();
+    if (kidFrame == mPopupSetFrame) {
+      // This child is handled separately after this loop.
+      continue;
+    }
 
+    ReflowOutput kidDesiredSize(aReflowInput);
+    bool kidDirty = kidFrame->HasAnyStateBits(NS_FRAME_IS_DIRTY);
     WritingMode kidWM = kidFrame->GetWritingMode();
     auto availableSize = aReflowInput.AvailableSize(kidWM);
     nscoord bOffset = 0;
     nscoord canvasBSizeSum = 0;
-    WritingMode wm = aReflowInput.GetWritingMode();
     if (prevCanvasFrame && availableSize.BSize(kidWM) != NS_UNCONSTRAINEDSIZE &&
+        !kidFrame->IsPlaceholderFrame() &&
         StaticPrefs::layout_display_list_improve_fragmentation()) {
       for (auto* pif = prevCanvasFrame; pif;
            pif = static_cast<nsCanvasFrame*>(pif->GetPrevInFlow())) {
@@ -768,7 +799,6 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
       availableSize.BSize(kidWM) -= bOffset;
     }
 
-    LogicalSize finalSize = aReflowInput.ComputedSize();
     if (MOZ_LIKELY(availableSize.BSize(kidWM) > 0)) {
       ReflowInput kidReflowInput(aPresContext, aReflowInput, kidFrame,
                                  availableSize);
@@ -785,18 +815,17 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
       LogicalPoint kidPt(kidWM, margin.IStart(kidWM), margin.BStart(kidWM));
       (kidWM.IsOrthogonalTo(wm) ? kidPt.I(kidWM) : kidPt.B(kidWM)) += bOffset;
 
-      // Reflow the frame
+      nsReflowStatus kidStatus;
       ReflowChild(kidFrame, aPresContext, kidDesiredSize, kidReflowInput, kidWM,
-                  kidPt, containerSize, ReflowChildFlags::Default, aStatus);
+                  kidPt, containerSize, ReflowChildFlags::Default, kidStatus);
 
-      // Complete the reflow and position and size the child frame
       FinishReflowChild(kidFrame, aPresContext, kidDesiredSize, &kidReflowInput,
                         kidWM, kidPt, containerSize,
                         ReflowChildFlags::ApplyRelativePositioning);
 
-      if (!aStatus.IsFullyComplete()) {
+      if (!kidStatus.IsFullyComplete()) {
         nsIFrame* nextFrame = kidFrame->GetNextInFlow();
-        NS_ASSERTION(nextFrame || aStatus.NextInFlowNeedsReflow(),
+        NS_ASSERTION(nextFrame || kidStatus.NextInFlowNeedsReflow(),
                      "If it's incomplete and has no nif yet, it must flag a "
                      "nif reflow.");
         if (!nextFrame) {
@@ -809,10 +838,11 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
           // aren't any other frames we need to isolate them from
           // during reflow.
         }
-        if (aStatus.IsOverflowIncomplete()) {
+        if (kidStatus.IsOverflowIncomplete()) {
           nextFrame->AddStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER);
         }
       }
+      aStatus.MergeCompletionStatusFrom(kidStatus);
 
       // If the child frame was just inserted, then we're responsible for making
       // sure it repaints
@@ -830,30 +860,31 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
       }
 
       // Return our desired size. Normally it's what we're told, but
-      // sometimes we can be given an unconstrained height (when a window
-      // is sizing-to-content), and we should compute our desired height.
-      if (aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE) {
+      // sometimes we can be given an unconstrained block-size (when a window
+      // is sizing-to-content), and we should compute our desired block-size.
+      if (aReflowInput.ComputedBSize() == NS_UNCONSTRAINEDSIZE &&
+          !kidFrame->IsPlaceholderFrame()) {
+        LogicalSize finalSize = aReflowInput.ComputedSize();
         finalSize.BSize(wm) =
             kidFrame->GetLogicalSize(wm).BSize(wm) +
             kidReflowInput.ComputedLogicalMargin(wm).BStartEnd(wm);
+        aDesiredSize.SetSize(wm, finalSize);
+        aDesiredSize.SetOverflowAreasToDesiredBounds();
       }
+      aDesiredSize.mOverflowAreas.UnionWith(kidDesiredSize.mOverflowAreas +
+                                            kidFrame->GetPosition());
+    } else if (kidFrame->IsPlaceholderFrame()) {
+      // Placeholders always fit even if there's no available block-size left.
     } else {
       // This only occurs in paginated mode.  There is no available space on
       // this page due to reserving space for overflow from a previous page,
       // so we push our child to the next page.  Note that we can have some
       // placeholders for fixed pos. frames in mFrames too, so we need to be
       // careful to only push `kidFrame`.
-      MOZ_ASSERT(!kidFrame->IsPlaceholderFrame(),
-                 "we should never push fixed pos placeholders");
       mFrames.RemoveFrame(kidFrame);
       SetOverflowFrames(nsFrameList(kidFrame, kidFrame));
       aStatus.SetIncomplete();
     }
-
-    aDesiredSize.SetSize(wm, finalSize);
-    aDesiredSize.SetOverflowAreasToDesiredBounds();
-    aDesiredSize.mOverflowAreas.UnionWith(kidDesiredSize.mOverflowAreas +
-                                          kidFrame->GetPosition());
   }
 
   if (prevCanvasFrame) {

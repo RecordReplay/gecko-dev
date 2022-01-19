@@ -11,6 +11,7 @@
 #include "jsexn.h"
 
 #include "mozilla/Assertions.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/ScopeExit.h"
 
 #include <new>
@@ -54,7 +55,9 @@
 #include "vm/Stack.h"
 #include "vm/StringType.h"
 #include "vm/SymbolType.h"
+#include "vm/WellKnownAtom.h"  // js_*_str
 
+#include "vm/Compartment-inl.h"
 #include "vm/ErrorObject-inl.h"
 #include "vm/JSContext-inl.h"
 #include "vm/JSObject-inl.h"
@@ -283,7 +286,7 @@ JS_PUBLIC_API uint64_t JS::ExceptionTimeWarpTarget(JS::HandleValue value) {
   return obj->timeWarpTarget();
 }
 
-JS_FRIEND_API JSLinearString* js::GetErrorTypeName(JSContext* cx,
+JS_PUBLIC_API JSLinearString* js::GetErrorTypeName(JSContext* cx,
                                                    int16_t exnType) {
   /*
    * JSEXN_INTERNALERR returns null to prevent that "InternalError: "
@@ -305,7 +308,7 @@ void js::ErrorToException(JSContext* cx, JSErrorReport* reportp,
   // cannot construct the Error constructor without self-hosted code. Just
   // print the error to stderr to help debugging.
   if (cx->realm()->isSelfHostingRealm()) {
-    JS::PrintError(cx, stderr, reportp, true);
+    JS::PrintError(stderr, reportp, true);
     return;
   }
 
@@ -343,6 +346,9 @@ void js::ErrorToException(JSContext* cx, JSErrorReport* reportp,
   uint32_t lineNumber = reportp->lineno;
   uint32_t columnNumber = reportp->column;
 
+  // Error reports don't provide a |cause|, so we default to |Nothing| here.
+  auto cause = JS::NothingHandleValue;
+
   RootedObject stack(cx);
   if (!CaptureStack(cx, &stack)) {
     return;
@@ -355,7 +361,7 @@ void js::ErrorToException(JSContext* cx, JSErrorReport* reportp,
 
   ErrorObject* errObject =
       ErrorObject::create(cx, exnType, stack, fileName, sourceId, warpTarget, lineNumber,
-                          columnNumber, std::move(report), messageStr);
+                          columnNumber, std::move(report), messageStr, cause);
   if (!errObject) {
     return;
   }
@@ -726,6 +732,14 @@ JSObject* js::CopyErrorObject(JSContext* cx, Handle<ErrorObject*> err) {
   if (!cx->compartment()->wrap(cx, &stack)) {
     return nullptr;
   }
+  Rooted<mozilla::Maybe<Value>> cause(cx, mozilla::Nothing());
+  if (auto maybeCause = err->getCause()) {
+    RootedValue errorCause(cx, maybeCause.value());
+    if (!cx->compartment()->wrap(cx, &errorCause)) {
+      return nullptr;
+    }
+    cause = mozilla::Some(errorCause.get());
+  }
   uint32_t sourceId = err->sourceId();
   uint32_t warpTarget = err->timeWarpTarget();
   uint32_t lineNumber = err->lineNumber();
@@ -735,7 +749,7 @@ JSObject* js::CopyErrorObject(JSContext* cx, Handle<ErrorObject*> err) {
   // Create the Error object.
   return ErrorObject::create(cx, errorType, stack, fileName, sourceId, warpTarget,
                              lineNumber, columnNumber, std::move(copyReport),
-                             message);
+                             message, cause);
 }
 
 JS_PUBLIC_API bool JS::CreateError(JSContext* cx, JSExnType type,
@@ -754,9 +768,13 @@ JS_PUBLIC_API bool JS::CreateError(JSContext* cx, JSExnType type,
     }
   }
 
+  // The public API doesn't (yet) support a |cause| argument, so we default to
+  // |Nothing()| here.
+  auto cause = JS::NothingHandleValue;
+
   JSObject* obj =
       js::ErrorObject::create(cx, type, stack, fileName, 0, 0, lineNumber,
-                              columnNumber, std::move(rep), message);
+                              columnNumber, std::move(rep), message, cause);
   if (!obj) {
     return false;
   }

@@ -6,9 +6,9 @@
 
 #include "vm/DateTime.h"
 
+#include "mozilla/RecordReplay.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/TextUtils.h"
-#include "mozilla/Unused.h"
 
 #include <algorithm>
 #include <cstdlib>

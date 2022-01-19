@@ -24,7 +24,6 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/HTMLEditor.h"
 #include "mozilla/Logging.h"
-#include "mozilla/layers/ScrollInputMethods.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/RangeBoundary.h"
 #include "mozilla/RangeUtils.h"
@@ -79,7 +78,6 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using mozilla::layers::ScrollInputMethod;
 
 static LazyLogModule sSelectionLog("Selection");
 
@@ -91,6 +89,11 @@ static void printRange(nsRange* aDomRange);
 #else
 #  define DEBUG_OUT_RANGE(x)
 #endif  // PRINT_RANGE
+
+static constexpr nsLiteralCString kNoDocumentTypeNodeError =
+    "DocumentType nodes are not supported"_ns;
+static constexpr nsLiteralCString kNoRangeExistsError =
+    "No selection range exists"_ns;
 
 /******************************************************************************
  * Utility methods defined in nsISelectionController.idl
@@ -547,6 +550,7 @@ DocGroup* Selection::GetDocGroup() const {
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(Selection)
 
+MOZ_CAN_RUN_SCRIPT_BOUNDARY
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Selection)
   // Unlink the selection listeners *before* we do RemoveAllRanges since
   // we don't want to notify the listeners during JS GC (they could be
@@ -557,7 +561,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Selection)
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSelectionChangeEventDispatcher)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSelectionListeners)
-  tmp->RemoveAllRanges(IgnoreErrors());
+  MOZ_KnownLive(tmp)->RemoveAllRanges(IgnoreErrors());
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFrameSelection)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
   NS_IMPL_CYCLE_COLLECTION_UNLINK_WEAK_PTR
@@ -858,12 +862,10 @@ nsresult Selection::AddRangesForUserSelectableNodes(
   *aOutIndex = int32_t(mStyledRanges.Length()) - 1;
 
   Document* doc = GetDocument();
-  bool selectEventsEnabled = StaticPrefs::dom_select_events_enabled() ||
-                             (doc && doc->NodePrincipal()->IsSystemPrincipal());
 
   if (aDispatchSelectstartEvent == DispatchSelectstartEvent::Maybe &&
-      mSelectionType == SelectionType::eNormal && selectEventsEnabled &&
-      IsCollapsed() && !IsBlockingSelectionChangeEvents()) {
+      mSelectionType == SelectionType::eNormal && IsCollapsed() &&
+      !IsBlockingSelectionChangeEvents()) {
     // We consider a selection to be starting if we are currently collapsed,
     // and the selection is becoming uncollapsed, and this is caused by a
     // user initiated event.
@@ -1095,7 +1097,7 @@ nsresult Selection::StyledRanges::RemoveCollapsedRanges() {
   return NS_OK;
 }
 
-nsresult Selection::Clear(nsPresContext* aPresContext) {
+void Selection::Clear(nsPresContext* aPresContext) {
   SetAnchorFocusRange(-1);
 
   mStyledRanges.UnregisterSelection();
@@ -1112,8 +1114,6 @@ nsresult Selection::Clear(nsPresContext* aPresContext) {
                              nsISelectionController::SELECTION_ATTENTION) {
     mFrameSelection->SetDisplaySelection(nsISelectionController::SELECTION_ON);
   }
-
-  return NS_OK;
 }
 
 bool Selection::StyledRanges::HasEqualRangeBoundariesAt(
@@ -1803,8 +1803,8 @@ nsresult AutoScroller::DoAutoScroll(nsIFrame* aFrame, nsPoint aPoint) {
   bool didScroll;
   while (true) {
     didScroll = presShell->ScrollFrameRectIntoView(
-        aFrame, nsRect(aPoint, nsSize(0, 0)), ScrollAxis(), ScrollAxis(),
-        ScrollFlags::IgnoreMarginAndPadding);
+        aFrame, nsRect(aPoint, nsSize(0, 0)), nsMargin(), ScrollAxis(),
+        ScrollAxis(), ScrollFlags::None);
     if (!weakFrame || !weakRootFrame) {
       return NS_OK;
     }
@@ -1856,11 +1856,7 @@ void Selection::RemoveAllRanges(ErrorResult& aRv) {
   }
 
   RefPtr<nsPresContext> presContext = GetPresContext();
-  nsresult result = Clear(presContext);
-  if (NS_FAILED(result)) {
-    aRv.Throw(result);
-    return;
-  }
+  Clear(presContext);
 
   // Turn off signal for table selection
   RefPtr<nsFrameSelection> frameSelection = mFrameSelection;
@@ -1868,13 +1864,7 @@ void Selection::RemoveAllRanges(ErrorResult& aRv) {
 
   RefPtr<Selection> kungFuDeathGrip{this};
   // Be aware, this instance may be destroyed after this call.
-  result = NotifySelectionListeners();
-
-  // Also need to notify the frames!
-  // PresShell::CharacterDataChanged should do that on DocumentChanged
-  if (NS_FAILED(result)) {
-    aRv.Throw(result);
-  }
+  NotifySelectionListeners();
 }
 
 void Selection::AddRangeJS(nsRange& aRange, ErrorResult& aRv) {
@@ -1956,10 +1946,7 @@ void Selection::AddRangeAndSelectFramesAndNotifyListeners(nsRange& aRange,
   SelectFrames(presContext, range, true);
 
   // Be aware, this instance may be destroyed after this call.
-  result = NotifySelectionListeners();
-  if (NS_FAILED(result)) {
-    aRv.Throw(result);
-  }
+  NotifySelectionListeners();
 }
 
 // Selection::RemoveRangeAndUnselectFramesAndNotifyListeners
@@ -2038,10 +2025,7 @@ void Selection::RemoveRangeAndUnselectFramesAndNotifyListeners(
 
   RefPtr<Selection> kungFuDeathGrip{this};
   // Be aware, this instance may be destroyed after this call.
-  rv = NotifySelectionListeners();
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-  }
+  NotifySelectionListeners();
 }
 
 /*
@@ -2072,7 +2056,7 @@ void Selection::CollapseInternal(InLimiter aInLimiter,
   }
 
   if (aPoint.Container()->NodeType() == nsINode::DOCUMENT_TYPE_NODE) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_NODE_TYPE_ERR);
+    aRv.ThrowInvalidNodeTypeError(kNoDocumentTypeNodeError);
     return;
   }
 
@@ -2081,7 +2065,7 @@ void Selection::CollapseInternal(InLimiter aInLimiter,
   // computed yet, this just checks it with its mRef.  So, we can avoid
   // computing offset here.
   if (!aPoint.IsSetAndValid()) {
-    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+    aRv.ThrowIndexSizeError("The offset is out of range.");
     return;
   }
 
@@ -2165,10 +2149,7 @@ void Selection::CollapseInternal(InLimiter aInLimiter,
 
   RefPtr<Selection> kungFuDeathGrip{this};
   // Be aware, this instance may be destroyed after this call.
-  result = NotifySelectionListeners();
-  if (NS_FAILED(result)) {
-    aRv.Throw(result);
-  }
+  NotifySelectionListeners();
 }
 
 /*
@@ -2183,7 +2164,7 @@ void Selection::CollapseToStartJS(ErrorResult& aRv) {
 
 void Selection::CollapseToStart(ErrorResult& aRv) {
   if (RangeCount() == 0) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    aRv.ThrowInvalidStateError(kNoRangeExistsError);
     return;
   }
 
@@ -2220,7 +2201,7 @@ void Selection::CollapseToEndJS(ErrorResult& aRv) {
 void Selection::CollapseToEnd(ErrorResult& aRv) {
   uint32_t cnt = RangeCount();
   if (cnt == 0) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    aRv.ThrowInvalidStateError(kNoRangeExistsError);
     return;
   }
 
@@ -2257,7 +2238,7 @@ void Selection::GetType(nsAString& aOutType) const {
 nsRange* Selection::GetRangeAt(uint32_t aIndex, ErrorResult& aRv) {
   nsRange* range = GetRangeAt(aIndex);
   if (!range) {
-    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+    aRv.ThrowIndexSizeError(nsPrintfCString("%u is out of range", aIndex));
     return nullptr;
   }
 
@@ -2370,7 +2351,7 @@ void Selection::Extend(nsINode& aContainer, uint32_t aOffset,
 
   // First, find the range containing the old focus point:
   if (!mAnchorFocusRange) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    aRv.ThrowInvalidStateError(kNoRangeExistsError);
     return;
   }
 
@@ -2638,10 +2619,7 @@ void Selection::Extend(nsINode& aContainer, uint32_t aOffset,
 
   RefPtr<Selection> kungFuDeathGrip{this};
   // Be aware, this instance may be destroyed after this call.
-  res = NotifySelectionListeners();
-  if (NS_FAILED(res)) {
-    aRv.Throw(res);
-  }
+  NotifySelectionListeners();
 }
 
 void Selection::SelectAllChildrenJS(nsINode& aNode, ErrorResult& aRv) {
@@ -2652,7 +2630,7 @@ void Selection::SelectAllChildrenJS(nsINode& aNode, ErrorResult& aRv) {
 
 void Selection::SelectAllChildren(nsINode& aNode, ErrorResult& aRv) {
   if (aNode.NodeType() == nsINode::DOCUMENT_TYPE_NODE) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_NODE_TYPE_ERR);
+    aRv.ThrowInvalidNodeTypeError(kNoDocumentTypeNodeError);
     return;
   }
 
@@ -2823,7 +2801,7 @@ nsIFrame* Selection::GetSelectionAnchorGeometry(SelectionRegion aRegion,
   // make focusRect relative to anchorFrame
   focusRect += focusFrame->GetOffsetTo(anchorFrame);
 
-  aRect->UnionRectEdges(anchorRect, focusRect);
+  *aRect = anchorRect.UnionEdges(focusRect);
   return anchorFrame;
 }
 
@@ -2860,6 +2838,8 @@ nsIFrame* Selection::GetSelectionEndPointGeometry(SelectionRegion aRegion,
   frame = nsFrameSelection::GetFrameForNodeOffset(
       content, nodeOffset, mFrameSelection->GetHint(), &frameOffset);
   if (!frame) return nullptr;
+
+  nsFrameSelection::AdjustFrameForLineStart(frame, frameOffset);
 
   // Figure out what node type we have, then get the
   // appropriate rect for it's nodeOffset.
@@ -2990,7 +2970,7 @@ nsresult Selection::ScrollIntoView(SelectionRegion aRegion,
   // vertical scrollbar or the scroll range is at least one device pixel)
   aVertical.mOnlyIfPerceivedScrollableDirection = true;
 
-  ScrollFlags scrollFlags = ScrollFlags::IgnoreMarginAndPadding;
+  auto scrollFlags = ScrollFlags::None;
   if (aFlags & Selection::SCROLL_FIRST_ANCESTOR_ONLY) {
     scrollFlags |= ScrollFlags::ScrollFirstAncestorOnly;
   }
@@ -2998,14 +2978,8 @@ nsresult Selection::ScrollIntoView(SelectionRegion aRegion,
     scrollFlags |= ScrollFlags::ScrollOverflowHidden;
   }
 
-  if (aFlags & Selection::SCROLL_FOR_CARET_MOVE) {
-    mozilla::Telemetry::Accumulate(
-        mozilla::Telemetry::SCROLL_INPUT_METHODS,
-        (uint32_t)ScrollInputMethod::MainThreadScrollCaretIntoView);
-  }
-
-  presShell->ScrollFrameRectIntoView(frame, rect, aVertical, aHorizontal,
-                                     scrollFlags);
+  presShell->ScrollFrameRectIntoView(frame, rect, nsMargin(), aVertical,
+                                     aHorizontal, scrollFlags);
   return NS_OK;
 }
 
@@ -3100,15 +3074,15 @@ void Selection::StyledRanges::MaybeFocusCommonEditingHost(
   }
 }
 
-nsresult Selection::NotifySelectionListeners(bool aCalledByJS) {
+void Selection::NotifySelectionListeners(bool aCalledByJS) {
   AutoRestore<bool> calledFromJSRestorer(mCalledByJS);
   mCalledByJS = aCalledByJS;
-  return NotifySelectionListeners();
+  NotifySelectionListeners();
 }
 
-nsresult Selection::NotifySelectionListeners() {
+void Selection::NotifySelectionListeners() {
   if (!mFrameSelection) {
-    return NS_OK;  // nothing to do
+    return;  // nothing to do
   }
 
   MOZ_LOG(sSelectionLog, LogLevel::Debug,
@@ -3125,17 +3099,18 @@ nsresult Selection::NotifySelectionListeners() {
   // browsers don't do it either.
   if (mSelectionType == SelectionType::eNormal &&
       calledByJSRestorer.SavedValue()) {
-    mStyledRanges.MaybeFocusCommonEditingHost(GetPresShell());
+    RefPtr<PresShell> presShell = GetPresShell();
+    mStyledRanges.MaybeFocusCommonEditingHost(presShell);
   }
 
   RefPtr<nsFrameSelection> frameSelection = mFrameSelection;
   if (frameSelection->IsBatching()) {
     frameSelection->SetChangesDuringBatchingFlag();
-    return NS_OK;
+    return;
   }
   if (mSelectionListeners.IsEmpty()) {
     // If there are no selection listeners, we're done!
-    return NS_OK;
+    return;
   }
 
   nsCOMPtr<Document> doc;
@@ -3169,7 +3144,7 @@ nsresult Selection::NotifySelectionListeners() {
         mSelectionChangeEventDispatcher);
     dispatcher->OnSelectionChange(doc, this, reason);
   }
-  for (auto& listener : selectionListeners) {
+  for (const auto& listener : selectionListeners) {
     // MOZ_KnownLive because 'selectionListeners' is guaranteed to
     // keep it alive.
     //
@@ -3177,7 +3152,6 @@ nsresult Selection::NotifySelectionListeners() {
     // https://bugzilla.mozilla.org/show_bug.cgi?id=1620312 is fixed.
     MOZ_KnownLive(listener)->NotifySelectionChanged(doc, this, reason);
   }
-  return NS_OK;
 }
 
 void Selection::StartBatchChanges() {
@@ -3252,7 +3226,8 @@ void Selection::Modify(const nsAString& aAlter, const nsAString& aDirection,
 
   if (!aAlter.LowerCaseEqualsLiteral("move") &&
       !aAlter.LowerCaseEqualsLiteral("extend")) {
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    aRv.ThrowSyntaxError(
+        R"(The first argument must be one of: "move" or "extend")");
     return;
   }
 
@@ -3260,7 +3235,8 @@ void Selection::Modify(const nsAString& aAlter, const nsAString& aDirection,
       !aDirection.LowerCaseEqualsLiteral("backward") &&
       !aDirection.LowerCaseEqualsLiteral("left") &&
       !aDirection.LowerCaseEqualsLiteral("right")) {
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    aRv.ThrowSyntaxError(
+        R"(The direction argument must be one of: "forward", "backward", "left", or "right")");
     return;
   }
 
@@ -3296,7 +3272,8 @@ void Selection::Modify(const nsAString& aAlter, const nsAString& aDirection,
     aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
     return;
   } else {
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    aRv.ThrowSyntaxError(
+        R"(The granularity argument must be one of: "character", "word", "line", or "lineboundary")");
     return;
   }
 
@@ -3360,9 +3337,14 @@ void Selection::SetBaseAndExtentJS(nsINode& aAnchorNode, uint32_t aAnchorOffset,
 void Selection::SetBaseAndExtent(nsINode& aAnchorNode, uint32_t aAnchorOffset,
                                  nsINode& aFocusNode, uint32_t aFocusOffset,
                                  ErrorResult& aRv) {
-  if ((aAnchorOffset > aAnchorNode.Length()) ||
-      (aFocusOffset > aFocusNode.Length())) {
-    aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+  if (aAnchorOffset > aAnchorNode.Length()) {
+    aRv.ThrowIndexSizeError(nsPrintfCString(
+        "The anchor offset value %u is out of range", aAnchorOffset));
+    return;
+  }
+  if (aFocusOffset > aFocusNode.Length()) {
+    aRv.ThrowIndexSizeError(nsPrintfCString(
+        "The focus offset value %u is out of range", aFocusOffset));
     return;
   }
 
@@ -3405,6 +3387,21 @@ void Selection::SetBaseAndExtentInternal(InLimiter aInLimiter,
   // If there's no `order`, the range will be collapsed, unless another error is
   // detected before.
   SetStartAndEndInternal(aInLimiter, aFocusRef, aAnchorRef, eDirPrevious, aRv);
+}
+
+Result<Ok, nsresult> Selection::SetStartAndEndInLimiter(
+    nsINode& aStartContainer, uint32_t aStartOffset, nsINode& aEndContainer,
+    uint32_t aEndOffset, nsDirection aDirection, int16_t aReason) {
+  if (mFrameSelection) {
+    mFrameSelection->AddChangeReasons(aReason);
+  }
+
+  ErrorResult error;
+  SetStartAndEndInternal(
+      InLimiter::eYes, RawRangeBoundary(&aStartContainer, aStartOffset),
+      RawRangeBoundary(&aEndContainer, aEndOffset), aDirection, error);
+  MOZ_TRY(error.StealNSResult());
+  return Ok();
 }
 
 void Selection::SetStartAndEndInternal(InLimiter aInLimiter,
@@ -3486,8 +3483,7 @@ nsresult Selection::SelectionLanguageChange(bool aLangRTL) {
     return NS_ERROR_FAILURE;
   }
 
-  int32_t frameStart, frameEnd;
-  focusFrame->GetOffsets(frameStart, frameEnd);
+  auto [frameStart, frameEnd] = focusFrame->GetOffsets();
   RefPtr<nsPresContext> context = GetPresContext();
   nsBidiLevel levelBefore, levelAfter;
   if (!context) {

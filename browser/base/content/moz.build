@@ -43,7 +43,7 @@ with Files("test/keyboard/**"):
 with Files("test/outOfProcess/**"):
     BUG_COMPONENT = ("Firefox", "General")
 
-with Files("test/pageActions/**"):
+with Files("test/pageActions*/**"):
     BUG_COMPONENT = ("Firefox", "Toolbars and Customization")
 
 with Files("test/pageinfo/**"):
@@ -92,6 +92,9 @@ with Files("test/sync/**"):
     BUG_COMPONENT = ("Firefox", "Sync")
 
 with Files("test/tabdialogs/**"):
+    BUG_COMPONENT = ("Firefox", "Tabbed Browser")
+
+with Files("test/notificationbox/**"):
     BUG_COMPONENT = ("Firefox", "Tabbed Browser")
 
 with Files("test/tabPrompts/**"):

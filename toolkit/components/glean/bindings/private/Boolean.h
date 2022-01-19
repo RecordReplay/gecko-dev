@@ -7,8 +7,9 @@
 #ifndef mozilla_glean_GleanBoolean_h
 #define mozilla_glean_GleanBoolean_h
 
+#include "mozilla/Result.h"
 #include "nsIGleanMetrics.h"
-#include "mozilla/glean/fog_ffi_generated.h"
+#include "nsString.h"
 
 namespace mozilla {
 namespace glean {
@@ -22,9 +23,9 @@ class BooleanMetric {
   /**
    * Set to the specified boolean value.
    *
-   * @param value the value to set.
+   * @param aValue the value to set.
    */
-  void Set(bool value) const { fog_boolean_set(mId, int(value)); }
+  void Set(bool aValue) const;
 
   /**
    * **Test-only API**
@@ -43,16 +44,13 @@ class BooleanMetric {
    *
    * @return value of the stored metric.
    */
-  Maybe<bool> TestGetValue(const nsACString& aPingName = nsCString()) const {
-    if (!fog_boolean_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    return Some(fog_boolean_test_get_value(mId, &aPingName));
-  }
+  Result<Maybe<bool>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;
 };
+
 }  // namespace impl
 
 class GleanBoolean final : public nsIGleanBoolean {

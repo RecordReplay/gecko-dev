@@ -53,11 +53,7 @@ TEST_HARNESS_BINS = [
 
 TEST_HARNESS_DLLS = ["crashinjectdll", "mozglue"]
 
-GMP_TEST_PLUGIN_DIRS = [
-    "gmp-clearkey/**",
-    "gmp-fake/**",
-    "gmp-fakeopenh264/**",
-]
+GMP_TEST_PLUGIN_DIRS = ["gmp-fake/**", "gmp-fakeopenh264/**"]
 
 # These entries will be used by artifact builds to re-construct an
 # objdir with the appropriate generated support files.
@@ -101,47 +97,30 @@ ARCHIVE_FILES = {
                 "fuzztest/**",
             ],
         },
-        {
-            "source": buildconfig.topobjdir,
-            "base": "_tests",
-            "pattern": "modules/**",
-        },
+        {"source": buildconfig.topobjdir, "base": "_tests", "pattern": "modules/**"},
         {
             "source": buildconfig.topsrcdir,
             "base": "testing/marionette",
-            "patterns": [
-                "client/**",
-                "harness/**",
-                "mach_test_package_commands.py",
-            ],
+            "patterns": ["client/**", "harness/**", "mach_test_package_commands.py"],
             "dest": "marionette",
-            "ignore": [
-                "client/docs",
-                "harness/marionette_harness/tests",
-            ],
+            "ignore": ["client/docs", "harness/marionette_harness/tests"],
         },
         {
             "source": buildconfig.topsrcdir,
             "base": "",
             "manifests": [
-                "testing/marionette/harness/marionette_harness/tests/unit-tests.ini",
+                "testing/marionette/harness/marionette_harness/tests/unit-tests.ini"
             ],
             # We also need the manifests and harness_unit tests
             "pattern": "testing/marionette/harness/marionette_harness/tests/**",
             "dest": "marionette/tests",
         },
-        {
-            "source": buildconfig.topobjdir,
-            "base": "_tests",
-            "pattern": "mozbase/**",
-        },
+        {"source": buildconfig.topobjdir, "base": "_tests", "pattern": "mozbase/**"},
         {
             "source": buildconfig.topsrcdir,
             "base": "testing",
             "pattern": "firefox-ui/**",
-            "ignore": [
-                "firefox-ui/tests",
-            ],
+            "ignore": ["firefox-ui/tests"],
         },
         {
             "source": buildconfig.topsrcdir,
@@ -155,11 +134,7 @@ ARCHIVE_FILES = {
             "pattern": "/**",
             "dest": "telemetry/marionette",
         },
-        {
-            "source": buildconfig.topsrcdir,
-            "base": "testing",
-            "pattern": "tps/**",
-        },
+        {"source": buildconfig.topsrcdir, "base": "testing", "pattern": "tps/**"},
         {
             "source": buildconfig.topsrcdir,
             "base": "services/sync/",
@@ -201,11 +176,7 @@ ARCHIVE_FILES = {
             "pattern": "**",
             "dest": "tools/distro",
         },
-        {
-            "source": buildconfig.topobjdir,
-            "base": "",
-            "pattern": "mozinfo.json",
-        },
+        {"source": buildconfig.topobjdir, "base": "", "pattern": "mozinfo.json"},
         {
             "source": buildconfig.topobjdir,
             "base": "dist/bin",
@@ -233,18 +204,13 @@ ARCHIVE_FILES = {
         {
             "source": buildconfig.topobjdir,
             "base": "dist/bin",
-            "patterns": [
-                "dmd.py",
-                "fix_stacks.py",
-            ],
+            "patterns": ["dmd.py", "fix_stacks.py"],
             "dest": "bin",
         },
         {
             "source": buildconfig.topobjdir,
             "base": "dist/bin/components",
-            "patterns": [
-                "httpd.js",
-            ],
+            "patterns": ["httpd.js"],
             "dest": "bin/components",
         },
         {
@@ -255,11 +221,7 @@ ARCHIVE_FILES = {
         },
     ],
     "cppunittest": [
-        {
-            "source": STAGE,
-            "base": "",
-            "pattern": "cppunittest/**",
-        },
+        {"source": STAGE, "base": "", "pattern": "cppunittest/**"},
         # We don't ship these files if startup cache is disabled, which is
         # rare. But it shouldn't matter for test archives.
         {
@@ -293,13 +255,7 @@ ARCHIVE_FILES = {
             "dest": "cppunittest",
         },
     ],
-    "gtest": [
-        {
-            "source": STAGE,
-            "base": "",
-            "pattern": "gtest/**",
-        },
-    ],
+    "gtest": [{"source": STAGE, "base": "", "pattern": "gtest/**"}],
     "mochitest": [
         OBJDIR_TEST_FILES["mochitest"],
         {
@@ -307,11 +263,7 @@ ARCHIVE_FILES = {
             "base": "_tests/testing",
             "pattern": "mochitest/**",
         },
-        {
-            "source": STAGE,
-            "base": "",
-            "pattern": "mochitest/**",
-        },
+        {"source": STAGE, "base": "", "pattern": "mochitest/**"},
         {
             "source": buildconfig.topobjdir,
             "base": "",
@@ -374,11 +326,7 @@ ARCHIVE_FILES = {
         },
     ],
     "reftest": [
-        {
-            "source": buildconfig.topobjdir,
-            "base": "_tests",
-            "pattern": "reftest/**",
-        },
+        {"source": buildconfig.topobjdir, "base": "_tests", "pattern": "reftest/**"},
         {
             "source": buildconfig.topobjdir,
             "base": "",
@@ -409,11 +357,7 @@ ARCHIVE_FILES = {
         },
     ],
     "talos": [
-        {
-            "source": buildconfig.topsrcdir,
-            "base": "testing",
-            "pattern": "talos/**",
-        },
+        {"source": buildconfig.topsrcdir, "base": "testing", "pattern": "talos/**"},
         {
             "source": buildconfig.topsrcdir,
             "base": "testing/profiles",
@@ -428,22 +372,11 @@ ARCHIVE_FILES = {
         },
     ],
     "perftests": [
-        {
-            "source": buildconfig.topsrcdir,
-            "pattern": "testing/mozbase/**",
-        },
-        {
-            "source": buildconfig.topsrcdir,
-            "pattern": "testing/condprofile/**",
-        },
-        {
-            "source": buildconfig.topsrcdir,
-            "pattern": "third_party/python/**",
-        },
-        {
-            "source": buildconfig.topsrcdir,
-            "pattern": "tools/lint/eslint/**",
-        },
+        {"source": buildconfig.topsrcdir, "pattern": "testing/mozbase/**"},
+        {"source": buildconfig.topsrcdir, "pattern": "testing/condprofile/**"},
+        {"source": buildconfig.topsrcdir, "pattern": "testing/performance/**"},
+        {"source": buildconfig.topsrcdir, "pattern": "third_party/python/**"},
+        {"source": buildconfig.topsrcdir, "pattern": "tools/lint/eslint/**"},
         {"source": buildconfig.topsrcdir, "pattern": "**/perftest_*.js"},
         {"source": buildconfig.topsrcdir, "pattern": "**/hooks_*py"},
         {"source": buildconfig.topsrcdir, "pattern": "build/autoconf/**"},
@@ -537,11 +470,7 @@ ARCHIVE_FILES = {
         },
     ],
     "raptor": [
-        {
-            "source": buildconfig.topsrcdir,
-            "base": "testing",
-            "pattern": "raptor/**",
-        },
+        {"source": buildconfig.topsrcdir, "base": "testing", "pattern": "raptor/**"},
         {
             "source": buildconfig.topsrcdir,
             "base": "testing/profiles",
@@ -556,11 +485,7 @@ ARCHIVE_FILES = {
         },
     ],
     "awsy": [
-        {
-            "source": buildconfig.topsrcdir,
-            "base": "testing",
-            "pattern": "awsy/**",
-        },
+        {"source": buildconfig.topsrcdir, "base": "testing", "pattern": "awsy/**"}
     ],
     "web-platform": [
         {
@@ -577,10 +502,7 @@ ARCHIVE_FILES = {
             "source": buildconfig.topsrcdir,
             "base": "testing",
             "pattern": "web-platform/tests/**",
-            "ignore": [
-                "web-platform/tests/tools/wptserve",
-                "web-platform/tests/tools/wpt_third_party",
-            ],
+            "ignore": ["web-platform/tests/tools/wpt_third_party"],
         },
         {
             "source": buildconfig.topobjdir,
@@ -606,6 +528,7 @@ ARCHIVE_FILES = {
                 "node-http2/**",
                 "node-ip/**",
                 "dns-packet/**",
+                "odoh-wasm/**",
                 "remotexpcshelltests.py",
                 "runxpcshelltests.py",
                 "selftest.py",
@@ -613,11 +536,7 @@ ARCHIVE_FILES = {
             ],
             "dest": "xpcshell",
         },
-        {
-            "source": STAGE,
-            "base": "",
-            "pattern": "xpcshell/**",
-        },
+        {"source": STAGE, "base": "", "pattern": "xpcshell/**"},
         {
             "source": buildconfig.topobjdir,
             "base": "",
@@ -664,18 +583,9 @@ ARCHIVE_FILES = {
             "dest": "updater-dep",
         },
     ],
-    "jsreftest": [
-        {
-            "source": STAGE,
-            "base": "",
-            "pattern": "jsreftest/**",
-        },
-    ],
+    "jsreftest": [{"source": STAGE, "base": "", "pattern": "jsreftest/**"}],
     "fuzztest": [
-        {
-            "source": buildconfig.topsrcdir,
-            "pattern": "tools/fuzzing/smoke/**",
-        },
+        {"source": buildconfig.topsrcdir, "pattern": "tools/fuzzing/smoke/**"}
     ],
     "jittest": [
         {
@@ -722,10 +632,7 @@ if buildconfig.substs.get("MOZ_CODE_COVERAGE"):
         {
             "source": buildconfig.topsrcdir,
             "base": "python/mozbuild/",
-            "patterns": [
-                "mozpack/**",
-                "mozbuild/codecoverage/**",
-            ],
+            "patterns": ["mozpack/**", "mozbuild/codecoverage/**"],
         }
     )
 
@@ -817,11 +724,7 @@ def find_files(archive):
             if patterns:
                 entry["patterns"] = patterns
                 extra_entries.append(entry)
-        entry = {
-            "source": buildconfig.topobjdir,
-            "base": "_tests",
-            "patterns": [],
-        }
+        entry = {"source": buildconfig.topobjdir, "base": "_tests", "patterns": []}
         for path in set(generated_harness_files) - packaged_paths:
             entry["patterns"].append(path[len("_tests") + 1 :])
         extra_entries.append(entry)
@@ -845,13 +748,7 @@ def find_files(archive):
             patterns.extend({"{}/**".format(d) for d in dirs})
 
         ignore = list(entry.get("ignore", []))
-        ignore.extend(
-            [
-                "**/.flake8",
-                "**/.mkdir.done",
-                "**/*.pyc",
-            ]
-        )
+        ignore.extend(["**/.flake8", "**/.mkdir.done", "**/*.pyc"])
 
         if archive not in ("common", "updater-dep") and base.startswith("_tests"):
             # We may have generated_harness_files to exclude from this entry.
@@ -859,10 +756,7 @@ def find_files(archive):
                 if path.startswith(base):
                     ignore.append(path[len(base) + 1 :])
 
-        common_kwargs = {
-            "find_dotfiles": True,
-            "ignore": ignore,
-        }
+        common_kwargs = {"find_dotfiles": True, "ignore": ignore}
 
         finder = FileFinder(os.path.join(source, base), **common_kwargs)
 

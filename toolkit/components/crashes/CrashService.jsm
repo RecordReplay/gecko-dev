@@ -4,9 +4,13 @@
 
 "use strict";
 
-ChromeUtils.import("resource://gre/modules/AppConstants.jsm", this);
-ChromeUtils.import("resource://gre/modules/AsyncShutdown.jsm", this);
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+const { AppConstants } = ChromeUtils.import(
+  "resource://gre/modules/AppConstants.jsm"
+);
+const { AsyncShutdown } = ChromeUtils.import(
+  "resource://gre/modules/AsyncShutdown.jsm"
+);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 // Set to true if the application is quitting
 var gQuitting = false;
@@ -172,9 +176,6 @@ CrashService.prototype = Object.freeze({
         break;
       case Ci.nsICrashService.PROCESS_TYPE_CONTENT:
         processType = Services.crashmanager.PROCESS_TYPE_CONTENT;
-        break;
-      case Ci.nsICrashService.PROCESS_TYPE_PLUGIN:
-        processType = Services.crashmanager.PROCESS_TYPE_PLUGIN;
         break;
       case Ci.nsICrashService.PROCESS_TYPE_GMPLUGIN:
         processType = Services.crashmanager.PROCESS_TYPE_GMPLUGIN;

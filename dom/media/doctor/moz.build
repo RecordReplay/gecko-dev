@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 TEST_DIRS += [
-    "gtest",
+    "test/gtest",
 ]
 
 # Needed for plugin IPC types required by nsPluginHost
@@ -34,5 +34,7 @@ UNIFIED_SOURCES += [
     "DecoderDoctorDiagnostics.cpp",
     "DecoderDoctorLogger.cpp",
 ]
+
+BROWSER_CHROME_MANIFESTS += ["test/browser/browser.ini"]
 
 FINAL_LIBRARY = "xul"

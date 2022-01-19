@@ -52,13 +52,19 @@
 #include "mozilla/Sprintf.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Uptime.h"
-#include <pthread.h>
+
+#if !defined(__wasi__)
+#  include <pthread.h>
+#endif
 
 // Estimate of the smallest duration of time we can measure.
 static uint64_t sResolution;
 static uint64_t sResolutionSigDigs;
 
+#if !defined(__wasi__)
 static const uint16_t kNsPerUs = 1000;
+#endif
+
 static const uint64_t kNsPerMs = 1000000;
 static const uint64_t kNsPerSec = 1000000000;
 static const double kNsPerMsd = 1000000.0;

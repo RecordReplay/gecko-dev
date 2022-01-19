@@ -81,8 +81,10 @@ class nsExternalHelperAppService : public nsIExternalHelperAppService,
                                bool* aResult) override;
   NS_IMETHOD GetProtocolHandlerInfo(const nsACString& aScheme,
                                     nsIHandlerInfo** aHandlerInfo) override;
+
   NS_IMETHOD LoadURI(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal,
-                     mozilla::dom::BrowsingContext* aBrowsingContext) override;
+                     mozilla::dom::BrowsingContext* aBrowsingContext,
+                     bool aWasTriggeredExternally) override;
   NS_IMETHOD SetProtocolHandlerDefaults(nsIHandlerInfo* aHandlerInfo,
                                         bool aOSHandlerExists) override;
 
@@ -115,6 +117,9 @@ class nsExternalHelperAppService : public nsIExternalHelperAppService,
                                              nsACString& aMIMEType);
 
   static already_AddRefed<nsExternalHelperAppService> GetSingleton();
+
+  // Internal method. Only called directly from tests.
+  static nsresult EscapeURI(nsIURI* aURI, nsIURI** aResult);
 
  protected:
   virtual ~nsExternalHelperAppService();

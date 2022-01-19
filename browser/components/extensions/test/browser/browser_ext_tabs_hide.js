@@ -141,7 +141,7 @@ add_task(function test_doorhanger_disable() {
     );
     ok(
       images.some(img =>
-        getComputedStyle(img).backgroundImage.includes("arrow-dropdown-16.svg")
+        getComputedStyle(img).backgroundImage.includes("arrow-down.svg")
       ),
       "There's an icon for the all tabs menu"
     );
@@ -349,6 +349,7 @@ add_task(async function test_tabs_shutdown() {
       if ("hidden" in changeInfo) {
         browser.test.assertEq(tabId, testTab.id, "correct tab was hidden");
         browser.test.assertTrue(changeInfo.hidden, "tab is hidden");
+        browser.test.assertEq(tab.url, testTab.url, "tab has correct URL");
         browser.test.sendMessage("changeInfo");
       }
     });

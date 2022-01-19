@@ -5,6 +5,10 @@
 
 #include "nsNativeBasicThemeCocoa.h"
 #include "mozilla/gfx/Helpers.h"
+#include "mozilla/ClearOnShutdown.h"
+#include "mozilla/LookAndFeel.h"
+#include "mozilla/ServoStyleConsts.h"
+#include "MacThemeGeometryType.h"
 
 already_AddRefed<nsITheme> do_GetBasicNativeThemeDoNotUseDirectly() {
   static mozilla::StaticRefPtr<nsITheme> gInstance;
@@ -19,91 +23,170 @@ NS_IMETHODIMP
 nsNativeBasicThemeCocoa::GetMinimumWidgetSize(
     nsPresContext* aPresContext, nsIFrame* aFrame, StyleAppearance aAppearance,
     mozilla::LayoutDeviceIntSize* aResult, bool* aIsOverridable) {
-  DPIRatio dpiRatio = GetDPIRatio(aFrame);
-
-  switch (aAppearance) {
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbartrackVertical:
-    case StyleAppearance::ScrollbartrackHorizontal:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight: {
-      *aIsOverridable = false;
-      *aResult = ScrollbarDrawingMac::GetMinimumWidgetSize(aAppearance, aFrame,
-                                                           dpiRatio.scale);
-      break;
-    }
-
-    default:
-      return nsNativeBasicTheme::GetMinimumWidgetSize(
-          aPresContext, aFrame, aAppearance, aResult, aIsOverridable);
+  if (!IsWidgetScrollbarPart(aAppearance)) {
+    return nsNativeBasicTheme::GetMinimumWidgetSize(
+        aPresContext, aFrame, aAppearance, aResult, aIsOverridable);
   }
 
+  DPIRatio dpiRatio = GetDPIRatioForScrollbarPart(aPresContext);
+  *aIsOverridable = false;
+  *aResult = ScrollbarDrawingMac::GetMinimumWidgetSize(aAppearance, aFrame,
+                                                       dpiRatio.scale);
   return NS_OK;
 }
 
-void nsNativeBasicThemeCocoa::PaintScrollbarThumb(
-    DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect, bool aHorizontal,
-    nsIFrame* aFrame, const ComputedStyle& aStyle,
+bool nsNativeBasicThemeCocoa::ThemeSupportsWidget(nsPresContext* aPc,
+                                                  nsIFrame* aFrame,
+                                                  StyleAppearance aAppearance) {
+  switch (aAppearance) {
+    case StyleAppearance::Tooltip:
+      return true;
+    default:
+      break;
+  }
+  return nsNativeBasicTheme::ThemeSupportsWidget(aPc, aFrame, aAppearance);
+}
+
+nsITheme::ThemeGeometryType nsNativeBasicThemeCocoa::ThemeGeometryTypeForWidget(
+    nsIFrame* aFrame, StyleAppearance aAppearance) {
+  switch (aAppearance) {
+    case StyleAppearance::Tooltip:
+      return eThemeGeometryTypeTooltip;
+    default:
+      break;
+  }
+  return nsNativeBasicTheme::ThemeGeometryTypeForWidget(aFrame, aAppearance);
+}
+
+auto nsNativeBasicThemeCocoa::GetScrollbarSizes(nsPresContext* aPresContext,
+                                                StyleScrollbarWidth aWidth,
+                                                Overlay aOverlay)
+    -> ScrollbarSizes {
+  auto size = ScrollbarDrawingMac::GetScrollbarSize(
+      aWidth, aOverlay == Overlay::Yes,
+      GetDPIRatioForScrollbarPart(aPresContext).scale);
+  return {size, size};
+}
+
+template <typename PaintBackendData>
+void nsNativeBasicThemeCocoa::DoPaintScrollbarThumb(
+    PaintBackendData& aPaintData, const LayoutDeviceRect& aRect,
+    bool aHorizontal, nsIFrame* aFrame, const ComputedStyle& aStyle,
     const EventStates& aElementState, const EventStates& aDocumentState,
     DPIRatio aDpiRatio) {
   ScrollbarParams params =
       ScrollbarDrawingMac::ComputeScrollbarParams(aFrame, aStyle, aHorizontal);
-  auto rect = aRect.ToUnknownRect();
-  if (aDpiRatio.scale >= 2.0f) {
-    mozilla::gfx::AutoRestoreTransform autoRestoreTransform(aDrawTarget);
-    aDrawTarget->SetTransform(aDrawTarget->GetTransform().PreScale(2.0f, 2.0f));
-    rect.Scale(1.0f / 2.0f);
-    ScrollbarDrawingMac::DrawScrollbarThumb(*aDrawTarget, rect, params);
-  } else {
-    ScrollbarDrawingMac::DrawScrollbarThumb(*aDrawTarget, rect, params);
+  auto thumb = ScrollbarDrawingMac::GetThumbRect(aRect.ToUnknownRect(), params,
+                                                 aDpiRatio.scale);
+  auto thumbRect = LayoutDeviceRect::FromUnknownRect(thumb.mRect);
+  LayoutDeviceCoord radius =
+      (params.horizontal ? thumbRect.Height() : thumbRect.Width()) / 2.0f;
+  PaintRoundedRectWithRadius(
+      aPaintData, thumbRect, thumbRect, sRGBColor::FromABGR(thumb.mFillColor),
+      sRGBColor::White(0.0f), 0.0f, radius / aDpiRatio, aDpiRatio);
+  if (!thumb.mStrokeColor) {
+    return;
   }
+
+  // Paint the stroke if needed.
+  thumbRect.Inflate(thumb.mStrokeOutset + thumb.mStrokeWidth);
+  radius = (params.horizontal ? thumbRect.Height() : thumbRect.Width()) / 2.0f;
+  PaintRoundedRectWithRadius(aPaintData, thumbRect, sRGBColor::White(0.0f),
+                             sRGBColor::FromABGR(thumb.mStrokeColor),
+                             thumb.mStrokeWidth, radius / aDpiRatio, aDpiRatio);
 }
 
-void nsNativeBasicThemeCocoa::PaintScrollbarTrack(
-    DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect, bool aHorizontal,
+bool nsNativeBasicThemeCocoa::PaintScrollbarThumb(
+    DrawTarget& aDt, const LayoutDeviceRect& aRect, bool aHorizontal,
     nsIFrame* aFrame, const ComputedStyle& aStyle,
-    const EventStates& aDocumentState, DPIRatio aDpiRatio, bool aIsRoot) {
+    const EventStates& aElementState, const EventStates& aDocumentState,
+    UseSystemColors, DPIRatio aDpiRatio) {
+  // TODO: Maybe respect the UseSystemColors setting?
+  DoPaintScrollbarThumb(aDt, aRect, aHorizontal, aFrame, aStyle, aElementState,
+                        aDocumentState, aDpiRatio);
+  return true;
+}
+
+bool nsNativeBasicThemeCocoa::PaintScrollbarThumb(
+    WebRenderBackendData& aWrData, const LayoutDeviceRect& aRect,
+    bool aHorizontal, nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aElementState, const EventStates& aDocumentState,
+    UseSystemColors, DPIRatio aDpiRatio) {
+  // TODO: Maybe respect the UseSystemColors setting?
+  DoPaintScrollbarThumb(aWrData, aRect, aHorizontal, aFrame, aStyle,
+                        aElementState, aDocumentState, aDpiRatio);
+  return true;
+}
+
+template <typename PaintBackendData>
+void nsNativeBasicThemeCocoa::DoPaintScrollbarTrack(
+    PaintBackendData& aPaintData, const LayoutDeviceRect& aRect,
+    bool aHorizontal, nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aDocumentState, DPIRatio aDpiRatio) {
   ScrollbarParams params =
       ScrollbarDrawingMac::ComputeScrollbarParams(aFrame, aStyle, aHorizontal);
-  auto rect = aRect.ToUnknownRect();
-  if (aDpiRatio.scale >= 2.0f) {
-    mozilla::gfx::AutoRestoreTransform autoRestoreTransform(aDrawTarget);
-    aDrawTarget->SetTransform(aDrawTarget->GetTransform().PreScale(2.0f, 2.0f));
-    rect.Scale(1.0f / 2.0f);
-    ScrollbarDrawingMac::DrawScrollbarTrack(*aDrawTarget, rect, params);
-  } else {
-    ScrollbarDrawingMac::DrawScrollbarTrack(*aDrawTarget, rect, params);
+  ScrollbarDrawingMac::ScrollbarTrackRects rects;
+  if (ScrollbarDrawingMac::GetScrollbarTrackRects(aRect.ToUnknownRect(), params,
+                                                  aDpiRatio.scale, rects)) {
+    for (const auto& rect : rects) {
+      FillRect(aPaintData, LayoutDeviceRect::FromUnknownRect(rect.mRect),
+               sRGBColor::FromABGR(rect.mColor));
+    }
   }
 }
 
-void nsNativeBasicThemeCocoa::PaintScrollbar(DrawTarget* aDrawTarget,
-                                             const LayoutDeviceRect& aRect,
-                                             bool aHorizontal, nsIFrame* aFrame,
-                                             const ComputedStyle& aStyle,
-                                             const EventStates& aDocumentState,
-                                             DPIRatio aDpiRatio, bool aIsRoot) {
-  // Draw nothing; the scrollbar track is drawn in PaintScrollbarTrack.
+bool nsNativeBasicThemeCocoa::PaintScrollbarTrack(
+    DrawTarget& aDt, const LayoutDeviceRect& aRect, bool aHorizontal,
+    nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aDocumentState, UseSystemColors, DPIRatio aDpiRatio) {
+  // TODO: Maybe respect the UseSystemColors setting?
+  DoPaintScrollbarTrack(aDt, aRect, aHorizontal, aFrame, aStyle, aDocumentState,
+                        aDpiRatio);
+  return true;
 }
 
-void nsNativeBasicThemeCocoa::PaintScrollCorner(
-    DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect, nsIFrame* aFrame,
-    const ComputedStyle& aStyle, const EventStates& aDocumentState,
-    DPIRatio aDpiRatio, bool aIsRoot) {
+bool nsNativeBasicThemeCocoa::PaintScrollbarTrack(
+    WebRenderBackendData& aWrData, const LayoutDeviceRect& aRect,
+    bool aHorizontal, nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aDocumentState, UseSystemColors, DPIRatio aDpiRatio) {
+  // TODO: Maybe respect the UseSystemColors setting?
+  DoPaintScrollbarTrack(aWrData, aRect, aHorizontal, aFrame, aStyle,
+                        aDocumentState, aDpiRatio);
+  return true;
+}
+
+template <typename PaintBackendData>
+void nsNativeBasicThemeCocoa::DoPaintScrollCorner(
+    PaintBackendData& aPaintData, const LayoutDeviceRect& aRect,
+    nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aDocumentState, DPIRatio aDpiRatio) {
   ScrollbarParams params =
       ScrollbarDrawingMac::ComputeScrollbarParams(aFrame, aStyle, false);
-  if (aDpiRatio.scale >= 2.0f) {
-    mozilla::gfx::AutoRestoreTransform autoRestoreTransform(aDrawTarget);
-    aDrawTarget->SetTransform(aDrawTarget->GetTransform().PreScale(2.0f, 2.0f));
-    auto rect = aRect.ToUnknownRect();
-    rect.Scale(1 / 2.0f);
-    ScrollbarDrawingMac::DrawScrollCorner(*aDrawTarget, rect, params);
-  } else {
-    auto rect = aRect.ToUnknownRect();
-    ScrollbarDrawingMac::DrawScrollCorner(*aDrawTarget, rect, params);
+  ScrollbarDrawingMac::ScrollCornerRects rects;
+  if (ScrollbarDrawingMac::GetScrollCornerRects(aRect.ToUnknownRect(), params,
+                                                aDpiRatio.scale, rects)) {
+    for (const auto& rect : rects) {
+      FillRect(aPaintData, LayoutDeviceRect::FromUnknownRect(rect.mRect),
+               sRGBColor::FromABGR(rect.mColor));
+    }
   }
+}
+
+bool nsNativeBasicThemeCocoa::PaintScrollCorner(
+    DrawTarget& aDt, const LayoutDeviceRect& aRect, nsIFrame* aFrame,
+    const ComputedStyle& aStyle, const EventStates& aDocumentState,
+    UseSystemColors, DPIRatio aDpiRatio) {
+  // TODO: Maybe respect the UseSystemColors setting?
+  DoPaintScrollCorner(aDt, aRect, aFrame, aStyle, aDocumentState, aDpiRatio);
+  return true;
+}
+
+bool nsNativeBasicThemeCocoa::PaintScrollCorner(
+    WebRenderBackendData& aWrData, const LayoutDeviceRect& aRect,
+    nsIFrame* aFrame, const ComputedStyle& aStyle,
+    const EventStates& aDocumentState, UseSystemColors, DPIRatio aDpiRatio) {
+  // TODO: Maybe respect the UseSystemColors setting?
+  DoPaintScrollCorner(aWrData, aRect, aFrame, aStyle, aDocumentState,
+                      aDpiRatio);
+  return true;
 }

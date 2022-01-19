@@ -67,15 +67,15 @@ class Gamepad;
 class GamepadServiceTest;
 class NavigatorUserMediaSuccessCallback;
 class NavigatorUserMediaErrorCallback;
-class MozGetUserMediaDevicesSuccessCallback;
 
 struct MIDIOptions;
+
+nsTArray<uint32_t> SanitizeVibratePattern(const nsTArray<uint32_t>& aPattern);
 
 namespace network {
 class Connection;
 }  // namespace network
 
-class Presentation;
 class LegacyMozTCPSocket;
 class VRDisplay;
 class VRServiceTest;
@@ -193,8 +193,6 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   already_AddRefed<Promise> RequestMIDIAccess(const MIDIOptions& aOptions,
                                               ErrorResult& aRv);
 
-  Presentation* GetPresentation(ErrorResult& aRv);
-
   bool SendBeacon(const nsAString& aUrl, const Nullable<fetch::BodyInit>& aData,
                   ErrorResult& aRv);
 
@@ -202,12 +200,6 @@ class Navigator final : public nsISupports, public nsWrapperCache {
                        NavigatorUserMediaSuccessCallback& aOnSuccess,
                        NavigatorUserMediaErrorCallback& aOnError,
                        CallerType aCallerType, ErrorResult& aRv);
-  MOZ_CAN_RUN_SCRIPT
-  void MozGetUserMediaDevices(const MediaStreamConstraints& aConstraints,
-                              MozGetUserMediaDevicesSuccessCallback& aOnSuccess,
-                              NavigatorUserMediaErrorCallback& aOnError,
-                              uint64_t aInnerWindowID, const nsAString& aCallID,
-                              ErrorResult& aRv);
 
   already_AddRefed<ServiceWorkerContainer> ServiceWorker();
 
@@ -282,7 +274,6 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   RefPtr<MediaDevices> mMediaDevices;
   RefPtr<ServiceWorkerContainer> mServiceWorkerContainer;
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
-  RefPtr<Presentation> mPresentation;
   RefPtr<GamepadServiceTest> mGamepadServiceTest;
   nsTArray<RefPtr<Promise>> mVRGetDisplaysPromises;
   RefPtr<VRServiceTest> mVRServiceTest;
@@ -294,8 +285,6 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   RefPtr<AddonManager> mAddonManager;
   RefPtr<webgpu::Instance> mWebGpu;
   RefPtr<Promise> mSharePromise;  // Web Share API related
-  // Gamepad moving to secure contexts
-  bool mGamepadSecureContextWarningShown = false;
 };
 
 }  // namespace dom

@@ -3,6 +3,12 @@
 
 "use strict";
 
+const { SearchTestUtils } = ChromeUtils.import(
+  "resource://testing-common/SearchTestUtils.jsm"
+);
+
+SearchTestUtils.init(this);
+
 const kButton = document.getElementById("reload-button");
 
 add_task(async function setup() {
@@ -10,21 +16,19 @@ add_task(async function setup() {
     set: [["browser.fixup.dns_first_for_single_words", true]],
   });
 
-  await Services.search.init();
-
   // Create an engine to use for the test.
-  await Services.search.addEngineWithDetails("MozSearch1", {
-    method: "GET",
-    template: "https://example.com/?q={searchTerms}",
+  await SearchTestUtils.installSearchExtension({
+    name: "MozSearch",
+    search_url: "https://example.com/",
+    search_url_get_params: "q={searchTerms}",
   });
 
   let originalEngine = await Services.search.getDefault();
-  let engineDefault = Services.search.getEngineByName("MozSearch1");
+  let engineDefault = Services.search.getEngineByName("MozSearch");
   await Services.search.setDefault(engineDefault);
 
   registerCleanupFunction(async function() {
     await Services.search.setDefault(originalEngine);
-    await Services.search.removeEngine(engineDefault);
   });
 });
 
@@ -48,7 +52,7 @@ add_task(async function test_unknown_host() {
     await searchPromise;
     ok(kButton.hasAttribute("displaystop"), "Should be showing stop");
 
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => !kButton.hasAttribute("displaystop")
     );
     ok(
@@ -76,7 +80,7 @@ add_task(async function test_unknown_host_without_search() {
     gURLBar.select();
     EventUtils.synthesizeKey("KEY_Enter");
     await searchPromise;
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => !kButton.hasAttribute("displaystop")
     );
     ok(

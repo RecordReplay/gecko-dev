@@ -9,8 +9,6 @@
 
 // This file declares various analysis passes that operate on MIR.
 
-#include "mozilla/Attributes.h"
-
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,7 +21,6 @@
 namespace js {
 
 class GenericPrinter;
-class ObjectGroup;
 class PlainObject;
 
 namespace jit {
@@ -169,8 +166,6 @@ class LinearSum {
 // and add any new instructions to the end of block.
 MDefinition* ConvertLinearSum(TempAllocator& alloc, MBasicBlock* block,
                               const LinearSum& sum, BailoutKind bailoutKind);
-
-[[nodiscard]] bool AnalyzeArgumentsUsage(JSContext* cx, JSScript* script);
 
 bool DeadIfUnused(const MDefinition* def);
 

@@ -2,9 +2,8 @@
 
 // This test checks whether applied WebExtension themes that attempt to change
 // the color of the font and background in a selection are applied properly.
-ChromeUtils.import(
-  "resource://testing-common/CustomizableUITestUtils.jsm",
-  this
+const { CustomizableUITestUtils } = ChromeUtils.import(
+  "resource://testing-common/CustomizableUITestUtils.jsm"
 );
 let gCUITestUtils = new CustomizableUITestUtils(window);
 add_task(async function setup() {
@@ -27,7 +26,6 @@ add_task(async function test_support_selection() {
       },
     },
   });
-
   await extension.startup();
 
   let fields = [
@@ -45,6 +43,7 @@ add_task(async function test_support_selection() {
   );
   for (let field of fields) {
     info(`Testing ${field.id || field.className}`);
+    field.focus();
     Assert.equal(
       window.getComputedStyle(field, "::selection").backgroundColor,
       hexToCSS(HIGHLIGHT_COLOR),

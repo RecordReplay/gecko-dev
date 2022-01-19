@@ -16,16 +16,18 @@ UNIFIED_SOURCES += [
     "TestCOMPtrEq.cpp",
     "TestCRT.cpp",
     "TestDafsa.cpp",
+    "TestDelayedRunnable.cpp",
     "TestEncoding.cpp",
     "TestEscape.cpp",
     "TestEventPriorities.cpp",
     "TestEventTargetQI.cpp",
-    "TestExpirationTracker.cpp",
     "TestFile.cpp",
     "TestGCPostBarriers.cpp",
     "TestID.cpp",
     "TestInputStreamLengthHelper.cpp",
     "TestLogCommandLineHandler.cpp",
+    "TestLogging.cpp",
+    "TestMemoryPressure.cpp",
     "TestMoveString.cpp",
     "TestMozPromise.cpp",
     "TestMruCache.cpp",
@@ -37,9 +39,11 @@ UNIFIED_SOURCES += [
     "TestObserverService.cpp",
     "TestPLDHash.cpp",
     "TestPriorityQueue.cpp",
+    "TestQueue.cpp",
     "TestRacingServiceManager.cpp",
     "TestRecursiveMutex.cpp",
     "TestRWLock.cpp",
+    "TestSeekableStreamWrapper.cpp",
     "TestSegmentedBuffer.cpp",
     "TestSlicedInputStream.cpp",
     "TestSmallArrayLRUCache.cpp",
@@ -74,6 +78,10 @@ if CONFIG["OS_TARGET"] != "Android":
 if not (CONFIG["OS_TARGET"] == "WINNT" and CONFIG["CPU_ARCH"] == "aarch64"):
     UNIFIED_SOURCES += ["TestThreadUtils.cpp"]
 
+# skip the test on OSX due to frequent failures (bug 1571186)
+if CONFIG["OS_TARGET"] != "Darwin":
+    UNIFIED_SOURCES += ["TestExpirationTracker.cpp"]
+
 # skip the test on windows10-aarch64 and Android, aarch64 due to bug 1545670
 if CONFIG["OS_TARGET"] != "Android" and not (
     CONFIG["OS_TARGET"] == "WINNT" and CONFIG["CPU_ARCH"] == "aarch64"
@@ -95,6 +103,8 @@ if (
 
 if CONFIG["OS_TARGET"] == "WINNT":
     UNIFIED_SOURCES += [
+        "TestAvailableMemoryWatcherWin.cpp",
+        "TestFileNTFSSpecialPaths.cpp",
         "TestFilePreferencesWin.cpp",
     ]
 else:

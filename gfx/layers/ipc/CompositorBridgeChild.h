@@ -92,24 +92,14 @@ class CompositorBridgeChild final : public PCompositorBridgeChild,
   // process). This may only be called on the main thread.
   static bool CompositorIsInGPUProcess();
 
-  mozilla::ipc::IPCResult RecvDidComposite(const LayersId& aId,
-                                           const TransactionId& aTransactionId,
-                                           const TimeStamp& aCompositeStart,
-                                           const TimeStamp& aCompositeEnd);
+  mozilla::ipc::IPCResult RecvDidComposite(
+      const LayersId& aId, const nsTArray<TransactionId>& aTransactionIds,
+      const TimeStamp& aCompositeStart, const TimeStamp& aCompositeEnd);
 
   mozilla::ipc::IPCResult RecvNotifyFrameStats(
       nsTArray<FrameStats>&& aFrameStats);
 
   mozilla::ipc::IPCResult RecvInvalidateLayers(const LayersId& aLayersId);
-
-  mozilla::ipc::IPCResult RecvUpdatePluginConfigurations(
-      const LayoutDeviceIntPoint& aContentOffset,
-      const LayoutDeviceIntRegion& aVisibleRegion,
-      nsTArray<PluginWindowData>&& aPlugins);
-
-  mozilla::ipc::IPCResult RecvCaptureAllPlugins(const uintptr_t& aParentWidget);
-
-  mozilla::ipc::IPCResult RecvHideAllPlugins(const uintptr_t& aParentWidget);
 
   mozilla::ipc::IPCResult RecvNotifyJankedAnimations(
       const LayersId& aLayersId, nsTArray<uint64_t>&& aJankedAnimations);
@@ -169,7 +159,6 @@ class CompositorBridgeChild final : public PCompositorBridgeChild,
                                   nsTArray<float>* intervals);
   bool SendNotifyRegionInvalidated(const nsIntRegion& region);
   bool SendRequestNotifyAfterRemotePaint();
-  bool SendAllPluginsCaptured();
   bool IsSameProcess() const override;
 
   bool IPCOpen() const override { return mCanSend; }

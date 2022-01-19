@@ -80,15 +80,18 @@ static constexpr struct {
     {"Thai", nsGkAtoms::th},
     {"Tibt", nsGkAtoms::x_tibt}};
 
+static UniquePtr<nsLanguageAtomService> gLangAtomService;
+
 // static
 nsLanguageAtomService* nsLanguageAtomService::GetService() {
-  static UniquePtr<nsLanguageAtomService> gLangAtomService;
   if (!gLangAtomService) {
     gLangAtomService = MakeUnique<nsLanguageAtomService>();
-    ClearOnShutdown(&gLangAtomService);
   }
   return gLangAtomService.get();
 }
+
+// static
+void nsLanguageAtomService::Shutdown() { gLangAtomService = nullptr; }
 
 nsStaticAtom* nsLanguageAtomService::LookupLanguage(
     const nsACString& aLanguage) {
@@ -135,17 +138,18 @@ nsAtom* nsLanguageAtomService::GetLocaleLanguage() {
 
 nsStaticAtom* nsLanguageAtomService::GetLanguageGroup(nsAtom* aLanguage,
                                                       bool* aNeedsToCache) {
-  if (nsStaticAtom* group = mLangToGroup.Get(aLanguage)) {
-    return group;
-  }
   if (aNeedsToCache) {
+    if (nsStaticAtom* atom = mLangToGroup.Get(aLanguage)) {
+      return atom;
+    }
     *aNeedsToCache = true;
     return nullptr;
   }
-  AssertIsMainThreadOrServoFontMetricsLocked();
-  nsStaticAtom* group = GetUncachedLanguageGroup(aLanguage);
-  mLangToGroup.Put(aLanguage, group);
-  return group;
+
+  return mLangToGroup.LookupOrInsertWith(aLanguage, [&] {
+    AssertIsMainThreadOrServoFontMetricsLocked();
+    return GetUncachedLanguageGroup(aLanguage);
+  });
 }
 
 nsStaticAtom* nsLanguageAtomService::GetUncachedLanguageGroup(

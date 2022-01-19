@@ -14,13 +14,13 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
 #include "nsIRunnable.h"
 #include "nsISupports.h"
 #include "nsStringFwd.h"
 #include "nsTArrayForwardDeclare.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 
 class nsITimer;
 
@@ -95,9 +95,9 @@ class LSSnapshot final : public nsIRunnable {
 
   LSSnapshotChild* mActor;
 
-  nsTHashtable<nsStringHashKey> mLoadedItems;
-  nsTHashtable<nsStringHashKey> mUnknownItems;
-  nsDataHashtable<nsStringHashKey, nsString> mValues;
+  nsTHashSet<nsString> mLoadedItems;
+  nsTHashSet<nsString> mUnknownItems;
+  nsTHashMap<nsStringHashKey, nsString> mValues;
   UniquePtr<SnapshotWriteOptimizer> mWriteOptimizer;
   UniquePtr<nsTArray<LSWriteAndNotifyInfo>> mWriteAndNotifyInfos;
 

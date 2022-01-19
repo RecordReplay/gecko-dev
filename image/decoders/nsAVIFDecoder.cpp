@@ -12,34 +12,143 @@
 
 #include "mozilla/gfx/Types.h"
 #include "YCbCrUtils.h"
+#include "libyuv.h"
 
 #include "SurfacePipeFactory.h"
 
 #include "mozilla/Telemetry.h"
+#include "mozilla/TelemetryComms.h"
 
 using namespace mozilla::gfx;
 
 namespace mozilla {
+
+Maybe<gfx::YUVColorSpace> GetColorSpace(const Dav1dPicture&, LazyLogModule&);
+
 namespace image {
 
+using Telemetry::LABELS_AVIF_AOM_DECODE_ERROR;
 using Telemetry::LABELS_AVIF_BIT_DEPTH;
 using Telemetry::LABELS_AVIF_DECODE_RESULT;
 using Telemetry::LABELS_AVIF_DECODER;
 using Telemetry::LABELS_AVIF_YUV_COLOR_SPACE;
-using Telemetry::ScalarID;
 
 static LazyLogModule sAVIFLog("AVIFDecoder");
 
 static const LABELS_AVIF_BIT_DEPTH gColorDepthLabel[] = {
     LABELS_AVIF_BIT_DEPTH::color_8, LABELS_AVIF_BIT_DEPTH::color_10,
-    LABELS_AVIF_BIT_DEPTH::color_12, LABELS_AVIF_BIT_DEPTH::color_16,
-    LABELS_AVIF_BIT_DEPTH::unknown};
+    LABELS_AVIF_BIT_DEPTH::color_12, LABELS_AVIF_BIT_DEPTH::color_16};
 
-static const LABELS_AVIF_YUV_COLOR_SPACE gColorSpaceLabel[static_cast<size_t>(
-    gfx::YUVColorSpace::_NUM_COLORSPACE)] = {
+static const LABELS_AVIF_YUV_COLOR_SPACE gColorSpaceLabel[] = {
     LABELS_AVIF_YUV_COLOR_SPACE::BT601, LABELS_AVIF_YUV_COLOR_SPACE::BT709,
-    LABELS_AVIF_YUV_COLOR_SPACE::BT2020, LABELS_AVIF_YUV_COLOR_SPACE::identity,
-    LABELS_AVIF_YUV_COLOR_SPACE::unknown};
+    LABELS_AVIF_YUV_COLOR_SPACE::BT2020, LABELS_AVIF_YUV_COLOR_SPACE::identity};
+
+static MaybeIntSize GetImageSize(const Mp4parseAvifImage& image) {
+  // Note this does not take cropping via CleanAperture (clap) into account
+  const struct Mp4parseImageSpatialExtents* ispe = image.spatial_extents;
+  // Decoder::PostSize takes int32_t, but ispe contains uint32_t
+  CheckedInt<int32_t> width = ispe->image_width;
+  CheckedInt<int32_t> height = ispe->image_height;
+
+  if (width.isValid() && height.isValid()) {
+    return Some(IntSize{width.value(), height.value()});
+  }
+
+  return Nothing();
+}
+
+// Translate the MIAF/HEIF-based orientation transforms (imir, irot) into
+// ImageLib's representation. Note that the interpretation of imir was reversed
+// Between HEIF (ISO 23008-12:2017) and ISO/IEC 23008-12:2017/DAmd 2. This is
+// handled by mp4parse. See mp4parse::read_imir for details.
+Orientation GetImageOrientation(const Mp4parseAvifImage& image) {
+  // Per MIAF (ISO/IEC 23000-22:2019) § 7.3.6.7
+  //   These properties, if used, shall be indicated to be applied in the
+  //   following order: clean aperture first, then rotation, then mirror.
+  // The Orientation type does the same order, but opposite rotation direction
+
+  const Mp4parseIrot heifRot = image.image_rotation;
+  const Mp4parseImir* heifMir = image.image_mirror;
+  Angle mozRot;
+  Flip mozFlip;
+
+  if (!heifMir) {  // No mirroring
+    mozFlip = Flip::Unflipped;
+
+    switch (heifRot) {
+      case MP4PARSE_IROT_D0:
+        // ⥠ UPWARDS HARPOON WITH BARB LEFT FROM BAR
+        mozRot = Angle::D0;
+        break;
+      case MP4PARSE_IROT_D90:
+        // ⥞ LEFTWARDS HARPOON WITH BARB DOWN FROM BAR
+        mozRot = Angle::D270;
+        break;
+      case MP4PARSE_IROT_D180:
+        // ⥝ DOWNWARDS HARPOON WITH BARB RIGHT FROM BAR
+        mozRot = Angle::D180;
+        break;
+      case MP4PARSE_IROT_D270:
+        // ⥛  RIGHTWARDS HARPOON WITH BARB UP FROM BAR
+        mozRot = Angle::D90;
+        break;
+      default:
+        MOZ_ASSERT_UNREACHABLE();
+    }
+  } else {
+    MOZ_ASSERT(heifMir);
+    mozFlip = Flip::Horizontal;
+
+    enum class HeifFlippedOrientation : uint8_t {
+      IROT_D0_IMIR_V = (MP4PARSE_IROT_D0 << 1) | MP4PARSE_IMIR_LEFT_RIGHT,
+      IROT_D0_IMIR_H = (MP4PARSE_IROT_D0 << 1) | MP4PARSE_IMIR_TOP_BOTTOM,
+      IROT_D90_IMIR_V = (MP4PARSE_IROT_D90 << 1) | MP4PARSE_IMIR_LEFT_RIGHT,
+      IROT_D90_IMIR_H = (MP4PARSE_IROT_D90 << 1) | MP4PARSE_IMIR_TOP_BOTTOM,
+      IROT_D180_IMIR_V = (MP4PARSE_IROT_D180 << 1) | MP4PARSE_IMIR_LEFT_RIGHT,
+      IROT_D180_IMIR_H = (MP4PARSE_IROT_D180 << 1) | MP4PARSE_IMIR_TOP_BOTTOM,
+      IROT_D270_IMIR_V = (MP4PARSE_IROT_D270 << 1) | MP4PARSE_IMIR_LEFT_RIGHT,
+      IROT_D270_IMIR_H = (MP4PARSE_IROT_D270 << 1) | MP4PARSE_IMIR_TOP_BOTTOM,
+    };
+
+    HeifFlippedOrientation heifO =
+        HeifFlippedOrientation((heifRot << 1) | *heifMir);
+
+    switch (heifO) {
+      case HeifFlippedOrientation::IROT_D0_IMIR_V:
+      case HeifFlippedOrientation::IROT_D180_IMIR_H:
+        // ⥜ UPWARDS HARPOON WITH BARB RIGHT FROM BAR
+        mozRot = Angle::D0;
+        break;
+      case HeifFlippedOrientation::IROT_D270_IMIR_V:
+      case HeifFlippedOrientation::IROT_D90_IMIR_H:
+        // ⥚ LEFTWARDS HARPOON WITH BARB UP FROM BAR
+        mozRot = Angle::D90;
+        break;
+      case HeifFlippedOrientation::IROT_D180_IMIR_V:
+      case HeifFlippedOrientation::IROT_D0_IMIR_H:
+        // ⥡ DOWNWARDS HARPOON WITH BARB LEFT FROM BAR
+        mozRot = Angle::D180;
+        break;
+      case HeifFlippedOrientation::IROT_D90_IMIR_V:
+      case HeifFlippedOrientation::IROT_D270_IMIR_H:
+        // ⥟ RIGHTWARDS HARPOON WITH BARB DOWN FROM BAR
+        mozRot = Angle::D270;
+        break;
+      default:
+        MOZ_ASSERT_UNREACHABLE();
+    }
+  }
+
+  MOZ_LOG(sAVIFLog, LogLevel::Debug,
+          ("GetImageOrientation: (rot%d, imir(%s)) -> (Angle%d, "
+           "Flip%d)",
+           static_cast<int>(heifRot),
+           heifMir ? (*heifMir == MP4PARSE_IMIR_LEFT_RIGHT ? "left-right"
+                                                           : "top-bottom")
+                   : "none",
+           static_cast<int>(mozRot), static_cast<int>(mozFlip)));
+  return Orientation{mozRot, mozFlip};
+}
 
 class AVIFParser {
  public:
@@ -58,7 +167,7 @@ class AVIFParser {
     MOZ_LOG(sAVIFLog, LogLevel::Debug, ("Destroy AVIFParser=%p", this));
   }
 
-  AvifImage* GetImage() {
+  Mp4parseAvifImage* GetImage() {
     MOZ_ASSERT(mParser);
 
     if (mAvifImage.isNothing()) {
@@ -67,7 +176,7 @@ class AVIFParser {
           mp4parse_avif_get_image(mParser.get(), mAvifImage.ptr());
       MOZ_LOG(sAVIFLog, LogLevel::Debug,
               ("[this=%p] mp4parse_avif_get_image -> %d; primary_item length: "
-               "%u, alpha_item length: %u",
+               "%zu, alpha_item length: %zu",
                this, status, mAvifImage->primary_item.length,
                mAvifImage->alpha_item.length));
       if (status != MP4PARSE_STATUS_OK) {
@@ -81,14 +190,20 @@ class AVIFParser {
  private:
   explicit AVIFParser(const Mp4parseIo* aIo) : mIo(aIo) {
     MOZ_ASSERT(mIo);
-    MOZ_LOG(sAVIFLog, LogLevel::Debug, ("Create AVIFParser=%p", this));
+    MOZ_LOG(sAVIFLog, LogLevel::Debug,
+            ("Create AVIFParser=%p, image.avif.compliance_strictness: %d", this,
+             StaticPrefs::image_avif_compliance_strictness()));
   }
 
   bool Init() {
     MOZ_ASSERT(!mParser);
 
     Mp4parseAvifParser* parser = nullptr;
-    Mp4parseStatus status = mp4parse_avif_new(mIo, &parser);
+    Mp4parseStatus status =
+        mp4parse_avif_new(mIo,
+                          static_cast<enum Mp4parseStrictness>(
+                              StaticPrefs::image_avif_compliance_strictness()),
+                          &parser);
     MOZ_LOG(sAVIFLog, LogLevel::Debug,
             ("[this=%p] mp4parse_avif_new status: %d", this, status));
     if (status != MP4PARSE_STATUS_OK) {
@@ -104,7 +219,7 @@ class AVIFParser {
 
   const Mp4parseIo* mIo;
   UniquePtr<Mp4parseAvifParser, FreeAvifParser> mParser;
-  Maybe<AvifImage> mAvifImage;
+  Maybe<Mp4parseAvifImage> mAvifImage;
 };
 
 // An interface to do decode and get the decoded data
@@ -119,7 +234,8 @@ class AVIFDecoderInterface {
   virtual ~AVIFDecoderInterface() = default;
 
   // Set the mDecodedData if Decode() succeeds
-  virtual DecodeResult Decode(bool aIsMetadataDecode) = 0;
+  virtual DecodeResult Decode(bool aIsMetadataDecode,
+                              const Mp4parseAvifImage& parsedImg) = 0;
   // Must be called after Decode() succeeds
   layers::PlanarYCbCrAData& GetDecodedData() {
     MOZ_ASSERT(mDecodedData.isSome());
@@ -172,7 +288,8 @@ class Dav1dDecoder final : AVIFDecoderInterface {
     return AsVariant(r);
   }
 
-  DecodeResult Decode(bool aIsMetadataDecode) override {
+  DecodeResult Decode(bool aIsMetadataDecode,
+                      const Mp4parseAvifImage& parsedImg) override {
     MOZ_ASSERT(mParser);
     MOZ_ASSERT(mContext);
     MOZ_ASSERT(mPicture.isNothing());
@@ -180,23 +297,21 @@ class Dav1dDecoder final : AVIFDecoderInterface {
 
     MOZ_LOG(sAVIFLog, LogLevel::Verbose, ("[this=%p] Beginning Decode", this));
 
-    AvifImage* parsedImg = mParser->GetImage();
-    if (!parsedImg || !parsedImg->primary_item.data ||
-        !parsedImg->primary_item.length) {
+    if (!parsedImg.primary_item.data || !parsedImg.primary_item.length) {
       return AsVariant(NonDecoderResult::NoPrimaryItem);
     }
 
     mPicture.emplace();
-    Dav1dResult r = GetPicture(&(parsedImg->primary_item), mPicture.ptr(),
-                               aIsMetadataDecode);
+    Dav1dResult r =
+        GetPicture(parsedImg.primary_item, mPicture.ptr(), aIsMetadataDecode);
     if (r != 0) {
       mPicture.reset();
       return AsVariant(r);
     }
 
-    if (parsedImg->alpha_item.data && parsedImg->alpha_item.length) {
+    if (parsedImg.alpha_item.data && parsedImg.alpha_item.length) {
       mAlphaPlane.emplace();
-      Dav1dResult r = GetPicture(&(parsedImg->alpha_item), mAlphaPlane.ptr(),
+      Dav1dResult r = GetPicture(parsedImg.alpha_item, mAlphaPlane.ptr(),
                                  aIsMetadataDecode);
       if (r != 0) {
         mAlphaPlane.reset();
@@ -212,10 +327,10 @@ class Dav1dDecoder final : AVIFDecoderInterface {
       }
     }
 
-    MOZ_ASSERT_IF(mAlphaPlane.isNothing(), !parsedImg->premultiplied_alpha);
+    MOZ_ASSERT_IF(mAlphaPlane.isNothing(), !parsedImg.premultiplied_alpha);
     mDecodedData.emplace(
         Dav1dPictureToYCbCrAData(mPicture.ptr(), mAlphaPlane.ptrOr(nullptr),
-                                 parsedImg->premultiplied_alpha));
+                                 parsedImg.premultiplied_alpha));
 
     return AsVariant(r);
   }
@@ -237,14 +352,13 @@ class Dav1dDecoder final : AVIFDecoderInterface {
     return dav1d_open(&mContext, &settings);
   }
 
-  Dav1dResult GetPicture(Mp4parseByteData* aBytes, Dav1dPicture* aPicture,
+  Dav1dResult GetPicture(const Mp4parseByteData& aBytes, Dav1dPicture* aPicture,
                          bool aIsMetadataDecode) {
     MOZ_ASSERT(mContext);
-    MOZ_ASSERT(aBytes);
     MOZ_ASSERT(aPicture);
 
     Dav1dData dav1dData;
-    Dav1dResult r = dav1d_data_wrap(&dav1dData, aBytes->data, aBytes->length,
+    Dav1dResult r = dav1d_data_wrap(&dav1dData, aBytes.data, aBytes.length,
                                     Dav1dFreeCallback_s, nullptr);
 
     MOZ_LOG(sAVIFLog, r == 0 ? LogLevel::Verbose : LogLevel::Error,
@@ -269,12 +383,20 @@ class Dav1dDecoder final : AVIFDecoderInterface {
     MOZ_LOG(sAVIFLog, r == 0 ? LogLevel::Debug : LogLevel::Error,
             ("[this=%p] dav1d_get_picture -> %d", this, r));
 
-    // Discard the value outside of the range of uint32
-    if (!aIsMetadataDecode && std::numeric_limits<int>::digits <= 31) {
-      // De-negate POSIX error code returned from DAV1D. This must be sync with
-      // DAV1D_ERR macro.
-      uint32_t value = r < 0 ? -r : r;
-      ScalarSet(ScalarID::AVIF_DAV1D_DECODE_ERROR, value);
+    // When bug 1682662 is fixed, revise this assert and subsequent condition
+    MOZ_ASSERT(aIsMetadataDecode || r == 0);
+
+    // We already have the AVIF_DECODE_RESULT histogram to record all the
+    // successful calls, so only bother recording what type of errors we see
+    // via events. Unlike AOM, dav1d returns an int, not an enum, so this is the
+    // easiest way to see if we're getting unexpected behavior to investigate.
+    if (aIsMetadataDecode && r != 0) {
+      // Uncomment once bug 1691156 is fixed
+      // mozilla::Telemetry::SetEventRecordingEnabled("avif"_ns, true);
+
+      mozilla::Telemetry::RecordEvent(
+          mozilla::Telemetry::EventID::Avif_Dav1dGetPicture_ReturnValue,
+          Some(nsPrintfCString("%d", r)), Nothing());
     }
 
     return r;
@@ -321,20 +443,19 @@ class AOMDecoder final : AVIFDecoderInterface {
     return AsVariant(AOMResult(e));
   }
 
-  DecodeResult Decode(bool aIsMetadataDecode) override {
+  DecodeResult Decode(bool aIsMetadataDecode,
+                      const Mp4parseAvifImage& parsedImg) override {
     MOZ_ASSERT(mParser);
     MOZ_ASSERT(mContext.isSome());
     MOZ_ASSERT(mDecodedData.isNothing());
 
-    AvifImage* parsedImg = mParser->GetImage();
-    if (!parsedImg || !parsedImg->primary_item.data ||
-        !parsedImg->primary_item.length) {
+    if (!parsedImg.primary_item.data || !parsedImg.primary_item.length) {
       return AsVariant(NonDecoderResult::NoPrimaryItem);
     }
 
     aom_image_t* aomImg = nullptr;
     DecodeResult r =
-        GetImage(parsedImg->primary_item, &aomImg, aIsMetadataDecode);
+        GetImage(parsedImg.primary_item, &aomImg, aIsMetadataDecode);
     if (!IsDecodeSuccess(r)) {
       return r;
     }
@@ -350,10 +471,10 @@ class AOMDecoder final : AVIFDecoderInterface {
     }
     mOwnedImage.reset(clonedImg);
 
-    if (parsedImg->alpha_item.data && parsedImg->alpha_item.length) {
+    if (parsedImg.alpha_item.data && parsedImg.alpha_item.length) {
       aom_image_t* alphaImg = nullptr;
       DecodeResult r =
-          GetImage(parsedImg->alpha_item, &alphaImg, aIsMetadataDecode);
+          GetImage(parsedImg.alpha_item, &alphaImg, aIsMetadataDecode);
       if (!IsDecodeSuccess(r)) {
         return r;
       }
@@ -376,11 +497,11 @@ class AOMDecoder final : AVIFDecoderInterface {
       }
     }
 
-    MOZ_ASSERT_IF(!mOwnedAlphaPlane, !parsedImg->premultiplied_alpha);
+    MOZ_ASSERT_IF(!mOwnedAlphaPlane, !parsedImg.premultiplied_alpha);
     mDecodedData.emplace(AOMImageToYCbCrAData(
         mOwnedImage->GetImage(),
         mOwnedAlphaPlane ? mOwnedAlphaPlane->GetImage() : nullptr,
-        parsedImg->premultiplied_alpha));
+        parsedImg.premultiplied_alpha));
 
     return r;
   }
@@ -410,7 +531,7 @@ class AOMDecoder final : AVIFDecoderInterface {
     return r;
   }
 
-  DecodeResult GetImage(Mp4parseByteData& aData, aom_image_t** aImage,
+  DecodeResult GetImage(const Mp4parseByteData& aData, aom_image_t** aImage,
                         bool aIsMetadataDecode) {
     MOZ_ASSERT(mContext.isSome());
 
@@ -421,8 +542,38 @@ class AOMDecoder final : AVIFDecoderInterface {
             ("[this=%p] aom_codec_decode -> %d", this, r));
 
     if (aIsMetadataDecode) {
-      uint32_t value = static_cast<uint32_t>(r);
-      ScalarSet(ScalarID::AVIF_AOM_DECODE_ERROR, value);
+      switch (r) {
+        case AOM_CODEC_OK:
+          // No need to record any telemetry for the common case
+          break;
+        case AOM_CODEC_ERROR:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::error);
+          break;
+        case AOM_CODEC_MEM_ERROR:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::mem_error);
+          break;
+        case AOM_CODEC_ABI_MISMATCH:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::abi_mismatch);
+          break;
+        case AOM_CODEC_INCAPABLE:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::incapable);
+          break;
+        case AOM_CODEC_UNSUP_BITSTREAM:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::unsup_bitstream);
+          break;
+        case AOM_CODEC_UNSUP_FEATURE:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::unsup_feature);
+          break;
+        case AOM_CODEC_CORRUPT_FRAME:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::corrupt_frame);
+          break;
+        case AOM_CODEC_INVALID_PARAM:
+          AccumulateCategorical(LABELS_AVIF_AOM_DECODE_ERROR::invalid_param);
+          break;
+        default:
+          MOZ_ASSERT_UNREACHABLE(
+              "Unknown aom_codec_err_t value from aom_codec_decode");
+      }
     }
 
     if (r != AOM_CODEC_OK) {
@@ -589,49 +740,12 @@ layers::PlanarYCbCrAData Dav1dDecoder::Dav1dPictureToYCbCrAData(
   data.mStereoMode = StereoMode::MONO;
   data.mColorDepth = ColorDepthForBitDepth(aPicture->p.bpc);
 
-  switch (aPicture->seq_hdr->mtrx) {
-    case DAV1D_MC_BT601:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT601;
-      break;
-    case DAV1D_MC_BT709:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT709;
-      break;
-    case DAV1D_MC_BT2020_NCL:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT2020;
-      break;
-    case DAV1D_MC_BT2020_CL:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT2020;
-      break;
-    case DAV1D_MC_IDENTITY:
-      data.mYUVColorSpace = gfx::YUVColorSpace::Identity;
-      break;
-    case DAV1D_MC_CHROMAT_NCL:
-    case DAV1D_MC_CHROMAT_CL:
-    case DAV1D_MC_UNKNOWN:  // MIAF specific
-      switch (aPicture->seq_hdr->pri) {
-        case DAV1D_COLOR_PRI_BT601:
-          data.mYUVColorSpace = gfx::YUVColorSpace::BT601;
-          break;
-        case DAV1D_COLOR_PRI_BT709:
-          data.mYUVColorSpace = gfx::YUVColorSpace::BT709;
-          break;
-        case DAV1D_COLOR_PRI_BT2020:
-          data.mYUVColorSpace = gfx::YUVColorSpace::BT2020;
-          break;
-        default:
-          data.mYUVColorSpace = gfx::YUVColorSpace::UNKNOWN;
-          break;
-      }
-      break;
-    default:
-      MOZ_LOG(sAVIFLog, LogLevel::Debug,
-              ("unsupported color matrix value: %u", aPicture->seq_hdr->mtrx));
-      data.mYUVColorSpace = gfx::YUVColorSpace::UNKNOWN;
-  }
-  if (data.mYUVColorSpace == gfx::YUVColorSpace::UNKNOWN) {
+  auto colorSpace = GetColorSpace(*aPicture, sAVIFLog);
+  if (!colorSpace) {
     // MIAF specific: UNKNOWN color space should be treated as BT601
-    data.mYUVColorSpace = gfx::YUVColorSpace::BT601;
+    colorSpace = Some(gfx::YUVColorSpace::BT601);
   }
+  data.mYUVColorSpace = *colorSpace;
 
   data.mColorRange = aPicture->seq_hdr->color_range ? gfx::ColorRange::FULL
                                                     : gfx::ColorRange::LIMITED;
@@ -686,50 +800,50 @@ layers::PlanarYCbCrAData AOMDecoder::AOMImageToYCbCrAData(
   data.mStereoMode = StereoMode::MONO;
   data.mColorDepth = ColorDepthForBitDepth(aImage->bit_depth);
 
+  Maybe<gfx::YUVColorSpace> colorSpace;
   switch (aImage->mc) {
     case AOM_CICP_MC_BT_601:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT601;
+      colorSpace = Some(gfx::YUVColorSpace::BT601);
       break;
     case AOM_CICP_MC_BT_709:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT709;
+      colorSpace = Some(gfx::YUVColorSpace::BT709);
       break;
     case AOM_CICP_MC_BT_2020_NCL:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT2020;
+      colorSpace = Some(gfx::YUVColorSpace::BT2020);
       break;
     case AOM_CICP_MC_BT_2020_CL:
-      data.mYUVColorSpace = gfx::YUVColorSpace::BT2020;
+      colorSpace = Some(gfx::YUVColorSpace::BT2020);
       break;
     case AOM_CICP_MC_IDENTITY:
-      data.mYUVColorSpace = gfx::YUVColorSpace::Identity;
+      colorSpace = Some(gfx::YUVColorSpace::Identity);
       break;
     case AOM_CICP_MC_CHROMAT_NCL:
     case AOM_CICP_MC_CHROMAT_CL:
     case AOM_CICP_MC_UNSPECIFIED:  // MIAF specific
       switch (aImage->cp) {
         case AOM_CICP_CP_BT_601:
-          data.mYUVColorSpace = gfx::YUVColorSpace::BT601;
+          colorSpace = Some(gfx::YUVColorSpace::BT601);
           break;
         case AOM_CICP_CP_BT_709:
-          data.mYUVColorSpace = gfx::YUVColorSpace::BT709;
+          colorSpace = Some(gfx::YUVColorSpace::BT709);
           break;
         case AOM_CICP_CP_BT_2020:
-          data.mYUVColorSpace = gfx::YUVColorSpace::BT2020;
+          colorSpace = Some(gfx::YUVColorSpace::BT2020);
           break;
         default:
-          data.mYUVColorSpace = gfx::YUVColorSpace::UNKNOWN;
           break;
       }
       break;
     default:
       MOZ_LOG(sAVIFLog, LogLevel::Debug,
               ("unsupported aom_matrix_coefficients value: %u", aImage->mc));
-      data.mYUVColorSpace = gfx::YUVColorSpace::UNKNOWN;
+      break;
   }
-
-  if (data.mYUVColorSpace == gfx::YUVColorSpace::UNKNOWN) {
+  if (!colorSpace) {
     // MIAF specific: UNKNOWN color space should be treated as BT601
-    data.mYUVColorSpace = gfx::YUVColorSpace::BT601;
+    colorSpace = Some(gfx::YUVColorSpace::BT601);
   }
+  data.mYUVColorSpace = *colorSpace;
 
   switch (aImage->range) {
     case AOM_CR_STUDIO_RANGE:
@@ -862,6 +976,37 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::Decode(
     return AsVariant(NonDecoderResult::ParseError);
   }
 
+  const Mp4parseAvifImage* parsedImagePtr = parser->GetImage();
+  if (!parsedImagePtr) {
+    return AsVariant(NonDecoderResult::NoPrimaryItem);
+  }
+  const Mp4parseAvifImage& parsedImg = *parsedImagePtr;
+
+  if (parsedImg.alpha_item.data) {
+    PostHasTransparency();
+  }
+
+  Orientation orientation = StaticPrefs::image_avif_apply_transforms()
+                                ? GetImageOrientation(parsedImg)
+                                : Orientation{};
+  MaybeIntSize parsedImageSize = GetImageSize(parsedImg);
+
+  if (parsedImageSize.isSome()) {
+    MOZ_LOG(sAVIFLog, LogLevel::Debug,
+            ("[this=%p] Parser returned image size %d x %d", this,
+             parsedImageSize->width, parsedImageSize->height));
+    PostSize(parsedImageSize->width, parsedImageSize->height, orientation);
+    if (IsMetadataDecode()) {
+      MOZ_LOG(
+          sAVIFLog, LogLevel::Debug,
+          ("[this=%p] Finishing metadata decode without image decode", this));
+      return AsVariant(NonDecoderResult::MetadataOk);
+    }
+  } else {
+    MOZ_LOG(sAVIFLog, LogLevel::Error,
+            ("[this=%p] Parser returned no image size, decoding...", this));
+  }
+
   UniquePtr<AVIFDecoderInterface> decoder;
   DecodeResult r = StaticPrefs::image_avif_use_dav1d()
                        ? Dav1dDecoder::Create(std::move(parser), decoder)
@@ -877,7 +1022,7 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::Decode(
   }
 
   MOZ_ASSERT(decoder);
-  r = decoder->Decode(IsMetadataDecode());
+  r = decoder->Decode(IsMetadataDecode(), parsedImg);
   MOZ_LOG(sAVIFLog, LogLevel::Debug,
           ("[this=%p] Decoder%s->Decode() %s", this,
            StaticPrefs::image_avif_use_dav1d() ? "Dav1d" : "AOM",
@@ -894,7 +1039,23 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::Decode(
     return AsVariant(NonDecoderResult::AlphaYSizeMismatch);
   }
 
-  PostSize(decodedData.mPicSize.width, decodedData.mPicSize.height);
+  if (parsedImageSize.isNothing()) {
+    // Bug 1696045: TODO add telemetry for missing ispe
+    MOZ_LOG(sAVIFLog, LogLevel::Error,
+            ("[this=%p] Using decoded image size: %d x %d", this,
+             decodedData.mPicSize.width, decodedData.mPicSize.height));
+    PostSize(decodedData.mPicSize.width, decodedData.mPicSize.height,
+             orientation);
+  } else if (decodedData.mPicSize.width != parsedImageSize->width ||
+             decodedData.mPicSize.height != parsedImageSize->height) {
+    MOZ_LOG(sAVIFLog, LogLevel::Error,
+            ("[this=%p] Metadata image size doesn't match decoded image size: "
+             "(%d x %d) != (%d x %d)",
+             this, parsedImageSize->width, parsedImageSize->height,
+             decodedData.mPicSize.width, decodedData.mPicSize.height));
+    // Bug 1696045: TODO need new error type
+    return AsVariant(NonDecoderResult::ParseError);
+  }
 
   const bool hasAlpha = decodedData.hasAlpha();
   if (hasAlpha) {
@@ -912,8 +1073,8 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::Decode(
   AccumulateCategorical(
       gColorDepthLabel[static_cast<size_t>(decodedData.mColorDepth)]);
 
-  const IntSize intrinsicSize = Size();
-  IntSize rgbSize = intrinsicSize;
+  IntSize rgbSize = Size();
+  MOZ_ASSERT(rgbSize == decodedData.mPicSize);
 
   // Get suggested format and size. Note that GetYCbCrToRGBDestFormatAndSize
   // force format to be B8G8R8X8 if it's not.
@@ -950,10 +1111,22 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::Decode(
   }
 
   if (hasAlpha) {
+    const auto wantPremultiply =
+        !bool(GetSurfaceFlags() & SurfaceFlags::NO_PREMULTIPLY_ALPHA);
+    const bool& hasPremultiply = decodedData.mPremultipliedAlpha;
+
+    PremultFunc premultOp = nullptr;
+    if (wantPremultiply && !hasPremultiply) {
+      premultOp = libyuv::ARGBAttenuate;
+    } else if (!wantPremultiply && hasPremultiply) {
+      premultOp = libyuv::ARGBUnattenuate;
+    }
+
     MOZ_LOG(sAVIFLog, LogLevel::Debug,
-            ("[this=%p] calling gfx::ConvertYCbCrAToARGB", this));
+            ("[this=%p] calling gfx::ConvertYCbCrAToARGB premultOp: %p", this,
+             premultOp));
     gfx::ConvertYCbCrAToARGB(decodedData, format, rgbSize, rgbBuf.get(),
-                             rgbStride.value());
+                             rgbStride.value(), premultOp);
   } else {
     MOZ_LOG(sAVIFLog, LogLevel::Debug,
             ("[this=%p] calling gfx::ConvertYCbCrToRGB", this));
@@ -961,23 +1134,11 @@ nsAVIFDecoder::DecodeResult nsAVIFDecoder::Decode(
                            rgbStride.value());
   }
 
-  const bool alphaPremultiplicationRequested =
-      !bool(GetSurfaceFlags() & SurfaceFlags::NO_PREMULTIPLY_ALPHA);
-  SurfacePipeFlags pipeFlags = SurfacePipeFlags();
-  // If the consumer of this decoder has requested output with alpha
-  // premultiplication and the decoded data wasn't already premultipilied, do it
-  // in our pipeline
-  if (alphaPremultiplicationRequested && hasAlpha &&
-      !decodedData.mPremultipliedAlpha) {
-    MOZ_LOG(sAVIFLog, LogLevel::Debug,
-            ("[this=%p] PREMULTIPLY_ALPHA is applied", this));
-    pipeFlags |= SurfacePipeFlags::PREMULTIPLY_ALPHA;
-  }
   MOZ_LOG(sAVIFLog, LogLevel::Debug,
           ("[this=%p] calling SurfacePipeFactory::CreateSurfacePipe", this));
   Maybe<SurfacePipe> pipe = SurfacePipeFactory::CreateSurfacePipe(
       this, rgbSize, OutputSize(), FullFrame(), format, format, Nothing(),
-      nullptr, pipeFlags);
+      nullptr, SurfacePipeFlags());
 
   if (!pipe) {
     MOZ_LOG(sAVIFLog, LogLevel::Debug,

@@ -154,6 +154,19 @@ void MouseEvent::InitNSMouseEvent(const nsAString& aType, bool aCanBubble,
   mouseEventBase->mInputSource = aInputSource;
 }
 
+void MouseEvent::PreventClickEvent() {
+  if (WidgetMouseEvent* mouseEvent = mEvent->AsMouseEvent()) {
+    mouseEvent->mClickEventPrevented = true;
+  }
+}
+
+bool MouseEvent::ClickEventPrevented() {
+  if (WidgetMouseEvent* mouseEvent = mEvent->AsMouseEvent()) {
+    return mouseEvent->mClickEventPrevented;
+  }
+  return false;
+}
+
 int16_t MouseEvent::Button() {
   switch (mEvent->mClass) {
     case eMouseEventClass:

@@ -369,8 +369,8 @@ class RecordedFillGlyphs : public RecordedDrawingEvent<RecordedFillGlyphs> {
   ReferencePtr mScaledFont;
   PatternStorage mPattern;
   DrawOptions mOptions;
-  Glyph* mGlyphs;
-  uint32_t mNumGlyphs;
+  Glyph* mGlyphs = nullptr;
+  uint32_t mNumGlyphs = 0;
 };
 
 class RecordedMask : public RecordedDrawingEvent<RecordedMask> {
@@ -878,7 +878,7 @@ class RecordedSourceSurfaceCreation
   friend class RecordedEvent;
 
   ReferencePtr mRefPtr;
-  uint8_t* mData;
+  uint8_t* mData = nullptr;
   int32_t mStride;
   IntSize mSize;
   SurfaceFormat mFormat;
@@ -1047,8 +1047,8 @@ class RecordedGradientStopsCreation
   friend class RecordedEvent;
 
   ReferencePtr mRefPtr;
-  GradientStop* mStops;
-  uint32_t mNumStops;
+  GradientStop* mStops = nullptr;
+  uint32_t mNumStops = 0;
   ExtendMode mExtendMode;
   bool mDataOwned;
 
@@ -1186,7 +1186,6 @@ class RecordedFontData : public RecordedEventDerived<RecordedFontData> {
   explicit RecordedFontData(UnscaledFont* aUnscaledFont)
       : RecordedEventDerived(FONTDATA),
         mType(aUnscaledFont->GetType()),
-        mData(nullptr),
         mFontDetails() {
     mGetFontFileDataSucceeded =
         aUnscaledFont->GetFontFileData(&FontDataProc, this) && mData;
@@ -1212,7 +1211,7 @@ class RecordedFontData : public RecordedEventDerived<RecordedFontData> {
   friend class RecordedEvent;
 
   FontType mType;
-  uint8_t* mData;
+  uint8_t* mData = nullptr;
   RecordedFontDetails mFontDetails;
 
   bool mGetFontFileDataSucceeded;
@@ -1528,6 +1527,30 @@ class RecordedFilterNodeSetInput
 
   template <class S>
   MOZ_IMPLICIT RecordedFilterNodeSetInput(S& aStream);
+};
+
+class RecordedLink : public RecordedDrawingEvent<RecordedLink> {
+ public:
+  RecordedLink(DrawTarget* aDT, const char* aDestination, const Rect& aRect)
+      : RecordedDrawingEvent(LINK, aDT),
+        mDestination(aDestination),
+        mRect(aRect) {}
+
+  bool PlayEvent(Translator* aTranslator) const override;
+  template <class S>
+  void Record(S& aStream) const;
+  void OutputSimpleEventInfo(std::stringstream& aStringStream) const override;
+
+  std::string GetName() const override { return "Link"; }
+
+ private:
+  friend class RecordedEvent;
+
+  std::string mDestination;
+  Rect mRect;
+
+  template <class S>
+  MOZ_IMPLICIT RecordedLink(S& aStream);
 };
 
 static std::string NameFromBackend(BackendType aType) {
@@ -1937,9 +1960,15 @@ inline void RecordedDrawTargetDestruction::OutputSimpleEventInfo(
 
 inline bool RecordedCreateSimilarDrawTarget::PlayEvent(
     Translator* aTranslator) const {
+  RefPtr<DrawTarget> drawTarget = aTranslator->GetReferenceDrawTarget();
+  if (!drawTarget) {
+    // We might end up with a null reference draw target due to a device
+    // failure, just return false so that we can recover.
+    return false;
+  }
+
   RefPtr<DrawTarget> newDT =
-      aTranslator->GetReferenceDrawTarget()->CreateSimilarDrawTarget(mSize,
-                                                                     mFormat);
+      drawTarget->CreateSimilarDrawTarget(mSize, mFormat);
 
   // If we couldn't create a DrawTarget this will probably cause us to crash
   // with nullptr later in the playback, so return false to abort.
@@ -2024,8 +2053,7 @@ inline bool RecordedCreateDrawTargetForFilter::PlayEvent(
   }
 
   RefPtr<DrawTarget> newDT =
-      aTranslator->GetReferenceDrawTarget()->CreateSimilarDrawTarget(
-          transformedRect.Size(), mFormat);
+      dt->CreateSimilarDrawTarget(transformedRect.Size(), mFormat);
   newDT =
       gfx::Factory::CreateOffsetDrawTarget(newDT, transformedRect.TopLeft());
 
@@ -2337,6 +2365,11 @@ inline void RecordedFill::OutputSimpleEventInfo(
 inline RecordedFillGlyphs::~RecordedFillGlyphs() { delete[] mGlyphs; }
 
 inline bool RecordedFillGlyphs::PlayEvent(Translator* aTranslator) const {
+  if (mNumGlyphs > 0 && !mGlyphs) {
+    // Glyph allocation failed
+    return false;
+  }
+
   DrawTarget* dt = aTranslator->LookupDrawTarget(mDT);
   if (!dt) {
     return false;
@@ -2362,12 +2395,19 @@ RecordedFillGlyphs::RecordedFillGlyphs(S& aStream)
   ReadDrawOptions(aStream, mOptions);
   ReadPatternData(aStream, mPattern);
   ReadElement(aStream, mNumGlyphs);
-  if (!aStream.good()) {
+  if (!aStream.good() || mNumGlyphs <= 0) {
     return;
   }
 
-  mGlyphs = new Glyph[mNumGlyphs];
-  aStream.read((char*)mGlyphs, sizeof(Glyph) * mNumGlyphs);
+  mGlyphs = new (fallible) Glyph[mNumGlyphs];
+  if (!mGlyphs) {
+     gfxCriticalNote
+         << "RecordedFillGlyphs failed to allocate glyphs of size "
+         << mNumGlyphs;
+    aStream.SetIsBad();
+  } else {
+    aStream.read((char*)mGlyphs, sizeof(Glyph) * mNumGlyphs);
+  }
 }
 
 template <class S>
@@ -2924,8 +2964,14 @@ inline RecordedPathCreation::RecordedPathCreation(PathRecording* aPath)
       mPath(aPath) {}
 
 inline bool RecordedPathCreation::PlayEvent(Translator* aTranslator) const {
-  RefPtr<PathBuilder> builder =
-      aTranslator->GetReferenceDrawTarget()->CreatePathBuilder(mFillRule);
+  RefPtr<DrawTarget> drawTarget = aTranslator->GetReferenceDrawTarget();
+  if (!drawTarget) {
+    // We might end up with a null reference draw target due to a device
+    // failure, just return false so that we can recover.
+    return false;
+  }
+
+  RefPtr<PathBuilder> builder = drawTarget->CreatePathBuilder(mFillRule);
   if (!mPathOps->StreamToSink(*builder)) {
     return false;
   }
@@ -3026,8 +3072,11 @@ RecordedSourceSurfaceCreation::RecordedSourceSurfaceCreation(S& aStream)
     return;
   }
 
-  size_t size = mSize.width * mSize.height * BytesPerPixel(mFormat);
-  mData = new (fallible) uint8_t[size];
+  size_t size = 0;
+  if (mSize.width >= 0 && mSize.height >= 0) {
+    size = size_t(mSize.width) * size_t(mSize.height) * BytesPerPixel(mFormat);
+    mData = new (fallible) uint8_t[size];
+  }
   if (!mData) {
     gfxCriticalNote
         << "RecordedSourceSurfaceCreation failed to allocate data of size "
@@ -3138,8 +3187,14 @@ inline RecordedFilterNodeCreation::~RecordedFilterNodeCreation() = default;
 
 inline bool RecordedFilterNodeCreation::PlayEvent(
     Translator* aTranslator) const {
-  RefPtr<FilterNode> node =
-      aTranslator->GetReferenceDrawTarget()->CreateFilter(mType);
+  RefPtr<DrawTarget> drawTarget = aTranslator->GetReferenceDrawTarget();
+  if (!drawTarget) {
+    // We might end up with a null reference draw target due to a device
+    // failure, just return false so that we can recover.
+    return false;
+  }
+
+  RefPtr<FilterNode> node = drawTarget->CreateFilter(mType);
   aTranslator->AddFilterNode(mRefPtr, node);
   return true;
 }
@@ -3194,9 +3249,12 @@ inline RecordedGradientStopsCreation::~RecordedGradientStopsCreation() {
 
 inline bool RecordedGradientStopsCreation::PlayEvent(
     Translator* aTranslator) const {
+  if (mNumStops > 0 && !mStops) {
+    // Stops allocation failed
+    return false;
+  }
   RefPtr<GradientStops> src =
-      aTranslator->GetReferenceDrawTarget()->CreateGradientStops(
-          mStops, mNumStops, mExtendMode);
+      aTranslator->GetOrCreateGradientStops(mStops, mNumStops, mExtendMode);
   aTranslator->AddGradientStops(mRefPtr, src);
   return true;
 }
@@ -3216,13 +3274,19 @@ RecordedGradientStopsCreation::RecordedGradientStopsCreation(S& aStream)
   ReadElementConstrained(aStream, mExtendMode, ExtendMode::CLAMP,
                          ExtendMode::REFLECT);
   ReadElement(aStream, mNumStops);
-  if (!aStream.good()) {
+  if (!aStream.good() || mNumStops <= 0) {
     return;
   }
 
-  mStops = new GradientStop[mNumStops];
-
-  aStream.read((char*)mStops, mNumStops * sizeof(GradientStop));
+  mStops = new (fallible) GradientStop[mNumStops];
+  if (!mStops) {
+    gfxCriticalNote
+        << "RecordedGradientStopsCreation failed to allocate stops of size "
+        << mNumStops;
+    aStream.SetIsBad();
+  } else {
+    aStream.read((char*)mStops, mNumStops * sizeof(GradientStop));
+  }
 }
 
 inline void RecordedGradientStopsCreation::OutputSimpleEventInfo(
@@ -3431,7 +3495,7 @@ inline bool RecordedFontData::GetFontDetails(RecordedFontDetails& fontDetails) {
 
 template <class S>
 RecordedFontData::RecordedFontData(S& aStream)
-    : RecordedEventDerived(FONTDATA), mType(FontType::UNKNOWN), mData(nullptr) {
+    : RecordedEventDerived(FONTDATA), mType(FontType::UNKNOWN) {
   ReadElementConstrained(aStream, mType, FontType::DWRITE, FontType::UNKNOWN);
   ReadElement(aStream, mFontDetails.fontDataKey);
   ReadElement(aStream, mFontDetails.size);
@@ -3848,6 +3912,42 @@ inline void RecordedFilterNodeSetInput::OutputSimpleEventInfo(
   aStringStream << ")";
 }
 
+inline bool RecordedLink::PlayEvent(Translator* aTranslator) const {
+  DrawTarget* dt = aTranslator->LookupDrawTarget(mDT);
+  if (!dt) {
+    return false;
+  }
+  dt->Link(mDestination.c_str(), mRect);
+  return true;
+}
+
+template <class S>
+void RecordedLink::Record(S& aStream) const {
+  RecordedDrawingEvent::Record(aStream);
+  WriteElement(aStream, mRect);
+  uint32_t len = mDestination.length();
+  WriteElement(aStream, len);
+  if (len) {
+    aStream.write(mDestination.data(), len);
+  }
+}
+
+template <class S>
+RecordedLink::RecordedLink(S& aStream) : RecordedDrawingEvent(LINK, aStream) {
+  ReadElement(aStream, mRect);
+  uint32_t len;
+  ReadElement(aStream, len);
+  mDestination.resize(size_t(len));
+  if (len && aStream.good()) {
+    aStream.read(&mDestination.front(), len);
+  }
+}
+
+inline void RecordedLink::OutputSimpleEventInfo(
+    std::stringstream& aStringStream) const {
+  aStringStream << "Link [" << mDestination << " @ " << mRect << "]";
+}
+
 #define FOR_EACH_EVENT(f)                                          \
   f(DRAWTARGETCREATION, RecordedDrawTargetCreation);               \
   f(DRAWTARGETDESTRUCTION, RecordedDrawTargetDestruction);         \
@@ -3896,7 +3996,8 @@ inline void RecordedFilterNodeSetInput::OutputSimpleEventInfo(
   f(EXTERNALSURFACECREATION, RecordedExternalSurfaceCreation);     \
   f(FLUSH, RecordedFlush);                                         \
   f(DETACHALLSNAPSHOTS, RecordedDetachAllSnapshots);               \
-  f(OPTIMIZESOURCESURFACE, RecordedOptimizeSourceSurface);
+  f(OPTIMIZESOURCESURFACE, RecordedOptimizeSourceSurface);         \
+  f(LINK, RecordedLink);
 
 #define DO_WITH_EVENT_TYPE(_typeenum, _class) \
   case _typeenum: {                           \

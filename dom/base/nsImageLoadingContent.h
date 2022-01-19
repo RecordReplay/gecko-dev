@@ -92,6 +92,13 @@ class nsImageLoadingContent : public nsIImageLoadingContent {
    */
   void NotifyOwnerDocumentActivityChanged();
 
+  /**
+   * Enables/disables image state forcing. When |aForce| is true, we force
+   * nsImageLoadingContent::ImageState() to return |aState|. Call again with
+   * |aForce| as false to revert ImageState() to its original behaviour.
+   */
+  void ForceImageState(bool aForce, mozilla::EventStates::InternalType aState);
+
  protected:
   enum ImageLoadType {
     // Most normal image loads
@@ -144,7 +151,6 @@ class nsImageLoadingContent : public nsIImageLoadingContent {
    * @param aNotify If true, nsIDocumentObserver state change notifications
    *                will be sent as needed.
    * @param aImageLoadType The ImageLoadType for this request
-   * @param aLoadStart If true, dispatch "loadstart" event.
    * @param aDocument Optional parameter giving the document this node is in.
    *        This is purely a performance optimization.
    * @param aLoadFlags Optional parameter specifying load flags to use for
@@ -154,7 +160,6 @@ class nsImageLoadingContent : public nsIImageLoadingContent {
    */
   nsresult LoadImage(nsIURI* aNewURI, bool aForce, bool aNotify,
                      ImageLoadType aImageLoadType, nsLoadFlags aLoadFlags,
-                     bool aLoadStart = true,
                      mozilla::dom::Document* aDocument = nullptr,
                      nsIPrincipal* aTriggeringPrincipal = nullptr);
 
@@ -162,7 +167,7 @@ class nsImageLoadingContent : public nsIImageLoadingContent {
                      ImageLoadType aImageLoadType,
                      nsIPrincipal* aTriggeringPrincipal) {
     return LoadImage(aNewURI, aForce, aNotify, aImageLoadType, LoadFlags(),
-                     true, nullptr, aTriggeringPrincipal);
+                     nullptr, aTriggeringPrincipal);
   }
 
   /**
@@ -232,9 +237,6 @@ class nsImageLoadingContent : public nsIImageLoadingContent {
   // want a non-const nsIContent.
   virtual nsIContent* AsContent() = 0;
 
-  // Hooks for subclasses to call to get the intrinsic width and height.
-  uint32_t NaturalWidth();
-  uint32_t NaturalHeight();
   /**
    * Get width and height of the current request, using given image request if
    * attributes are unset.

@@ -29,6 +29,9 @@ web-platform-tests-backlog:
 web-platform-tests-wdspec-headless:
     - web-platform-tests-wdspec-headless
 
+mochitest-devtools-chrome:
+    - mochitest-devtools-chrome
+
 mochitest-webgpu:
     - mochitest-webgpu
 
@@ -79,15 +82,6 @@ talos-ref-hw:
     - talos-webgl
 
 raptor-firefox:
-    - raptor-tp6
-    - raptor-tp6-live
-    - raptor-speedometer-firefox
-    - raptor-stylebench-firefox
-    - raptor-motionmark-htmlsuite-firefox
-    - raptor-motionmark-animometer-firefox
-    - raptor-webaudio-firefox
-    - raptor-sunspider-firefox
-    - raptor-wasm-godot-firefox
     - raptor-youtube-playback-av1-sfr-firefox
     - raptor-youtube-playback-h264-sfr-firefox
     - raptor-youtube-playback-hfr-firefox
@@ -95,19 +89,8 @@ raptor-firefox:
     - raptor-youtube-playback-widevine-hfr-firefox
     - raptor-youtube-playback-widevine-h264-sfr-firefox
     - raptor-youtube-playback-widevine-vp9-sfr-firefox
-    - raptor-ares6-firefox
-    - raptor-jetstream2-firefox
 
 raptor-chrome:
-    - raptor-speedometer-chrome
-    - raptor-stylebench-chrome
-    - raptor-motionmark-htmlsuite-chrome
-    - raptor-motionmark-animometer-chrome
-    - raptor-webaudio-chrome
-    - raptor-sunspider-chrome
-    - raptor-wasm-godot-chrome
-    - raptor-ares6-chrome
-    - raptor-jetstream2-chrome
     - raptor-youtube-playback-av1-sfr-chrome
     - raptor-youtube-playback-h264-sfr-chrome
     - raptor-youtube-playback-hfr-chrome
@@ -116,59 +99,23 @@ raptor-chrome:
     - raptor-youtube-playback-widevine-h264-sfr-chrome
     - raptor-youtube-playback-widevine-vp9-sfr-chrome
 
-raptor-profiling:
-    - raptor-speedometer-firefox-profiling
-    - raptor-stylebench-firefox-profiling
-    - raptor-motionmark-htmlsuite-firefox-profiling
-    - raptor-motionmark-animometer-firefox-profiling
-    - raptor-webaudio-firefox-profiling
-    - raptor-sunspider-firefox-profiling
-    - raptor-wasm-godot-firefox-profiling
-    - raptor-ares6-firefox-profiling
-    - raptor-jetstream2-firefox-profiling
-
-raptor-chromium:
-    - raptor-speedometer-chromium
-    - raptor-stylebench-chromium
-    - raptor-motionmark-htmlsuite-chromium
-    - raptor-motionmark-animometer-chromium
-    - raptor-webaudio-chromium
-    - raptor-sunspider-chromium
-    - raptor-wasm-godot-chromium
-    - raptor-ares6-chromium
-    - raptor-jetstream2-chromium
-
-# Fetch tasks are only supported on Linux for now,
-# so these need to be separate sets.
-raptor-fetch-firefox:
-    - raptor-unity-webgl-firefox
-    - raptor-wasm-misc-firefox
-    - raptor-wasm-misc-baseline-firefox
-    - raptor-wasm-misc-optimizing-firefox
-    - raptor-wasm-godot-baseline-firefox
-    - raptor-wasm-godot-optimizing-firefox
-    - raptor-assorted-dom-firefox
-
-raptor-fetch-profiling:
-    - raptor-unity-webgl-firefox-profiling
-    - raptor-wasm-misc-firefox-profiling
-    - raptor-wasm-misc-baseline-firefox-profiling
-    - raptor-wasm-misc-optimizing-firefox-profiling
-    - raptor-wasm-godot-baseline-firefox-profiling
-    - raptor-wasm-godot-optimizing-firefox-profiling
-    - raptor-assorted-dom-firefox-profiling
-
-raptor-fetch-chromium:
-    - raptor-unity-webgl-chromium
-    - raptor-wasm-misc-chromium
-    - raptor-assorted-dom-chromium
-    - raptor-jetstream2-chromium
-
 browsertime:
     - browsertime-tp6
-    - browsertime-speedometer
-    - browsertime-ares6
+    - browsertime-tp6-essential
+    - browsertime-tp6-live
+    - browsertime-tp6-live-sheriffed
+    - browsertime-benchmark
+    - browsertime-benchmark-wasm
+    - browsertime-youtube-playback
+    - browsertime-custom
+    - browsertime-first-install
+
+browsertime-profiling:
     - browsertime-tp6-profiling
+
+browsertime-high-priority:
+    - browsertime-benchmark
+    - browsertime-tp6
 
 # Raptor desktop power tests
 # (requires Intel Power Gadget to be pre-installed)
@@ -193,19 +140,17 @@ mochitest-headless:
 mochitest-valgrind:
     - mochitest-valgrind
 
-marionette-framescript:
-    - marionette-framescript
-
 marionette-headless:
     - marionette-headless
 
 desktop-screenshot-capture:
     - browser-screenshots
 
-
 ### Specific platform test sets
 
 # Linux
+linux32-gtest:
+    - gtest
 
 linux32-tests:
     - web-platform-tests
@@ -233,31 +178,11 @@ linux1804-tests:
     - mochitest-webgl2-core
     - mochitest-webgl2-ext
     - reftest
-    - reftest-no-accel
+    - reftest-snapshot
     - telemetry-tests-client
     - test-verify
     - test-verify-gpu
     - test-verify-wpt
-    - xpcshell
-
-linux1804-qr-tests:
-    - cppunit
-    - crashtest
-    - gtest
-    # - jittest  # See comment in linux1804-ccov-tests set.
-    - jsreftest
-    - mochitest-a11y
-    - mochitest-chrome
-    - mochitest-chrome-gpu
-    - mochitest-media
-    - mochitest-plain
-    - mochitest-plain-gpu
-    - mochitest-remote
-    - mochitest-webgl1-core
-    - mochitest-webgl1-ext
-    - mochitest-webgl2-core
-    - mochitest-webgl2-ext
-    - reftest
     - xpcshell
 
 linux1804-ccov-tests:
@@ -267,53 +192,36 @@ linux1804-ccov-tests:
     # on ccov builds.
     - jittest
 
-linux-qr-smoketests:
-    - crashtest
-    - reftest
-
 linux-talos-flex:
     - talos-flex
 
 # Windows
 
-windows-qr-tests:
-    - crashtest
-    - mochitest-chrome-gpu
+windows-7-tests:
     - mochitest-browser-chrome
-    - mochitest-plain
-    - mochitest-plain-gpu
-    - mochitest-media
-    - mochitest-webgl1-core
-    - mochitest-webgl2-core
+    - mochitest-webgpu
     - reftest
+    - xpcshell
 
-windows-reftest-gpu:
-    - reftest-gpu
-
-windows-tests:
+windows32-2004-tests:
     - cppunit
     - crashtest
+    - gtest
     - firefox-ui-functional-local
     - firefox-ui-functional-remote
-    - gtest
-    # - jittest  # See comment in windows-ccov-tests set.
     - jsreftest
     - marionette
     - mochitest-a11y
-    - mochitest-browser-chrome
     - mochitest-chrome
     - mochitest-chrome-gpu
     - mochitest-media
     - mochitest-plain
     - mochitest-plain-gpu
     - mochitest-remote
-    - reftest
-    - reftest-no-accel
     - telemetry-tests-client
     - test-verify
     - test-verify-gpu
     - test-verify-wpt
-    - xpcshell
 
 windows-ccov-tests:
     # jittest run on regular windows builds is redundant with SM(p), so we omit
@@ -321,12 +229,63 @@ windows-ccov-tests:
     # so we have this set that has it and which runs on ccov builds.
     - jittest
 
-windows10-tests:
+windows10-2004-tests:
+    - cppunit
+    - crashtest
+    - firefox-ui-functional-local
+    - firefox-ui-functional-remote
+    - gtest
+    - jsreftest
+    - marionette
+    - mochitest-a11y
+    - mochitest-browser-chrome
+    - mochitest-chrome
+    - mochitest-chrome-gpu
+    - mochitest-devtools-chrome
+    - mochitest-media
+    - mochitest-plain
+    - mochitest-plain-gpu
+    - mochitest-remote
+    - mochitest-webgpu
     - mochitest-webgl1-core
     - mochitest-webgl1-ext
     - mochitest-webgl2-core
     - mochitest-webgl2-ext
+    - reftest
+    - telemetry-tests-client
+    - test-verify
+    - test-verify-gpu
+    - test-verify-wpt
+    - xpcshell
+
+windows10-64-ccov-tests:
+    - jittest
+    - mochitest-plain
+    - mochitest-browser-chrome
     - mochitest-devtools-chrome
+    - web-platform-tests
+    - web-platform-tests-reftest
+    - web-platform-tests-wdspec
+    - crashtest
+    - reftest
+    - xpcshell
+
+windows10-64-2004-ccov-tests:
+    - gtest
+    - marionette
+    - test-coverage
+    - test-verify
+    - test-verify-gpu
+    - cppunit
+    - jsreftest
+    - web-platform-tests-crashtest
+    - web-platform-tests-print-reftest
+
+windows10-64-2004-failure-tests:
+    - mochitest-browser-chrome-failures
+
+windows10-32-2004-failure-tests:
+    - xpcshell-failures
 
 mingwclang-tests-debug:
     - cppunit
@@ -346,7 +305,7 @@ mingwclang-tests-debug:
 # The following is the same as the above block, minus reftests.
 # Reftests were disabled due to frequent hangs; see bug 1642719
 # for re-enabling.
-mingwclang-win7-tests-debug:
+mingwclang-win32-tests-debug:
     - cppunit
     - firefox-ui-functional-local
     - firefox-ui-functional-remote
@@ -367,9 +326,7 @@ mingwclang-tests-opt:
     - mochitest-plain-gpu
 
 windows-aarch64-tests:
-    - crashtest
     - mochitest-media
-    - reftest
 
 windows-talos:
     - talos-bcv
@@ -393,12 +350,33 @@ windows-talos:
 
 # macOS
 
-macosx1014-64-tests:
-    - crashtest
-    - reftest
-    - web-platform-tests-reftest
+macosx1100-64-qr-failure-tests:
+    - xpcshell-failures
+    - mochitest-media-failures
+    - mochitest-browser-chrome-failures
 
-macosx1014-64-qr-tests:
+macosx1100-64-jittests:
+    - jittest
+
+macosx1100-64-qr-tests:
+    - crashtest
+    - jsreftest
+    - mochitest-browser-chrome
+    - mochitest-chrome-gpu
+    - mochitest-media
+    - mochitest-webgpu
+    - mochitest-webgl1-core
+    - mochitest-webgl1-ext
+    - mochitest-webgl2-core
+    - mochitest-webgl2-ext
+    - reftest
+    - xpcshell
+
+macosx1015-64-qr-failure-tests:
+    - mochitest-media-failures
+    - mochitest-browser-chrome-failures
+
+macosx1015-64-qr-tests:
     - cppunit
     - crashtest
     - firefox-ui-functional-local
@@ -412,9 +390,9 @@ macosx1014-64-qr-tests:
     - mochitest-chrome
     - mochitest-chrome-gpu
     - mochitest-devtools-chrome
+    - mochitest-media
     - mochitest-plain
     - mochitest-plain-gpu
-    - mochitest-media
     - mochitest-remote
     - mochitest-webgl1-core
     - mochitest-webgl1-ext
@@ -427,6 +405,10 @@ macosx1014-64-qr-tests:
     - test-verify-gpu
     - test-verify-wpt
     - xpcshell
+
+# debug only
+macosx1015-64-tests:
+    - web-platform-tests-reftest
 
 macosx64-talos:
     - talos-bcv
@@ -483,15 +465,13 @@ android-hw-aarch64-opt-unittests:
     - jittest
 
 android-hw-arm7-pgo-unittests:
-    - jittest
-    - jsreftest
+    - jittest-all
 
 android-hw-aarch64-pgo-unittests:
     - jittest
 
 android-hw-arm7-debug-unittests:
     - jittest
-    - jsreftest
 
 android-hw-aarch64-debug-unittests:
     - jittest
@@ -532,29 +512,25 @@ android-hw-aarch64-raptor-cpu-memory-power:
     - raptor-scn-cpu-memory-power-idle-bg-geckoview
     - raptor-scn-cpu-memory-power-idle-bg-refbrow
 
-android-hw-aarch64-browsertime:
+android-hw-browsertime:
     - browsertime-power
     - browsertime-tp6m
+    - browsertime-tp6m-essential
     - browsertime-tp6m-live
-    - browsertime-tp6m-profiling
     - browsertime-speedometer-mobile
     - browsertime-youtube-playback-mobile
     - browsertime-unity-webgl-mobile
 
-android-hw-arm7-browsertime:
-    - browsertime-power
-    - browsertime-tp6m
-    - browsertime-tp6m-live
+android-hw-browsertime-profiling:
     - browsertime-tp6m-profiling
-    - browsertime-speedometer-mobile
-    - browsertime-youtube-playback-mobile
-    - browsertime-unity-webgl-mobile
 
 linux-tsan-tests:
+    - crashtest
     - mochitest-a11y
     - mochitest-browser-chrome
     - mochitest-media
     - mochitest-plain
+    - reftest
     - web-platform-tests
     - web-platform-tests-reftest
     - xpcshell

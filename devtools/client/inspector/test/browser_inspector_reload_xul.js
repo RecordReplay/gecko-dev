@@ -15,25 +15,15 @@ add_task(async function() {
 });
 
 async function testToolboxInitialization(tab, inspector, toolbox) {
-  const target = await TargetFactory.forTab(tab);
-
   ok(true, "Inspector started, and notification received.");
   ok(inspector, "Inspector instance is accessible.");
-  ok(inspector.isReady, "Inspector instance is ready.");
   is(inspector.currentTarget.localTab, tab, "Valid target.");
 
   await selectNode("#p", inspector);
   await testMarkupView("#p", inspector);
 
   info("Reloading the page.");
-  const markuploaded = inspector.once("markuploaded");
-  const onNewRoot = inspector.once("new-root");
-  const onUpdated = inspector.once("inspector-updated");
-  await toolbox.target.reload();
-  info("Waiting for inspector to be ready.");
-  await markuploaded;
-  await onNewRoot;
-  await onUpdated;
+  await navigateTo(TEST_URI);
 
   await selectNode("#q", inspector);
   await testMarkupView("#q", inspector);
@@ -42,7 +32,8 @@ async function testToolboxInitialization(tab, inspector, toolbox) {
   await toolbox.destroy();
 
   ok(true, "'destroyed' notification received.");
-  ok(!gDevTools.getToolbox(target), "Toolbox destroyed.");
+  const toolboxForTab = await gDevTools.getToolboxForTab(tab);
+  ok(!toolboxForTab, "Toolbox destroyed.");
 }
 
 async function testMarkupView(selector, inspector) {

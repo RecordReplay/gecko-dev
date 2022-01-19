@@ -31,7 +31,6 @@ EXPORTS += [
     "gfxFont.h",
     "gfxFontConstants.h",
     "gfxFontEntry.h",
-    "gfxFontFamilyList.h",
     "gfxFontFeatures.h",
     "gfxFontInfoLoader.h",
     "gfxFontPrefLangList.h",
@@ -136,9 +135,13 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
             "gfxXlibNativeRenderer.h",
             "gfxXlibSurface.h",
         ]
+        EXPORTS.mozilla.gfx += [
+            "XlibDisplay.h",
+        ]
         SOURCES += [
             "gfxXlibNativeRenderer.cpp",
             "gfxXlibSurface.cpp",
+            "XlibDisplay.cpp",
         ]
 
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
@@ -260,6 +263,7 @@ FINAL_LIBRARY = "xul"
 
 LOCAL_INCLUDES += [
     "/dom/base",
+    "/dom/media/platforms/apple",
     "/dom/xml",
 ]
 
@@ -292,3 +296,5 @@ DEFINES["GRAPHITE2_STATIC"] = True
 if CONFIG["CC_TYPE"] == "clang":
     # Suppress warnings from Skia header files.
     SOURCES["gfxPlatform.cpp"].flags += ["-Wno-implicit-fallthrough"]
+
+CXXFLAGS += ["-Werror=switch"]

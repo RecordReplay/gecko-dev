@@ -6,13 +6,13 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/TextUtils.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/Utf8.h"
 
 #include "nsCOMPtr.h"
 #include "nsMemory.h"
-#include "GeckoProfiler.h"
 
 #include "nsLocalFile.h"
 #include "nsLocalFileCommon.h"
@@ -80,6 +80,11 @@ using mozilla::FilePreferences::kPathSeparator;
 
 #ifndef DRIVE_REMOTE
 #  define DRIVE_REMOTE 4
+#endif
+
+// MinGW does not know about this error, ensure we do.
+#ifndef ERROR_DEVICE_HARDWARE_ERROR
+#  define ERROR_DEVICE_HARDWARE_ERROR 483L
 #endif
 
 namespace {
@@ -238,32 +243,45 @@ class nsDriveEnumerator : public nsSimpleEnumerator,
  * code will be logged to stderr. Error codes, names, and descriptions can be
  * found at the following MSDN page:
  * https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes
+ *
+ * \note When adding more mappings here, it must be checked if there's code that
+ * depends on the current generic NS_ERROR_MODULE_WIN32 mapping for such error
+ * codes.
  */
 static nsresult ConvertWinError(DWORD aWinErr) {
   nsresult rv;
 
   switch (aWinErr) {
     case ERROR_FILE_NOT_FOUND:
+      [[fallthrough]];  // to NS_ERROR_FILE_NOT_FOUND
     case ERROR_PATH_NOT_FOUND:
+      [[fallthrough]];  // to NS_ERROR_FILE_NOT_FOUND
     case ERROR_INVALID_DRIVE:
+      [[fallthrough]];  // to NS_ERROR_FILE_NOT_FOUND
     case ERROR_NOT_READY:
       rv = NS_ERROR_FILE_NOT_FOUND;
       break;
     case ERROR_ACCESS_DENIED:
+      [[fallthrough]];  // to NS_ERROR_FILE_ACCESS_DENIED
     case ERROR_NOT_SAME_DEVICE:
       rv = NS_ERROR_FILE_ACCESS_DENIED;
       break;
     case ERROR_SHARING_VIOLATION:  // CreateFile without sharing flags
+      [[fallthrough]];             // to NS_ERROR_FILE_IS_LOCKED
     case ERROR_LOCK_VIOLATION:     // LockFile, LockFileEx
       rv = NS_ERROR_FILE_IS_LOCKED;
       break;
     case ERROR_NOT_ENOUGH_MEMORY:
+      [[fallthrough]];  // to NS_ERROR_OUT_OF_MEMORY
     case ERROR_INVALID_BLOCK:
+      [[fallthrough]];  // to NS_ERROR_OUT_OF_MEMORY
     case ERROR_INVALID_HANDLE:
+      [[fallthrough]];  // to NS_ERROR_OUT_OF_MEMORY
     case ERROR_ARENA_TRASHED:
       rv = NS_ERROR_OUT_OF_MEMORY;
       break;
     case ERROR_DIR_NOT_EMPTY:
+      [[fallthrough]];  // to NS_ERROR_FILE_DIR_NOT_EMPTY
     case ERROR_CURRENT_DIRECTORY:
       rv = NS_ERROR_FILE_DIR_NOT_EMPTY;
       break;
@@ -271,10 +289,14 @@ static nsresult ConvertWinError(DWORD aWinErr) {
       rv = NS_ERROR_FILE_READ_ONLY;
       break;
     case ERROR_HANDLE_DISK_FULL:
-      rv = NS_ERROR_FILE_TOO_BIG;
+      [[fallthrough]];  // to NS_ERROR_FILE_NO_DEVICE_SPACE
+    case ERROR_DISK_FULL:
+      rv = NS_ERROR_FILE_NO_DEVICE_SPACE;
       break;
     case ERROR_FILE_EXISTS:
+      [[fallthrough]];  // to NS_ERROR_FILE_ALREADY_EXISTS
     case ERROR_ALREADY_EXISTS:
+      [[fallthrough]];  // to NS_ERROR_FILE_ALREADY_EXISTS
     case ERROR_CANNOT_MAKE:
       rv = NS_ERROR_FILE_ALREADY_EXISTS;
       break;
@@ -283,6 +305,16 @@ static nsresult ConvertWinError(DWORD aWinErr) {
       break;
     case ERROR_DIRECTORY:
       rv = NS_ERROR_FILE_NOT_DIRECTORY;
+      break;
+    case ERROR_FILE_CORRUPT:
+      rv = NS_ERROR_FILE_FS_CORRUPTED;
+      break;
+    case ERROR_DEVICE_HARDWARE_ERROR:
+      [[fallthrough]];  // to NS_ERROR_FILE_DEVICE_FAILURE
+    case ERROR_DEVICE_NOT_CONNECTED:
+      [[fallthrough]];  // to NS_ERROR_FILE_DEVICE_FAILURE
+    case ERROR_IO_DEVICE:
+      rv = NS_ERROR_FILE_DEVICE_FAILURE;
       break;
     case 0:
       rv = NS_OK;
@@ -1206,7 +1238,7 @@ static nsresult do_mkdir(nsIFile*, const nsString& aPath, uint32_t) {
 }
 
 NS_IMETHODIMP
-nsLocalFile::Create(uint32_t aType, uint32_t aAttributes) {
+nsLocalFile::Create(uint32_t aType, uint32_t aAttributes, bool aSkipAncestors) {
   if (aType != NORMAL_FILE_TYPE && aType != DIRECTORY_TYPE) {
     return NS_ERROR_FILE_UNKNOWN_TYPE;
   }
@@ -1215,7 +1247,8 @@ nsLocalFile::Create(uint32_t aType, uint32_t aAttributes) {
 
   nsresult rv = createFunc(this, mWorkingPath, aAttributes);
 
-  if (NS_SUCCEEDED(rv) || NS_ERROR_FILE_ALREADY_EXISTS == rv) {
+  if (NS_SUCCEEDED(rv) || NS_ERROR_FILE_ALREADY_EXISTS == rv ||
+      aSkipAncestors) {
     return rv;
   }
 

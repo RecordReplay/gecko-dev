@@ -73,7 +73,7 @@ inline bool IsExtensible(JSContext* cx, JS::Handle<JSObject*> obj,
   // If the following assertion fails, there's somewhere else a missing
   // call to shrinkCapacityToInitializedLength() which needs to be found and
   // fixed.
-  MOZ_ASSERT_IF(obj->isNative() && !*extensible,
+  MOZ_ASSERT_IF(obj->is<NativeObject>() && !*extensible,
                 obj->as<NativeObject>().getDenseInitializedLength() ==
                     obj->as<NativeObject>().getDenseCapacity());
   return true;
@@ -153,6 +153,24 @@ inline bool GetElement(JSContext* cx, JS::Handle<JSObject*> obj,
                        JS::MutableHandle<JS::Value> vp) {
   JS::Rooted<JS::Value> receiverValue(cx, JS::ObjectValue(*receiver));
   return GetElement(cx, obj, receiverValue, index, vp);
+}
+
+inline bool GetElementLargeIndex(JSContext* cx, JS::Handle<JSObject*> obj,
+                                 JS::Handle<JSObject*> receiver, uint64_t index,
+                                 JS::MutableHandle<JS::Value> vp) {
+  MOZ_ASSERT(index < uint64_t(DOUBLE_INTEGRAL_PRECISION_LIMIT));
+
+  if (MOZ_LIKELY(index <= UINT32_MAX)) {
+    return GetElement(cx, obj, receiver, uint32_t(index), vp);
+  }
+
+  RootedValue tmp(cx, DoubleValue(index));
+  RootedId id(cx);
+  if (!PrimitiveValueToId<CanGC>(cx, tmp, &id)) {
+    return false;
+  }
+
+  return GetProperty(cx, obj, obj, id, vp);
 }
 
 inline bool GetPropertyNoGC(JSContext* cx, JSObject* obj,

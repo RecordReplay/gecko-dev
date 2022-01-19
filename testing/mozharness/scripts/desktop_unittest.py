@@ -19,7 +19,6 @@ import copy
 import shutil
 import glob
 import imp
-import platform
 
 from datetime import datetime, timedelta
 
@@ -280,6 +279,24 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     "Examples: 'apple_silicon'",
                 },
             ],
+            [
+                ["--crash-as-pass"],
+                {
+                    "action": "store_true",
+                    "default": False,
+                    "dest": "crash_as_pass",
+                    "help": "treat harness level crash as a pass",
+                },
+            ],
+            [
+                ["--timeout-as-pass"],
+                {
+                    "action": "store_true",
+                    "default": False,
+                    "dest": "timeout_as_pass",
+                    "help": "treat harness level timeout as a pass",
+                },
+            ],
         ]
         + copy.deepcopy(testing_config_options)
         + copy.deepcopy(code_coverage_config_options)
@@ -450,17 +467,12 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
         self.register_virtualenv_module(name="mock")
         self.register_virtualenv_module(name="simplejson")
 
-        marionette_requirements_file = os.path.join(
-            dirs["abs_test_install_dir"], "config", "marionette_requirements.txt"
-        )
-        # marionette_requirements.txt must use the legacy resolver until bug 1684969 is resolved.
-        self.register_virtualenv_module(
-            requirements=[marionette_requirements_file],
-            two_pass=True,
-            legacy_resolver=True,
-        )
+        requirements_files = [
+            os.path.join(
+                dirs["abs_test_install_dir"], "config", "marionette_requirements.txt"
+            )
+        ]
 
-        requirements_files = []
         if self._query_specified_suites("mochitest") is not None:
             # mochitest is the only thing that needs this
             if PY2:
@@ -610,6 +622,12 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
 
             if c["run_failures"]:
                 base_cmd.extend(["--run-failures={}".format(c["run_failures"])])
+
+            if c["timeout_as_pass"]:
+                base_cmd.append("--timeout-as-pass")
+
+            if c["crash_as_pass"]:
+                base_cmd.append("--crash-as-pass")
 
             # set pluginsPath
             abs_res_plugins_dir = os.path.join(abs_res_dir, "plugins")
@@ -1024,6 +1042,7 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
             max_per_test_tests = 30
         executed_tests = 0
         executed_too_many_tests = False
+        xpcshell_selftests = 0
 
         if suites:
             self.info("#### Running %s suites" % suite_category)
@@ -1150,6 +1169,20 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     final_cmd = copy.copy(cmd)
                     final_cmd.extend(per_test_args)
 
+                    # Bug 1714406: In test-verify of xpcshell tests on Windows, repeated
+                    # self-tests can trigger https://bugs.python.org/issue37380,
+                    # for python < 3.7; avoid by running xpcshell self-tests only once
+                    # per test-verify run.
+                    if (
+                        (self.verify_enabled or self.per_test_coverage)
+                        and sys.platform.startswith("win")
+                        and sys.version_info < (3, 7)
+                        and "--self-test" in final_cmd
+                    ):
+                        xpcshell_selftests += 1
+                        if xpcshell_selftests > 1:
+                            final_cmd.remove("--self-test")
+
                     final_env = copy.copy(env)
 
                     if self.per_test_coverage:
@@ -1179,14 +1212,6 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     # 3) checking to see if the return code is in success_codes
 
                     success_codes = None
-                    if (
-                        suite_category == "reftest"
-                        and "32bit" in platform.architecture()
-                        and platform.system() == "Windows"
-                    ):
-                        # see bug 1120644, 1526777, 1531499
-                        success_codes = [1]
-
                     tbpl_status, log_level, summary = parser.evaluate_parser(
                         return_code, success_codes, summary
                     )

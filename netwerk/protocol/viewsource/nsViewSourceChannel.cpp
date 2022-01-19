@@ -36,8 +36,6 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
                                      mHttpChannelInternal)
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsICachingChannel, mCachingChannel)
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsICacheInfoChannel, mCacheInfoChannel)
-  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIApplicationCacheChannel,
-                                     mApplicationCacheChannel)
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIUploadChannel, mUploadChannel)
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIFormPOSTActionChannel, mPostChannel)
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIChildChannel, mChildChannel)
@@ -119,7 +117,6 @@ void nsViewSourceChannel::UpdateChannelInterfaces() {
   mHttpChannelInternal = do_QueryInterface(mChannel);
   mCachingChannel = do_QueryInterface(mChannel);
   mCacheInfoChannel = do_QueryInterface(mChannel);
-  mApplicationCacheChannel = do_QueryInterface(mChannel);
   mUploadChannel = do_QueryInterface(mChannel);
   mPostChannel = do_QueryInterface(mChannel);
   mChildChannel = do_QueryInterface(mChannel);
@@ -319,15 +316,17 @@ nsViewSourceChannel::AsyncOpen(nsIStreamListener* aListener) {
 
   nsCOMPtr<nsILoadGroup> loadGroup;
   mChannel->GetLoadGroup(getter_AddRefs(loadGroup));
-  if (loadGroup)
+  if (loadGroup) {
     loadGroup->AddRequest(static_cast<nsIViewSourceChannel*>(this), nullptr);
+  }
 
   nsresult rv = NS_OK;
   rv = mChannel->AsyncOpen(this);
 
-  if (NS_FAILED(rv) && loadGroup)
+  if (NS_FAILED(rv) && loadGroup) {
     loadGroup->RemoveRequest(static_cast<nsIViewSourceChannel*>(this), nullptr,
                              rv);
+  }
 
   if (NS_SUCCEEDED(rv)) {
     // We do this here to make sure all notification callbacks changes have been
@@ -387,7 +386,7 @@ nsViewSourceChannel::SetLoadFlags(uint32_t aLoadFlags) {
   // the win32 compiler fails to deal due to amiguous inheritance.
   // nsIChannel::LOAD_DOCUMENT_URI/nsIRequest::LOAD_FROM_CACHE also fails; the
   // Win32 compiler thinks that's supposed to be a method.
-  mIsDocument = (aLoadFlags & ::nsIChannel::LOAD_DOCUMENT_URI) ? true : false;
+  mIsDocument = (aLoadFlags & ::nsIChannel::LOAD_DOCUMENT_URI) != 0;
 
   nsresult rv =
       mChannel->SetLoadFlags((aLoadFlags | ::nsIRequest::LOAD_FROM_CACHE) &
@@ -729,17 +728,15 @@ nsViewSourceChannel::SetTopLevelContentWindowId(uint64_t aWindowId) {
 }
 
 NS_IMETHODIMP
-nsViewSourceChannel::GetTopLevelOuterContentWindowId(uint64_t* aWindowId) {
-  return !mHttpChannel
-             ? NS_ERROR_NULL_POINTER
-             : mHttpChannel->GetTopLevelOuterContentWindowId(aWindowId);
+nsViewSourceChannel::GetTopBrowsingContextId(uint64_t* aId) {
+  return !mHttpChannel ? NS_ERROR_NULL_POINTER
+                       : mHttpChannel->GetTopBrowsingContextId(aId);
 }
 
 NS_IMETHODIMP
-nsViewSourceChannel::SetTopLevelOuterContentWindowId(uint64_t aWindowId) {
-  return !mHttpChannel
-             ? NS_ERROR_NULL_POINTER
-             : mHttpChannel->SetTopLevelOuterContentWindowId(aWindowId);
+nsViewSourceChannel::SetTopBrowsingContextId(uint64_t aId) {
+  return !mHttpChannel ? NS_ERROR_NULL_POINTER
+                       : mHttpChannel->SetTopBrowsingContextId(aId);
 }
 
 NS_IMETHODIMP
@@ -1056,21 +1053,6 @@ void nsViewSourceChannel::SetIPv4Disabled() {
 void nsViewSourceChannel::SetIPv6Disabled() {
   if (mHttpChannelInternal) {
     mHttpChannelInternal->SetIPv6Disabled();
-  }
-}
-
-bool nsViewSourceChannel::GetHasNonEmptySandboxingFlag() {
-  if (mHttpChannelInternal) {
-    return mHttpChannelInternal->GetHasNonEmptySandboxingFlag();
-  }
-  return false;
-}
-
-void nsViewSourceChannel::SetHasNonEmptySandboxingFlag(
-    bool aHasNonEmptySandboxingFlag) {
-  if (mHttpChannelInternal) {
-    mHttpChannelInternal->SetHasNonEmptySandboxingFlag(
-        aHasNonEmptySandboxingFlag);
   }
 }
 

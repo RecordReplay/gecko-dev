@@ -67,7 +67,10 @@ class DataTextureSourceBasic : public DataTextureSource,
 
   bool Update(gfx::DataSourceSurface* aSurface,
               nsIntRegion* aDestRegion = nullptr,
-              gfx::IntPoint* aSrcOffset = nullptr) override {
+              gfx::IntPoint* aSrcOffset = nullptr,
+              gfx::IntPoint* aDstOffset = nullptr) override {
+    // We can't handle any dst offset
+    MOZ_RELEASE_ASSERT(aDstOffset == nullptr);
     MOZ_ASSERT(!mWrappingExistingData);
     if (mWrappingExistingData) {
       return false;
@@ -146,7 +149,8 @@ class WrappingTextureSourceYCbCrBasic : public DataTextureSource,
 
   virtual bool Update(gfx::DataSourceSurface* aSurface,
                       nsIntRegion* aDestRegion = nullptr,
-                      gfx::IntPoint* aSrcOffset = nullptr) override {
+                      gfx::IntPoint* aSrcOffset = nullptr,
+                      gfx::IntPoint* aDstOffset = nullptr) override {
     return false;
   }
 

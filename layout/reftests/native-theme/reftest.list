@@ -43,9 +43,9 @@ fails-if(Android&&!asyncPan) != 492155-4.html about:blank
 
 # RTL mirroring tests
 == checkbox-not-mirrored-when-rtl.html checkbox-not-mirrored-when-rtl-ref.html
-skip-if(!cocoaWidget) == chrome://reftest/content/native-theme/menulist-mirrored-when-rtl.xhtml chrome://reftest/content/native-theme/menulist-mirrored-when-rtl-ref.xhtml
-skip-if(!cocoaWidget||debug) == chrome://reftest/content/native-theme/searchfield-mirrored-when-rtl.xhtml chrome://reftest/content/native-theme/searchfield-mirrored-when-rtl-ref.xhtml
-skip-if(!cocoaWidget) == select-mirrored-when-rtl.html select-mirrored-when-rtl-ref.html
+skip-if(!cocoaWidget||!nativeThemePref) == chrome://reftest/content/native-theme/menulist-mirrored-when-rtl.xhtml chrome://reftest/content/native-theme/menulist-mirrored-when-rtl-ref.xhtml
+skip-if(!cocoaWidget||!nativeThemePref||debug) == chrome://reftest/content/native-theme/searchfield-mirrored-when-rtl.xhtml chrome://reftest/content/native-theme/searchfield-mirrored-when-rtl-ref.xhtml
+skip-if(!cocoaWidget||!nativeThemePref) == select-mirrored-when-rtl.html select-mirrored-when-rtl-ref.html
 
 != chrome://reftest/content/native-theme/resizer-bottomend.xhtml chrome://reftest/content/native-theme/blank-window.xhtml
 random-if(d2d) == chrome://reftest/content/native-theme/resizer-bottomend.xhtml chrome://reftest/content/native-theme/resizer-bottomright.xhtml # bug 581086
@@ -67,7 +67,7 @@ skip-if(gtkWidget) random-if(d2d) == chrome://reftest/content/native-theme/resiz
 skip-if(!winWidget) == scroll-thumb-minimum-size-notheme.html scroll-thumb-minimum-size-notheme-ref.html
 # skip-if(!winWidget) == scroll-thumb-minimum-size-theme.html scroll-thumb-minimum-size-theme-ref.html # Bug 512206
 
-== border-radius.html border-radius-ref.html
+fuzzy-if(useDrawSnapshot,1-1,3-3) == border-radius.html border-radius-ref.html
 
 == checkbox-dynamic-1.html checkbox-dynamic-1-ref.html
 

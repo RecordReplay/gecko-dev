@@ -27,6 +27,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/TabContext.h"
 #include "mozilla/dom/CoalescedMouseData.h"
+#include "mozilla/dom/CoalescedTouchData.h"
 #include "mozilla/dom/CoalescedWheelData.h"
 #include "mozilla/dom/MessageManagerCallback.h"
 #include "mozilla/dom/VsyncChild.h"
@@ -37,7 +38,7 @@
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/GeckoContentControllerTypes.h"
-#include "nsIWebBrowserChrome3.h"
+#include "nsIWebBrowserChrome.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "AudioChannelService.h"
 #include "PuppetWidget.h"
@@ -84,6 +85,7 @@ class ClonedMessageData;
 class CoalescedMouseData;
 class CoalescedWheelData;
 class ContentSessionStore;
+class SessionStoreChangeListener;
 class TabListener;
 class RequestData;
 class WebProgressData;
@@ -241,6 +243,10 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   bool IsTopLevel() const { return mIsTopLevel; }
 
+  bool ShouldSendWebProgressEventsToParent() const {
+    return mShouldSendWebProgressEventsToParent;
+  }
+
   /**
    * MessageManagerCallback methods that we override.
    */
@@ -258,11 +264,20 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvLoadURL(nsDocShellLoadState* aLoadState,
                                       const ParentShowInfo& aInfo);
 
+  mozilla::ipc::IPCResult RecvCreateAboutBlankContentViewer(
+      nsIPrincipal* aPrincipal, nsIPrincipal* aPartitionedPrincipal);
+
   mozilla::ipc::IPCResult RecvResumeLoad(const uint64_t& aPendingSwitchID,
                                          const ParentShowInfo&);
 
-  mozilla::ipc::IPCResult RecvCloneDocumentTreeIntoSelf(
-      const MaybeDiscarded<BrowsingContext>& aSourceBC);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY mozilla::ipc::IPCResult
+  RecvCloneDocumentTreeIntoSelf(
+      const MaybeDiscarded<BrowsingContext>& aSourceBC,
+      const embedding::PrintData& aPrintData);
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  mozilla::ipc::IPCResult RecvUpdateRemotePrintSettings(
+      const embedding::PrintData& aPrintData);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvShow(const ParentShowInfo&, const OwnerShowInfo&);
@@ -295,13 +310,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   mozilla::ipc::IPCResult RecvDeactivate(uint64_t aActionId);
 
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  mozilla::ipc::IPCResult RecvMouseEvent(const nsString& aType, const float& aX,
-                                         const float& aY,
-                                         const int32_t& aButton,
-                                         const int32_t& aClickCount,
-                                         const int32_t& aModifiers);
-
   mozilla::ipc::IPCResult RecvRealMouseMoveEvent(
       const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
       const uint64_t& aInputBlockId);
@@ -326,6 +334,13 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
       const uint64_t& aInputBlockId);
   mozilla::ipc::IPCResult RecvNormalPriorityRealMouseButtonEvent(
+      const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+      const uint64_t& aInputBlockId);
+
+  mozilla::ipc::IPCResult RecvRealMouseEnterExitWidgetEvent(
+      const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
+      const uint64_t& aInputBlockId);
+  mozilla::ipc::IPCResult RecvNormalPriorityRealMouseEnterExitWidgetEvent(
       const mozilla::WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
       const uint64_t& aInputBlockId);
 
@@ -380,12 +395,9 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                                                 aApzResponse);
   }
 
-  mozilla::ipc::IPCResult RecvFlushTabState(const uint32_t& aFlushId,
-                                            const bool& aIsFinal);
-
   mozilla::ipc::IPCResult RecvUpdateEpoch(const uint32_t& aEpoch);
 
-  mozilla::ipc::IPCResult RecvUpdateSHistory(const bool& aImmediately);
+  mozilla::ipc::IPCResult RecvUpdateSHistory();
 
   mozilla::ipc::IPCResult RecvNativeSynthesisResponse(
       const uint64_t& aObserverId, const nsCString& aResponse);
@@ -404,6 +416,11 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   mozilla::ipc::IPCResult RecvSetIsUnderHiddenEmbedderElement(
       const bool& aIsUnderHiddenEmbedderElement);
+
+  mozilla::ipc::IPCResult RecvInsertText(const nsString& aStringToInsert);
+
+  mozilla::ipc::IPCResult RecvNormalPriorityInsertText(
+      const nsString& aStringToInsert);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvPasteTransferable(
@@ -469,6 +486,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                            nsTArray<CommandInt>& aCommands);
 
   bool IsVisible();
+  bool IsPreservingLayers() const { return mIsPreservingLayers; }
 
   /**
    * Signal to this BrowserChild that it should be made visible:
@@ -478,6 +496,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   MOZ_CAN_RUN_SCRIPT void UpdateVisibility();
   MOZ_CAN_RUN_SCRIPT void MakeVisible();
   void MakeHidden();
+  void PresShellActivenessMaybeChanged();
 
   ContentChild* Manager() const { return mManager; }
 
@@ -536,34 +555,19 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvHandleAccessKey(const WidgetKeyboardEvent& aEvent,
                                               nsTArray<uint32_t>&& aCharCodes);
 
-  mozilla::ipc::IPCResult RecvHandledWindowedPluginKeyEvent(
-      const mozilla::NativeEventData& aKeyEventData, const bool& aIsConsumed);
-
-  mozilla::ipc::IPCResult RecvPrintPreview(
-      const PrintData& aPrintData,
-      const mozilla::Maybe<uint64_t>& aSourceOuterWindowID,
-      PrintPreviewResolver&& aCallback);
+  mozilla::ipc::IPCResult RecvPrintPreview(const PrintData& aPrintData,
+                                           const MaybeDiscardedBrowsingContext&,
+                                           PrintPreviewResolver&& aCallback);
 
   mozilla::ipc::IPCResult RecvExitPrintPreview();
 
-  mozilla::ipc::IPCResult RecvPrint(const uint64_t& aOuterWindowID,
-                                    const PrintData& aPrintData);
+  mozilla::ipc::IPCResult RecvPrint(const MaybeDiscardedBrowsingContext&,
+                                    const PrintData&);
 
   mozilla::ipc::IPCResult RecvUpdateNativeWindowHandle(
       const uintptr_t& aNewHandle);
 
-  mozilla::ipc::IPCResult RecvWillChangeProcess(
-      WillChangeProcessResolver&& aResolve);
-  /**
-   * Native widget remoting protocol for use with windowed plugins with e10s.
-   */
-  PPluginWidgetChild* AllocPPluginWidgetChild();
-
-  bool DeallocPPluginWidgetChild(PPluginWidgetChild* aActor);
-
-#ifdef XP_WIN
-  nsresult CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut);
-#endif
+  mozilla::ipc::IPCResult RecvWillChangeProcess();
 
   PPaymentRequestChild* AllocPPaymentRequestChild();
 
@@ -645,9 +649,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   }
 #endif
 
-  // The HANDLE object for the widget this BrowserChild in.
-  WindowsHandle WidgetNativeData() { return mWidgetNativeData; }
-
   // The transform from the coordinate space of this BrowserChild to the
   // coordinate space of the native window its BrowserParent is in.
   mozilla::LayoutDeviceToLayoutDeviceMatrix4x4
@@ -656,7 +657,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   // Returns the portion of the visible rect of this remote document in the
   // top browser window coordinate system.  This is the result of being clipped
   // by all ancestor viewports.
-  mozilla::ScreenRect GetTopLevelViewportVisibleRectInBrowserCoords() const;
+  Maybe<ScreenRect> GetTopLevelViewportVisibleRectInBrowserCoords() const;
 
   // Similar to above GetTopLevelViewportVisibleRectInBrowserCoords(), but in
   // this out-of-process document's coordinate system.
@@ -670,6 +671,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   void FlushAllCoalescedMouseData();
   void ProcessPendingCoalescedMouseDataAndDispatchEvents();
 
+  void ProcessPendingColaescedTouchData();
+
   void HandleRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
                                   const ScrollableLayerGuid& aGuid,
                                   const uint64_t& aInputBlockId);
@@ -678,7 +681,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
     mCancelContentJSEpoch = aEpoch;
   }
 
-  bool UpdateSessionStore(uint32_t aFlushId, bool aIsFinal = false);
+  bool UpdateSessionStore();
 
 #ifdef XP_WIN
   // Check if the window this BrowserChild is associated with supports
@@ -712,6 +715,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvRenderLayers(
       const bool& aEnabled, const layers::LayersObserverEpoch& aEpoch);
 
+  mozilla::ipc::IPCResult RecvPreserveLayers(bool);
+
   mozilla::ipc::IPCResult RecvNavigateByKey(const bool& aForward,
                                             const bool& aForDocumentNavigation);
 
@@ -728,20 +733,11 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   mozilla::ipc::IPCResult RecvAllowScriptsToClose();
 
-  mozilla::ipc::IPCResult RecvSetWidgetNativeData(
-      const WindowsHandle& aWidgetNativeData);
-
   mozilla::ipc::IPCResult RecvReleaseAllPointerCapture();
 
  private:
   void HandleDoubleTap(const CSSPoint& aPoint, const Modifiers& aModifiers,
                        const ScrollableLayerGuid& aGuid);
-
-  // Notify others that our TabContext has been updated.
-  //
-  // You should call this after calling TabContext::SetTabContext().  We also
-  // call this during Init().
-  void NotifyTabContextUpdated();
 
   void ActorDestroy(ActorDestroyReason why) override;
 
@@ -759,8 +755,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   bool HasValidInnerSize();
 
-  void SetTabId(const TabId& aTabId);
-
   ScreenIntRect GetOuterRect();
 
   void SetUnscaledInnerSize(const CSSSize& aSize) {
@@ -771,12 +765,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   void UpdateRepeatedKeyEventEndTime(const WidgetKeyboardEvent& aEvent);
 
-  bool MaybeCoalesceWheelEvent(const WidgetWheelEvent& aEvent,
-                               const ScrollableLayerGuid& aGuid,
-                               const uint64_t& aInputBlockId,
-                               bool* aIsNextWheelEvent);
-
-  void MaybeDispatchCoalescedWheelEvent();
+  void DispatchCoalescedWheelEvent();
 
   /**
    * Dispatch aEvent on aEvent.mWidget.
@@ -792,16 +781,15 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   bool CreateRemoteLayerManager(
       mozilla::layers::PCompositorBridgeChild* aCompositorChild);
 
+  nsresult PrepareRequestData(nsIRequest* aRequest, RequestData& aRequestData);
   nsresult PrepareProgressListenerData(nsIWebProgress* aWebProgress,
                                        nsIRequest* aRequest,
-                                       Maybe<WebProgressData>& aWebProgressData,
+                                       WebProgressData& aWebProgressData,
                                        RequestData& aRequestData);
-  already_AddRefed<nsIWebBrowserChrome3> GetWebBrowserChromeActor();
 
   class DelayedDeleteRunnable;
 
   RefPtr<BrowserChildMessageManager> mBrowserChildMessageManager;
-  nsCOMPtr<nsIWebBrowserChrome3> mWebBrowserChrome;
   TextureFactoryIdentifier mTextureFactoryIdentifier;
   RefPtr<nsWebBrowser> mWebBrowser;
   nsCOMPtr<nsIWebNavigation> mWebNav;
@@ -816,17 +804,12 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   CSSRect mUnscaledOuterRect;
   Maybe<bool> mLayersConnected;
   EffectsInfo mEffectsInfo;
-  bool mDidFakeShow;
-  bool mTriedBrowserInit;
   hal::ScreenOrientation mOrientation;
 
   RefPtr<VsyncChild> mVsyncChild;
 
-  bool mIgnoreKeyPressEvent;
   RefPtr<APZEventState> mAPZEventState;
   SetAllowedTouchBehaviorCallback mSetAllowedTouchBehaviorCallback;
-  bool mHasValidInnerSize;
-  bool mDestroyed;
 
   // Position of client area relative to the outer window
   LayoutDeviceIntPoint mClientOffset;
@@ -836,14 +819,51 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   ScreenIntCoord mDynamicToolbarMaxHeight;
   TabId mUniqueId;
 
+  bool mDidFakeShow : 1;
+  bool mTriedBrowserInit : 1;
+  bool mIgnoreKeyPressEvent : 1;
+  bool mHasValidInnerSize : 1;
+  bool mDestroyed : 1;
+
   // Whether or not this browser is the child part of the top level PBrowser
   // actor in a remote browser.
-  bool mIsTopLevel;
+  bool mIsTopLevel : 1;
 
   // Whether or not this tab has siblings (other tabs in the same window).
   // This is one factor used when choosing to allow or deny a non-system
   // script's attempt to resize the window.
-  bool mHasSiblings;
+  bool mHasSiblings : 1;
+
+  bool mIsTransparent : 1;
+  bool mIPCOpen : 1;
+
+  bool mDidSetRealShowInfo : 1;
+  bool mDidLoadURLInit : 1;
+
+  bool mSkipKeyPress : 1;
+  bool mDidSetEffectsInfo : 1;
+
+  bool mCoalesceMouseMoveEvents : 1;
+
+  bool mShouldSendWebProgressEventsToParent : 1;
+
+  // Whether we are rendering to the compositor or not.
+  bool mRenderLayers : 1;
+
+  // Whether we're artificially preserving layers.
+  bool mIsPreservingLayers : 1;
+
+  // In some circumstances, a DocShell might be in a state where it is
+  // "blocked", and we should not attempt to change its active state or
+  // the underlying PresShell state until the DocShell becomes unblocked.
+  // It is possible, however, for the parent process to send commands to
+  // change those states while the DocShell is blocked. We store those
+  // states temporarily as "pending", and only apply them once the DocShell
+  // is no longer blocked.
+  bool mPendingDocShellIsActive : 1;
+  bool mPendingDocShellReceivedMessage : 1;
+  bool mPendingRenderLayers : 1;
+  bool mPendingRenderLayersReceivedMessage : 1;
 
   // Holds the compositor options for the compositor rendering this tab,
   // once we find out which compositor that is.
@@ -851,14 +871,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   friend class ContentChild;
 
-  bool mIsTransparent;
 
-  bool mIPCOpen;
   CSSSize mUnscaledInnerSize;
-  bool mDidSetRealShowInfo;
-  bool mDidLoadURLInit;
-
-  bool mSkipKeyPress;
 
   // Store the end time of the handling of the last repeated keydown/keypress
   // event so that in case event handling takes time, some repeated events can
@@ -877,10 +891,14 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   nsDeque<CoalescedMouseData> mToBeDispatchedMouseData;
 
   CoalescedWheelData mCoalescedWheelData;
+  CoalescedTouchData mCoalescedTouchData;
+
   RefPtr<CoalescedMouseMoveFlusher> mCoalescedMouseEventFlusher;
+  RefPtr<CoalescedTouchMoveFlusher> mCoalescedTouchMoveEventFlusher;
 
   RefPtr<layers::IAPZCTreeManager> mApzcTreeManager;
   RefPtr<TabListener> mSessionStoreListener;
+  RefPtr<SessionStoreChangeListener> mSessionStoreChangeListener;
 
   // The most recently seen layer observer epoch in RecvSetDocShellIsActive.
   layers::LayersObserverEpoch mLayersObserverEpoch;
@@ -893,33 +911,14 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 #if defined(ACCESSIBILITY)
   PDocAccessibleChild* mTopLevelDocAccessibleChild;
 #endif
-  bool mCoalesceMouseMoveEvents;
-
-  bool mShouldSendWebProgressEventsToParent;
-
-  // Whether we are rendering to the compositor or not.
-  bool mRenderLayers;
-
-  // In some circumstances, a DocShell might be in a state where it is
-  // "blocked", and we should not attempt to change its active state or
-  // the underlying PresShell state until the DocShell becomes unblocked.
-  // It is possible, however, for the parent process to send commands to
-  // change those states while the DocShell is blocked. We store those
-  // states temporarily as "pending", and only apply them once the DocShell
-  // is no longer blocked.
-  bool mPendingDocShellIsActive;
-  bool mPendingDocShellReceivedMessage;
-  bool mPendingRenderLayers;
-  bool mPendingRenderLayersReceivedMessage;
   layers::LayersObserverEpoch mPendingLayersObserverEpoch;
   // When mPendingDocShellBlockers is greater than 0, the DocShell is blocked,
   // and once it reaches 0, it is no longer blocked.
   uint32_t mPendingDocShellBlockers;
   int32_t mCancelContentJSEpoch;
 
-  WindowsHandle mWidgetNativeData;
-
   Maybe<LayoutDeviceToLayoutDeviceMatrix4x4> mChildToParentConversionMatrix;
+  // When mChildToParentConversionMatrix is Nothing() this value is invalid.
   ScreenRect mTopLevelViewportVisibleRectInBrowserCoords;
 
 #ifdef XP_WIN

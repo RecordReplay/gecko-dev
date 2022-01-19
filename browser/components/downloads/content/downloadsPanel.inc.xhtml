@@ -66,8 +66,6 @@
        otherwise flickering may occur when the cursor is moved over the area
        of a disabled menu item that overlaps the panel.  See bug 492960. -->
   <menupopup id="downloadsContextMenu"
-             onpopupshown="DownloadsView.onContextPopupShown(event);"
-             onpopuphidden="DownloadsView.onContextPopupHidden(event);"
              class="download-state">
     <menuitem command="downloadsCmd_pauseResume"
               class="downloadPauseMenuItem"
@@ -119,7 +117,7 @@
     <panelview id="downloadsPanel-mainView">
       <vbox class="panel-view-body-unscrollable">
         <richlistbox id="downloadsListBox"
-                     data-l10n-id="downloads-panel-list"
+                     data-l10n-id="downloads-panel-items"
                      data-l10n-attrs="style"
                      context="downloadsContextMenu"
                      onmouseover="DownloadsView.onDownloadMouseOver(event);"
@@ -148,15 +146,15 @@
                            crop="end"/>
             </vbox>
           </hbox>
-          <hbox id="downloadsFooterButtons"
-                class="panel-footer">
+          <vbox id="downloadsFooterButtons">
+            <toolbarseparator />
             <button id="downloadsHistory"
                     data-l10n-id="downloads-history"
-                    class="downloadsPanelFooterButton"
+                    class="downloadsPanelFooterButton subviewbutton panel-subview-footer-button toolbarbutton-1"
                     flex="1"
                     oncommand="DownloadsPanel.showDownloadsHistory();"
                     pack="start"/>
-          </hbox>
+          </vbox>
         </stack>
       </vbox>
     </panelview>
@@ -166,7 +164,10 @@
                descriptionheightworkaround="true"
                class="PanelUI-subView">
       <vbox class="panel-view-body-unscrollable">
-        <description id="downloadsPanel-blockedSubview-title"/>
+        <hbox class="downloadsPanel-blockedSubview-title-box">
+          <description id="downloadsPanel-blockedSubview-title"/>
+          <image class="downloadsPanel-blockedSubview-image"/>
+        </hbox>
         <description id="downloadsPanel-blockedSubview-details1"/>
         <description id="downloadsPanel-blockedSubview-details2"/>
       </vbox>
@@ -184,29 +185,6 @@
                 flex="1"/>
       </hbox>
     </panelview>
-
-    <panelview id="PanelUI-downloads" class="PanelUI-subView">
-      <vbox class="panel-subview-body">
-        <toolbarbutton id="appMenu-library-downloads-show-button"
-                       data-l10n-id="downloads-cmd-show-downloads"
-                       class="subviewbutton subviewbutton-iconic"
-                       closemenu="none"
-                       oncommand="DownloadsSubview.onShowDownloads(this);"/>
-        <toolbarseparator/>
-        <toolbaritem id="panelMenu_downloadsMenu"
-                     orient="vertical"
-                     smoothscroll="false"
-                     flatList="true"
-                     tooltip="bhTooltip">
-          <!-- downloads menu items will go here -->
-        </toolbaritem>
-      </vbox>
-      <toolbarbutton id="PanelUI-downloadsMore"
-                     data-l10n-id="downloads-history"
-                     class="panel-subview-footer subviewbutton"
-                     oncommand="BrowserDownloadsUI(); CustomizableUI.hidePanelForNode(this);"/>
-    </panelview>
-
   </panelmultiview>
 
 </panel>

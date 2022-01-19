@@ -598,7 +598,10 @@ Download.prototype = {
           new FileUtils.File(this.target.path)
         );
       } else if (
-        Services.prefs.getBoolPref("browser.helperApps.deleteTempFileOnExit")
+        Services.prefs.getBoolPref("browser.helperApps.deleteTempFileOnExit") &&
+        !Services.prefs.getBoolPref(
+          "browser.download.improvements_to_download_panel"
+        )
       ) {
         gExternalAppLauncher.deleteTemporaryFileOnExit(
           new FileUtils.File(this.target.path)
@@ -651,6 +654,9 @@ Download.prototype = {
       this.error = null;
       this.succeeded = false;
       this.hasBlockedData = false;
+      // This ensures the verdict will not get set again after the browser
+      // restarts and the download gets serialized and de-serialized again.
+      delete this._unknownProperties?.errorObj;
       this.start().catch(e => {
         this.error = e;
         this._notifyChange();
@@ -1032,6 +1038,11 @@ Download.prototype = {
   _finalized: false,
 
   /**
+   * True if the "finalize" has been called and fully finished it's execution.
+   */
+  _finalizeExecuted: false,
+
+  /**
    * Ensures that the download is stopped, and optionally removes any partial
    * data kept as part of a canceled or failed download.  After this method has
    * been called, the download cannot be started again.
@@ -1053,16 +1064,24 @@ Download.prototype = {
   finalize(aRemovePartialData) {
     // Prevents the download from starting again after having been stopped.
     this._finalized = true;
+    let promise;
 
     if (aRemovePartialData) {
       // Cancel the download, in case it is currently in progress, then remove
       // any partially downloaded data.  The removal operation waits for
       // cancellation to be completed before resolving the promise it returns.
       this.cancel();
-      return this.removePartialData();
+      promise = this.removePartialData();
+    } else {
+      // Just cancel the download, in case it is currently in progress.
+      promise = this.cancel();
     }
-    // Just cancel the download, in case it is currently in progress.
-    return this.cancel();
+    promise.then(() => {
+      // At this point, either removing data / just cancelling the download should be done.
+      this._finalizeExecuted = true;
+    });
+
+    return promise;
   },
 
   /**
@@ -1382,6 +1401,12 @@ DownloadSource.prototype = {
   loadingPrincipal: null,
 
   /**
+   * Represents the cookieJarSettings of the download source, could be null if
+   * the download source is not from a document.
+   */
+  cookieJarSettings: null,
+
+  /**
    * Returns a static representation of the current object state.
    *
    * @return A JavaScript object that can be serialized to JSON.
@@ -1421,6 +1446,12 @@ DownloadSource.prototype = {
         : E10SUtils.serializePrincipal(this.loadingPrincipal);
     }
 
+    if (this.cookieJarSettings) {
+      serializable.cookieJarSettings = isString(this.cookieJarSettings)
+        ? this.cookieJarSettings
+        : E10SUtils.serializeCookieJarSettings(this.cookieJarSettings);
+    }
+
     serializeUnknownProperties(this, serializable);
     return serializable;
   },
@@ -1438,8 +1469,11 @@ DownloadSource.prototype = {
  *          isPrivate: Indicates whether the download originated from a private
  *                     window.  If omitted, the download is public.
  *          referrerInfo: represents the referrerInfo of the download source.
- *                        Can be omitted or null for examnple if the download
+ *                        Can be omitted or null for example if the download
  *                        source is not HTTP.
+ *          cookieJarSettings: represents the cookieJarSettings of the download
+ *                             source. Can be omitted or null if the download
+ *                             source is not from a document.
  *          adjustChannel: For downloads handled by (default) DownloadCopySaver,
  *                         this function can adjust the network channel before
  *                         it is opened, for example to change the HTTP headers
@@ -1498,13 +1532,24 @@ DownloadSource.fromSerializable = function(aSerializable) {
       source.allowHttpStatus = aSerializable.allowHttpStatus;
     }
 
+    if ("cookieJarSettings" in aSerializable) {
+      if (aSerializable.cookieJarSettings instanceof Ci.nsICookieJarSettings) {
+        source.cookieJarSettings = aSerializable.cookieJarSettings;
+      } else {
+        source.cookieJarSettings = E10SUtils.deserializeCookieJarSettings(
+          aSerializable.cookieJarSettings
+        );
+      }
+    }
+
     deserializeUnknownProperties(
       source,
       aSerializable,
       property =>
         property != "url" &&
         property != "isPrivate" &&
-        property != "referrerInfo"
+        property != "referrerInfo" &&
+        property != "cookieJarSettings"
     );
   }
 
@@ -2307,6 +2352,13 @@ DownloadCopySaver.prototype = {
           channel.referrerInfo = download.source.referrerInfo;
           // Stored computed referrerInfo;
           download.source.referrerInfo = channel.referrerInfo;
+        }
+        if (
+          channel instanceof Ci.nsIHttpChannel &&
+          download.source.cookieJarSettings
+        ) {
+          channel.loadInfo.cookieJarSettings =
+            download.source.cookieJarSettings;
         }
 
         // This makes the channel be corretly throttled during page loads

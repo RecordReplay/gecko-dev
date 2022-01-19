@@ -7,7 +7,7 @@
 #ifndef TransportSecurityInfo_h
 #define TransportSecurityInfo_h
 
-#include "CertVerifier.h"  // For CertificateTransparencyInfo
+#include "CertVerifier.h"  // For CertificateTransparencyInfo, EVStatus
 #include "ScopedNSSTypes.h"
 #include "certt.h"
 #include "mozilla/Assertions.h"
@@ -16,7 +16,7 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/ipc/TransportSecurityInfoUtils.h"
 #include "mozpkix/pkixtypes.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsIClassInfo.h"
 #include "nsIObjectInputStream.h"
 #include "nsIInterfaceRequestor.h"
@@ -26,11 +26,6 @@
 
 namespace mozilla {
 namespace psm {
-
-enum class EVStatus : uint8_t {
-  NotEV = 0,
-  EV = 1,
-};
 
 class TransportSecurityInfo : public nsITransportSecurityInfo,
                               public nsIInterfaceRequestor,
@@ -71,7 +66,8 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
     MutexAutoLock lock(mMutex);
     return mOriginAttributes;
   }
-  const OriginAttributes& GetOriginAttributes(MutexAutoLock& aProofOfLock) const {
+  const OriginAttributes& GetOriginAttributes(
+      MutexAutoLock& aProofOfLock) const {
     return mOriginAttributes;
   }
   void SetOriginAttributes(const OriginAttributes& aOriginAttributes);
@@ -216,7 +212,7 @@ class RememberCertErrorsTable {
     bool mIsNotValidAtThisTime;
     bool mIsUntrusted;
   };
-  nsDataHashtable<nsCStringHashKey, CertStateBits> mErrorHosts;
+  nsTHashMap<nsCStringHashKey, CertStateBits> mErrorHosts;
 
  public:
   void RememberCertHasError(TransportSecurityInfo* infoObject,

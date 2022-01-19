@@ -729,6 +729,11 @@ var PanelMultiView = class extends AssociatedToNode {
         (anchor && anchor.getAttribute("label"));
       // The constrained width of subviews may also vary between panels.
       nextPanelView.minMaxWidth = prevPanelView.knownWidth;
+      let lockPanelVertical =
+        this.openViews[0].node.getAttribute("lockpanelvertical") == "true";
+      nextPanelView.minMaxHeight = lockPanelVertical
+        ? prevPanelView.knownHeight
+        : 0;
 
       if (anchor) {
         viewNode.classList.add("PanelUI-subView");
@@ -807,6 +812,7 @@ var PanelMultiView = class extends AssociatedToNode {
     nextPanelView.mainview = true;
     nextPanelView.headerText = "";
     nextPanelView.minMaxWidth = 0;
+    nextPanelView.minMaxHeight = 0;
 
     // Ensure the view will be visible once the panel is opened.
     nextPanelView.visible = true;
@@ -1346,6 +1352,20 @@ var PanelView = class extends AssociatedToNode {
   }
 
   /**
+   * Constrains the height of this view using the "min-height" and "max-height"
+   * styles. Setting this to zero removes the constraints.
+   */
+  set minMaxHeight(value) {
+    let style = this.node.style;
+    if (value) {
+      style.minHeight = style.maxHeight = value + "px";
+    } else {
+      style.removeProperty("min-height");
+      style.removeProperty("max-height");
+    }
+  }
+
+  /**
    * Adds a header with the given title, or removes it if the title is empty.
    */
   set headerText(value) {
@@ -1355,10 +1375,11 @@ var PanelView = class extends AssociatedToNode {
       if (value) {
         // The back button has a label in it - we want to select
         // the label that's a direct child of the header.
-        header.querySelector(
-          ".panel-header > label > span"
-        ).textContent = value;
+        header.querySelector(".panel-header > h1 > span").textContent = value;
       } else {
+        if (header.nextSibling.tagName == "toolbarseparator") {
+          header.nextSibling.remove();
+        }
         header.remove();
       }
       return;
@@ -1387,13 +1408,18 @@ var PanelView = class extends AssociatedToNode {
       backButton.blur();
     });
 
-    let label = this.document.createXULElement("label");
+    let h1 = this.document.createElement("h1");
     let span = this.document.createElement("span");
     span.textContent = value;
-    label.appendChild(span);
+    h1.appendChild(span);
 
-    header.append(backButton, label);
+    header.append(backButton, h1);
     this.node.prepend(header);
+
+    if (header.nextSibling.tagName != "toolbarseparator") {
+      let separator = this.document.createXULElement("toolbarseparator");
+      this.node.insertBefore(separator, header.nextSibling);
+    }
   }
 
   /**
@@ -1860,6 +1886,7 @@ var PanelView = class extends AssociatedToNode {
           event.altKey,
           event.shiftKey,
           event.metaKey,
+          0,
           null,
           0
         );

@@ -95,17 +95,17 @@ nsresult GetJSValFromKeyPathString(
 
       // We call JS_GetOwnUCPropertyDescriptor on purpose (as opposed to
       // JS_GetUCPropertyDescriptor) to avoid searching the prototype chain.
-      JS::Rooted<JS::PropertyDescriptor> desc(aCx);
-      IDB_TRY(OkIf(JS_GetOwnUCPropertyDescriptor(aCx, obj, keyPathChars,
-                                                 keyPathLen, &desc)),
-              NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR,
-              IDB_REPORT_INTERNAL_ERR_LAMBDA);
+      JS::Rooted<mozilla::Maybe<JS::PropertyDescriptor>> desc(aCx);
+      QM_TRY(OkIf(JS_GetOwnUCPropertyDescriptor(aCx, obj, keyPathChars,
+                                                keyPathLen, &desc)),
+             NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR,
+             IDB_REPORT_INTERNAL_ERR_LAMBDA);
 
       JS::Rooted<JS::Value> intermediate(aCx);
       bool hasProp = false;
 
-      if (desc.object()) {
-        intermediate = desc.value();
+      if (desc.isSome() && desc->isDataDescriptor()) {
+        intermediate = desc->value();
         hasProp = true;
       } else {
         // If we get here it means the object doesn't have the property or the
@@ -243,13 +243,13 @@ nsresult GetJSValFromKeyPathString(
       IDB_REPORT_INTERNAL_ERR();
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
-    IDB_TRY(OkIf(succeeded.ok()), NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR,
-            IDB_REPORT_INTERNAL_ERR_LAMBDA);
+    QM_TRY(OkIf(succeeded.ok()), NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR,
+           IDB_REPORT_INTERNAL_ERR_LAMBDA);
   }
 
   // TODO: It would be nicer to do the cleanup using a RAII class or something.
-  //       This last IDB_TRY could be removed then.
-  IDB_TRY(rv);
+  //       This last QM_TRY could be removed then.
+  QM_TRY(rv);
   return NS_OK;
 }
 
@@ -258,7 +258,7 @@ nsresult GetJSValFromKeyPathString(
 // static
 Result<KeyPath, nsresult> KeyPath::Parse(const nsAString& aString) {
   KeyPath keyPath(0);
-  keyPath.SetType(STRING);
+  keyPath.SetType(KeyPathType::String);
 
   if (!keyPath.AppendStringWithValidation(aString)) {
     return Err(NS_ERROR_FAILURE);
@@ -270,7 +270,7 @@ Result<KeyPath, nsresult> KeyPath::Parse(const nsAString& aString) {
 // static
 Result<KeyPath, nsresult> KeyPath::Parse(const Sequence<nsString>& aStrings) {
   KeyPath keyPath(0);
-  keyPath.SetType(ARRAY);
+  keyPath.SetType(KeyPathType::Array);
 
   for (uint32_t i = 0; i < aStrings.Length(); ++i) {
     if (!keyPath.AppendStringWithValidation(aStrings[i])) {
@@ -453,7 +453,7 @@ KeyPath KeyPath::DeserializeFromString(const nsAString& aString) {
   KeyPath keyPath(0);
 
   if (!aString.IsEmpty() && aString.First() == ',') {
-    keyPath.SetType(ARRAY);
+    keyPath.SetType(KeyPathType::Array);
 
     // We use a comma in the beginning to indicate that it's an array of
     // key paths. This is to be able to tell a string-keypath from an
@@ -475,7 +475,7 @@ KeyPath KeyPath::DeserializeFromString(const nsAString& aString) {
     return keyPath;
   }
 
-  keyPath.SetType(STRING);
+  keyPath.SetType(KeyPathType::String);
   keyPath.mStrings.AppendElement(aString);
 
   return keyPath;

@@ -56,6 +56,8 @@ class Metric:
         gecko_datapoint: str = "",
         no_lint: Optional[List[str]] = None,
         data_sensitivity: Optional[List[str]] = None,
+        defined_in: Optional[Dict] = None,
+        telemetry_mirror: Optional[str] = None,
         _config: Dict[str, Any] = None,
         _validated: bool = False,
     ):
@@ -88,13 +90,16 @@ class Metric:
             self.data_sensitivity = [
                 getattr(DataSensitivity, x) for x in data_sensitivity
             ]
+        self.defined_in = defined_in
+        if telemetry_mirror is not None:
+            self.telemetry_mirror = telemetry_mirror
 
         # _validated indicates whether this metric has already been jsonschema
         # validated (but not any of the Python-level validation).
         if not _validated:
             data = {
                 "$schema": parser.METRICS_ID,
-                self.category: {self.name: self.serialize()},
+                self.category: {self.name: self._serialize_input()},
             }  # type: Dict[str, util.JSONType]
             for error in parser.validate(data):
                 raise ValueError(error)
@@ -146,6 +151,7 @@ class Metric:
         return cls.metric_types[metric_type](
             category=category,
             name=name,
+            defined_in=getattr(metric_info, "defined_in", None),
             _validated=validated,
             _config=config,
             **metric_info,
@@ -167,6 +173,11 @@ class Metric:
         del d["name"]
         del d["category"]
         return d
+
+    def _serialize_input(self) -> Dict[str, util.JSONType]:
+        d = self.serialize()
+        modified_dict = util.remove_output_params(d, "defined_in")
+        return modified_dict
 
     def identifier(self) -> str:
         """
@@ -288,12 +299,29 @@ class Event(Metric):
     def __init__(self, *args, **kwargs):
         self.extra_keys = kwargs.pop("extra_keys", {})
         self.validate_extra_keys(self.extra_keys, kwargs.get("_config", {}))
+        if self.has_extra_types:
+            self._generate_enums = [("allowed_extra_keys_with_types", "Extra")]
         super().__init__(*args, **kwargs)
 
     @property
     def allowed_extra_keys(self):
         # Sort keys so that output is deterministic
         return sorted(list(self.extra_keys.keys()))
+
+    @property
+    def allowed_extra_keys_with_types(self):
+        # Sort keys so that output is deterministic
+        return sorted(
+            [(k, v["type"]) for (k, v) in self.extra_keys.items()], key=lambda x: x[0]
+        )
+
+    @property
+    def has_extra_types(self):
+        """
+        If any extra key has a `type` specified,
+        we generate the new struct/object-based API.
+        """
+        return any("type" in x for x in self.extra_keys.values())
 
     @staticmethod
     def validate_extra_keys(extra_keys: Dict[str, str], config: Dict[str, Any]) -> None:
@@ -314,8 +342,10 @@ class Jwe(Metric):
     typename = "jwe"
 
     def __init__(self, *args, **kwargs):
-        self.decrypted_name = kwargs.pop("decrypted_name")
-        super().__init__(*args, **kwargs)
+        raise ValueError(
+            "JWE support was removed. "
+            "If you require this send an email to glean-team@mozilla.com."
+        )
 
 
 class Labeled(Metric):
@@ -351,6 +381,14 @@ class LabeledString(Labeled, String):
 
 class LabeledCounter(Labeled, Counter):
     typename = "labeled_counter"
+
+
+class Rate(Metric):
+    typename = "rate"
+
+    def __init__(self, *args, **kwargs):
+        self.denominator_metric = kwargs.pop("denominator_metric", None)
+        super().__init__(*args, **kwargs)
 
 
 ObjectTree = Dict[str, Dict[str, Union[Metric, pings.Ping]]]

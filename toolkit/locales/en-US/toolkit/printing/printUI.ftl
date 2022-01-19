@@ -47,13 +47,31 @@ printui-scale-pcent = Scale
 
 # Section title (noun) for the two-sided print options
 printui-two-sided-printing = Two-sided printing
-printui-duplex-checkbox = Print on both sides
+printui-two-sided-printing-off = Off
+# Flip the sheet as if it were bound along its long edge.
+printui-two-sided-printing-long-edge = Flip on long edge
+# Flip the sheet as if it were bound along its short edge.
+printui-two-sided-printing-short-edge = Flip on short edge
 
 # Section title for miscellaneous print options
 printui-options = Options
 printui-headers-footers-checkbox = Print headers and footers
 printui-backgrounds-checkbox = Print backgrounds
-printui-selection-checkbox = Print selection only
+
+## The "Format" section, select a version of the website to print. Radio
+## options to select between the original page, selected text only, or a version
+## where the page is processed with "Reader View".
+
+# The section title.
+printui-source-label = Format
+# Option for printing the original page.
+printui-source-radio = Original
+# Option for printing just the content a user selected prior to printing.
+printui-selection-radio = Selection
+# Option for "simplifying" the page by printing the Reader View version.
+printui-simplify-page-radio = Simplified
+
+##
 
 printui-color-mode-label = Color mode
 printui-color-mode-color = Color
@@ -64,14 +82,19 @@ printui-margins-default = Default
 printui-margins-min = Minimum
 printui-margins-none = None
 printui-margins-custom-inches = Custom (inches)
+printui-margins-custom-mm = Custom (mm)
 printui-margins-custom-top = Top
 printui-margins-custom-top-inches = Top (inches)
+printui-margins-custom-top-mm = Top (mm)
 printui-margins-custom-bottom = Bottom
 printui-margins-custom-bottom-inches = Bottom (inches)
+printui-margins-custom-bottom-mm = Bottom (mm)
 printui-margins-custom-left = Left
 printui-margins-custom-left-inches = Left (inches)
+printui-margins-custom-left-mm = Left (mm)
 printui-margins-custom-right = Right
 printui-margins-custom-right-inches = Right (inches)
+printui-margins-custom-right-mm = Right (mm)
 
 printui-system-dialog-link = Print using the system dialog…
 
@@ -114,6 +137,7 @@ printui-paper-tabloid = Tabloid
 
 printui-error-invalid-scale = Scale must be a number between 10 and 200.
 printui-error-invalid-margin = Please enter a valid margin for the selected paper size.
+printui-error-invalid-copies = Copies must be a number between 1 and 10000.
 
 # Variables
 # $numPages (integer) - Number of pages

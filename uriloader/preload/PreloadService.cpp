@@ -8,7 +8,6 @@
 #include "FetchPreloader.h"
 #include "PreloaderBase.h"
 #include "mozilla/AsyncEventDispatcher.h"
-#include "mozilla/dom/WindowGlobalChild.h"
 #include "mozilla/dom/HTMLLinkElement.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/Encoding.h"
@@ -23,12 +22,14 @@ PreloadService::~PreloadService() = default;
 
 bool PreloadService::RegisterPreload(const PreloadHashKey& aKey,
                                      PreloaderBase* aPreload) {
-  if (PreloadExists(aKey)) {
+  return mPreloads.WithEntryHandle(aKey, [&](auto&& lookup) {
+    if (lookup) {
+      lookup.Data() = aPreload;
+      return true;
+    }
+    lookup.Insert(aPreload);
     return false;
-  }
-
-  mPreloads.Put(aKey, RefPtr{aPreload});
-  return true;
+  });
 }
 
 void PreloadService::DeregisterPreload(const PreloadHashKey& aKey) {
@@ -38,9 +39,7 @@ void PreloadService::DeregisterPreload(const PreloadHashKey& aKey) {
 void PreloadService::ClearAllPreloads() { mPreloads.Clear(); }
 
 bool PreloadService::PreloadExists(const PreloadHashKey& aKey) {
-  bool found;
-  mPreloads.GetWeak(aKey, &found);
-  return found;
+  return mPreloads.Contains(aKey);
 }
 
 already_AddRefed<PreloaderBase> PreloadService::LookupPreload(
@@ -63,19 +62,12 @@ already_AddRefed<nsIURI> PreloadService::GetPreloadURI(const nsAString& aURL) {
 
 already_AddRefed<PreloaderBase> PreloadService::PreloadLinkElement(
     dom::HTMLLinkElement* aLinkElement, nsContentPolicyType aPolicyType) {
-  // Even if the pref is disabled, we still want to collect telemetry about
-  // attempted preloads.
-  const bool preloadEnabled = StaticPrefs::network_preload();
   if (aPolicyType == nsIContentPolicy::TYPE_INVALID) {
     MOZ_ASSERT_UNREACHABLE("Caller should check");
     return nullptr;
   }
 
-  if (auto* wgc = mDocument->GetWindowGlobalChild()) {
-    wgc->MaybeSendUpdateDocumentWouldPreloadResources();
-  }
-
-  if (!preloadEnabled) {
+  if (!StaticPrefs::network_preload()) {
     return nullptr;
   }
 
@@ -93,9 +85,9 @@ already_AddRefed<PreloaderBase> PreloadService::PreloadLinkElement(
   aLinkElement->GetReferrerPolicy(referrerPolicy);
   aLinkElement->GetType(type);
 
-  auto result =
-      PreloadOrCoalesce(uri, url, aPolicyType, as, type, charset, srcset, sizes,
-                        integrity, crossOrigin, referrerPolicy);
+  auto result = PreloadOrCoalesce(uri, url, aPolicyType, as, type, charset,
+                                  srcset, sizes, integrity, crossOrigin,
+                                  referrerPolicy, /* aFromHeader = */ false);
 
   if (!result.mPreloader) {
     NotifyNodeEvent(aLinkElement, result.mAlreadyComplete);
@@ -111,25 +103,18 @@ void PreloadService::PreloadLinkHeader(
     const nsAString& aAs, const nsAString& aType, const nsAString& aIntegrity,
     const nsAString& aSrcset, const nsAString& aSizes, const nsAString& aCORS,
     const nsAString& aReferrerPolicy) {
-  // Even if the pref is disabled, we still want to collect telemetry about
-  // attempted preloads.
-  const bool preloadEnabled = StaticPrefs::network_preload();
-
   if (aPolicyType == nsIContentPolicy::TYPE_INVALID) {
     MOZ_ASSERT_UNREACHABLE("Caller should check");
     return;
   }
 
-  if (auto* wgc = mDocument->GetWindowGlobalChild()) {
-    wgc->MaybeSendUpdateDocumentWouldPreloadResources();
-  }
-
-  if (!preloadEnabled) {
+  if (!StaticPrefs::network_preload()) {
     return;
   }
 
   PreloadOrCoalesce(aURI, aURL, aPolicyType, aAs, aType, u""_ns, aSrcset,
-                    aSizes, aIntegrity, aCORS, aReferrerPolicy);
+                    aSizes, aIntegrity, aCORS, aReferrerPolicy,
+                    /* aFromHeader = */ true);
 }
 
 PreloadService::PreloadOrCoalesceResult PreloadService::PreloadOrCoalesce(
@@ -137,7 +122,7 @@ PreloadService::PreloadOrCoalesceResult PreloadService::PreloadOrCoalesce(
     const nsAString& aAs, const nsAString& aType, const nsAString& aCharset,
     const nsAString& aSrcset, const nsAString& aSizes,
     const nsAString& aIntegrity, const nsAString& aCORS,
-    const nsAString& aReferrerPolicy) {
+    const nsAString& aReferrerPolicy, bool aFromHeader) {
   if (!aURI) {
     MOZ_ASSERT_UNREACHABLE("Should not pass null nsIURI");
     return {nullptr, false};
@@ -180,7 +165,12 @@ PreloadService::PreloadOrCoalesceResult PreloadService::PreloadOrCoalesce(
     PreloadScript(uri, aType, aCharset, aCORS, aReferrerPolicy, aIntegrity,
                   true /* isInHead - TODO */);
   } else if (aAs.LowerCaseEqualsASCII("style")) {
-    switch (PreloadStyle(uri, aCharset, aCORS, aReferrerPolicy, aIntegrity)) {
+    auto status = mDocument->PreloadStyle(
+        aURI, Encoding::ForLabel(aCharset), aCORS,
+        PreloadReferrerPolicy(aReferrerPolicy), aIntegrity,
+        aFromHeader ? css::StylePreloadKind::FromLinkRelPreloadHeader
+                    : css::StylePreloadKind::FromLinkRelPreloadElement);
+    switch (status) {
       case dom::SheetPreloadStatus::AlreadyComplete:
         return {nullptr, /* already_complete = */ true};
       case dom::SheetPreloadStatus::Errored:
@@ -207,14 +197,6 @@ void PreloadService::PreloadScript(nsIURI* aURI, const nsAString& aType,
   mDocument->ScriptLoader()->PreloadURI(
       aURI, aCharset, aType, aCrossOrigin, aIntegrity, aScriptFromHead, false,
       false, false, true, PreloadReferrerPolicy(aReferrerPolicy));
-}
-
-dom::SheetPreloadStatus PreloadService::PreloadStyle(
-    nsIURI* aURI, const nsAString& aCharset, const nsAString& aCrossOrigin,
-    const nsAString& aReferrerPolicy, const nsAString& aIntegrity) {
-  return mDocument->PreloadStyle(
-      aURI, Encoding::ForLabel(aCharset), aCrossOrigin,
-      PreloadReferrerPolicy(aReferrerPolicy), aIntegrity, true);
 }
 
 void PreloadService::PreloadImage(nsIURI* aURI, const nsAString& aCrossOrigin,

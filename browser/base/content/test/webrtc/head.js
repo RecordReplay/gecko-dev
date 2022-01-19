@@ -71,6 +71,8 @@ function whenDelayedStartupFinished(aWindow) {
 }
 
 function promiseIndicatorWindow() {
+  let startTime = performance.now();
+
   // We don't show the legacy indicator window on Mac.
   if (USING_LEGACY_INDICATOR && IS_MAC) {
     return Promise.resolve();
@@ -87,7 +89,13 @@ function promiseIndicatorWindow() {
           }
 
           Services.obs.removeObserver(obs, "domwindowopened");
-          executeSoon(() => resolve(win));
+          executeSoon(() => {
+            ChromeUtils.addProfilerMarker("promiseIndicatorWindow", {
+              startTime,
+              category: "Test",
+            });
+            resolve(win);
+          });
         },
         { once: true }
       );
@@ -356,6 +364,7 @@ function promiseMessage(
   aCount = 1,
   browser = gBrowser.selectedBrowser
 ) {
+  let startTime = performance.now();
   let promise = ContentTask.spawn(browser, [aMessage, aCount], async function([
     expectedMessage,
     expectedCount,
@@ -376,10 +385,18 @@ function promiseMessage(
   if (aAction) {
     aAction();
   }
-  return promise;
+  return promise.then(data => {
+    ChromeUtils.addProfilerMarker(
+      "promiseMessage",
+      { startTime, category: "Test" },
+      data
+    );
+    return data;
+  });
 }
 
 function promisePopupNotificationShown(aName, aAction, aWindow = window) {
+  let startTime = performance.now();
   return new Promise(resolve => {
     // In case the global webrtc indicator has stolen focus (bug 1421724)
     aWindow.focus();
@@ -397,7 +414,14 @@ function promisePopupNotificationShown(aName, aAction, aWindow = window) {
           "notification panel populated"
         );
 
-        executeSoon(resolve);
+        executeSoon(() => {
+          ChromeUtils.addProfilerMarker(
+            "promisePopupNotificationShown",
+            { startTime, category: "Test" },
+            aName
+          );
+          resolve();
+        });
       },
       { once: true }
     );
@@ -447,6 +471,8 @@ function activateSecondaryAction(aAction) {
 }
 
 async function getMediaCaptureState() {
+  let startTime = performance.now();
+
   function gatherBrowsingContexts(aBrowsingContext) {
     let list = [aBrowsingContext];
 
@@ -538,6 +564,10 @@ async function getMediaCaptureState() {
     result.screen = "Browser";
   }
 
+  ChromeUtils.addProfilerMarker("getMediaCaptureState", {
+    startTime,
+    category: "Test",
+  });
   return result;
 }
 
@@ -551,22 +581,6 @@ async function stopSharing(
     "recording-device-events",
     1,
     aFrameBC
-  );
-  aWindow.gIdentityHandler._identityBox.click();
-  let popup = aWindow.gIdentityHandler._identityPopup;
-  // If the popup gets hidden before being shown, by stray focus/activate
-  // events, don't bother failing the test. It's enough to know that we
-  // started showing the popup.
-  let hiddenEvent = BrowserTestUtils.waitForEvent(popup, "popuphidden");
-  let shownEvent = BrowserTestUtils.waitForEvent(popup, "popupshown");
-  await Promise.race([hiddenEvent, shownEvent]);
-  let doc = aWindow.document;
-  let permissions = doc.getElementById("identity-popup-permission-list");
-  let cancelButton = permissions.querySelector(
-    ".identity-popup-permission-icon." +
-      aType +
-      "-icon ~ " +
-      ".identity-popup-permission-remove-button"
   );
   let observerPromise1 = expectObserverCalled(
     "getUserMedia:revoke",
@@ -585,12 +599,41 @@ async function stopSharing(
     );
   }
 
-  cancelButton.click();
-  popup.hidePopup();
-
+  await revokePermission(aType, aShouldKeepSharing, aFrameBC, aWindow);
   await promiseRecordingEvent;
   await observerPromise1;
   await observerPromise2;
+
+  if (!aShouldKeepSharing) {
+    await checkNotSharing();
+  }
+}
+
+async function revokePermission(
+  aType = "camera",
+  aShouldKeepSharing = false,
+  aFrameBC,
+  aWindow = window
+) {
+  aWindow.gPermissionPanel._identityPermissionBox.click();
+  let popup = aWindow.gPermissionPanel._permissionPopup;
+  // If the popup gets hidden before being shown, by stray focus/activate
+  // events, don't bother failing the test. It's enough to know that we
+  // started showing the popup.
+  let hiddenEvent = BrowserTestUtils.waitForEvent(popup, "popuphidden");
+  let shownEvent = BrowserTestUtils.waitForEvent(popup, "popupshown");
+  await Promise.race([hiddenEvent, shownEvent]);
+  let doc = aWindow.document;
+  let permissions = doc.getElementById("permission-popup-permission-list");
+  let cancelButton = permissions.querySelector(
+    ".permission-popup-permission-icon." +
+      aType +
+      "-icon ~ " +
+      ".permission-popup-permission-remove-button"
+  );
+
+  cancelButton.click();
+  popup.hidePopup();
 
   if (!aShouldKeepSharing) {
     await checkNotSharing();
@@ -662,6 +705,60 @@ async function promiseRequestDevice(
   );
 }
 
+async function promiseRequestAudioOutput() {
+  info("requesting audio output");
+  const bc = gBrowser.selectedBrowser;
+  return SpecialPowers.spawn(bc, [], async function() {
+    const global = content.wrappedJSObject;
+    global.requestAudioOutput();
+  });
+}
+
+async function stopTracks(
+  aKind,
+  aAlreadyStopped,
+  aLastTracks,
+  aFrameId,
+  aBrowsingContext,
+  aBrowsingContextToObserve
+) {
+  // If the observers are listening to other frames, listen for a notification
+  // on the right subframe.
+  let frameBC =
+    aBrowsingContext ??
+    (await getBrowsingContextForFrame(
+      gBrowser.selectedBrowser.browsingContext,
+      aFrameId
+    ));
+
+  let observerPromises = [];
+  if (!aAlreadyStopped) {
+    observerPromises.push(
+      expectObserverCalled(
+        "recording-device-events",
+        1,
+        aBrowsingContextToObserve
+      )
+    );
+  }
+  if (aLastTracks) {
+    observerPromises.push(
+      expectObserverCalled(
+        "recording-window-ended",
+        1,
+        aBrowsingContextToObserve
+      )
+    );
+  }
+
+  info(`Stopping all ${aKind} tracks`);
+  await SpecialPowers.spawn(frameBC, [aKind], async function(kind) {
+    content.wrappedJSObject.stopTracks(kind);
+  });
+
+  await Promise.all(observerPromises);
+}
+
 async function closeStream(
   aAlreadyClosed,
   aFrameId,
@@ -714,8 +811,24 @@ async function closeStream(
   await assertWebRTCIndicatorStatus(null);
 }
 
-async function reloadAndAssertClosedStreams() {
-  info("reloading the web page");
+async function reloadAsUser() {
+  info("reloading as a user");
+
+  const reloadButton = document.getElementById("reload-button");
+  await TestUtils.waitForCondition(() => !reloadButton.disabled);
+  // Disable observers as the page is being reloaded which can destroy
+  // the actors listening to the notifications.
+  await disableObserverVerification();
+
+  let loadedPromise = BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
+  reloadButton.click();
+  await loadedPromise;
+
+  await enableObserverVerification();
+}
+
+async function reloadFromContent() {
+  info("reloading from content");
 
   // Disable observers as the page is being reloaded which can destroy
   // the actors listening to the notifications.
@@ -729,40 +842,73 @@ async function reloadAndAssertClosedStreams() {
   await loadedPromise;
 
   await enableObserverVerification();
+}
 
+async function reloadAndAssertClosedStreams() {
+  await reloadFromContent();
   await checkNotSharing();
 }
 
-function checkDeviceSelectors(aAudio, aVideo, aScreen, aWindow = window) {
+/**
+ * @param {("microphone"|"camera"|"screen")[]} aExpectedTypes
+ * @param {Window} [aWindow]
+ */
+function checkDeviceSelectors(aExpectedTypes, aWindow = window) {
+  for (const type of aExpectedTypes) {
+    if (!["microphone", "camera", "screen", "speaker"].includes(type)) {
+      throw new Error(`Bad device type name ${type}`);
+    }
+  }
   let document = aWindow.document;
-  let micSelector = document.getElementById("webRTC-selectMicrophone");
-  if (aAudio) {
-    ok(!micSelector.hidden, "microphone selector visible");
-  } else {
-    ok(micSelector.hidden, "microphone selector hidden");
-  }
 
-  let cameraSelector = document.getElementById("webRTC-selectCamera");
-  if (aVideo) {
-    ok(!cameraSelector.hidden, "camera selector visible");
-  } else {
-    ok(cameraSelector.hidden, "camera selector hidden");
+  for (let type of ["Microphone", "Camera", "Speaker"]) {
+    let selector = document.getElementById(`webRTC-select${type}`);
+    if (!aExpectedTypes.includes(type.toLowerCase())) {
+      ok(selector.hidden, `${type} selector hidden`);
+      continue;
+    }
+    ok(!selector.hidden, `${type} selector visible`);
+    let selectorList = document.getElementById(`webRTC-select${type}-menulist`);
+    let label = document.getElementById(
+      `webRTC-select${type}-single-device-label`
+    );
+    // If there's only 1 device listed, then we should show the label
+    // instead of the menulist.
+    if (selectorList.itemCount == 1) {
+      ok(selectorList.hidden, `${type} selector list should be hidden.`);
+      ok(!label.hidden, `${type} selector label should not be hidden.`);
+      is(
+        label.value,
+        selectorList.selectedItem.getAttribute("label"),
+        `${type} label should be showing the lone device label.`
+      );
+    } else {
+      ok(!selectorList.hidden, `${type} selector list should not be hidden.`);
+      ok(label.hidden, `${type} selector label should be hidden.`);
+    }
   }
-
   let screenSelector = document.getElementById("webRTC-selectWindowOrScreen");
-  if (aScreen) {
+  if (aExpectedTypes.includes("screen")) {
     ok(!screenSelector.hidden, "screen selector visible");
   } else {
     ok(screenSelector.hidden, "screen selector hidden");
   }
 }
 
-// aExpected is for the current tab,
-// aExpectedGlobal is for all tabs.
+/**
+ * Tests the siteIdentity icons, the permission panel and the global indicator
+ * UI state.
+ * @param {Object} aExpected - Expected state for the current tab.
+ * @param {window} [aWin] - Top level chrome window to test state of.
+ * @param {Object} [aExpectedGlobal] - Expected state for all tabs.
+ * @param {Object} [aExpectedPerm] - Expected permission states keyed by device
+ * type.
+ */
 async function checkSharingUI(
   aExpected,
   aWin = window,
-  aExpectedGlobal = null
+  aExpectedGlobal = null,
+  aExpectedPerm = null
 ) {
   function isPaused(streamState) {
     if (typeof streamState == "string") {
@@ -773,7 +919,7 @@ async function checkSharingUI(
 
   let doc = aWin.document;
   // First check the icon above the control center (i) icon.
-  let identityBox = doc.getElementById("identity-box");
+  let permissionBox = doc.getElementById("identity-permission-box");
   let webrtcSharingIcon = doc.getElementById("webrtc-sharing-icon");
   ok(webrtcSharingIcon.hasAttribute("sharing"), "sharing attribute is set");
   let sharing = webrtcSharingIcon.getAttribute("sharing");
@@ -796,16 +942,16 @@ async function checkSharingUI(
     "sharing icon(s) should be in paused state when paused"
   );
 
-  // Then check the sharing indicators inside the control center panel.
-  identityBox.click();
-  let popup = aWin.gIdentityHandler._identityPopup;
+  // Then check the sharing indicators inside the permission popup.
+  permissionBox.click();
+  let popup = aWin.gPermissionPanel._permissionPopup;
   // If the popup gets hidden before being shown, by stray focus/activate
   // events, don't bother failing the test. It's enough to know that we
   // started showing the popup.
   let hiddenEvent = BrowserTestUtils.waitForEvent(popup, "popuphidden");
   let shownEvent = BrowserTestUtils.waitForEvent(popup, "popupshown");
   await Promise.race([hiddenEvent, shownEvent]);
-  let permissions = doc.getElementById("identity-popup-permission-list");
+  let permissions = doc.getElementById("permission-popup-permission-list");
   for (let id of ["microphone", "camera", "screen"]) {
     let convertId = idToConvert => {
       if (idToConvert == "camera") {
@@ -817,35 +963,64 @@ async function checkSharingUI(
       return idToConvert;
     };
     let expected = aExpected[convertId(id)];
+
+    // Extract the expected permission for the device type.
+    // Defaults to temporary allow.
+    let { state, scope } = aExpectedPerm?.[convertId(id)] || {};
+    if (state == null) {
+      state = SitePermissions.ALLOW;
+    }
+    if (scope == null) {
+      scope = SitePermissions.SCOPE_TEMPORARY;
+    }
+
     is(
-      !!aWin.gIdentityHandler._sharingState.webRTC[id],
+      !!aWin.gPermissionPanel._sharingState.webRTC[id],
       !!expected,
       "sharing state for " + id + " as expected"
     );
+    let item = permissions.querySelectorAll(
+      ".permission-popup-permission-item-" + id
+    );
+    let stateLabel = item?.[0]?.querySelector(
+      ".permission-popup-permission-state-label"
+    );
     let icon = permissions.querySelectorAll(
-      ".identity-popup-permission-icon." + id + "-icon"
+      ".permission-popup-permission-icon." + id + "-icon"
     );
     if (expected) {
-      is(icon.length, 1, "should show " + id + " icon in control center panel");
+      is(item.length, 1, "should show " + id + " item in permission panel");
+      is(
+        stateLabel?.textContent,
+        SitePermissions.getCurrentStateLabel(state, id, scope),
+        "should show correct item label for " + id
+      );
+      is(icon.length, 1, "should show " + id + " icon in permission panel");
       is(
         icon[0].classList.contains("in-use"),
         expected && !isPaused(expected),
         "icon should have the in-use class, unless paused"
       );
-    } else if (!icon.length) {
-      ok(true, "should not show " + id + " icon in the control center panel");
+    } else if (!icon.length && !item.length && !stateLabel) {
+      ok(true, "should not show " + id + " item in the permission panel");
+      ok(true, "should not show " + id + " icon in the permission panel");
+      ok(
+        true,
+        "should not show " + id + " state label in the permission panel"
+      );
     } else {
       // This will happen if there are persistent permissions set.
       ok(
         !icon[0].classList.contains("in-use"),
         "if shown, the " + id + " icon should not have the in-use class"
       );
+      is(item.length, 1, "should not show more than 1 " + id + " item");
       is(icon.length, 1, "should not show more than 1 " + id + " icon");
     }
   }
-  aWin.gIdentityHandler._identityPopup.hidePopup();
+  aWin.gPermissionPanel._permissionPopup.hidePopup();
   await TestUtils.waitForCondition(
-    () => identityPopupHidden(aWin),
+    () => permissionPopupHidden(aWin),
     "identity popup should be hidden"
   );
 
@@ -863,6 +1038,25 @@ async function checkNotSharing() {
   ok(
     !document.getElementById("webrtc-sharing-icon").hasAttribute("sharing"),
     "no sharing indicator on the control center icon"
+  );
+
+  await assertWebRTCIndicatorStatus(null);
+}
+
+async function checkNotSharingWithinGracePeriod() {
+  Assert.deepEqual(
+    await getMediaCaptureState(),
+    {},
+    "expected nothing to be shared"
+  );
+
+  ok(
+    document.getElementById("webrtc-sharing-icon").hasAttribute("sharing"),
+    "has sharing indicator on the control center icon"
+  );
+  ok(
+    document.getElementById("webrtc-sharing-icon").hasAttribute("paused"),
+    "sharing indicator is paused"
   );
 
   await assertWebRTCIndicatorStatus(null);
@@ -967,8 +1161,8 @@ async function disableObserverVerification() {
   }
 }
 
-function identityPopupHidden(win = window) {
-  let popup = win.gIdentityHandler._identityPopup;
+function permissionPopupHidden(win = window) {
+  let popup = win.gPermissionPanel._permissionPopup;
   return !popup || popup.state == "closed";
 }
 
@@ -981,8 +1175,8 @@ async function runTests(tests, options = {}) {
     "should start the test without any prior popup notification"
   );
   ok(
-    identityPopupHidden(),
-    "should start the test with the control center hidden"
+    permissionPopupHidden(),
+    "should start the test with the permission panel hidden"
   );
 
   // Set prefs so that permissions prompts are shown and loopback devices
@@ -1003,6 +1197,7 @@ async function runTests(tests, options = {}) {
   gObserveSubFrames = SpecialPowers.useRemoteSubframes ? options.subFrames : {};
 
   for (let testCase of tests) {
+    let startTime = performance.now();
     info(testCase.desc);
     if (
       !testCase.skipObserverVerification &&
@@ -1020,6 +1215,11 @@ async function runTests(tests, options = {}) {
     if (options.cleanup) {
       await options.cleanup();
     }
+    ChromeUtils.addProfilerMarker(
+      "browser-test",
+      { startTime, category: "Test" },
+      testCase.desc
+    );
   }
 
   // Some tests destroy the original tab and leave a new one in its place.
@@ -1058,7 +1258,11 @@ async function shareDevices(
     await promiseRequestDevice(mic, camera, null, null, browser);
     await promise;
 
-    checkDeviceSelectors(mic, camera);
+    const expectedDeviceSelectorTypes = [
+      camera && "camera",
+      mic && "microphone",
+    ].filter(x => x);
+    checkDeviceSelectors(expectedDeviceSelectorTypes);
     let observerPromise1 = expectObserverCalled("getUserMedia:response:allow");
     let observerPromise2 = expectObserverCalled("recording-device-events");
 
@@ -1086,7 +1290,7 @@ async function shareDevices(
     await promiseRequestDevice(false, true, null, "screen", browser);
     await promise;
 
-    checkDeviceSelectors(false, false, true, window);
+    checkDeviceSelectors(["screen"], window);
 
     let document = window.document;
 

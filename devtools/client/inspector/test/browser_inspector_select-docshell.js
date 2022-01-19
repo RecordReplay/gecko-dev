@@ -8,7 +8,8 @@
 // when using the inspector
 
 const FrameURL =
-  "data:text/html;charset=UTF-8," + encodeURI('<div id="frame">frame</div>');
+  "data:text/html;charset=UTF-8," +
+  encodeURI('<div id="in-iframe">frame</div>');
 const URL =
   "data:text/html;charset=UTF-8," +
   encodeURI('<iframe src="' + FrameURL + '"></iframe><div id="top">top</div>');
@@ -16,12 +17,16 @@ const URL =
 add_task(async function() {
   Services.prefs.setBoolPref("devtools.command-button-frames.enabled", true);
 
-  const { inspector, toolbox, testActor } = await openInspectorForURL(URL);
+  const { inspector, toolbox } = await openInspectorForURL(URL);
 
   // Verify we are on the top level document
-  ok(
-    await testActor.hasNode("#top"),
-    "We have the test node on the top level document"
+  await assertMarkupViewAsTree(
+    `
+    body
+      iframe!ignore-children
+      div id="top"`,
+    "body",
+    inspector
   );
 
   assertMarkupViewIsLoaded(inspector);
@@ -59,7 +64,19 @@ add_task(async function() {
   );
 
   // Listen to will-navigate to check if the view is empty
-  const willNavigate = toolbox.target.once("will-navigate").then(() => {
+  const { resourceCommand } = toolbox.commands;
+  const {
+    onResource: willNavigate,
+  } = await resourceCommand.waitForNextResource(
+    resourceCommand.TYPES.DOCUMENT_EVENT,
+    {
+      ignoreExistingResources: true,
+      predicate(resource) {
+        return resource.name == "will-navigate";
+      },
+    }
+  );
+  willNavigate.then(() => {
     info("Navigation to the iframe has started, the inspector should be empty");
     assertMarkupViewIsEmpty(inspector);
   });
@@ -77,13 +94,12 @@ add_task(async function() {
   info("Navigation to the iframe is done, the inspector should be back up");
 
   // Verify we are on page one
-  ok(
-    !(await testActor.hasNode("iframe")),
-    "We not longer have access to the top frame elements"
-  );
-  ok(
-    await testActor.hasNode("#frame"),
-    "But now have direct access to the iframe elements"
+  await assertMarkupViewAsTree(
+    `
+    body
+      div id="in-iframe"`,
+    "body",
+    inspector
   );
 
   // On page 2 load, verify we have the right content

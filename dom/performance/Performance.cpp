@@ -205,6 +205,11 @@ void Performance::GetEntriesByName(
   aRetval.Sort(PerformanceEntryComparator());
 }
 
+void Performance::GetEntriesByTypeForObserver(
+    const nsAString& aEntryType, nsTArray<RefPtr<PerformanceEntry>>& aRetval) {
+  GetEntriesByType(aEntryType, aRetval);
+}
+
 void Performance::ClearUserEntries(const Optional<nsAString>& aEntryName,
                                    const nsAString& aEntryType) {
   MOZ_ASSERT(!aEntryType.IsEmpty());
@@ -219,7 +224,6 @@ void Performance::ClearUserEntries(const Optional<nsAString>& aEntryName,
 
 void Performance::ClearResourceTimings() { mResourceEntries.Clear(); }
 
-#ifdef MOZ_GECKO_PROFILER
 struct UserTimingMarker {
   static constexpr Span<const char> MarkerTypeName() {
     return MakeStringSpan("UserTiming");
@@ -264,7 +268,6 @@ struct UserTimingMarker {
     return schema;
   }
 };
-#endif
 
 void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
   // We add nothing when 'privacy.resistFingerprinting' is on.
@@ -281,7 +284,6 @@ void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
       new PerformanceMark(GetParentObject(), aName, Now());
   InsertUserEntry(performanceMark);
 
-#ifdef MOZ_GECKO_PROFILER
   if (profiler_can_accept_markers()) {
     Maybe<uint64_t> innerWindowId;
     if (GetOwner()) {
@@ -291,7 +293,6 @@ void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
                         MarkerInnerWindowId(innerWindowId), UserTimingMarker{},
                         aName, /* aIsMeasure */ false, Nothing{}, Nothing{});
   }
-#endif
 }
 
 void Performance::ClearMarks(const Optional<nsAString>& aName) {
@@ -361,7 +362,6 @@ void Performance::Measure(const nsAString& aName,
       new PerformanceMeasure(GetParentObject(), aName, startTime, endTime);
   InsertUserEntry(performanceMeasure);
 
-#ifdef MOZ_GECKO_PROFILER
   if (profiler_can_accept_markers()) {
     TimeStamp startTimeStamp =
         CreationTimeStamp() + TimeDuration::FromMilliseconds(startTime);
@@ -389,7 +389,6 @@ void Performance::Measure(const nsAString& aName,
                         UserTimingMarker{}, aName, /* aIsMeasure */ true,
                         startMark, endMark);
   }
-#endif
 }
 
 void Performance::ClearMeasures(const Optional<nsAString>& aName) {
@@ -656,25 +655,23 @@ void Performance::RunNotificationObserversTask() {
 }
 
 void Performance::QueueEntry(PerformanceEntry* aEntry) {
-  if (mObservers.IsEmpty()) {
-    return;
-  }
-
   nsTObserverArray<PerformanceObserver*> interestedObservers;
-  const auto [begin, end] = mObservers.NonObservingRange();
-  std::copy_if(begin, end, MakeBackInserter(interestedObservers),
-               [aEntry](PerformanceObserver* observer) {
-                 return observer->ObservesTypeOfEntry(aEntry);
-               });
-
-  if (interestedObservers.IsEmpty()) {
-    return;
+  if (!mObservers.IsEmpty()) {
+    const auto [begin, end] = mObservers.NonObservingRange();
+    std::copy_if(begin, end, MakeBackInserter(interestedObservers),
+                 [aEntry](PerformanceObserver* observer) {
+                   return observer->ObservesTypeOfEntry(aEntry);
+                 });
   }
 
   NS_OBSERVER_ARRAY_NOTIFY_XPCOM_OBSERVERS(interestedObservers, QueueEntry,
                                            (aEntry));
 
-  QueueNotificationObserversTask();
+  aEntry->BufferEntryIfNeeded();
+
+  if (!interestedObservers.IsEmpty()) {
+    QueueNotificationObserversTask();
+  }
 }
 
 void Performance::MemoryPressure() { mUserEntries.Clear(); }

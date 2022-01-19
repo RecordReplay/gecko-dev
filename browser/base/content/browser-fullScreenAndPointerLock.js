@@ -90,7 +90,7 @@ var PointerlockFsWarning = {
       ".pointerlockfswarning-domain-text"
     );
     if (!host) {
-      textElem.setAttribute("hidden", true);
+      textElem.hidden = true;
     } else {
       textElem.removeAttribute("hidden");
       // Document's principal's URI has a host. Display a warning including it.
@@ -122,8 +122,17 @@ var PointerlockFsWarning = {
     this._timeoutHide.start();
   },
 
-  close() {
-    if (!this._element) {
+  /**
+   * Close the full screen or pointerlock warning.
+   * @param {('fullscreen-warning'|'pointerlock-warning')} elementId - Id of the
+   * warning element to close. If the id does not match the currently shown
+   * warning this is a no-op.
+   */
+  close(elementId) {
+    if (!elementId) {
+      throw new Error("Must pass id of warning element to close");
+    }
+    if (!this._element || this._element.id != elementId) {
       return;
     }
     // Cancel any pending timeout
@@ -135,7 +144,7 @@ var PointerlockFsWarning = {
     this._element
       .querySelector(".pointerlockfswarning-domain-text")
       .removeAttribute("data-l10n-id");
-    this._element.setAttribute("hidden", true);
+    this._element.hidden = true;
     // Remove all event listeners
     this._element.removeEventListener("transitionend", this);
     window.removeEventListener("mousemove", this, true);
@@ -231,7 +240,7 @@ var PointerlockFsWarning = {
       }
       case "transitionend": {
         if (this._state == "hiding") {
-          this._element.setAttribute("hidden", true);
+          this._element.hidden = true;
         }
         break;
       }
@@ -245,7 +254,7 @@ var PointerLock = {
   },
 
   exited() {
-    PointerlockFsWarning.close();
+    PointerlockFsWarning.close("pointerlock-warning");
   },
 };
 
@@ -266,6 +275,7 @@ var FullScreen = {
     // the content.
     addEventListener("willenterfullscreen", this, true);
     addEventListener("willexitfullscreen", this, true);
+    addEventListener("MacFullscreenMenubarRevealUpdate", this, true);
 
     if (window.fullScreen) {
       this.toggle();
@@ -300,6 +310,7 @@ var FullScreen = {
       // Make sure the menu items are adjusted.
       document.getElementById("enterFullScreenItem").hidden = enterFS;
       document.getElementById("exitFullScreenItem").hidden = !enterFS;
+      this.shiftMacToolbarDown(0);
     }
 
     if (!this._fullScrToggler) {
@@ -321,12 +332,12 @@ var FullScreen = {
         (alwaysUsesNativeFullscreen || !document.fullscreenElement) &&
         AppConstants.platform == "macosx"
       ) {
-        document.documentElement.setAttribute("OSXLionFullscreen", true);
+        document.documentElement.setAttribute("macOSNativeFullscreen", true);
       }
     } else {
       gNavToolbox.removeAttribute("inFullscreen");
       document.documentElement.removeAttribute("inFullscreen");
-      document.documentElement.removeAttribute("OSXLionFullscreen");
+      document.documentElement.removeAttribute("macOSNativeFullscreen");
     }
 
     if (!document.fullscreenElement) {
@@ -357,6 +368,36 @@ var FullScreen = {
     }
   },
 
+  /**
+   * Shifts the browser toolbar down when it is moused over on macOS in
+   * fullscreen.
+   * @param {number} shiftSize
+   *   A distance, in pixels, by which to shift the browser toolbar down.
+   */
+  shiftMacToolbarDown(shiftSize) {
+    if (typeof shiftSize !== "number") {
+      Cu.reportError("Tried to shift the toolbar by a non-numeric distance.");
+      return;
+    }
+
+    // shiftSize is sent from Cocoa widget code as a very precise double. We
+    // don't need that kind of precision in our CSS.
+    shiftSize = shiftSize.toFixed(2);
+    let toolbox = document.getElementById("navigator-toolbox");
+    let browserEl = document.getElementById("browser");
+    if (shiftSize > 0) {
+      toolbox.style.setProperty("transform", `translateY(${shiftSize}px)`);
+      toolbox.style.setProperty("z-index", "2");
+      toolbox.style.setProperty("position", "relative");
+      browserEl.style.setProperty("position", "relative");
+    } else {
+      toolbox.style.removeProperty("transform");
+      toolbox.style.removeProperty("z-index");
+      toolbox.style.removeProperty("position");
+      browserEl.style.removeProperty("position");
+    }
+  },
+
   handleEvent(event) {
     switch (event.type) {
       case "willenterfullscreen":
@@ -367,6 +408,9 @@ var FullScreen = {
         break;
       case "fullscreen":
         this.toggle();
+        break;
+      case "MacFullscreenMenubarRevealUpdate":
+        this.shiftMacToolbarDown(event.detail);
         break;
     }
   },
@@ -412,7 +456,7 @@ var FullScreen = {
 
     // If we have a current pointerlock warning shown then hide it
     // before transition.
-    PointerlockFsWarning.close();
+    PointerlockFsWarning.close("pointerlock-warning");
 
     // If it is a remote browser, send a message to ask the content
     // to enter fullscreen state. We don't need to do so if it is an
@@ -534,7 +578,7 @@ var FullScreen = {
       true
     );
 
-    PointerlockFsWarning.close();
+    PointerlockFsWarning.close("fullscreen-warning");
     gBrowser.tabContainer.removeEventListener(
       "TabSelect",
       this.exitDomFullScreen
@@ -711,7 +755,7 @@ var FullScreen = {
     }
 
     // Track whether mouse is near the toolbox
-    if (trackMouse && AppConstants.platform != "macosx") {
+    if (trackMouse) {
       let rect = gBrowser.tabpanels.getBoundingClientRect();
       this._mouseTargetRect = {
         top: rect.top + 50,
@@ -735,10 +779,6 @@ var FullScreen = {
     }
     // a popup menu is open in chrome: don't collapse chrome
     if (this._isPopupOpen) {
-      return;
-    }
-    // On macOS we don't want to hide toolbars.
-    if (AppConstants.platform == "macosx") {
       return;
     }
 

@@ -200,7 +200,7 @@ a.hidden,
   height: 50px;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (-moz-toolbar-prefers-color-scheme: dark) {
   :root {
     --social-highlight-color: #9661FF;
     --cookie-highlight-color: #2BA8FF;
@@ -265,7 +265,7 @@ a.hidden,
   height: var(--exit-icon-size);
   top: var(--exit-icon-position);
   inset-inline-end: var(--exit-icon-position);
-  background-image: url(chrome://browser/skin/stop.svg);
+  background-image: url(chrome://global/skin/icons/close.svg);
   background-size: calc(var(--exit-icon-size) - 2px);
   background-color: transparent;
   background-position: center;
@@ -855,7 +855,7 @@ label[for="tab-cryptominer"]:hover ~ #highlight-hover {
 
 #monitor-breaches-link,
 #monitor-partial-breaches-link {
-  color: var(--in-content-selected-text);
+  color: inherit;
   outline: none;
   text-decoration: none;
   width: 157.267px;
@@ -1002,7 +1002,8 @@ label[for="tab-cryptominer"]:hover ~ #highlight-hover {
   border: 1px solid transparent;
   border-radius: 2px;
   text-decoration: none;
-  color: var(--in-content-selected-text);
+  color: var(--in-content-primary-button-text-color);
+  font-weight: 600;
 }
 
 #manage-protections:active,
@@ -1023,6 +1024,7 @@ label[for="tab-cryptominer"]:hover ~ #highlight-hover {
 #monitor-partial-breaches-link:hover,
 #monitor-breaches-link:hover {
   background-color: var(--in-content-primary-button-background-hover);
+  color: var(--in-content-primary-button-text-color-hover);
 }
 
 #manage-protections:focus,
@@ -1033,8 +1035,8 @@ label[for="tab-cryptominer"]:hover ~ #highlight-hover {
 #monitor-partial-breaches-link:focus,
 .monitor-block > a:focus,
 #monitor-breaches-link:focus {
-  box-shadow: 0 0 0 1px #0a84ff inset, 0 0 0 1px #0a84ff, 0 0 0 4px rgba(10, 132, 255, 0.3);
-  outline: none;
+  outline: 2px solid var(--in-content-focus-outline-color);
+  outline-offset: 2px;
 }
 
 .monitor-card.loading::after,

@@ -20,19 +20,19 @@ use crate::render_api::CaptureBits;
 #[cfg(feature = "replay")]
 use crate::render_api::CapturedDocument;
 use crate::render_api::{MemoryReport, TransactionMsg, ResourceUpdate, ApiMsg, FrameMsg, ClearCache, DebugCommand};
-use crate::clip::ClipIntern;
+use crate::clip::{ClipIntern, PolygonIntern, ClipStoreScratchBuffer};
 use crate::filterdata::FilterDataIntern;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::CaptureConfig;
 use crate::composite::{CompositorKind, CompositeDescriptor};
-#[cfg(feature = "debugger")]
-use crate::debug_server;
 use crate::frame_builder::{FrameBuilder, FrameBuilderConfig, FrameScratchBuffer};
 use crate::glyph_rasterizer::{FontInstance};
 use crate::gpu_cache::GpuCache;
 use crate::hit_test::{HitTest, HitTester, SharedHitTester};
 use crate::intern::DataStore;
-use crate::internal_types::{DebugOutput, FastHashMap, RenderedDocument, ResultMsg};
+#[cfg(any(feature = "capture", feature = "replay"))]
+use crate::internal_types::DebugOutput;
+use crate::internal_types::{FastHashMap, RenderedDocument, ResultMsg};
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use crate::picture::{TileCacheLogger, PictureScratchBuffer, SliceId, TileCacheInstance, TileCacheParams};
 use crate::prim_store::{PrimitiveScratchBuffer, PrimitiveInstance};
@@ -40,7 +40,7 @@ use crate::prim_store::{PrimitiveInstanceKind, PrimTemplateCommonData, Primitive
 use crate::prim_store::interned::*;
 use crate::profiler::{self, TransactionProfile};
 use crate::render_task_graph::RenderTaskGraphBuilder;
-use crate::renderer::{AsyncPropertySampler, PipelineInfo};
+use crate::renderer::{AsyncPropertySampler, FullFrameStats, PipelineInfo};
 use crate::resource_cache::ResourceCache;
 #[cfg(feature = "replay")]
 use crate::resource_cache::PlainCacheOwn;
@@ -52,8 +52,6 @@ use crate::scene::{BuiltScene, SceneProperties};
 use crate::scene_builder_thread::*;
 #[cfg(feature = "serialize")]
 use serde::{Serialize, Deserialize};
-#[cfg(feature = "debugger")]
-use serde_json;
 #[cfg(feature = "replay")]
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::sync::Arc;
@@ -72,7 +70,6 @@ use crate::util::{Recycler, VecHelper, drain_filter};
 #[derive(Copy, Clone)]
 pub struct DocumentView {
     scene: SceneView,
-    frame: FrameView,
 }
 
 /// Some rendering parameters applying at the scene level.
@@ -81,37 +78,7 @@ pub struct DocumentView {
 #[derive(Copy, Clone)]
 pub struct SceneView {
     pub device_rect: DeviceIntRect,
-    pub device_pixel_ratio: f32,
-    pub page_zoom_factor: f32,
     pub quality_settings: QualitySettings,
-}
-
-impl SceneView {
-    pub fn accumulated_scale_factor_for_snapping(&self) -> DevicePixelScale {
-        DevicePixelScale::new(
-            self.device_pixel_ratio *
-            self.page_zoom_factor
-        )
-    }
-}
-
-/// Some rendering parameters applying at the frame level.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[derive(Copy, Clone)]
-pub struct FrameView {
-    pan: DeviceIntPoint,
-    pinch_zoom_factor: f32,
-}
-
-impl DocumentView {
-    pub fn accumulated_scale_factor(&self) -> DevicePixelScale {
-        DevicePixelScale::new(
-            self.scene.device_pixel_ratio *
-            self.scene.page_zoom_factor *
-            self.frame.pinch_zoom_factor
-        )
-    }
 }
 
 #[derive(Copy, Clone, Hash, MallocSizeOf, PartialEq, PartialOrd, Debug, Eq, Ord)]
@@ -168,6 +135,7 @@ impl ::std::ops::Sub<usize> for FrameId {
 }
 enum RenderBackendStatus {
     Continue,
+    StopRenderBackend,
     ShutDown(Option<Sender<()>>),
 }
 
@@ -347,7 +315,8 @@ impl DataStores {
                 let prim_data = &self.line_decoration[data_handle];
                 &prim_data.common
             }
-            PrimitiveInstanceKind::LinearGradient { data_handle, .. } => {
+            PrimitiveInstanceKind::LinearGradient { data_handle, .. }
+            | PrimitiveInstanceKind::CachedLinearGradient { data_handle, .. } => {
                 let prim_data = &self.linear_grad[data_handle];
                 &prim_data.common
             }
@@ -387,6 +356,7 @@ pub struct ScratchBuffer {
     pub primitive: PrimitiveScratchBuffer,
     pub picture: PictureScratchBuffer,
     pub frame: FrameScratchBuffer,
+    pub clip_store: ClipStoreScratchBuffer,
 }
 
 impl ScratchBuffer {
@@ -396,6 +366,10 @@ impl ScratchBuffer {
         self.frame.begin_frame();
     }
 
+    pub fn end_frame(&mut self) {
+        self.primitive.end_frame();
+    }
+
     pub fn recycle(&mut self, recycler: &mut Recycler) {
         self.primitive.recycle(recycler);
         self.picture.recycle(recycler);
@@ -403,10 +377,11 @@ impl ScratchBuffer {
     }
 
     pub fn memory_pressure(&mut self) {
-        // TODO: causes browser chrome test crahes on windows.
+        // TODO: causes browser chrome test crashes on windows.
         //self.primitive = Default::default();
         self.picture = Default::default();
         self.frame = Default::default();
+        self.clip_store = Default::default();
     }
 }
 
@@ -471,13 +446,13 @@ struct Document {
     dirty_rects_are_valid: bool,
 
     profile: TransactionProfile,
+    frame_stats: Option<FullFrameStats>,
 }
 
 impl Document {
     pub fn new(
         id: DocumentId,
         size: DeviceIntSize,
-        default_device_pixel_ratio: f32,
     ) -> Self {
         Document {
             id,
@@ -485,13 +460,7 @@ impl Document {
             view: DocumentView {
                 scene: SceneView {
                     device_rect: size.into(),
-                    page_zoom_factor: 1.0,
-                    device_pixel_ratio: default_device_pixel_ratio,
                     quality_settings: QualitySettings::default(),
-                },
-                frame: FrameView {
-                    pan: DeviceIntPoint::new(0, 0),
-                    pinch_zoom_factor: 1.0,
                 },
             },
             stamp: FrameStamp::first(id),
@@ -512,6 +481,7 @@ impl Document {
             dirty_rects_are_valid: true,
             profile: TransactionProfile::new(),
             rg_builder: RenderTaskGraphBuilder::new(),
+            frame_stats: None,
         }
     }
 
@@ -520,7 +490,7 @@ impl Document {
     }
 
     fn has_pixels(&self) -> bool {
-        !self.view.scene.device_rect.size.is_empty()
+        !self.view.scene.device_rect.is_empty()
     }
 
     fn process_frame_msg(
@@ -548,13 +518,6 @@ impl Document {
             FrameMsg::RequestHitTester(tx) => {
                 tx.send(self.shared_hit_tester.clone()).unwrap();
             }
-            FrameMsg::SetPan(pan) => {
-                if self.view.frame.pan != pan {
-                    self.view.frame.pan = pan;
-                    self.hit_tester_is_valid = false;
-                    self.frame_is_valid = false;
-                }
-            }
             FrameMsg::ScrollNodeWithId(origin, id, clamp) => {
                 profile_scope!("ScrollNodeWithScrollId");
 
@@ -578,12 +541,6 @@ impl Document {
             FrameMsg::AppendDynamicTransformProperties(property_bindings) => {
                 self.dynamic_properties.add_transforms(property_bindings);
             }
-            FrameMsg::SetPinchZoom(factor) => {
-                if self.view.frame.pinch_zoom_factor != factor.get() {
-                    self.view.frame.pinch_zoom_factor = factor.get();
-                    self.frame_is_valid = false;
-                }
-            }
             FrameMsg::SetIsTransformAsyncZooming(is_zooming, animation_id) => {
                 let node = self.scene.spatial_tree.spatial_nodes.iter_mut()
                     .find(|node| node.is_transform_bound_to_property(animation_id));
@@ -606,11 +563,9 @@ impl Document {
         debug_flags: DebugFlags,
         tile_cache_logger: &mut TileCacheLogger,
         tile_caches: &mut FastHashMap<SliceId, Box<TileCacheInstance>>,
+        frame_stats: Option<FullFrameStats>
     ) -> RenderedDocument {
-        self.profile.start_time(profiler::FRAME_BUILDING_TIME);
-
-        let accumulated_scale_factor = self.view.accumulated_scale_factor();
-        let pan = self.view.frame.pan.to_f32() / accumulated_scale_factor;
+        let frame_build_start_time = precise_time_ns();
 
         // Advance to the next frame.
         self.stamp.advance();
@@ -625,9 +580,7 @@ impl Document {
                 gpu_cache,
                 &mut self.rg_builder,
                 self.stamp,
-                accumulated_scale_factor,
-                self.view.scene.device_rect.origin,
-                pan,
+                self.view.scene.device_rect.min,
                 &self.dynamic_properties,
                 &mut self.data_stores,
                 &mut self.scratch,
@@ -647,24 +600,25 @@ impl Document {
         let is_new_scene = self.has_built_scene;
         self.has_built_scene = false;
 
-        self.profile.end_time(profiler::FRAME_BUILDING_TIME);
+        let frame_build_time_ms =
+            profiler::ns_to_ms(precise_time_ns() - frame_build_start_time);
+        self.profile.set(profiler::FRAME_BUILDING_TIME, frame_build_time_ms);
+
+        let frame_stats = frame_stats.map(|mut stats| {
+            stats.frame_build_time += frame_build_time_ms;
+            stats
+        });
 
         RenderedDocument {
             frame,
             is_new_scene,
             profile: self.profile.take_and_reset(),
+            frame_stats: frame_stats
         }
     }
 
     fn rebuild_hit_tester(&mut self) {
-        let accumulated_scale_factor = self.view.accumulated_scale_factor();
-        let pan = self.view.frame.pan.to_f32() / accumulated_scale_factor;
-
-        self.scene.spatial_tree.update_tree(
-            pan,
-            accumulated_scale_factor,
-            &self.dynamic_properties,
-        );
+        self.scene.spatial_tree.update_tree(&self.dynamic_properties);
 
         let hit_tester = Arc::new(self.scene.create_hit_tester());
         self.hit_tester = Some(Arc::clone(&hit_tester));
@@ -709,7 +663,10 @@ impl Document {
             let tile_cache = match tile_caches.remove(&slice_id) {
                 Some(mut existing_tile_cache) => {
                     // Found an existing cache - update the cache params and reuse it
-                    existing_tile_cache.prepare_for_new_scene(params);
+                    existing_tile_cache.prepare_for_new_scene(
+                        params,
+                        resource_cache,
+                    );
                     existing_tile_cache
                 }
                 None => {
@@ -783,7 +740,6 @@ static NEXT_NAMESPACE_ID: AtomicUsize = AtomicUsize::new(1);
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 struct PlainRenderBackend {
-    default_device_pixel_ratio: f32,
     frame_config: FrameBuilderConfig,
     documents: FastHashMap<DocumentId, DocumentView>,
     resource_sequence_id: u32,
@@ -797,9 +753,6 @@ pub struct RenderBackend {
     api_rx: Receiver<ApiMsg>,
     result_tx: Sender<ResultMsg>,
     scene_tx: Sender<SceneBuilderRequest>,
-    low_priority_scene_tx: Sender<SceneBuilderRequest>,
-
-    default_device_pixel_ratio: f32,
 
     gpu_cache: GpuCache,
     resource_cache: ResourceCache,
@@ -821,8 +774,13 @@ pub struct RenderBackend {
     blob_image_handler: Option<Box<dyn BlobImageHandler>>,
 
     recycler: Recycler,
+
     #[cfg(feature = "capture")]
+    /// If `Some`, do 'sequence capture' logging, recording updated documents,
+    /// frames, etc. This is set only through messages from the scene builder,
+    /// so all control of sequence capture goes through there.
     capture_config: Option<CaptureConfig>,
+
     #[cfg(feature = "replay")]
     loaded_resource_sequence_id: u32,
 
@@ -836,8 +794,6 @@ impl RenderBackend {
         api_rx: Receiver<ApiMsg>,
         result_tx: Sender<ResultMsg>,
         scene_tx: Sender<SceneBuilderRequest>,
-        low_priority_scene_tx: Sender<SceneBuilderRequest>,
-        default_device_pixel_ratio: f32,
         resource_cache: ResourceCache,
         notifier: Box<dyn RenderNotifier>,
         blob_image_handler: Option<Box<dyn BlobImageHandler>>,
@@ -851,8 +807,6 @@ impl RenderBackend {
             api_rx,
             result_tx,
             scene_tx,
-            low_priority_scene_tx,
-            default_device_pixel_ratio,
             resource_cache,
             gpu_cache: GpuCache::new(),
             frame_config,
@@ -893,6 +847,29 @@ impl RenderBackend {
                 }
                 Err(..) => { RenderBackendStatus::ShutDown(None) }
             };
+        }
+
+        if let RenderBackendStatus::StopRenderBackend = status {
+            while let Ok(msg) = self.api_rx.recv() {
+                match msg {
+                    ApiMsg::SceneBuilderResult(SceneBuilderResult::ExternalEvent(evt)) => {
+                        self.notifier.external_event(evt);
+                    }
+                    ApiMsg::SceneBuilderResult(SceneBuilderResult::FlushComplete(tx)) => {
+                        // If somebody's blocked waiting for a flush, how did they
+                        // trigger the RB thread to shut down? This shouldn't happen
+                        // but handle it gracefully anyway.
+                        debug_assert!(false);
+                        tx.send(()).ok();
+                    }
+                    ApiMsg::SceneBuilderResult(SceneBuilderResult::ShutDown(sender)) => {
+                        info!("Recycling stats: {:?}", self.recycler);
+                        status = RenderBackendStatus::ShutDown(sender);
+                        break;
+                   }
+                    _ => {},
+                }
+            }
         }
 
         // Ensure we read everything the scene builder is sending us from
@@ -940,10 +917,15 @@ impl RenderBackend {
            let has_built_scene = txn.built_scene.is_some();
 
             if let Some(doc) = self.documents.get_mut(&txn.document_id) {
-
                 doc.removed_pipelines.append(&mut txn.removed_pipelines);
                 doc.view.scene = txn.view;
                 doc.profile.merge(&mut txn.profile);
+
+                doc.frame_stats = if let Some(stats) = &doc.frame_stats {
+                    Some(stats.merge(&txn.frame_stats))
+                } else {
+                    Some(txn.frame_stats)
+                };
 
                 if let Some(built_scene) = txn.built_scene.take() {
                     doc.new_async_scene_ready(
@@ -1026,7 +1008,6 @@ impl RenderBackend {
         frame_counter: &mut u32,
     ) -> RenderBackendStatus {
         match msg {
-            ApiMsg::WakeUp => {}
             ApiMsg::CloneApi(sender) => {
                 assert!(!self.namespace_alloc_by_client);
                 sender.send(self.next_namespace_id()).unwrap();
@@ -1039,7 +1020,6 @@ impl RenderBackend {
                 let document = Document::new(
                     document_id,
                     initial_size,
-                    self.default_device_pixel_ratio,
                 );
                 let old = self.documents.insert(document_id, document);
                 debug_assert!(old.is_none());
@@ -1089,16 +1069,6 @@ impl RenderBackend {
                         self.update_frame_builder_config();
 
                         return RenderBackendStatus::Continue;
-                    }
-                    DebugCommand::FetchDocuments => {
-                        // Ask SceneBuilderThread to send JSON presentation of the documents,
-                        // that will be forwarded to Renderer.
-                        self.send_backend_message(SceneBuilderRequest::DocumentsForDebugger);
-                        return RenderBackendStatus::Continue;
-                    }
-                    DebugCommand::FetchClipScrollTree => {
-                        let json = self.get_spatial_tree_for_debugger();
-                        ResultMsg::DebugOutput(DebugOutput::FetchClipScrollTree(json))
                     }
                     #[cfg(feature = "capture")]
                     DebugCommand::SaveCapture(root, bits) => {
@@ -1179,12 +1149,6 @@ impl RenderBackend {
                     }
                     DebugCommand::SimulateLongSceneBuild(time_ms) => {
                         let _ = self.scene_tx.send(SceneBuilderRequest::SimulateLongSceneBuild(time_ms));
-                        return RenderBackendStatus::Continue;
-                    }
-                    DebugCommand::SimulateLongLowPrioritySceneBuild(time_ms) => {
-                        let _ = self.low_priority_scene_tx.send(
-                            SceneBuilderRequest::SimulateLongLowPrioritySceneBuild(time_ms)
-                        );
                         return RenderBackendStatus::Continue;
                     }
                     DebugCommand::SetFlags(flags) => {
@@ -1273,6 +1237,10 @@ impl RenderBackend {
 
                 self.bookkeep_after_frames();
             },
+            #[cfg(feature = "capture")]
+            SceneBuilderResult::StopCaptureSequence => {
+                self.capture_config = None;
+            }
             SceneBuilderResult::GetGlyphDimensions(request) => {
                 let mut glyph_dimensions = Vec::with_capacity(request.glyph_indices.len());
                 if let Some(base) = self.resource_cache.get_font_instance(request.key) {
@@ -1308,14 +1276,12 @@ impl RenderBackend {
             SceneBuilderResult::DeleteDocument(document_id) => {
                 self.documents.remove(&document_id);
             }
+            SceneBuilderResult::StopRenderBackend => {
+                return RenderBackendStatus::StopRenderBackend;
+            }
             SceneBuilderResult::ShutDown(sender) => {
                 info!("Recycling stats: {:?}", self.recycler);
                 return RenderBackendStatus::ShutDown(sender);
-            }
-            SceneBuilderResult::DocumentsForDebugger(json) => {
-                let msg = ResultMsg::DebugOutput(DebugOutput::FetchDocuments(json));
-                self.result_tx.send(msg).unwrap();
-                self.notifier.wake_up(false);
             }
         }
 
@@ -1438,7 +1404,7 @@ impl RenderBackend {
         // fiddle with things after a potentially long scene build, but just
         // before rendering. This is useful for rendering with the latest
         // async transforms.
-        if requested_frame || has_built_scene {
+        if requested_frame {
             if let Some(ref sampler) = self.sampler {
                 frame_ops.append(&mut sampler.sample(document_id, generated_frame_id));
             }
@@ -1490,13 +1456,9 @@ impl RenderBackend {
         // external image with NativeTexture or when platform requested to composite frame.
         if invalidate_rendered_frame {
             doc.rendered_frame_is_valid = false;
-            if let CompositorKind::Draw { max_partial_present_rects, .. } = doc.scene.config.compositor_kind {
-
-              // When partial present is enabled, we need to force redraw.
-              if max_partial_present_rects > 0 {
-                  let msg = ResultMsg::ForceRedraw;
-                  self.result_tx.send(msg).unwrap();
-              }
+            if doc.scene.config.compositor_kind.should_redraw_on_invalidation() {
+                let msg = ResultMsg::ForceRedraw;
+                self.result_tx.send(msg).unwrap();
             }
         }
 
@@ -1510,12 +1472,15 @@ impl RenderBackend {
             let (pending_update, rendered_document) = {
                 let frame_build_start_time = precise_time_ns();
 
+                let frame_stats = doc.frame_stats.take();
+
                 let rendered_document = doc.build_frame(
                     &mut self.resource_cache,
                     &mut self.gpu_cache,
                     self.debug_flags,
                     &mut self.tile_cache_logger,
                     &mut self.tile_caches,
+                    frame_stats
                 );
 
                 debug!("generated frame for document {:?} with {} passes",
@@ -1620,29 +1585,6 @@ impl RenderBackend {
         self.scene_tx.send(msg).unwrap();
     }
 
-    #[cfg(not(feature = "debugger"))]
-    fn get_spatial_tree_for_debugger(&self) -> String {
-        String::new()
-    }
-
-    #[cfg(feature = "debugger")]
-    fn get_spatial_tree_for_debugger(&self) -> String {
-        use crate::print_tree::PrintableTree;
-
-        let mut debug_root = debug_server::SpatialTreeList::new();
-
-        for (_, doc) in &self.documents {
-            let debug_node = debug_server::TreeNode::new("document spatial tree");
-            let mut builder = debug_server::TreeNodeBuilder::new(debug_node);
-
-            doc.scene.spatial_tree.print_with(&mut builder);
-
-            debug_root.add(builder.build());
-        }
-
-        serde_json::to_string(&debug_root).unwrap()
-    }
-
     fn report_memory(&mut self, tx: Sender<Box<MemoryReport>>) {
         let mut report = Box::new(MemoryReport::default());
         let ops = self.size_of_ops.as_mut().unwrap();
@@ -1677,7 +1619,6 @@ impl RenderBackend {
             let deferred = self.resource_cache.save_capture_sequence(config);
 
             let backend = PlainRenderBackend {
-                default_device_pixel_ratio: self.default_device_pixel_ratio,
                 frame_config: self.frame_config.clone(),
                 resource_sequence_id: config.resource_id,
                 documents: self.documents
@@ -1727,6 +1668,7 @@ impl RenderBackend {
                     self.debug_flags,
                     &mut self.tile_cache_logger,
                     &mut self.tile_caches,
+                    None,
                 );
                 // After we rendered the frames, there are pending updates to both
                 // GPU cache and resources. Instead of serializing them, we are going to make sure
@@ -1751,17 +1693,28 @@ impl RenderBackend {
                     .expect("Failed to open the SVG file.");
                 dump_render_tasks_as_svg(
                     &rendered_document.frame.render_tasks,
-                    &rendered_document.frame.passes,
                     &mut render_tasks_file
                 ).unwrap();
+
                 let file_name = format!("texture-cache-color-linear-{}-{}.svg", id.namespace_id.0, id.id);
                 let mut texture_file = fs::File::create(&config.file_path_for_frame(file_name, "svg"))
                     .expect("Failed to open the SVG file.");
                 self.resource_cache.texture_cache.dump_color8_linear_as_svg(&mut texture_file).unwrap();
-                let file_name = format!("texture-cache-glyphs-{}-{}.svg", id.namespace_id.0, id.id);
+
+                let file_name = format!("texture-cache-color8-glyphs-{}-{}.svg", id.namespace_id.0, id.id);
                 let mut texture_file = fs::File::create(&config.file_path_for_frame(file_name, "svg"))
                     .expect("Failed to open the SVG file.");
-                self.resource_cache.texture_cache.dump_glyphs_as_svg(&mut texture_file).unwrap();
+                self.resource_cache.texture_cache.dump_color8_glyphs_as_svg(&mut texture_file).unwrap();
+
+                let file_name = format!("texture-cache-alpha8-glyphs-{}-{}.svg", id.namespace_id.0, id.id);
+                let mut texture_file = fs::File::create(&config.file_path_for_frame(file_name, "svg"))
+                    .expect("Failed to open the SVG file.");
+                self.resource_cache.texture_cache.dump_alpha8_glyphs_as_svg(&mut texture_file).unwrap();
+
+                let file_name = format!("texture-cache-alpha8-linear-{}-{}.svg", id.namespace_id.0, id.id);
+                let mut texture_file = fs::File::create(&config.file_path_for_frame(file_name, "svg"))
+                    .expect("Failed to open the SVG file.");
+                self.resource_cache.texture_cache.dump_alpha8_linear_as_svg(&mut texture_file).unwrap();
             }
 
             let data_stores_name = format!("data-stores-{}-{}", id.namespace_id.0, id.id);
@@ -1794,7 +1747,6 @@ impl RenderBackend {
 
         info!("\tbackend");
         let backend = PlainRenderBackend {
-            default_device_pixel_ratio: self.default_device_pixel_ratio,
             frame_config: self.frame_config.clone(),
             resource_sequence_id: 0,
             documents: self.documents
@@ -1898,7 +1850,6 @@ impl RenderBackend {
             };
         }
 
-        self.default_device_pixel_ratio = backend.default_device_pixel_ratio;
         self.frame_config = backend.frame_config;
 
         let mut scenes_to_build = Vec::new();
@@ -1958,6 +1909,7 @@ impl RenderBackend {
                         dirty_rects_are_valid: false,
                         profile: TransactionProfile::new(),
                         rg_builder: RenderTaskGraphBuilder::new(),
+                        frame_stats: None,
                     };
                     entry.insert(doc);
                 }
@@ -1974,7 +1926,7 @@ impl RenderBackend {
 
                     let msg_publish = ResultMsg::PublishDocument(
                         id,
-                        RenderedDocument { frame, is_new_scene: true, profile: TransactionProfile::new() },
+                        RenderedDocument { frame, is_new_scene: true, profile: TransactionProfile::new(), frame_stats: None },
                         self.resource_cache.pending_updates(),
                     );
                     self.result_tx.send(msg_publish).unwrap();

@@ -210,6 +210,9 @@ Preferences.addAll([
   // HTTPS-Only
   { id: "dom.security.https_only_mode", type: "bool" },
   { id: "dom.security.https_only_mode_pbm", type: "bool" },
+
+  // Windows SSO
+  { id: "network.http.windows-sso.enabled", type: "bool" },
 ]);
 
 // Study opt out
@@ -417,15 +420,6 @@ var gPrivacyPane = {
     });
   },
 
-  /**
-   * Initialize autocomplete to ensure prefs are in sync.
-   */
-  _initAutocomplete() {
-    Cc["@mozilla.org/autocomplete/search;1?name=unifiedcomplete"].getService(
-      Ci.mozIPlacesAutoComplete
-    );
-  },
-
   syncFromHttpsOnlyPref() {
     let httpsOnlyOnPref = Services.prefs.getBoolPref(
       "dom.security.https_only_mode"
@@ -434,13 +428,19 @@ var gPrivacyPane = {
       "dom.security.https_only_mode_pbm"
     );
     let httpsOnlyRadioGroup = document.getElementById("httpsOnlyRadioGroup");
+    let httpsOnlyExceptionButton = document.getElementById(
+      "httpsOnlyExceptionButton"
+    );
 
     if (httpsOnlyOnPref) {
       httpsOnlyRadioGroup.value = "enabled";
+      httpsOnlyExceptionButton.disabled = false;
     } else if (httpsOnlyOnPBMPref) {
       httpsOnlyRadioGroup.value = "privateOnly";
+      httpsOnlyExceptionButton.disabled = true;
     } else {
       httpsOnlyRadioGroup.value = "disabled";
+      httpsOnlyExceptionButton.disabled = true;
     }
   },
 
@@ -460,18 +460,6 @@ var gPrivacyPane = {
    * Init HTTPS-Only mode and corresponding prefs
    */
   initHttpsOnly() {
-    let exposeHttpsOnly = Services.prefs.getBoolPref(
-      "browser.preferences.exposeHTTPSOnly"
-    );
-    let httpsOnlyBox = document.getElementById("httpsOnlyBox");
-
-    if (!exposeHttpsOnly) {
-      httpsOnlyBox.setAttribute("hidehttpsonly", "true");
-      return;
-    }
-
-    httpsOnlyBox.removeAttribute("hidehttpsonly");
-
     let link = document.getElementById("httpsOnlyLearnMore");
     let httpsOnlyURL =
       Services.urlFormatter.formatURLPref("app.support.baseURL") +
@@ -507,7 +495,6 @@ var gPrivacyPane = {
     this.updateHistoryModePane();
     this.updatePrivacyMicroControls();
     this.initAutoStartPrivateBrowsingReverter();
-    this._initAutocomplete();
 
     /* Initialize Content Blocking */
     this.initContentBlocking();
@@ -587,6 +574,11 @@ var gPrivacyPane = {
       "cookieExceptions",
       "command",
       gPrivacyPane.showCookieExceptions
+    );
+    setEventListener(
+      "httpsOnlyExceptionButton",
+      "command",
+      gPrivacyPane.showHttpsOnlyModeExceptions
     );
     setEventListener(
       "clearDataSettings",
@@ -768,6 +760,15 @@ var gPrivacyPane = {
     document
       .getElementById("notificationPermissionsLearnMore")
       .setAttribute("href", notificationInfoURL);
+
+    if (AppConstants.platform == "win") {
+      let windowsSSOURL =
+        Services.urlFormatter.formatURLPref("app.support.baseURL") +
+        "windows-sso";
+      document
+        .getElementById("windowsSSOLearnMoreLink")
+        .setAttribute("href", windowsSSOURL);
+    }
 
     if (AppConstants.MOZ_DATA_REPORTING) {
       this.initDataCollection();
@@ -997,6 +998,33 @@ var gPrivacyPane = {
             );
             break;
         }
+        let cookieBehaviorPBM = defaults.getIntPref(
+          "network.cookie.cookieBehavior.pbmode"
+        );
+        switch (cookieBehaviorPBM) {
+          case Ci.nsICookieService.BEHAVIOR_ACCEPT:
+            rulesArray.push("cookieBehaviorPBM0");
+            break;
+          case Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN:
+            rulesArray.push("cookieBehaviorPBM1");
+            break;
+          case Ci.nsICookieService.BEHAVIOR_REJECT:
+            rulesArray.push("cookieBehaviorPBM2");
+            break;
+          case Ci.nsICookieService.BEHAVIOR_LIMIT_FOREIGN:
+            rulesArray.push("cookieBehaviorPBM3");
+            break;
+          case Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER:
+            rulesArray.push("cookieBehaviorPBM4");
+            break;
+          case BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN:
+            rulesArray.push(
+              gIsFirstPartyIsolated
+                ? "cookieBehaviorPBM4"
+                : "cookieBehaviorPBM5"
+            );
+            break;
+        }
         rulesArray.push(
           defaults.getBoolPref(
             "privacy.trackingprotection.cryptomining.enabled"
@@ -1040,6 +1068,9 @@ var gPrivacyPane = {
       ).hidden = true;
       document.querySelector(
         selector + " .third-party-tracking-cookies-option"
+      ).hidden = true;
+      document.querySelector(
+        selector + " .all-third-party-cookies-private-windows-option"
       ).hidden = true;
       document.querySelector(
         selector + " .all-third-party-cookies-option"
@@ -1135,6 +1166,16 @@ var gPrivacyPane = {
               : " .third-party-tracking-cookies-plus-isolate-option";
             document.querySelector(selector + cookieSelector).hidden = false;
             break;
+          case "cookieBehaviorPBM5":
+            // We only need to show the cookie option for private windows if the
+            // cookieBehaviors are different between regular windows and private
+            // windows.
+            if (!rulesArray.includes("cookieBehavior5")) {
+              document.querySelector(
+                selector + " .all-third-party-cookies-private-windows-option"
+              ).hidden = false;
+            }
+            break;
         }
       }
       // Hide the "tracking protection in private browsing" list item
@@ -1225,7 +1266,7 @@ var gPrivacyPane = {
    * Selects the right items of the new Cookies & Site Data UI.
    */
   networkCookieBehaviorReadPrefs() {
-    let behavior = Services.cookies.cookieBehavior;
+    let behavior = Services.cookies.getCookieBehavior(false);
     let blockCookiesMenu = document.getElementById("blockCookiesMenu");
     let deleteOnCloseCheckbox = document.getElementById("deleteOnClose");
     let deleteOnCloseNote = document.getElementById("deleteOnCloseNote");
@@ -1490,7 +1531,7 @@ var gPrivacyPane = {
         this._updateSanitizeSettingsButton();
       }
     } else {
-      clearDataSettings.setAttribute("hidden", "true");
+      clearDataSettings.hidden = true;
     }
   },
 
@@ -1703,7 +1744,8 @@ var gPrivacyPane = {
   readBlockCookies() {
     let bcControl = document.getElementById("blockCookiesMenu");
     bcControl.disabled =
-      Services.cookies.cookieBehavior == Ci.nsICookieService.BEHAVIOR_ACCEPT;
+      Services.cookies.getCookieBehavior(false) ==
+      Ci.nsICookieService.BEHAVIOR_ACCEPT;
   },
 
   /**
@@ -1723,7 +1765,7 @@ var gPrivacyPane = {
   },
 
   readBlockCookiesFrom() {
-    switch (Services.cookies.cookieBehavior) {
+    switch (Services.cookies.getCookieBehavior(false)) {
       case Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN:
         return "all-third-parties";
       case Ci.nsICookieService.BEHAVIOR_REJECT:
@@ -1817,6 +1859,24 @@ var gPrivacyPane = {
       allowVisible: true,
       prefilledHost: "",
       permissionType: "cookie",
+    };
+    gSubDialog.open(
+      "chrome://browser/content/preferences/dialogs/permissions.xhtml",
+      undefined,
+      params
+    );
+  },
+
+  /**
+   * Displays per-site preferences for HTTPS-Only Mode exceptions.
+   */
+  showHttpsOnlyModeExceptions() {
+    var params = {
+      blockVisible: false,
+      sessionVisible: true,
+      allowVisible: false,
+      prefilledHost: "",
+      permissionType: "https-only-load-insecure",
     };
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/permissions.xhtml",
@@ -2422,6 +2482,13 @@ var gPrivacyPane = {
       "toolkit.crashreporter.infoURL",
       "crashReporterLearnMore"
     );
+    setEventListener("crashReporterLabel", "click", function(event) {
+      if (event.target.localName == "a") {
+        return;
+      }
+      const checkboxId = event.target.getAttribute("for");
+      document.getElementById(checkboxId).click();
+    });
   },
 
   /**
@@ -2435,7 +2502,7 @@ var gPrivacyPane = {
     if (url) {
       el.setAttribute("href", url);
     } else {
-      el.setAttribute("hidden", "true");
+      el.hidden = true;
     }
   },
 

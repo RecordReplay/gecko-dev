@@ -407,11 +407,11 @@ class TestLint(unittest.TestCase):
         """
         ):
             self.lint_test()
-        with self.assertRaisesFromLine(ConfigureError, 4) as e:
+        with self.assertRaisesFromLine(ConfigureError, 3) as e:
             with self.moz_configure(
                 """
                 option(env='FOO', help='foo')
-                option('--enable-bar', default=depends('FOO')(lambda x: bool(x)),
+                option('--enable-bar', default=depends('FOO')(lambda x: bool(x)),\
                        help='Enable bar')
             """
             ):
@@ -423,14 +423,14 @@ class TestLint(unittest.TestCase):
         )
 
     def test_large_offset(self):
-        with self.assertRaisesFromLine(ConfigureError, 376):
+        with self.assertRaisesFromLine(ConfigureError, 375):
             with self.moz_configure(
                 """
                 option(env='FOO', help='foo')
             """
                 + "\n" * 371
                 + """
-                option('--enable-bar', default=depends('FOO')(lambda x: bool(x)),
+                option('--enable-bar', default=depends('FOO')(lambda x: bool(x)),\
                        help='Enable bar')
             """
             ):
@@ -470,6 +470,25 @@ class TestLint(unittest.TestCase):
                 self.lint_test()
 
         self.assertEquals(str(e.exception), "global name 'unknown' is not defined")
+
+    def test_unnecessary_imports(self):
+        with self.assertRaisesFromLine(NameError, 3) as e:
+            with self.moz_configure(
+                """
+                option(env='FOO', help='foo')
+                @depends('FOO')
+                @imports(_from='__builtin__', _import='list')
+                def foo(value):
+                    if value:
+                        return list()
+                    return value
+            """
+            ):
+                self.lint_test()
+
+        self.assertEquals(
+            str(e.exception), "builtin 'list' doesn't need to be imported"
+        )
 
 
 if __name__ == "__main__":

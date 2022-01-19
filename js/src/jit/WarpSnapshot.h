@@ -14,6 +14,7 @@
 #include "gc/Policy.h"
 #include "jit/JitAllocPolicy.h"
 #include "jit/JitContext.h"
+#include "jit/TypeData.h"
 #include "vm/FunctionFlags.h"  // js::FunctionFlags
 #include "vm/Printer.h"
 
@@ -21,8 +22,10 @@ namespace js {
 
 class ArgumentsObject;
 class CallObject;
+class GlobalLexicalEnvironmentObject;
 class LexicalEnvironmentObject;
 class ModuleEnvironmentObject;
+class NamedLambdaObject;
 
 namespace jit {
 
@@ -38,12 +41,11 @@ class WarpScriptSnapshot;
   _(WarpGetImport)               \
   _(WarpLambda)                  \
   _(WarpRest)                    \
-  _(WarpNewArray)                \
-  _(WarpNewObject)               \
   _(WarpBindGName)               \
   _(WarpBailout)                 \
   _(WarpCacheIR)                 \
-  _(WarpInlinedCall)
+  _(WarpInlinedCall)             \
+  _(WarpPolymorphicTypes)
 
 // Wrapper for GC things stored in WarpSnapshot. Asserts the GC pointer is not
 // nursery-allocated. These pointers must be traced using TraceWarpGCPtr.
@@ -60,8 +62,8 @@ class WarpGCPtr {
   }
   WarpGCPtr(const WarpGCPtr<T>& other) = default;
 
-  operator T() const { return static_cast<T>(ptr_); }
-  T operator->() const { return static_cast<T>(ptr_); }
+  operator T() const { return ptr_; }
+  T operator->() const { return ptr_; }
 
  private:
   WarpGCPtr() = delete;
@@ -375,64 +377,36 @@ class WarpInlinedCall : public WarpOpSnapshot {
 #endif
 };
 
-// Template object for JSOp::Rest.
+// Information for inlining an ordered set of types
+class WarpPolymorphicTypes : public WarpOpSnapshot {
+  TypeDataList list_;
+
+ public:
+  static constexpr Kind ThisKind = Kind::WarpPolymorphicTypes;
+
+  WarpPolymorphicTypes(uint32_t offset, TypeDataList list)
+      : WarpOpSnapshot(ThisKind, offset), list_(list) {}
+
+  const TypeDataList& list() const { return list_; }
+
+  void traceData(JSTracer* trc);
+
+#ifdef JS_JITSPEW
+  void dumpData(GenericPrinter& out) const;
+#endif
+};
+
+// Shape for JSOp::Rest.
 class WarpRest : public WarpOpSnapshot {
-  WarpGCPtr<ArrayObject*> templateObject_;
-  size_t maxInlineElements_;
+  WarpGCPtr<Shape*> shape_;
 
  public:
   static constexpr Kind ThisKind = Kind::WarpRest;
 
-  WarpRest(uint32_t offset, ArrayObject* templateObject,
-           size_t maxInlineElements)
-      : WarpOpSnapshot(ThisKind, offset),
-        templateObject_(templateObject),
-        maxInlineElements_(maxInlineElements) {}
+  WarpRest(uint32_t offset, Shape* shape)
+      : WarpOpSnapshot(ThisKind, offset), shape_(shape) {}
 
-  ArrayObject* templateObject() const { return templateObject_; }
-  size_t maxInlineElements() const { return maxInlineElements_; }
-
-  void traceData(JSTracer* trc);
-
-#ifdef JS_JITSPEW
-  void dumpData(GenericPrinter& out) const;
-#endif
-};
-
-// Template object for JSOp::NewArray.
-class WarpNewArray : public WarpOpSnapshot {
-  WarpGCPtr<ArrayObject*> templateObject_;
-  bool useVMCall_;
-
- public:
-  static constexpr Kind ThisKind = Kind::WarpNewArray;
-
-  WarpNewArray(uint32_t offset, ArrayObject* templateObject, bool useVMCall)
-      : WarpOpSnapshot(ThisKind, offset),
-        templateObject_(templateObject),
-        useVMCall_(useVMCall) {}
-
-  ArrayObject* templateObject() const { return templateObject_; }
-  bool useVMCall() const { return useVMCall_; }
-
-  void traceData(JSTracer* trc);
-
-#ifdef JS_JITSPEW
-  void dumpData(GenericPrinter& out) const;
-#endif
-};
-
-// Template object for JSOp::NewObject, JSOp::NewInit, JSOp::NewObjectWithGroup.
-class WarpNewObject : public WarpOpSnapshot {
-  WarpGCPtr<JSObject*> templateObject_;
-
- public:
-  static constexpr Kind ThisKind = Kind::WarpNewObject;
-
-  WarpNewObject(uint32_t offset, JSObject* templateObject)
-      : WarpOpSnapshot(ThisKind, offset), templateObject_(templateObject) {}
-
-  JSObject* templateObject() const { return templateObject_; }
+  Shape* shape() const { return shape_; }
 
   void traceData(JSTracer* trc);
 
@@ -464,11 +438,11 @@ struct NoEnvironment {};
 using ConstantObjectEnvironment = WarpGCPtr<JSObject*>;
 struct FunctionEnvironment {
   WarpGCPtr<CallObject*> callObjectTemplate;
-  WarpGCPtr<LexicalEnvironmentObject*> namedLambdaTemplate;
+  WarpGCPtr<NamedLambdaObject*> namedLambdaTemplate;
 
  public:
   FunctionEnvironment(CallObject* callObjectTemplate,
-                      LexicalEnvironmentObject* namedLambdaTemplate)
+                      NamedLambdaObject* namedLambdaTemplate)
       : callObjectTemplate(callObjectTemplate),
         namedLambdaTemplate(namedLambdaTemplate) {}
 };
@@ -567,7 +541,7 @@ class WarpSnapshot : public TempObject {
 
   // The global lexical environment and its thisObject(). We don't inline
   // cross-realm calls so this can be stored once per snapshot.
-  WarpGCPtr<LexicalEnvironmentObject*> globalLexicalEnv_;
+  WarpGCPtr<GlobalLexicalEnvironmentObject*> globalLexicalEnv_;
   WarpGCPtr<JSObject*> globalLexicalEnvThis_;
 
   const WarpBailoutInfo bailoutInfo_;
@@ -596,7 +570,7 @@ class WarpSnapshot : public TempObject {
   WarpScriptSnapshot* rootScript() { return scriptSnapshots_.getFirst(); }
   const WarpScriptSnapshotList& scripts() const { return scriptSnapshots_; }
 
-  LexicalEnvironmentObject* globalLexicalEnv() const {
+  GlobalLexicalEnvironmentObject* globalLexicalEnv() const {
     return globalLexicalEnv_;
   }
   JSObject* globalLexicalEnvThis() const { return globalLexicalEnvThis_; }

@@ -72,7 +72,7 @@ nsCocoaUtils::PromiseArray nsCocoaUtils::sAudioCapturePromises;
 StaticMutex nsCocoaUtils::sMediaCaptureMutex;
 
 static float MenuBarScreenHeight() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   NSArray* allScreens = [NSScreen screens];
   if ([allScreens count]) {
@@ -81,7 +81,7 @@ static float MenuBarScreenHeight() {
 
   return 0.0;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(0.0);
+  NS_OBJC_END_TRY_BLOCK_RETURN(0.0);
 }
 
 float nsCocoaUtils::FlippedScreenY(float y) { return MenuBarScreenHeight() - y; }
@@ -91,6 +91,10 @@ NSRect nsCocoaUtils::GeckoRectToCocoaRect(const DesktopIntRect& geckoRect) {
   // height and subtracting the gecko Y coordinate of the bottom of the rect.
   return NSMakeRect(geckoRect.x, MenuBarScreenHeight() - geckoRect.YMost(), geckoRect.width,
                     geckoRect.height);
+}
+
+NSPoint nsCocoaUtils::GeckoPointToCocoaPoint(const mozilla::DesktopPoint& aPoint) {
+  return NSMakePoint(aPoint.x, MenuBarScreenHeight() - aPoint.y);
 }
 
 NSRect nsCocoaUtils::GeckoRectToCocoaRectDevPix(const LayoutDeviceIntRect& aGeckoRect,
@@ -124,7 +128,7 @@ LayoutDeviceIntRect nsCocoaUtils::CocoaRectToGeckoRectDevPix(const NSRect& aCoco
 }
 
 NSPoint nsCocoaUtils::ScreenLocationForEvent(NSEvent* anEvent) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   // Don't trust mouse locations of mouse move events, see bug 443178.
   if (!anEvent || [anEvent type] == NSEventTypeMouseMoved) return [NSEvent mouseLocation];
@@ -135,122 +139,35 @@ NSPoint nsCocoaUtils::ScreenLocationForEvent(NSEvent* anEvent) {
 
   return nsCocoaUtils::ConvertPointToScreen([anEvent window], [anEvent locationInWindow]);
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
+  NS_OBJC_END_TRY_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
 }
 
 BOOL nsCocoaUtils::IsEventOverWindow(NSEvent* anEvent, NSWindow* aWindow) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   return NSPointInRect(ScreenLocationForEvent(anEvent), [aWindow frame]);
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NO);
+  NS_OBJC_END_TRY_BLOCK_RETURN(NO);
 }
 
 NSPoint nsCocoaUtils::EventLocationForWindow(NSEvent* anEvent, NSWindow* aWindow) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   return nsCocoaUtils::ConvertPointFromScreen(aWindow, ScreenLocationForEvent(anEvent));
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
-}
-
-@interface NSEvent (ScrollPhase)
-// 10.5 and 10.6
-- (long long)_scrollPhase;
-// 10.7 and above
-- (NSEventPhase)phase;
-- (NSEventPhase)momentumPhase;
-@end
-
-NSEventPhase nsCocoaUtils::EventPhase(NSEvent* aEvent) {
-  if ([aEvent respondsToSelector:@selector(phase)]) {
-    return [aEvent phase];
-  }
-  return NSEventPhaseNone;
-}
-
-NSEventPhase nsCocoaUtils::EventMomentumPhase(NSEvent* aEvent) {
-  if ([aEvent respondsToSelector:@selector(momentumPhase)]) {
-    return [aEvent momentumPhase];
-  }
-  if ([aEvent respondsToSelector:@selector(_scrollPhase)]) {
-    switch ([aEvent _scrollPhase]) {
-      case 1:
-        return NSEventPhaseBegan;
-      case 2:
-        return NSEventPhaseChanged;
-      case 3:
-        return NSEventPhaseEnded;
-      default:
-        return NSEventPhaseNone;
-    }
-  }
-  return NSEventPhaseNone;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
 }
 
 BOOL nsCocoaUtils::IsMomentumScrollEvent(NSEvent* aEvent) {
-  return [aEvent type] == NSEventTypeScrollWheel && EventMomentumPhase(aEvent) != NSEventPhaseNone;
-}
-
-@interface NSEvent (HasPreciseScrollingDeltas)
-// 10.7 and above
-- (BOOL)hasPreciseScrollingDeltas;
-// For 10.6 and below, see the comment in nsChildView.h about _eventRef
-- (EventRef)_eventRef;
-@end
-
-BOOL nsCocoaUtils::HasPreciseScrollingDeltas(NSEvent* aEvent) {
-  if ([aEvent respondsToSelector:@selector(hasPreciseScrollingDeltas)]) {
-    return [aEvent hasPreciseScrollingDeltas];
-  }
-
-  // For events that don't contain pixel scrolling information, the event
-  // kind of their underlaying carbon event is kEventMouseWheelMoved instead
-  // of kEventMouseScroll.
-  EventRef carbonEvent = [aEvent _eventRef];
-  return carbonEvent && ::GetEventKind(carbonEvent) == kEventMouseScroll;
-}
-
-@interface NSEvent (ScrollingDeltas)
-// 10.6 and below
-- (CGFloat)deviceDeltaX;
-- (CGFloat)deviceDeltaY;
-// 10.7 and above
-- (CGFloat)scrollingDeltaX;
-- (CGFloat)scrollingDeltaY;
-@end
-
-void nsCocoaUtils::GetScrollingDeltas(NSEvent* aEvent, CGFloat* aOutDeltaX, CGFloat* aOutDeltaY) {
-  if ([aEvent respondsToSelector:@selector(scrollingDeltaX)]) {
-    *aOutDeltaX = [aEvent scrollingDeltaX];
-    *aOutDeltaY = [aEvent scrollingDeltaY];
-    return;
-  }
-  if ([aEvent respondsToSelector:@selector(deviceDeltaX)] && HasPreciseScrollingDeltas(aEvent)) {
-    // Calling deviceDeltaX/Y on those events that do not contain pixel
-    // scrolling information triggers a Cocoa assertion and an
-    // Objective-C NSInternalInconsistencyException.
-    *aOutDeltaX = [aEvent deviceDeltaX];
-    *aOutDeltaY = [aEvent deviceDeltaY];
-    return;
-  }
-
-  // This is only hit pre-10.7 when we are called on a scroll event that does
-  // not contain pixel scrolling information.
-  CGFloat lineDeltaPixels = 12;
-  *aOutDeltaX = [aEvent deltaX] * lineDeltaPixels;
-  *aOutDeltaY = [aEvent deltaY] * lineDeltaPixels;
+  return [aEvent type] == NSEventTypeScrollWheel && [aEvent momentumPhase] != NSEventPhaseNone;
 }
 
 BOOL nsCocoaUtils::EventHasPhaseInformation(NSEvent* aEvent) {
-  if (![aEvent respondsToSelector:@selector(phase)]) {
-    return NO;
-  }
-  return EventPhase(aEvent) != NSEventPhaseNone || EventMomentumPhase(aEvent) != NSEventPhaseNone;
+  return [aEvent phase] != NSEventPhaseNone || [aEvent momentumPhase] != NSEventPhaseNone;
 }
 
 void nsCocoaUtils::HideOSChromeOnScreen(bool aShouldHide) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   // Keep track of how many hiding requests have been made, so that they can
   // be nested.
@@ -264,7 +181,7 @@ void nsCocoaUtils::HideOSChromeOnScreen(bool aShouldHide) {
                         : NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar;
   [NSApp setPresentationOptions:options];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 #define NS_APPSHELLSERVICE_CONTRACTID "@mozilla.org/appshell/appShellService;1"
@@ -299,7 +216,7 @@ nsIWidget* nsCocoaUtils::GetHiddenWindowWidget() {
 }
 
 void nsCocoaUtils::PrepareForNativeAppModalDialog() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   // Don't do anything if this is embedding. We'll assume that if there is no hidden
   // window we shouldn't do anything, and that should cover the embedding case.
@@ -330,11 +247,11 @@ void nsCocoaUtils::PrepareForNativeAppModalDialog() {
   [NSApp setMainMenu:newMenuBar];
   [newMenuBar release];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 void nsCocoaUtils::CleanUpAfterNativeAppModalDialog() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   // Don't do anything if this is embedding. We'll assume that if there is no hidden
   // window we shouldn't do anything, and that should cover the embedding case.
@@ -347,7 +264,7 @@ void nsCocoaUtils::CleanUpAfterNativeAppModalDialog() {
   else
     [WindowDelegate paintMenubarForWindow:mainWindow];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 static void data_ss_release_callback(void* aDataSourceSurface, const void* data, size_t size) {
@@ -418,7 +335,7 @@ nsresult nsCocoaUtils::CreateCGImageFromSurface(SourceSurface* aSurface, CGImage
 }
 
 nsresult nsCocoaUtils::CreateNSImageFromCGImage(CGImageRef aInputImage, NSImage** aResult) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   // Be very careful when creating the NSImage that the backing NSImageRep is
   // exactly 1:1 with the input image. On a retina display, both [NSImage
@@ -467,10 +384,11 @@ nsresult nsCocoaUtils::CreateNSImageFromCGImage(CGImageRef aInputImage, NSImage*
   [offscreenRep release];
   return NS_OK;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, uint32_t aWhichFrame,
+                                                       const ComputedStyle* aComputedStyle,
                                                        NSImage** aResult, CGFloat scaleFactor,
                                                        bool* aIsEntirelyBlack) {
   RefPtr<SourceSurface> surface;
@@ -479,7 +397,7 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, ui
   aImage->GetHeight(&height);
 
   // Render a vector image at the correct resolution on a retina display
-  if (aImage->GetType() == imgIContainer::TYPE_VECTOR && scaleFactor != 1.0f) {
+  if (aImage->GetType() == imgIContainer::TYPE_VECTOR) {
     IntSize scaledSize = IntSize::Ceil(width * scaleFactor, height * scaleFactor);
 
     RefPtr<DrawTarget> drawTarget = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
@@ -492,9 +410,13 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, ui
     RefPtr<gfxContext> context = gfxContext::CreateOrNull(drawTarget);
     MOZ_ASSERT(context);
 
-    mozilla::image::ImgDrawResult res = aImage->Draw(
-        context, scaledSize, ImageRegion::Create(scaledSize), aWhichFrame, SamplingFilter::POINT,
-        /* no SVGImageContext */ Nothing(), imgIContainer::FLAG_SYNC_DECODE, 1.0);
+    Maybe<SVGImageContext> svgContext;
+    if (aComputedStyle) {
+      SVGImageContext::MaybeStoreContextPaint(svgContext, aComputedStyle, aImage);
+    }
+    mozilla::image::ImgDrawResult res =
+        aImage->Draw(context, scaledSize, ImageRegion::Create(scaledSize), aWhichFrame,
+                     SamplingFilter::POINT, svgContext, imgIContainer::FLAG_SYNC_DECODE, 1.0);
 
     if (res != mozilla::image::ImgDrawResult::SUCCESS) {
       return NS_ERROR_FAILURE;
@@ -527,10 +449,9 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, ui
   return NS_OK;
 }
 
-nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(imgIContainer* aImage,
-                                                                         uint32_t aWhichFrame,
-                                                                         NSImage** aResult,
-                                                                         bool* aIsEntirelyBlack) {
+nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(
+    imgIContainer* aImage, uint32_t aWhichFrame, const ComputedStyle* aComputedStyle,
+    NSImage** aResult, bool* aIsEntirelyBlack) {
   int32_t width = 0, height = 0;
   aImage->GetWidth(&width);
   aImage->GetHeight(&height);
@@ -540,7 +461,7 @@ nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(imgICon
 
   NSImage* newRepresentation = nil;
   nsresult rv = nsCocoaUtils::CreateNSImageFromImageContainer(
-      aImage, aWhichFrame, &newRepresentation, 1.0f, aIsEntirelyBlack);
+      aImage, aWhichFrame, aComputedStyle, &newRepresentation, 1.0f, aIsEntirelyBlack);
   if (NS_FAILED(rv) || !newRepresentation) {
     return NS_ERROR_FAILURE;
   }
@@ -550,8 +471,8 @@ nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(imgICon
   [newRepresentation release];
   newRepresentation = nil;
 
-  rv = nsCocoaUtils::CreateNSImageFromImageContainer(aImage, aWhichFrame, &newRepresentation, 2.0f,
-                                                     aIsEntirelyBlack);
+  rv = nsCocoaUtils::CreateNSImageFromImageContainer(aImage, aWhichFrame, aComputedStyle,
+                                                     &newRepresentation, 2.0f, aIsEntirelyBlack);
   if (NS_FAILED(rv) || !newRepresentation) {
     return NS_ERROR_FAILURE;
   }
@@ -564,7 +485,7 @@ nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(imgICon
 
 // static
 void nsCocoaUtils::GetStringForNSString(const NSString* aSrc, nsAString& aDist) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   if (!aSrc) {
     aDist.Truncate();
@@ -575,7 +496,7 @@ void nsCocoaUtils::GetStringForNSString(const NSString* aSrc, nsAString& aDist) 
   [aSrc getCharacters:reinterpret_cast<unichar*>(aDist.BeginWriting())
                 range:NSMakeRange(0, [aSrc length])];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 // static
@@ -616,28 +537,28 @@ void nsCocoaUtils::NSRectToGeckoRect(const NSRect& aCocoaRect, nsIntRect& aOutGe
 
 // static
 NSEvent* nsCocoaUtils::MakeNewCocoaEventWithType(NSEventType aEventType, NSEvent* aEvent) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   NSEvent* newEvent = [NSEvent keyEventWithType:aEventType
                                        location:[aEvent locationInWindow]
                                   modifierFlags:[aEvent modifierFlags]
                                       timestamp:[aEvent timestamp]
                                    windowNumber:[aEvent windowNumber]
-                                        context:[aEvent context]
+                                        context:nil
                                      characters:[aEvent characters]
                     charactersIgnoringModifiers:[aEvent charactersIgnoringModifiers]
                                       isARepeat:[aEvent isARepeat]
                                         keyCode:[aEvent keyCode]];
   return newEvent;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_END_TRY_BLOCK_RETURN(nil);
 }
 
 // static
 NSEvent* nsCocoaUtils::MakeNewCococaEventFromWidgetEvent(const WidgetKeyboardEvent& aKeyEvent,
                                                          NSInteger aWindowNumber,
                                                          NSGraphicsContext* aContext) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   NSEventType eventType;
   if (aKeyEvent.mMessage == eKeyUp) {
@@ -683,23 +604,18 @@ NSEvent* nsCocoaUtils::MakeNewCococaEventFromWidgetEvent(const WidgetKeyboardEve
                          isARepeat:NO
                            keyCode:0];  // Native key code not currently needed
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
-}
-
-// static
-void nsCocoaUtils::InitNPCocoaEvent(NPCocoaEvent* aNPCocoaEvent) {
-  memset(aNPCocoaEvent, 0, sizeof(NPCocoaEvent));
+  NS_OBJC_END_TRY_BLOCK_RETURN(nil);
 }
 
 // static
 void nsCocoaUtils::InitInputEvent(WidgetInputEvent& aInputEvent, NSEvent* aNativeEvent) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   aInputEvent.mModifiers = ModifiersForEvent(aNativeEvent);
   aInputEvent.mTime = PR_IntervalNow();
   aInputEvent.mTimeStamp = GetEventTimeStamp([aNativeEvent timestamp]);
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 // static
@@ -804,12 +720,9 @@ bool nsCocoaUtils::HiDPIEnabled() {
       if ([desc objectForKey:NSDeviceIsScreen] == nil) {
         continue;
       }
-      CGFloat scale = [screen respondsToSelector:@selector(backingScaleFactor)]
-                          ? [screen backingScaleFactor]
-                          : 1.0;
       // Currently, we only care about differentiating "1.0" and "2.0",
       // so we set one of the two low bits to record which.
-      if (scale > 1.0) {
+      if ([screen backingScaleFactor] > 1.0) {
         scaleFactors |= 2;
       } else {
         scaleFactors |= 1;
@@ -831,7 +744,7 @@ bool nsCocoaUtils::HiDPIEnabled() {
 
 void nsCocoaUtils::GetCommandsFromKeyEvent(NSEvent* aEvent,
                                            nsTArray<KeyBindingsCommand>& aCommands) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   MOZ_ASSERT(aEvent);
 
@@ -845,7 +758,7 @@ void nsCocoaUtils::GetCommandsFromKeyEvent(NSEvent* aEvent,
   // This will trigger 0 - N calls to doCommandBySelector: and insertText:
   [sNativeKeyBindingsRecorder interpretKeyEvents:[NSArray arrayWithObject:aEvent]];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 @implementation NativeKeyBindingsRecorder
@@ -1040,10 +953,72 @@ uint32_t nsCocoaUtils::ConvertGeckoKeyCodeToMacCharCode(uint32_t aKeyCode) {
   return 0;
 }
 
+NSEventModifierFlags nsCocoaUtils::ConvertWidgetModifiersToMacModifierFlags(
+    nsIWidget::Modifiers aNativeModifiers) {
+  if (!aNativeModifiers) {
+    return 0;
+  }
+  struct ModifierFlagMapEntry {
+    nsIWidget::Modifiers mWidgetModifier;
+    NSEventModifierFlags mModifierFlags;
+  };
+  static constexpr ModifierFlagMapEntry sModifierFlagMap[] = {
+      {nsIWidget::CAPS_LOCK, NSEventModifierFlagCapsLock},
+      {nsIWidget::SHIFT_L, NSEventModifierFlagShift | 0x0002},
+      {nsIWidget::SHIFT_R, NSEventModifierFlagShift | 0x0004},
+      {nsIWidget::CTRL_L, NSEventModifierFlagControl | 0x0001},
+      {nsIWidget::CTRL_R, NSEventModifierFlagControl | 0x2000},
+      {nsIWidget::ALT_L, NSEventModifierFlagOption | 0x0020},
+      {nsIWidget::ALT_R, NSEventModifierFlagOption | 0x0040},
+      {nsIWidget::COMMAND_L, NSEventModifierFlagCommand | 0x0008},
+      {nsIWidget::COMMAND_R, NSEventModifierFlagCommand | 0x0010},
+      {nsIWidget::NUMERIC_KEY_PAD, NSEventModifierFlagNumericPad},
+      {nsIWidget::HELP, NSEventModifierFlagHelp},
+      {nsIWidget::FUNCTION, NSEventModifierFlagFunction}};
+
+  NSEventModifierFlags modifierFlags = 0;
+  for (const ModifierFlagMapEntry& entry : sModifierFlagMap) {
+    if (aNativeModifiers & entry.mWidgetModifier) {
+      modifierFlags |= entry.mModifierFlags;
+    }
+  }
+  return modifierFlags;
+}
+
+mozilla::MouseButton nsCocoaUtils::ButtonForEvent(NSEvent* aEvent) {
+  switch (aEvent.type) {
+    case NSEventTypeLeftMouseDown:
+    case NSEventTypeLeftMouseDragged:
+    case NSEventTypeLeftMouseUp:
+      return MouseButton::ePrimary;
+    case NSEventTypeRightMouseDown:
+    case NSEventTypeRightMouseDragged:
+    case NSEventTypeRightMouseUp:
+      return MouseButton::eSecondary;
+    case NSEventTypeOtherMouseDown:
+    case NSEventTypeOtherMouseDragged:
+    case NSEventTypeOtherMouseUp:
+      switch (aEvent.buttonNumber) {
+        case 3:
+          return MouseButton::eX1;
+        case 4:
+          return MouseButton::eX2;
+        default:
+          // The middle button usually has button 2, but if this is a synthesized event (for which
+          // you cannot specify a buttonNumber), then the button will be 0. Treat all remaining
+          // OtherMouse events as the middle button.
+          return MouseButton::eMiddle;
+      }
+    default:
+      // Treat non-mouse events as the primary mouse button.
+      return MouseButton::ePrimary;
+  }
+}
+
 NSMutableAttributedString* nsCocoaUtils::GetNSMutableAttributedString(
     const nsAString& aText, const nsTArray<mozilla::FontRange>& aFontRanges, const bool aIsVertical,
     const CGFloat aBackingScaleFactor) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN
 
   NSString* nsstr = nsCocoaUtils::ToNSString(aText);
   NSMutableAttributedString* attrStr =
@@ -1073,7 +1048,7 @@ NSMutableAttributedString* nsCocoaUtils::GetNSMutableAttributedString(
 
   return attrStr;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NIL
+  NS_OBJC_END_TRY_BLOCK_RETURN(nil)
 }
 
 TimeStamp nsCocoaUtils::GetEventTimeStamp(NSTimeInterval aEventTime) {

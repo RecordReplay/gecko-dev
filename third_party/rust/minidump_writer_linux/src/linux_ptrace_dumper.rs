@@ -1,9 +1,11 @@
 // use libc::c_void;
+#[cfg(target_os = "android")]
+use crate::android::late_process_mappings;
 use crate::auxv_reader::{AuxvType, ProcfsAuxvIter};
+use crate::errors::{DumperError, InitError, ThreadInfoError};
 use crate::maps_reader::{MappingInfo, MappingInfoParsingResult, DELETED_SUFFIX};
 use crate::minidump_format::MDGUID;
 use crate::thread_info::{Pid, ThreadInfo};
-use crate::Result;
 use crate::LINUX_GATE_LIBRARY_NAME;
 use goblin::elf;
 use nix::errno::Errno;
@@ -13,19 +15,26 @@ use std::convert::TryInto;
 use std::ffi::c_void;
 use std::io::{BufRead, BufReader};
 use std::path;
+use std::result::Result;
+
+#[derive(Debug, Clone)]
+pub struct Thread {
+    pub tid: Pid,
+    pub name: Option<String>,
+}
 
 #[derive(Debug)]
 pub struct LinuxPtraceDumper {
     pub pid: Pid,
     threads_suspended: bool,
-    pub threads: Vec<Pid>,
+    pub threads: Vec<Thread>,
     pub auxv: HashMap<AuxvType, AuxvType>,
     pub mappings: Vec<MappingInfo>,
 }
 
-#[cfg(target_arch = "x86")]
+#[cfg(target_pointer_width = "32")]
 pub const AT_SYSINFO_EHDR: u32 = 33;
-#[cfg(target_arch = "x86_64")]
+#[cfg(target_pointer_width = "64")]
 pub const AT_SYSINFO_EHDR: u64 = 33;
 
 impl Drop for LinuxPtraceDumper {
@@ -38,7 +47,7 @@ impl Drop for LinuxPtraceDumper {
 impl LinuxPtraceDumper {
     /// Constructs a dumper for extracting information of a given process
     /// with a process ID of |pid|.
-    pub fn new(pid: Pid) -> Result<Self> {
+    pub fn new(pid: Pid) -> Result<Self, InitError> {
         let mut dumper = LinuxPtraceDumper {
             pid,
             threads_suspended: false,
@@ -51,48 +60,62 @@ impl LinuxPtraceDumper {
     }
 
     // TODO: late_init for chromeos and android
-    pub fn init(&mut self) -> Result<()> {
+    pub fn init(&mut self) -> Result<(), InitError> {
         self.read_auxv()?;
         self.enumerate_threads()?;
         self.enumerate_mappings()?;
         Ok(())
     }
+
+    pub fn late_init(&mut self) -> Result<(), InitError> {
+        #[cfg(target_os = "android")]
+        {
+            late_process_mappings(self.pid, &mut self.mappings)?;
+        }
+        Ok(())
+    }
+
     /// Copies content of |length| bytes from a given process |child|,
     /// starting from |src|, into |dest|. This method uses ptrace to extract
     /// the content from the target process. Always returns true.
-    pub fn copy_from_process(child: Pid, src: *mut c_void, num_of_bytes: isize) -> Result<Vec<u8>> {
+    pub fn copy_from_process(
+        child: Pid,
+        src: *mut c_void,
+        num_of_bytes: usize,
+    ) -> Result<Vec<u8>, DumperError> {
+        use DumperError::CopyFromProcessError as CFPE;
         let pid = nix::unistd::Pid::from_raw(child);
         let mut res = Vec::new();
-        let mut idx = 0isize;
+        let mut idx = 0usize;
         while idx < num_of_bytes {
-            match ptrace::read(pid, unsafe { src.offset(idx) }) {
-                Ok(word) => res.append(&mut word.to_ne_bytes().to_vec()),
-                Err(e) => {
-                    return Err(format!("Failed in ptrace::read: {:?}", e).into());
-                }
-            }
-
-            idx += std::mem::size_of::<libc::c_long>() as isize;
+            let word = ptrace::read(pid, (src as usize + idx) as *mut c_void)
+                .map_err(|e| CFPE(child, src as usize, idx, num_of_bytes, e))?;
+            res.append(&mut word.to_ne_bytes().to_vec());
+            idx += std::mem::size_of::<libc::c_long>();
         }
         Ok(res)
     }
 
     /// Suspends a thread by attaching to it.
-    pub fn suspend_thread(child: Pid) -> Result<()> {
+    pub fn suspend_thread(child: Pid) -> Result<(), DumperError> {
+        use DumperError::PtraceAttachError as AttachErr;
+        use DumperError::PtraceDetachError as DetachErr;
+
         let pid = nix::unistd::Pid::from_raw(child);
         // This may fail if the thread has just died or debugged.
-        ptrace::attach(pid)?;
+        ptrace::attach(pid).map_err(|e| AttachErr(child, e))?;
         loop {
             match wait::waitpid(pid, Some(wait::WaitPidFlag::__WALL)) {
                 Ok(_) => break,
-                Err(nix::Error::Sys(Errno::EINTR)) => {
-                    ptrace::detach(pid)?;
-                    return Err(format!("Failed to attach to: {:?}. Got EINTR.", pid).into());
+                Err(e @ nix::Error::Sys(Errno::EINTR)) => {
+                    ptrace::detach(pid).map_err(|e| DetachErr(child, e))?;
+                    return Err(DumperError::WaitPidError(child, e));
                 }
                 Err(_) => continue,
             }
         }
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
             // On x86, the stack pointer is NULL or -1, when executing trusted code in
             // the seccomp sandbox. Not only does this cause difficulties down the line
             // when trying to dump the thread's stack, it also results in the minidumps
@@ -115,40 +138,41 @@ impl LinuxPtraceDumper {
                 skip_thread = true;
             }
             if skip_thread {
-                ptrace::detach(pid)?;
-                return Err(format!("Skipped thread {:?} due to it being part of the seccomp sandbox's trusted code", child).into());
+                ptrace::detach(pid).map_err(|e| DetachErr(child, e))?;
+                return Err(DumperError::DetachSkippedThread(child));
             }
         }
         Ok(())
     }
 
     /// Resumes a thread by detaching from it.
-    pub fn resume_thread(child: Pid) -> Result<()> {
+    pub fn resume_thread(child: Pid) -> Result<(), DumperError> {
+        use DumperError::PtraceDetachError as DetachErr;
         let pid = nix::unistd::Pid::from_raw(child);
-        ptrace::detach(pid)?;
+        ptrace::detach(pid).map_err(|e| DetachErr(child, e))?;
         Ok(())
     }
 
-    pub fn suspend_threads(&mut self) -> Result<()> {
+    pub fn suspend_threads(&mut self) -> Result<(), DumperError> {
         // Iterate over all threads and try to suspend them.
         // If the thread either disappeared before we could attach to it, or if
         // it was part of the seccomp sandbox's trusted code, it is OK to
         // silently drop it from the minidump.
-        self.threads.retain(|&x| Self::suspend_thread(x).is_ok());
+        self.threads.retain(|x| Self::suspend_thread(x.tid).is_ok());
 
         if self.threads.is_empty() {
-            Err("No threads left".into())
+            Err(DumperError::SuspendNoThreadsLeft)
         } else {
             self.threads_suspended = true;
             Ok(())
         }
     }
 
-    pub fn resume_threads(&mut self) -> Result<()> {
+    pub fn resume_threads(&mut self) -> Result<(), DumperError> {
         let mut result = Ok(());
         if self.threads_suspended {
             for thread in &self.threads {
-                match Self::resume_thread(*thread) {
+                match Self::resume_thread(thread.tid) {
                     Ok(_) => {}
                     x => {
                         result = x;
@@ -157,41 +181,59 @@ impl LinuxPtraceDumper {
             }
         }
         self.threads_suspended = false;
-        return result;
+        result
     }
 
     /// Parse /proc/$pid/task to list all the threads of the process identified by
     /// pid.
-    fn enumerate_threads(&mut self) -> Result<()> {
-        let task_path = path::PathBuf::from(format!("/proc/{}/task", self.pid));
+    fn enumerate_threads(&mut self) -> Result<(), InitError> {
+        let pid = self.pid;
+        let filename = format!("/proc/{}/task", pid);
+        let task_path = path::PathBuf::from(&filename);
         if task_path.is_dir() {
-            for entry in std::fs::read_dir(task_path)? {
-                let name = entry?
-                    .file_name()
-                    .to_str()
-                    .ok_or("Unparsable filename")?
-                    .parse::<Pid>();
-                if let Ok(tid) = name {
-                    self.threads.push(tid);
-                }
-            }
+            std::fs::read_dir(task_path)
+                .map_err(|e| InitError::IOError(filename, e))?
+                .into_iter()
+                .filter_map(|entry| entry.ok()) // Filter out bad entries
+                .filter_map(|entry| {
+                    entry
+                        .file_name() // Parse name to Pid, filter out those that are unparsable
+                        .to_str()
+                        .and_then(|name| name.parse::<Pid>().ok())
+                })
+                .map(|tid| {
+                    // Read the thread-name (if there is any)
+                    let name = std::fs::read_to_string(format!("/proc/{}/task/{}/comm", pid, tid))
+                        // NOTE: This is a bit wasteful as it does two allocations in order to trim, but leaving it for now
+                        .map(|s| s.trim_end().to_string())
+                        .ok();
+                    (tid, name)
+                })
+                .for_each(|(tid, name)| self.threads.push(Thread { tid, name }))
         }
         Ok(())
     }
 
-    fn read_auxv(&mut self) -> Result<()> {
-        let auxv_path = path::PathBuf::from(format!("/proc/{}/auxv", self.pid));
-        let auxv_file = std::fs::File::open(auxv_path)?;
+    fn read_auxv(&mut self) -> Result<(), InitError> {
+        let filename = format!("/proc/{}/auxv", self.pid);
+        let auxv_path = path::PathBuf::from(&filename);
+        let auxv_file =
+            std::fs::File::open(auxv_path).map_err(|e| InitError::IOError(filename, e))?;
         let input = BufReader::new(auxv_file);
         let reader = ProcfsAuxvIter::new(input);
-        for item in reader {
-            let item = item?;
-            self.auxv.insert(item.key, item.value);
+        self.auxv = reader
+            .filter_map(Result::ok)
+            .map(|x| (x.key, x.value))
+            .collect();
+
+        if self.auxv.is_empty() {
+            Err(InitError::NoAuxvEntryFound(self.pid))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
-    fn enumerate_mappings(&mut self) -> Result<()> {
+    fn enumerate_mappings(&mut self) -> Result<(), InitError> {
         // linux_gate_loc is the beginning of the kernel's mapping of
         // linux-gate.so in the process.  It doesn't actually show up in the
         // maps list as a filename, but it can be found using the AT_SYSINFO_EHDR
@@ -203,15 +245,26 @@ impl LinuxPtraceDumper {
         // Although the initial executable is usually the first mapping, it's not
         // guaranteed (see http://crosbug.com/25355); therefore, try to use the
         // actual entry point to find the mapping.
-        let entry_point_loc = *self.auxv.get(&libc::AT_ENTRY).unwrap_or(&0);
+        let at_entry;
+        #[cfg(target_arch = "arm")]
+        {
+            at_entry = 9;
+        }
+        #[cfg(not(target_arch = "arm"))]
+        {
+            at_entry = libc::AT_ENTRY;
+        }
 
-        let auxv_path = path::PathBuf::from(format!("/proc/{}/maps", self.pid));
-        let auxv_file = std::fs::File::open(auxv_path)?;
+        let entry_point_loc = *self.auxv.get(&at_entry).unwrap_or(&0);
+        let filename = format!("/proc/{}/maps", self.pid);
+        let errmap = |e| InitError::IOError(filename.clone(), e);
+        let maps_path = path::PathBuf::from(&filename);
+        let maps_file = std::fs::File::open(maps_path).map_err(errmap)?;
 
-        for line in BufReader::new(auxv_file).lines() {
+        for line in BufReader::new(maps_file).lines() {
             // /proc/<pid>/maps looks like this
             // 7fe34a863000-7fe34a864000 rw-p 00009000 00:31 4746408                    /usr/lib64/libogg.so.0.8.4
-            let line = line?;
+            let line = line.map_err(errmap)?;
             match MappingInfo::parse_from_line(&line, linux_gate_loc, self.mappings.last_mut()) {
                 Ok(MappingInfoParsingResult::Success(map)) => self.mappings.push(map),
                 Ok(MappingInfoParsingResult::SkipLine) => continue,
@@ -245,24 +298,18 @@ impl LinuxPtraceDumper {
     /// Fill out the |tgid|, |ppid| and |pid| members of |info|. If unavailable,
     /// these members are set to -1. Returns true if all three members are
     /// available.
-    pub fn get_thread_info_by_index(&self, index: usize) -> Result<ThreadInfo> {
+    pub fn get_thread_info_by_index(&self, index: usize) -> Result<ThreadInfo, ThreadInfoError> {
         if index > self.threads.len() {
-            return Err(format!(
-                "Index out of bounds! Got {}, only have {}\n",
-                index,
-                self.threads.len()
-            )
-            .into());
+            return Err(ThreadInfoError::IndexOutOfBounds(index, self.threads.len()));
         }
 
-        let tid = self.threads[index];
-        ThreadInfo::create(self.pid, tid)
+        ThreadInfo::create(self.pid, self.threads[index].tid)
     }
 
     // Get information about the stack, given the stack pointer. We don't try to
     // walk the stack since we might not have all the information needed to do
     // unwind. So we just grab, up to, 32k of stack.
-    pub fn get_stack_info(&self, int_stack_pointer: usize) -> Result<(usize, usize)> {
+    pub fn get_stack_info(&self, int_stack_pointer: usize) -> Result<(usize, usize), DumperError> {
         // Move the stack pointer to the bottom of the page that it's in.
         // NOTE: original code uses getpagesize(), which a) isn't there in Rust and
         //       b) shouldn't be used, as its not portable (see man getpagesize)
@@ -275,7 +322,7 @@ impl LinuxPtraceDumper {
 
         let mapping = self
             .find_mapping(stack_pointer)
-            .ok_or("No mapping for stack pointer found")?;
+            .ok_or(DumperError::NoStackPointerMapping)?;
         let offset = stack_pointer - mapping.start_address;
         let distance_to_end = mapping.size - offset;
         let stack_len = std::cmp::min(distance_to_end, stack_to_capture);
@@ -288,7 +335,7 @@ impl LinuxPtraceDumper {
         stack_copy: &mut [u8],
         stack_pointer: usize,
         sp_offset: usize,
-    ) -> Result<()> {
+    ) -> Result<(), DumperError> {
         // We optimize the search for containing mappings in three ways:
         // 1) We expect that pointers into the stack mapping will be common, so
         //    we cache that address range.
@@ -393,7 +440,7 @@ impl LinuxPtraceDumper {
     }
 
     // Find the mapping which the given memory address falls in.
-    pub fn find_mapping<'a>(&'a self, address: usize) -> Option<&'a MappingInfo> {
+    pub fn find_mapping(&self, address: usize) -> Option<&MappingInfo> {
         for map in &self.mappings {
             if address >= map.start_address && address - map.start_address < map.size {
                 return Some(&map);
@@ -405,7 +452,7 @@ impl LinuxPtraceDumper {
     // Find the mapping which the given memory address falls in. Uses the
     // unadjusted mapping address range from the kernel, rather than the
     // biased range.
-    pub fn find_mapping_no_bias<'a>(&'a self, address: usize) -> Option<&'a MappingInfo> {
+    pub fn find_mapping_no_bias(&self, address: usize) -> Option<&MappingInfo> {
         for map in &self.mappings {
             if address >= map.system_mapping_info.start_address
                 && address < map.system_mapping_info.end_address
@@ -437,13 +484,11 @@ impl LinuxPtraceDumper {
         None
     }
 
-    pub fn elf_file_identifier_from_mapped_file(mem_slice: &[u8]) -> Result<Vec<u8>> {
+    pub fn elf_file_identifier_from_mapped_file(mem_slice: &[u8]) -> Result<Vec<u8>, DumperError> {
         let elf_obj = elf::Elf::parse(mem_slice)?;
         match Self::parse_build_id(&elf_obj, mem_slice) {
             // Look for a build id note first.
-            Some(build_id) => {
-                return Ok(build_id.to_vec());
-            }
+            Some(build_id) => Ok(build_id.to_vec()),
             // Fall back on hashing the first page of the text section.
             None => {
                 // Attempt to locate the .text section of an ELF binary and generate
@@ -454,46 +499,45 @@ impl LinuxPtraceDumper {
                     }
                     if section.sh_flags & u64::from(elf::section_header::SHF_ALLOC) != 0 {
                         if section.sh_flags & u64::from(elf::section_header::SHF_EXECINSTR) != 0 {
-                            unsafe {
-                                let ptr = mem_slice.as_ptr().offset(section.sh_offset.try_into()?);
-                                let text_section = std::slice::from_raw_parts(
-                                    ptr as *const u8,
-                                    section.sh_size.try_into()?,
-                                );
-
-                                // Only provide mem::size_of(MDGUID) bytes to keep identifiers produced by this
-                                // function backwards-compatible.
-                                let max_len = std::cmp::min(text_section.len(), 4096);
-                                let mut result = vec![0u8; std::mem::size_of::<MDGUID>()];
-                                let mut offset = 0;
-                                while offset < max_len {
-                                    for idx in 0..std::mem::size_of::<MDGUID>() {
-                                        if offset + idx >= text_section.len() {
-                                            break;
-                                        }
-                                        result[idx] ^= text_section[offset + idx];
+                            let text_section = &mem_slice[section.sh_offset as usize..]
+                                [..section.sh_size as usize];
+                            // Only provide mem::size_of(MDGUID) bytes to keep identifiers produced by this
+                            // function backwards-compatible.
+                            let max_len = std::cmp::min(text_section.len(), 4096);
+                            let mut result = vec![0u8; std::mem::size_of::<MDGUID>()];
+                            let mut offset = 0;
+                            while offset < max_len {
+                                for idx in 0..std::mem::size_of::<MDGUID>() {
+                                    if offset + idx >= text_section.len() {
+                                        break;
                                     }
-                                    offset += std::mem::size_of::<MDGUID>();
+                                    result[idx] ^= text_section[offset + idx];
                                 }
-                                return Ok(result);
+                                offset += std::mem::size_of::<MDGUID>();
                             }
+                            return Ok(result);
                         }
                     }
                 }
-                Err("No build-id found".into())
+                Err(DumperError::NoBuildIDFound)
             }
         }
     }
 
-    pub fn elf_identifier_for_mapping_index(&mut self, idx: usize) -> Result<Vec<u8>> {
+    pub fn elf_identifier_for_mapping_index(&mut self, idx: usize) -> Result<Vec<u8>, DumperError> {
         assert!(idx < self.mappings.len());
 
-        return Self::elf_identifier_for_mapping(&mut self.mappings[idx], self.pid);
+        Self::elf_identifier_for_mapping(&mut self.mappings[idx], self.pid)
     }
 
-    pub fn elf_identifier_for_mapping(mapping: &mut MappingInfo, pid: Pid) -> Result<Vec<u8>> {
+    pub fn elf_identifier_for_mapping(
+        mapping: &mut MappingInfo,
+        pid: Pid,
+    ) -> Result<Vec<u8>, DumperError> {
         if !MappingInfo::is_mapped_file_safe_to_open(&mapping.name) {
-            return Err("Not safe to open mapping".into());
+            return Err(DumperError::NotSafeToOpenMapping(
+                mapping.name.clone().unwrap_or_default(),
+            ));
         }
 
         // Special-case linux-gate because it's not a real file.
@@ -507,7 +551,7 @@ impl LinuxPtraceDumper {
                 let mem_slice = Self::copy_from_process(
                     pid,
                     mapping.start_address as *mut libc::c_void,
-                    mapping.size.try_into()?,
+                    mapping.size,
                 )?;
                 return Self::elf_file_identifier_from_mapped_file(&mem_slice);
             }
@@ -533,6 +577,6 @@ impl LinuxPtraceDumper {
                 );
             }
         }
-        return Ok(build_id);
+        Ok(build_id)
     }
 }

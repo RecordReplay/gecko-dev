@@ -94,7 +94,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "separatedMozillaDomains",
   "browser.tabs.remote.separatedMozillaDomains",
-  false,
+  "",
   false,
   val => val.split(",")
 );
@@ -102,7 +102,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "accountServer",
   "identity.fxaccounts.remote.root",
-  false,
+  null,
   false,
   val => Services.io.newURI(val)
 );
@@ -437,7 +437,9 @@ FxAccountsWebChannelHelpers.prototype = {
     delete accountData.verifiedCanLinkAccount;
 
     // Remember who it was so we can log out next time.
-    this.setPreviousAccountNameHashPref(accountData.email);
+    if (accountData.verified) {
+      this.setPreviousAccountNameHashPref(accountData.email);
+    }
 
     await this._fxAccounts.telemetry.recordConnection(
       Object.keys(requestedServices || {}),

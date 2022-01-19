@@ -16,7 +16,7 @@
  * @typedef {import("./@types/perf").RecordingStateFromPreferences} RecordingStateFromPreferences
  * @typedef {import("./@types/perf").RestartBrowserWithEnvironmentVariable} RestartBrowserWithEnvironmentVariable
  * @typedef {import("./@types/perf").GetEnvironmentVariable} GetEnvironmentVariable
- * @typedef {import("./@types/perf").GetActiveBrowsingContextID} GetActiveBrowsingContextID
+ * @typedef {import("./@types/perf").GetActiveBrowserID} GetActiveBrowserID
  * @typedef {import("./@types/perf").MinimallyTypedGeckoProfile} MinimallyTypedGeckoProfile
  * * @typedef {import("./@types/perf").ProfilerViewMode} ProfilerViewMode
  */
@@ -97,10 +97,12 @@ function receiveProfile(profile, profilerViewMode, getSymbolTableCallback) {
   // We automatically open up the "full" mode if no query string is present.
   // `undefined` also means nothing is specified, and it should open the "full"
   // timeline view in that case.
-  const viewModeQueryString =
-    profilerViewMode !== undefined && profilerViewMode !== "full"
-      ? `?view=${profilerViewMode}`
-      : "";
+  let viewModeQueryString = "";
+  if (profilerViewMode === "active-tab") {
+    viewModeQueryString = "?view=active-tab&implementation=js";
+  } else if (profilerViewMode !== undefined && profilerViewMode !== "full") {
+    viewModeQueryString = `?view=${profilerViewMode}`;
+  }
 
   const tab = browser.addWebTab(
     `${baseUrl}${baseUrlPath}${viewModeQueryString}`,

@@ -26,14 +26,23 @@ const APIS = {
   GetPidForTab({ tab }) {
     return browser.test.getPidForTab(tab.id);
   },
+  GetProfilePath() {
+    return browser.test.getProfilePath();
+  },
+  GetAllBrowserPids() {
+    return browser.test.getAllBrowserPids();
+  },
+  KillContentProcess({ pid }) {
+    return browser.test.killContentProcess(pid);
+  },
   GetPrefs({ prefs }) {
     return browser.test.getPrefs(prefs);
   },
   GetActive({ tab }) {
     return browser.test.getActive(tab.id);
   },
-  RemoveCertOverride({ host, port }) {
-    browser.test.removeCertOverride(host, port);
+  RemoveAllCertOverrides() {
+    browser.test.removeAllCertOverrides();
   },
   RestorePrefs({ oldPrefs }) {
     return browser.test.restorePrefs(oldPrefs);

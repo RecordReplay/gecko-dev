@@ -392,18 +392,9 @@ Database::GetProfileBeforeChangePhase() {
 
 Database::~Database() = default;
 
-bool Database::IsShutdownStarted() const {
-  if (!mConnectionShutdown) {
-    // We have already broken the cycle between `this` and
-    // `mConnectionShutdown`.
-    return true;
-  }
-  return mConnectionShutdown->IsStarted();
-}
-
 already_AddRefed<mozIStorageAsyncStatement> Database::GetAsyncStatement(
     const nsACString& aQuery) {
-  if (IsShutdownStarted() || NS_FAILED(EnsureConnection())) {
+  if (PlacesShutdownBlocker::sIsStarted || NS_FAILED(EnsureConnection())) {
     return nullptr;
   }
 
@@ -413,7 +404,7 @@ already_AddRefed<mozIStorageAsyncStatement> Database::GetAsyncStatement(
 
 already_AddRefed<mozIStorageStatement> Database::GetStatement(
     const nsACString& aQuery) {
-  if (IsShutdownStarted()) {
+  if (PlacesShutdownBlocker::sIsStarted) {
     return nullptr;
   }
   if (NS_IsMainThread()) {
@@ -440,7 +431,7 @@ already_AddRefed<nsIAsyncShutdownClient> Database::GetConnectionShutdown() {
 
 // static
 already_AddRefed<Database> Database::GetDatabase() {
-  if (PlacesShutdownBlocker::IsStarted()) {
+  if (PlacesShutdownBlocker::sIsStarted) {
     return nullptr;
   }
   return GetSingleton();
@@ -493,7 +484,7 @@ nsresult Database::EnsureConnection() {
     return NS_OK;
   }
   // Don't try to create a database too late.
-  if (IsShutdownStarted()) {
+  if (PlacesShutdownBlocker::sIsStarted) {
     return NS_ERROR_FAILURE;
   }
 
@@ -709,6 +700,8 @@ nsresult Database::EnsureFaviconsDatabaseAttached(
     // We are going to update the database, so everything from now on should be
     // in a transaction for performances.
     mozStorageTransaction transaction(conn, false);
+    // XXX Handle the error, bug 1696133.
+    Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
     rv = conn->ExecuteSimpleSQL(CREATE_MOZ_ICONS);
     NS_ENSURE_SUCCESS(rv, rv);
     rv = conn->ExecuteSimpleSQL(CREATE_IDX_MOZ_ICONS_ICONURLHASH);
@@ -901,6 +894,9 @@ nsresult Database::TryToCloneTablesFromCorruptDatabase(
 
   mozStorageTransaction transaction(conn, false);
 
+  // XXX Handle the error, bug 1696133.
+  Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
+
   // Copy the schema version.
   nsCOMPtr<mozIStorageStatement> stmt;
   (void)conn->CreateStatement("PRAGMA corrupt.user_version"_ns,
@@ -1092,6 +1088,9 @@ nsresult Database::InitSchema(bool* aDatabaseMigrated) {
   // a transaction for performances.
   mozStorageTransaction transaction(mMainConn, false);
 
+  // XXX Handle the error, bug 1696133.
+  Unused << NS_WARN_IF(NS_FAILED(transaction.Start()));
+
   if (databaseInitialized) {
     // Migration How-to:
     //
@@ -1180,6 +1179,23 @@ nsresult Database::InitSchema(bool* aDatabaseMigrated) {
 
       // Firefox 81 uses schema version 54
 
+      if (currentSchemaVersion < 55) {
+        rv = MigrateV55Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      if (currentSchemaVersion < 56) {
+        rv = MigrateV56Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      if (currentSchemaVersion < 57) {
+        rv = MigrateV57Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 91 uses schema version 57
+
       // Schema Upgrades must add migration code here.
       // >>> IMPORTANT! <<<
       // NEVER MIX UP SYNC AND ASYNC EXECUTION IN MIGRATORS, YOU MAY LOCK THE
@@ -1267,6 +1283,17 @@ nsresult Database::InitSchema(bool* aDatabaseMigrated) {
 
     // moz_meta.
     rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_META);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_places_metadata
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_IDX_MOZ_PLACES_METADATA_PLACECREATED);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_places_metadata_search_queries
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SEARCH_QUERIES);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // The bookmarks roots get initialized in CheckRoots().
@@ -1507,8 +1534,6 @@ nsresult Database::InitFunctions() {
   NS_ENSURE_SUCCESS(rv, rv);
   rv = IsFrecencyDecayingFunction::create(mMainConn);
   NS_ENSURE_SUCCESS(rv, rv);
-  rv = SqrtFunction::create(mMainConn);
-  NS_ENSURE_SUCCESS(rv, rv);
   rv = NoteSyncChangeFunction::create(mMainConn);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = InvalidateDaysOfHistoryFunction::create(mMainConn);
@@ -1573,6 +1598,10 @@ nsresult Database::InitTempEntities() {
   NS_ENSURE_SUCCESS(rv, rv);
   rv =
       mMainConn->ExecuteSimpleSQL(CREATE_BOOKMARKS_DELETED_AFTERDELETE_TRIGGER);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = mMainConn->ExecuteSimpleSQL(
+      CREATE_PLACES_METADATA_DELETED_AFTERDELETE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -2157,6 +2186,54 @@ nsresult Database::MigrateV54Up() {
   return NS_OK;
 }
 
+nsresult Database::MigrateV55Up() {
+  // Add places metadata tables.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT id FROM moz_places_metadata"_ns, getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    // Create the tables.
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA);
+    NS_ENSURE_SUCCESS(rv, rv);
+    // moz_places_metadata_search_queries.
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SEARCH_QUERIES);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return NS_OK;
+}
+
+nsresult Database::MigrateV56Up() {
+  // Add places metadata (place_id, created_at) index.
+  return mMainConn->ExecuteSimpleSQL(
+      CREATE_IDX_MOZ_PLACES_METADATA_PLACECREATED);
+}
+
+nsresult Database::MigrateV57Up() {
+  // Add the scrolling columns to the metadata.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT scrolling_time FROM moz_places_metadata"_ns,
+      getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata "
+        "ADD COLUMN scrolling_time INTEGER NOT NULL DEFAULT 0 "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  rv = mMainConn->CreateStatement(
+      "SELECT scrolling_distance FROM moz_places_metadata"_ns,
+      getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata "
+        "ADD COLUMN scrolling_distance INTEGER NOT NULL DEFAULT 0 "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  return NS_OK;
+}
+
 nsresult Database::ConvertOldStyleQuery(nsCString& aURL) {
   AutoTArray<QueryKeyValuePair, 8> tokens;
   nsresult rv = TokenizeQueryString(aURL, &tokens);
@@ -2398,7 +2475,7 @@ Database::Observe(nsISupports* aSubject, const char* aTopic,
   MOZ_ASSERT(NS_IsMainThread());
   if (strcmp(aTopic, TOPIC_PROFILE_CHANGE_TEARDOWN) == 0) {
     // Tests simulating shutdown may cause multiple notifications.
-    if (IsShutdownStarted()) {
+    if (PlacesShutdownBlocker::sIsStarted) {
       return NS_OK;
     }
 
@@ -2432,7 +2509,7 @@ Database::Observe(nsISupports* aSubject, const char* aTopic,
     // to simulate Places shutdown out of the normal shutdown path.
 
     // Tests simulating shutdown may cause re-entrance.
-    if (IsShutdownStarted()) {
+    if (PlacesShutdownBlocker::sIsStarted) {
       return NS_OK;
     }
 

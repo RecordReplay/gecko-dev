@@ -35,6 +35,7 @@ async function withAddBookmarkForFrame(taskFn) {
 
       let bookmarkFrame = document.getElementById("context-bookmarkframe");
       bookmarkFrame.click();
+      contentAreaContextMenu.hidePopup();
     },
     taskFn
   );
@@ -59,7 +60,7 @@ add_task(async function test_open_add_bookmark_for_frame() {
     let folderPicker = dialogWin.document.getElementById(
       "editBMPanel_folderMenuList"
     );
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => folderPicker.selectedItem.label == expectedFolderName,
       "The folder is the expected one."
     );
@@ -89,7 +90,7 @@ add_task(async function test_move_bookmark_whilst_add_bookmark_open() {
     );
 
     // Check the initial state of the folder picker.
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => folderPicker.selectedItem.label == expectedFolderName,
       "The folder is the expected one."
     );
@@ -109,7 +110,7 @@ add_task(async function test_move_bookmark_whilst_add_bookmark_open() {
 
     await PlacesUtils.bookmarks.update(bookmark);
 
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => folderPicker.selectedItem.label == bookmarksMenuFolderName,
       "The folder picker has changed to the new folder"
     );

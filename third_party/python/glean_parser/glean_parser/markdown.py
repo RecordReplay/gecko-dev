@@ -10,6 +10,7 @@ Outputter to generate Markdown documentation for metrics.
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import urlsplit, parse_qs
 
 
 from . import metrics
@@ -32,9 +33,6 @@ def extra_info(obj: Union[metrics.Metric, pings.Ping]) -> List[Tuple[str, str]]:
     if isinstance(obj, metrics.Labeled) and obj.ordered_labels is not None:
         for label in obj.ordered_labels:
             extra_info.append((label, None))
-
-    if isinstance(obj, metrics.Jwe):
-        extra_info.append(("decrypted_name", obj.decrypted_name))
 
     if isinstance(obj, metrics.Quantity):
         extra_info.append(("unit", obj.unit))
@@ -119,6 +117,31 @@ def ping_data_reviews(
         return custom_pings_cache[ping_name].data_reviews
     else:
         return None
+
+
+def ping_review_title(data_url: str, index: int) -> str:
+    """
+    Return a title for a data review in human readable form.
+
+    :param data_url: A url for data review.
+    :param index: Position of the data review on list (e.g: 1, 2, 3...).
+    """
+    url_object = urlsplit(data_url)
+
+    # Bugzilla urls like `https://bugzilla.mozilla.org/show_bug.cgi?id=1581647`
+    query = url_object.query
+    params = parse_qs(query)
+
+    # GitHub urls like `https://github.com/mozilla-mobile/fenix/pull/1707`
+    path = url_object.path
+    short_url = path[1:].replace("/pull/", "#")
+
+    if params and params["id"]:
+        return f"Bug {params['id'][0]}"
+    elif url_object.netloc == "github.com":
+        return short_url
+
+    return f"Review {index}"
 
 
 def ping_bugs(
@@ -211,6 +234,7 @@ def output_markdown(
         )
 
     project_title = options.get("project_title", "this project")
+    introduction_extra = options.get("introduction_extra")
 
     template = util.get_jinja2_template(
         "markdown.jinja2",
@@ -222,6 +246,7 @@ def output_markdown(
             ("ping_docs", ping_docs),
             ("ping_reasons", lambda x: ping_reasons(x, custom_pings_cache)),
             ("ping_data_reviews", lambda x: ping_data_reviews(x, custom_pings_cache)),
+            ("ping_review_title", ping_review_title),
             ("ping_bugs", lambda x: ping_bugs(x, custom_pings_cache)),
             (
                 "ping_include_client_id",
@@ -237,7 +262,9 @@ def output_markdown(
     with filepath.open("w", encoding="utf-8") as fd:
         fd.write(
             template.render(
-                metrics_by_pings=metrics_by_pings, project_title=project_title
+                metrics_by_pings=metrics_by_pings,
+                project_title=project_title,
+                introduction_extra=introduction_extra,
             )
         )
         # Jinja2 squashes the final newline, so we explicitly add it

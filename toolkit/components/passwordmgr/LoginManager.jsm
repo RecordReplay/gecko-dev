@@ -322,7 +322,6 @@ LoginManager.prototype = {
     if (matchingLogin) {
       throw LoginHelper.createLoginAlreadyExistsError(matchingLogin.guid);
     }
-
     log.debug("Adding login");
     return this._storage.addLogin(login);
   },
@@ -562,6 +561,18 @@ LoginManager.prototype = {
 
   async setLastSync(timestamp) {
     await this._storage.setLastSync(timestamp);
+  },
+
+  async ensureCurrentSyncID(newSyncID) {
+    let existingSyncID = await this.getSyncID();
+    if (existingSyncID == newSyncID) {
+      return existingSyncID;
+    }
+    log.debug("Engine syncIDs: " + [newSyncID, existingSyncID]);
+
+    await this.setSyncID(newSyncID);
+    await this.setLastSync(0);
+    return newSyncID;
   },
 
   get uiBusy() {

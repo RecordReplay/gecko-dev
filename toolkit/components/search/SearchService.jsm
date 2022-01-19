@@ -16,7 +16,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   IgnoreLists: "resource://gre/modules/IgnoreLists.jsm",
   OpenSearchEngine: "resource://gre/modules/OpenSearchEngine.jsm",
-  OS: "resource://gre/modules/osfile.jsm",
   Region: "resource://gre/modules/Region.jsm",
   RemoteSettings: "resource://services-settings/remote-settings.js",
   SearchEngine: "resource://gre/modules/SearchEngine.jsm",
@@ -965,7 +964,8 @@ SearchService.prototype = {
       if (this._engines.has(name)) {
         logConsole.debug(
           "_loadEnginesMetadataFromSettings, transfering metadata for",
-          name
+          name,
+          engine._metaData
         );
         let eng = this._engines.get(name);
         // We used to store the alias in metadata.alias, in 1621892 that was
@@ -1015,7 +1015,9 @@ SearchService.prototype = {
           // Note: these may be prefixed by jar:,
           loadPath.includes("[app]/extensions/langpack") ||
           loadPath.includes("[other]/langpack") ||
-          loadPath.includes("[profile]/extensions/langpack"))
+          loadPath.includes("[profile]/extensions/langpack") ||
+          // Old omni.ja engines also moved to in-app in Firefox 62.
+          loadPath.startsWith("jar:[app]/omni.ja"))
       ) {
         continue;
       }
@@ -1261,20 +1263,10 @@ SearchService.prototype = {
       await this._init();
       TelemetryStopwatch.finish("SEARCH_SERVICE_INIT_MS");
     } catch (ex) {
-      Services.telemetry.scalarSet(
-        "browser.searchinit.init_result_status_code",
-        // Scalar is a string due to bug 1651210 when the scalar was created.
-        ex.result?.toString(10)
-      );
       TelemetryStopwatch.cancel("SEARCH_SERVICE_INIT_MS");
       this._initObservers.reject(ex.result);
       throw ex;
     }
-    Services.telemetry.scalarSet(
-      "browser.searchinit.init_result_status_code",
-      // Scalar is a string due to bug 1651210 when the scalar was created.
-      this._initRV?.toString(10)
-    );
 
     if (!Components.isSuccessCode(this._initRV)) {
       throw Components.Exception(
@@ -1310,11 +1302,62 @@ SearchService.prototype = {
   },
 
   /**
+   * Runs background checks for the search service. This is called from
+   * BrowserGlue and may be run once per session if the user is idle for
+   * long enough.
+   */
+  async runBackgroundChecks() {
+    await this.init();
+    await this._migrateLegacyEngines();
+    await this._checkWebExtensionEngines();
+  },
+
+  /**
+   * Migrates legacy add-ons which used the OpenSearch definitions to
+   * WebExtensions, if an equivalent WebExtension is installed.
+   *
+   * Run during the background checks.
+   */
+  async _migrateLegacyEngines() {
+    logConsole.debug("Running migrate legacy engines");
+
+    const matchRegExp = /extensions\/(.*?)\.xpi!/i;
+    for (let engine of this._engines.values()) {
+      if (
+        !engine.isAppProvided &&
+        !engine._extensionID &&
+        engine._loadPath.includes("[profile]/extensions/")
+      ) {
+        let match = engine._loadPath.match(matchRegExp);
+        if (match?.[1]) {
+          // There's a chance here that the WebExtension might not be
+          // installed any longer, even though the engine is. We'll deal
+          // with that in `checkWebExtensionEngines`.
+          let engines = await this.getEnginesByExtensionID(match[1]);
+          if (engines.length) {
+            logConsole.debug(
+              `Migrating ${engine.name} to WebExtension install`
+            );
+
+            if (this.defaultEngine == engine) {
+              this.defaultEngine = engines[0];
+            }
+            await this.removeEngine(engine);
+          }
+        }
+      }
+    }
+
+    logConsole.debug("Migrate legacy engines complete");
+  },
+
+  /**
    * Checks if Search Engines associated with WebExtensions are valid and
    * up-to-date, and reports them via telemetry if not.
+   *
+   * Run during the background checks.
    */
-  async checkWebExtensionEngines() {
-    await this.init();
+  async _checkWebExtensionEngines() {
     logConsole.debug("Running check on WebExtension engines");
 
     for (let engine of this._engines.values()) {
@@ -1505,39 +1548,6 @@ SearchService.prototype = {
   },
 
   /**
-   * Adds an engine with specific details, only used for tests and should
-   * be considered obsolete, see bug 1649186.
-   *
-   * @param {string} name
-   *   The name of the engine to add.
-   * @param {object} details
-   *   The details of the engine to add.
-   */
-  async addEngineWithDetails(name, details) {
-    let manifest = {
-      description: details.description,
-      iconURL: details.iconURL,
-      chrome_settings_overrides: {
-        search_provider: {
-          name,
-          encoding: details.encoding || SearchUtils.DEFAULT_QUERY_CHARSET,
-          search_url: encodeURI(details.template),
-          keyword: details.alias,
-          search_url_get_params: details.searchGetParams,
-          search_url_post_params: details.postData || details.searchPostParams,
-          suggest_url: details.suggestURL,
-        },
-      },
-    };
-    return this._createAndAddEngine({
-      extensionID: details.extensionID ?? `${name}@test.engine`,
-      extensionBaseURI: "",
-      isAppProvided: false,
-      manifest,
-    });
-  },
-
-  /**
    * Creates and adds a WebExtension based engine.
    * Note: this is currently used for enterprise policy engines as well.
    *
@@ -1581,23 +1591,28 @@ SearchService.prototype = {
     if (!this._initialized && !isAppProvided && !initEngine) {
       await this.init();
     }
+    // Special search engines (policy and user) are skipped for migration as
+    // there would never have been an OpenSearch engine associated with those.
+    if (extensionID && !extensionID.startsWith("set-via")) {
+      for (let engine of this._engines.values()) {
+        if (
+          !engine.extensionID &&
+          engine._loadPath.startsWith(`jar:[profile]/extensions/${extensionID}`)
+        ) {
+          // This is a legacy extension engine that needs to be migrated to WebExtensions.
+          logConsole.debug("Migrating existing engine");
+          isCurrent = isCurrent || this.defaultEngine == engine;
+          await this.removeEngine(engine);
+        }
+      }
+    }
+
     let existingEngine = this._engines.get(name);
     if (existingEngine) {
-      if (
-        extensionID &&
-        existingEngine._loadPath.startsWith(
-          `jar:[profile]/extensions/${extensionID}`
-        )
-      ) {
-        // This is a legacy extension engine that needs to be migrated to WebExtensions.
-        isCurrent = this.defaultEngine == existingEngine;
-        await this.removeEngine(existingEngine);
-      } else {
-        throw Components.Exception(
-          "An engine with that name already exists!",
-          Cr.NS_ERROR_FILE_ALREADY_EXISTS
-        );
-      }
+      throw Components.Exception(
+        "An engine with that name already exists!",
+        Cr.NS_ERROR_FILE_ALREADY_EXISTS
+      );
     }
 
     let newEngine = new SearchEngine({
@@ -1636,7 +1651,13 @@ SearchService.prototype = {
       extension.startupReason == "ADDON_UPGRADE" ||
       extension.startupReason == "ADDON_DOWNGRADE"
     ) {
-      return this._upgradeExtensionEngine(extension);
+      // Bug 1679861 An a upgrade or downgrade could be adding a search engine
+      // that was not in a prior version, or the addon may have been blocklisted.
+      // In either case, there will not be an existing engine.
+      let existing = await this._upgradeExtensionEngine(extension);
+      if (existing?.length) {
+        return existing;
+      }
     }
 
     if (extension.isAppProvided) {
@@ -1689,6 +1710,16 @@ SearchService.prototype = {
           e =>
             e.webExtension.id == extension.id && e.webExtension.locale == locale
         ) ?? {};
+
+      let originalName = engine.name;
+      let name = manifest.chrome_settings_overrides.search_provider.name.trim();
+      if (originalName != name && this._engines.has(name)) {
+        throw new Error("Can't upgrade to the same name as an existing engine");
+      }
+
+      let isDefault = engine == this.defaultEngine;
+      let isDefaultPrivate = engine == this.defaultPrivateEngine;
+
       engine._updateFromManifest(
         extension.id,
         extension.baseURI,
@@ -1696,6 +1727,18 @@ SearchService.prototype = {
         locale,
         configuration
       );
+
+      if (originalName != engine.name) {
+        this._engines.delete(originalName);
+        this._engines.set(engine.name, engine);
+        if (isDefault) {
+          this._settings.setVerifiedAttribute("current", engine.name);
+        }
+        if (isDefaultPrivate) {
+          this._settings.setVerifiedAttribute("private", engine.name);
+        }
+        this.__sortedEngines = null;
+      }
     }
     return extensionEngines;
   },
@@ -1804,13 +1847,10 @@ SearchService.prototype = {
     await this.init();
     let errCode;
     try {
-      var engine = new OpenSearchEngine({
-        uri: engineURL,
-        isAppProvided: false,
-      });
+      var engine = new OpenSearchEngine();
       engine._setIcon(iconURL, false);
       errCode = await new Promise(resolve => {
-        engine._initFromURIAndLoad(engineURL, errorCode => {
+        engine._install(engineURL, errorCode => {
           resolve(errorCode);
         });
       });
@@ -1863,7 +1903,10 @@ SearchService.prototype = {
     }
 
     if (engineToRemove == this.defaultEngine) {
-      this._currentEngine = null;
+      this._findAndSetNewDefaultEngine({
+        privateMode: false,
+        excludeEngineName: engineToRemove.name,
+      });
     }
 
     // Bug 1575649 - We can't just check the default private engine here when
@@ -1875,7 +1918,10 @@ SearchService.prototype = {
       this._separatePrivateDefault &&
       engineToRemove == this.defaultPrivateEngine
     ) {
-      this._currentPrivateEngine = null;
+      this._findAndSetNewDefaultEngine({
+        privateMode: true,
+        excludeEngineName: engineToRemove.name,
+      });
     }
 
     if (engineToRemove._isAppProvided) {
@@ -2004,6 +2050,100 @@ SearchService.prototype = {
   },
 
   /**
+   * Helper function to find a new default engine and set it. This could
+   * be used if there is not default set yet, or if the current default is
+   * being removed.
+   *
+   * The new default will be chosen from (in order):
+   *
+   * - Existing default from configuration, if it is not hidden.
+   * - The first non-hidden engine that is a general search engine.
+   * - If all other engines are hidden, unhide the default from the configuration.
+   * - If the default from the configuration is the one being removed, unhide
+   *   the first general search engine, or first visible engine.
+   *
+   * @param {boolean} privateMode
+   *   If true, returns the default engine for private browsing mode, otherwise
+   *   the default engine for the normal mode. Note, this function does not
+   *   check the "separatePrivateDefault" preference - that is up to the caller.
+   * @param {string} [excludeEngineName]
+   *   Exclude the given engine name from the search for a new engine. This is
+   *   typically used when removing engines to ensure we do not try to reselect
+   *   the same engine again.
+   * @returns {nsISearchEngine|null}
+   *   The appropriate search engine, or null if one could not be determined.
+   */
+  _findAndSetNewDefaultEngine({ privateMode, excludeEngineName = "" }) {
+    const currentEngineProp = privateMode
+      ? "_currentPrivateEngine"
+      : "_currentEngine";
+
+    // First to the original default engine...
+    let newDefault = privateMode
+      ? this.originalPrivateDefaultEngine
+      : this.originalDefaultEngine;
+
+    if (
+      !newDefault ||
+      newDefault.hidden ||
+      newDefault.name == excludeEngineName
+    ) {
+      let sortedEngines = this._getSortedEngines(false);
+      let generalSearchEngines = sortedEngines.filter(
+        e => e.isGeneralPurposeEngine
+      );
+
+      // then to the first visible general search engine that isn't excluded...
+      let firstVisible = generalSearchEngines.find(
+        e => e.name != excludeEngineName
+      );
+      if (firstVisible) {
+        newDefault = firstVisible;
+      } else if (newDefault) {
+        // then to the original if it is not the one that is excluded...
+        if (newDefault.name != excludeEngineName) {
+          newDefault.hidden = false;
+        } else {
+          newDefault = null;
+        }
+      }
+
+      // and finally as a last resort we unhide the first engine
+      // even if the name is the same as the excluded one (should never happen).
+      if (!newDefault) {
+        if (!firstVisible) {
+          sortedEngines = this._getSortedEngines(true);
+          firstVisible = sortedEngines.find(e => e.isGeneralPurposeEngine);
+          if (!firstVisible) {
+            firstVisible = sortedEngines[0];
+          }
+        }
+        if (firstVisible) {
+          firstVisible.hidden = false;
+          newDefault = firstVisible;
+        }
+      }
+    }
+    // We tried out best but something went very wrong.
+    if (!newDefault) {
+      logConsole.error("Could not find a replacement default engine.");
+      return null;
+    }
+
+    // If the current engine wasn't set or was hidden, we used a fallback
+    // to pick a new current engine. As soon as we return it, this new
+    // current engine will become user-visible, so we should persist it.
+    // by calling the setter.
+    if (privateMode) {
+      this.defaultPrivateEngine = newDefault;
+    } else {
+      this.defaultEngine = newDefault;
+    }
+
+    return this[currentEngineProp];
+  },
+
+  /**
    * Helper function to get the current default engine.
    *
    * @param {boolean} privateMode
@@ -2015,68 +2155,39 @@ SearchService.prototype = {
    */
   _getEngineDefault(privateMode) {
     this._ensureInitialized();
-    const currentEngine = privateMode
+    const currentEngineProp = privateMode
       ? "_currentPrivateEngine"
       : "_currentEngine";
-    if (!this[currentEngine]) {
-      const attributeName = privateMode ? "private" : "current";
-      let name = this._settings.getAttribute(attributeName);
-      let engine = this.getEngineByName(name);
-      if (
-        engine &&
-        (engine.isAppProvided ||
-          this._settings.getVerifiedAttribute(attributeName))
-      ) {
-        // If the current engine is a default one, we can relax the
-        // verification hash check to reduce the annoyance for users who
-        // backup/sync their profile in custom ways.
-        this[currentEngine] = engine;
-      }
-      if (!name) {
-        this[currentEngine] = privateMode
-          ? this.originalPrivateDefaultEngine
-          : this.originalDefaultEngine;
-      }
+
+    if (this[currentEngineProp] && !this[currentEngineProp].hidden) {
+      return this[currentEngineProp];
     }
 
-    // If the current engine is not set or hidden, we fallback...
-    if (!this[currentEngine] || this[currentEngine].hidden) {
-      // first to the original default engine
-      let originalDefault = privateMode
+    // No default loaded, so find it from settings.
+    const attributeName = privateMode ? "private" : "current";
+    let name = this._settings.getAttribute(attributeName);
+    let engine = this.getEngineByName(name);
+    if (
+      engine &&
+      (engine.isAppProvided ||
+        this._settings.getVerifiedAttribute(attributeName))
+    ) {
+      // If the current engine is a default one, we can relax the
+      // verification hash check to reduce the annoyance for users who
+      // backup/sync their profile in custom ways.
+      this[currentEngineProp] = engine;
+    }
+    if (!name) {
+      this[currentEngineProp] = privateMode
         ? this.originalPrivateDefaultEngine
         : this.originalDefaultEngine;
-      if (!originalDefault || originalDefault.hidden) {
-        // then to the first visible engine
-        let firstVisible = this._getSortedEngines(false)[0];
-        if (firstVisible && !firstVisible.hidden) {
-          if (privateMode) {
-            this.defaultPrivateEngine = firstVisible;
-          } else {
-            this.defaultEngine = firstVisible;
-          }
-          return firstVisible;
-        }
-        // and finally as a last resort we unhide the original default engine.
-        if (originalDefault) {
-          originalDefault.hidden = false;
-        }
-      }
-      if (!originalDefault) {
-        return null;
-      }
-
-      // If the current engine wasn't set or was hidden, we used a fallback
-      // to pick a new current engine. As soon as we return it, this new
-      // current engine will become user-visible, so we should persist it.
-      // by calling the setter.
-      if (privateMode) {
-        this.defaultPrivateEngine = originalDefault;
-      } else {
-        this.defaultEngine = originalDefault;
-      }
     }
 
-    return this[currentEngine];
+    if (this[currentEngineProp] && !this[currentEngineProp].hidden) {
+      return this[currentEngineProp];
+    }
+    // No default in settings or it is hidden, so find the new default.
+    return this._findAndSetNewDefaultEngine({ privateMode });
   },
 
   /**
@@ -2561,10 +2672,8 @@ SearchService.prototype = {
         });
         break;
       case Region.REGION_TOPIC:
-        if (verb == Region.REGION_UPDATED) {
-          logConsole.debug("Region updated:", Region.home);
-          this._maybeReloadEngines().catch(Cu.reportError);
-        }
+        logConsole.debug("Region updated:", Region.home);
+        this._maybeReloadEngines().catch(Cu.reportError);
         break;
     }
   },
@@ -2642,7 +2751,7 @@ SearchService.prototype = {
         stack: undefined,
       },
     };
-    OS.File.profileBeforeChange.addBlocker(
+    IOUtils.profileBeforeChange.addBlocker(
       "Search service: shutting down",
       () =>
         (async () => {
@@ -2733,12 +2842,13 @@ var engineUpdateService = {
       }
 
       logConsole.debug("updating", engine.name, updateURI.spec);
-      testEngine = new OpenSearchEngine({
-        uri: updateURI,
-        isAppProvided: false,
-      });
+      testEngine = new OpenSearchEngine();
       testEngine._engineToUpdate = engine;
-      testEngine._initFromURIAndLoad(updateURI);
+      try {
+        testEngine._install(updateURI);
+      } catch (ex) {
+        logConsole.error("Failed to update", engine.name, ex);
+      }
     } else {
       logConsole.debug("invalid updateURI");
     }

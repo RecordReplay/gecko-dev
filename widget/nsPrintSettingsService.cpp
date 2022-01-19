@@ -23,6 +23,7 @@
 
 #include "nsIStringEnumerator.h"
 #include "stdlib.h"
+#include "mozilla/StaticPrefs_print.h"
 #include "mozilla/Preferences.h"
 #include "nsPrintfCString.h"
 
@@ -767,8 +768,7 @@ nsPrintSettingsService::InitPrintSettingsFromPrinter(
     const nsAString& aPrinterName, nsIPrintSettings* aPrintSettings) {
   // Don't get print settings from the printer in the child when printing via
   // parent, these will be retrieved in the parent later in the print process.
-  if (XRE_IsContentProcess() &&
-      Preferences::GetBool("print.print_via_parent")) {
+  if (XRE_IsContentProcess() && StaticPrefs::print_print_via_parent()) {
     return NS_OK;
   }
 
@@ -840,20 +840,13 @@ nsPrintSettingsService::InitPrintSettingsFromPrefs(nsIPrintSettings* aPS,
   bool isInitialized;
   aPS->GetIsInitializedFromPrefs(&isInitialized);
 
-  if (isInitialized) return NS_OK;
+  if (isInitialized) {
+    return NS_OK;
+  }
 
   auto globalPrintSettings = aFlags;
 #ifndef MOZ_WIDGET_ANDROID
-  globalPrintSettings &= nsIPrintSettings::kInitSaveShrinkToFit |
-                         nsIPrintSettings::kInitSaveHeaderLeft |
-                         nsIPrintSettings::kInitSaveHeaderCenter |
-                         nsIPrintSettings::kInitSaveHeaderRight |
-                         nsIPrintSettings::kInitSaveFooterLeft |
-                         nsIPrintSettings::kInitSaveFooterCenter |
-                         nsIPrintSettings::kInitSaveFooterRight |
-                         nsIPrintSettings::kInitSaveEdges |
-                         nsIPrintSettings::kInitSaveReversed |
-                         nsIPrintSettings::kInitSaveInColor;
+  globalPrintSettings &= nsIPrintSettings::kGlobalSettings;
 #endif
 
   nsAutoString prtName;

@@ -5,8 +5,11 @@
 #include "GetUserMediaRequest.h"
 
 #include "base/basictypes.h"
+#include "MediaManager.h"
+#include "mozilla/dom/MediaDevicesBinding.h"
 #include "mozilla/dom/MediaStreamBinding.h"
 #include "mozilla/dom/GetUserMediaRequestBinding.h"
+#include "nsIMediaDevice.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsPIDOMWindow.h"
 
@@ -14,12 +17,29 @@ namespace mozilla::dom {
 
 GetUserMediaRequest::GetUserMediaRequest(
     nsPIDOMWindowInner* aInnerWindow, const nsAString& aCallID,
+    RefPtr<MediaDeviceSetRefCnt> aMediaDeviceSet,
     const MediaStreamConstraints& aConstraints, bool aIsSecure,
     bool aIsHandlingUserInput)
     : mInnerWindowID(aInnerWindow->WindowID()),
       mOuterWindowID(aInnerWindow->GetOuterWindow()->WindowID()),
       mCallID(aCallID),
+      mMediaDeviceSet(std::move(aMediaDeviceSet)),
       mConstraints(new MediaStreamConstraints(aConstraints)),
+      mType(GetUserMediaRequestType::Getusermedia),
+      mIsSecure(aIsSecure),
+      mIsHandlingUserInput(aIsHandlingUserInput) {}
+
+GetUserMediaRequest::GetUserMediaRequest(
+    nsPIDOMWindowInner* aInnerWindow, const nsAString& aCallID,
+    RefPtr<MediaDeviceSetRefCnt> aMediaDeviceSet,
+    const AudioOutputOptions& aAudioOutputOptions, bool aIsSecure,
+    bool aIsHandlingUserInput)
+    : mInnerWindowID(aInnerWindow->WindowID()),
+      mOuterWindowID(aInnerWindow->GetOuterWindow()->WindowID()),
+      mCallID(aCallID),
+      mMediaDeviceSet(std::move(aMediaDeviceSet)),
+      mAudioOutputOptions(new AudioOutputOptions(aAudioOutputOptions)),
+      mType(GetUserMediaRequestType::Selectaudiooutput),
       mIsSecure(aIsSecure),
       mIsHandlingUserInput(aIsHandlingUserInput) {}
 
@@ -31,12 +51,15 @@ GetUserMediaRequest::GetUserMediaRequest(nsPIDOMWindowInner* aInnerWindow,
       mOuterWindowID(0),
       mRawID(aRawId),
       mMediaSource(aMediaSource),
+      mType(GetUserMediaRequestType::Recording_device_stopped),
       mIsSecure(false),
       mIsHandlingUserInput(aIsHandlingUserInput) {
   if (aInnerWindow && aInnerWindow->GetOuterWindow()) {
     mOuterWindowID = aInnerWindow->GetOuterWindow()->WindowID();
   }
 }
+
+GetUserMediaRequest::~GetUserMediaRequest() = default;
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_0(GetUserMediaRequest)
 NS_IMPL_CYCLE_COLLECTING_ADDREF(GetUserMediaRequest)
@@ -52,6 +75,8 @@ JSObject* GetUserMediaRequest::WrapObject(JSContext* aCx,
 }
 
 nsISupports* GetUserMediaRequest::GetParentObject() { return nullptr; }
+
+GetUserMediaRequestType GetUserMediaRequest::Type() { return mType; }
 
 void GetUserMediaRequest::GetCallID(nsString& retval) { retval = mCallID; }
 
@@ -71,8 +96,32 @@ bool GetUserMediaRequest::IsHandlingUserInput() const {
   return mIsHandlingUserInput;
 }
 
+void GetUserMediaRequest::GetDevices(
+    nsTArray<RefPtr<nsIMediaDevice>>& retval) const {
+  MOZ_ASSERT(retval.Length() == 0);
+  if (!mMediaDeviceSet) {
+    return;
+  }
+  for (const auto& device : *mMediaDeviceSet) {
+    retval.AppendElement(device);
+  }
+}
+
 void GetUserMediaRequest::GetConstraints(MediaStreamConstraints& result) {
-  result = *mConstraints;
+  MOZ_ASSERT(result.mAudio.IsBoolean() && !result.mAudio.GetAsBoolean() &&
+                 result.mVideo.IsBoolean() && !result.mVideo.GetAsBoolean(),
+             "result should be default initialized");
+  if (mConstraints) {
+    result = *mConstraints;
+  }
+}
+
+void GetUserMediaRequest::GetAudioOutputOptions(AudioOutputOptions& result) {
+  MOZ_ASSERT(result.mDeviceId.IsEmpty(),
+             "result should be default initialized");
+  if (mAudioOutputOptions) {
+    result = *mAudioOutputOptions;
+  }
 }
 
 }  // namespace mozilla::dom

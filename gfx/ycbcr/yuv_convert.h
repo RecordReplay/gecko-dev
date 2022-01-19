@@ -60,7 +60,8 @@ void ConvertYCbCrToRGB32(const uint8* yplane,
                          int uvstride,
                          int rgbstride,
                          YUVType yuv_type,
-                         YUVColorSpace yuv_color_space);
+                         YUVColorSpace yuv_color_space,
+                         ColorRange color_range);
 
 void ConvertYCbCrToRGB32_deprecated(const uint8* yplane,
                                     const uint8* uplane,
@@ -117,13 +118,6 @@ void ConvertI420AlphaToARGB32(const uint8* yplane,
                               int yastride,
                               int uvstride,
                               int argbstride);
-
-void ARGBAttenuate(const uint8_t* src_argb,
-                   int src_stride_argb,
-                   uint8_t* dst_argb,
-                   int dst_stride_argb,
-                   int width,
-                   int height);
 
 } // namespace gfx
 } // namespace mozilla

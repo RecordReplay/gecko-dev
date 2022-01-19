@@ -16,7 +16,7 @@
 #include "nsIWebNavigation.h"
 #include "nsSHistory.h"
 #include "nsThreadUtils.h"
-
+#include "nsFrameLoader.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Preferences.h"
 
@@ -24,7 +24,7 @@ namespace dom = mozilla::dom;
 
 namespace {
 uint64_t gSHEntrySharedID = 0;
-nsDataHashtable<nsUint64HashKey, mozilla::dom::SHEntrySharedParentState*>*
+nsTHashMap<nsUint64HashKey, mozilla::dom::SHEntrySharedParentState*>*
     sIdToSharedState = nullptr;
 }  // namespace
 
@@ -49,9 +49,9 @@ static void AddSHEntrySharedParentState(
 
   if (!sIdToSharedState) {
     sIdToSharedState =
-        new nsDataHashtable<nsUint64HashKey, SHEntrySharedParentState*>();
+        new nsTHashMap<nsUint64HashKey, SHEntrySharedParentState*>();
   }
-  sIdToSharedState->Put(aSharedState->mId, aSharedState);
+  sIdToSharedState->InsertOrUpdate(aSharedState->mId, aSharedState);
 }
 
 SHEntrySharedParentState::SHEntrySharedParentState() {
@@ -70,6 +70,12 @@ SHEntrySharedParentState::SHEntrySharedParentState(
 SHEntrySharedParentState::~SHEntrySharedParentState() {
   MOZ_ASSERT(mId != 0);
 
+  RefPtr<nsFrameLoader> loader = mFrameLoader;
+  SetFrameLoader(nullptr);
+  if (loader) {
+    loader->Destroy();
+  }
+
   sIdToSharedState->Remove(mId);
   if (sIdToSharedState->IsEmpty()) {
     delete sIdToSharedState;
@@ -82,7 +88,7 @@ void SHEntrySharedParentState::ChangeId(uint64_t aId) {
 
   sIdToSharedState->Remove(mId);
   mId = aId;
-  sIdToSharedState->Put(mId, this);
+  sIdToSharedState->InsertOrUpdate(mId, this);
 }
 
 void SHEntrySharedParentState::CopyFrom(SHEntrySharedParentState* aEntry) {
@@ -109,6 +115,27 @@ void dom::SHEntrySharedParentState::NotifyListenersContentViewerEvicted() {
 
 void SHEntrySharedChildState::CopyFrom(SHEntrySharedChildState* aEntry) {
   mChildShells.AppendObjects(aEntry->mChildShells);
+}
+
+void SHEntrySharedParentState::SetFrameLoader(nsFrameLoader* aFrameLoader) {
+  // If expiration tracker is removing this object, IsTracked() returns false.
+  if (GetExpirationState()->IsTracked() && mFrameLoader) {
+    if (nsCOMPtr<nsISHistory> shistory = do_QueryReferent(mSHistory)) {
+      shistory->RemoveFromExpirationTracker(this);
+    }
+  }
+
+  mFrameLoader = aFrameLoader;
+
+  if (mFrameLoader) {
+    if (nsCOMPtr<nsISHistory> shistory = do_QueryReferent(mSHistory)) {
+      shistory->AddToExpirationTracker(this);
+    }
+  }
+}
+
+nsFrameLoader* SHEntrySharedParentState::GetFrameLoader() {
+  return mFrameLoader;
 }
 
 }  // namespace dom

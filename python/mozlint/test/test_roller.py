@@ -12,7 +12,7 @@ import time
 import mozunit
 import pytest
 
-from mozlint.errors import LintersNotConfigured
+from mozlint.errors import LintersNotConfigured, NoValidLinter
 from mozlint.result import Issue, ResultSummary
 from itertools import chain
 
@@ -104,6 +104,7 @@ def test_roll_with_local_excluded_path(lint, linters, files):
     lint.read(linters("excludes"))
     result = lint.roll(files)
 
+    assert "**/foobar.js" in lint.linters[0]["local_exclude"]
     assert len(result.issues) == 0
     assert result.failed == set([])
 
@@ -149,6 +150,28 @@ def test_roll_warnings(lint, linters, files):
     assert result.total_issues == 2
     assert len(result.suppressed_warnings) == 0
     assert result.total_suppressed_warnings == 0
+
+
+def test_roll_code_review(monkeypatch, lint, linters, files):
+    monkeypatch.setenv("CODE_REVIEW", "1")
+    lint.lintargs["show_warnings"] = False
+    lint.read(linters("warning"))
+    result = lint.roll(files)
+    assert len(result.issues) == 1
+    assert result.total_issues == 2
+    assert len(result.suppressed_warnings) == 0
+    assert result.total_suppressed_warnings == 0
+
+
+def test_roll_code_review_warnings_disabled(monkeypatch, lint, linters, files):
+    monkeypatch.setenv("CODE_REVIEW", "1")
+    lint.lintargs["show_warnings"] = False
+    lint.read(linters("warning_no_code_review"))
+    result = lint.roll(files)
+    assert len(result.issues) == 0
+    assert result.total_issues == 0
+    assert len(result.suppressed_warnings) == 1
+    assert result.total_suppressed_warnings == 2
 
 
 def fake_run_worker(config, paths, **lintargs):
@@ -311,7 +334,7 @@ def test_support_files(lint, linters, filedir, monkeypatch, files):
 
 
 def test_setup(lint, linters, filedir, capfd):
-    with pytest.raises(LintersNotConfigured):
+    with pytest.raises(NoValidLinter):
         lint.setup()
 
     lint.read(linters("setup", "setupfailed", "setupraised"))

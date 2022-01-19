@@ -24,9 +24,9 @@
 #include "nsDirectoryServiceDefs.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "gfxFontConstants.h"
-#include "GeckoProfiler.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/Telemetry.h"
 
@@ -515,7 +515,11 @@ void GDIFontFamily::FindStyleVariations(FontInfoData* aFontInfoData) {
 gfxGDIFontList::gfxGDIFontList() : mFontSubstitutes(32) {
 #ifdef MOZ_BUNDLED_FONTS
   if (StaticPrefs::gfx_bundled_fonts_activate_AtStartup() != 0) {
+    TimeStamp start = TimeStamp::Now();
     ActivateBundledFonts();
+    TimeStamp end = TimeStamp::Now();
+    Telemetry::Accumulate(Telemetry::FONTLIST_BUNDLEDFONTS_ACTIVATE,
+                          (end - start).ToMilliseconds());
   }
 #endif
 }
@@ -567,7 +571,7 @@ nsresult gfxGDIFontList::GetFontSubstitutes() {
     NS_ConvertUTF16toUTF8 substitute(substituteName);
     NS_ConvertUTF16toUTF8 actual(actualFontName);
     if (!actual.IsEmpty() && (ff = mFontFamilies.GetWeak(actual))) {
-      mFontSubstitutes.Put(substitute, RefPtr{ff});
+      mFontSubstitutes.InsertOrUpdate(substitute, RefPtr{ff});
     } else {
       mNonExistingFonts.AppendElement(substitute);
     }
@@ -588,7 +592,7 @@ nsresult gfxGDIFontList::GetFontSubstitutes() {
     NS_ConvertUTF16toUTF8 actual(actualFontName);
     ff = mFontFamilies.GetWeak(actual);
     if (ff) {
-      mFontSubstitutes.Put(substitute, RefPtr{ff});
+      mFontSubstitutes.InsertOrUpdate(substitute, RefPtr{ff});
     }
   }
   return NS_OK;
@@ -633,11 +637,11 @@ int CALLBACK gfxGDIFontList::EnumFontFamExProc(ENUMLOGFONTEXW* lpelfe,
 
   gfxGDIFontList* fontList = PlatformFontList();
 
-  if (!fontList->mFontFamilies.GetWeak(key)) {
+  if (!fontList->mFontFamilies.Contains(key)) {
     NS_ConvertUTF16toUTF8 faceName(lf.lfFaceName);
     FontVisibility visibility = FontVisibility::Unknown;  // TODO
     RefPtr<GDIFontFamily> family = new GDIFontFamily(faceName, visibility);
-    fontList->mFontFamilies.Put(key, RefPtr{family});
+    fontList->mFontFamilies.InsertOrUpdate(key, RefPtr{family});
 
     // if locale is such that CJK font names are the default coming from
     // GDI, then if a family name is non-ASCII immediately read in other
@@ -1020,7 +1024,7 @@ int CALLBACK GDIFontInfo::EnumerateFontsForFamily(
   }
 
   if (cmapLoaded || nameDataLoaded) {
-    famData->mFontInfo.mFontFaceData.Put(fontName, fontData);
+    famData->mFontInfo.mFontFaceData.InsertOrUpdate(fontName, fontData);
   }
 
   return famData->mFontInfo.mCanceled ? 0 : 1;
@@ -1044,7 +1048,7 @@ void GDIFontInfo::LoadFontFamilyData(const nsACString& aFamilyName) {
 
   // if found other names, insert them
   if (data.mOtherFamilyNames.Length() != 0) {
-    mOtherFamilyNames.Put(aFamilyName, data.mOtherFamilyNames);
+    mOtherFamilyNames.InsertOrUpdate(aFamilyName, data.mOtherFamilyNames);
     mLoadStats.othernames += data.mOtherFamilyNames.Length();
   }
 }

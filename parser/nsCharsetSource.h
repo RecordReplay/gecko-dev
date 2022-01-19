@@ -9,7 +9,6 @@
 enum {
   kCharsetUninitialized,
   kCharsetFromFallback,
-  kCharsetFromTopLevelDomain,
   kCharsetFromDocTypeDefault,  // This and up confident for XHR
   // Start subdividing source for telementry purposes
   kCharsetFromInitialAutoDetectionASCII,
@@ -17,7 +16,6 @@ enum {
   kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8Generic,
   kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8Content,
   kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD,
-  kCharsetFromFinalJapaneseAutoDetection,
   // Deliberately no Final version of ASCII
   kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8,
   kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Generic,
@@ -28,17 +26,19 @@ enum {
   kCharsetFromParentFrame,  // Same-origin parent takes precedence over detector
                             // to avoid breaking tests. (Also, the HTML spec
                             // says so.)
+  kCharsetFromXmlDeclaration,
   kCharsetFromMetaPrescan,  // this one and smaller: HTML5 Tentative
   kCharsetFromMetaTag,      // this one and greater: HTML5 Confident
-  kCharsetFromIrreversibleAutoDetection,
   kCharsetFromChannel,
   kCharsetFromOtherComponent,
   kCharsetFromPendingUserForcedAutoDetection,  // Marker value to be upgraded
                                                // later
   kCharsetFromInitialUserForcedAutoDetection,
   kCharsetFromFinalUserForcedAutoDetection,
-  kCharsetFromUserForced,  // propagates to child frames
-  kCharsetFromUserForcedJapaneseAutoDetection,
+  kCharsetFromXmlDeclarationUtf16,        // This one is overridden by
+                                          // kCharsetFromChannel
+  kCharsetFromIrreversibleAutoDetection,  // This one is overridden by
+                                          // kCharsetFromChannel
   kCharsetFromByteOrderMark,
   kCharsetFromUtf8OnlyMime,  // For JSON, WebVTT and such
   kCharsetFromBuiltIn,       // resource: URLs

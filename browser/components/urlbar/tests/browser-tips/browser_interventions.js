@@ -23,10 +23,11 @@ add_task(async function refresh() {
       "Restore default settings and remove old add-ons for optimal performance.",
     button: /^Refresh .+…$/,
     awaitCallback() {
-      return promiseAlertDialog("cancel", [
+      return BrowserTestUtils.promiseAlertDialog(
+        "cancel",
         "chrome://global/content/resetProfile.xhtml",
-        "chrome://global/content/resetProfile.xul",
-      ]);
+        { isSubDialog: true }
+      );
     },
   });
 });
@@ -41,10 +42,10 @@ add_task(async function clear() {
     title: "Clear your cache, cookies, history and more.",
     button: "Choose What to Clear…",
     awaitCallback() {
-      return promiseAlertDialog("cancel", [
-        "chrome://browser/content/sanitize.xhtml",
-        "chrome://browser/content/sanitize.xul",
-      ]);
+      return BrowserTestUtils.promiseAlertDialog(
+        "cancel",
+        "chrome://browser/content/sanitize.xhtml"
+      );
     },
   });
 });

@@ -1740,9 +1740,8 @@ bool Console::PopulateConsoleNotificationInTheTargetScope(
       js::SetFunctionNativeReserved(funObj, SLOT_RAW_STACK,
                                     JS::PrivateValue(aData->mStack.get()));
 
-      if (NS_WARN_IF(!JS_DefineProperty(
-              aCx, eventObj, "stacktrace", funObj, nullptr,
-              JSPROP_ENUMERATE | JSPROP_GETTER | JSPROP_SETTER))) {
+      if (NS_WARN_IF(!JS_DefineProperty(aCx, eventObj, "stacktrace", funObj,
+                                        nullptr, JSPROP_ENUMERATE))) {
         return false;
       }
     }
@@ -2118,11 +2117,15 @@ Console::TimerStatus Console::StartTimer(JSContext* aCx, const JS::Value& aName,
 
   aTimerLabel = label;
 
-  auto entry = mTimerRegistry.LookupForAdd(label);
-  if (entry) {
+  if (mTimerRegistry.WithEntryHandle(label, [&](auto&& entry) {
+        if (entry) {
+          return true;
+        }
+        entry.Insert(aTimestamp);
+        return false;
+      })) {
     return eTimerAlreadyExists;
   }
-  entry.OrInsert([&aTimestamp]() { return aTimestamp; });
 
   *aTimerValue = aTimestamp;
   return eTimerDone;
@@ -2274,18 +2277,18 @@ uint32_t Console::IncreaseCounter(JSContext* aCx,
   aCountLabel = string;
 
   const bool maxCountersReached = mCounterRegistry.Count() >= MAX_PAGE_COUNTERS;
-  auto entry = mCounterRegistry.LookupForAdd(aCountLabel);
-  if (entry) {
-    ++entry.Data();
-  } else {
-    entry.OrInsert([]() { return 1; });
-    if (maxCountersReached) {
-      // oops, we speculatively added an entry even though we shouldn't
-      mCounterRegistry.Remove(aCountLabel);
-      return MAX_PAGE_COUNTERS;
-    }
-  }
-  return entry.Data();
+  return mCounterRegistry.WithEntryHandle(
+      aCountLabel, [maxCountersReached](auto&& entry) -> uint32_t {
+        if (entry) {
+          ++entry.Data();
+        } else {
+          if (maxCountersReached) {
+            return MAX_PAGE_COUNTERS;
+          }
+          entry.Insert(1);
+        }
+        return entry.Data();
+      });
 }
 
 uint32_t Console::ResetCounter(JSContext* aCx,

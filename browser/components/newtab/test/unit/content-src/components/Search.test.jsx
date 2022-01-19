@@ -3,7 +3,10 @@ import { mount, shallow } from "enzyme";
 import React from "react";
 import { _Search as Search } from "content-src/components/Search/Search";
 
-const DEFAULT_PROPS = { dispatch() {}, Prefs: { values: {} } };
+const DEFAULT_PROPS = {
+  dispatch() {},
+  Prefs: { values: { featureConfig: {} } },
+};
 
 describe("<Search>", () => {
   let globals;
@@ -142,7 +145,7 @@ describe("<Search>", () => {
         },
         type: "HANDOFF_SEARCH_TO_AWESOMEBAR",
       });
-      assert.calledWith(dispatch, { type: "HIDE_SEARCH" });
+      assert.calledWith(dispatch, { type: "DISABLE_SEARCH" });
       const [action] = dispatch.thirdCall.args;
       assert.isUserEventAction(action);
       assert.propertyVal(action.data, "event", "SEARCH_HANDOFF");
@@ -167,7 +170,7 @@ describe("<Search>", () => {
         },
         type: "HANDOFF_SEARCH_TO_AWESOMEBAR",
       });
-      assert.calledWith(dispatch, { type: "HIDE_SEARCH" });
+      assert.calledWith(dispatch, { type: "DISABLE_SEARCH" });
       const [action] = dispatch.thirdCall.args;
       assert.isUserEventAction(action);
       assert.propertyVal(action.data, "event", "SEARCH_HANDOFF");

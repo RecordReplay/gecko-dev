@@ -8,7 +8,6 @@
 var EXPORTED_SYMBOLS = [
     "OnRefTestLoad",
     "OnRefTestUnload",
-    "getTestPlugin"
 ];
 
 Cu.import("resource://gre/modules/FileUtils.jsm");
@@ -70,7 +69,7 @@ function isWebRenderOnAndroidDevice() {
   // more correct detection of this case.
   return xr.OS == "Android" &&
       g.browserIsRemote &&
-      g.windowUtils.layerManagerType == "WebRender";
+      g.windowUtils.layerManagerType.startsWith("WebRender");
 }
 
 function FlushTestBuffer()
@@ -132,20 +131,6 @@ function IDForEventTarget(event)
     }
 }
 
-function getTestPlugin(aName) {
-  var ph = Cc["@mozilla.org/plugin/host;1"].getService(Ci.nsIPluginHost);
-  var tags = ph.getPluginTags();
-
-  // Find the test plugin
-  for (var i = 0; i < tags.length; i++) {
-    if (tags[i].name == aName)
-      return tags[i];
-  }
-
-  logger.warning("Failed to find the test-plugin.");
-  return null;
-}
-
 function OnRefTestLoad(win)
 {
     g.crashDumpDir = Cc[NS_DIRECTORY_SERVICE_CONTRACTID]
@@ -168,6 +153,7 @@ function OnRefTestLoad(win)
     var prefs = Cc["@mozilla.org/preferences-service;1"].
                 getService(Ci.nsIPrefBranch);
     g.browserIsIframe = prefs.getBoolPref("reftest.browser.iframe.enabled", false);
+    g.useDrawSnapshot = prefs.getBoolPref("reftest.use-draw-snapshot", false);
 
     g.logLevel = prefs.getStringPref("reftest.logLevel", "info");
 
@@ -201,20 +187,8 @@ function OnRefTestLoad(win)
       // TODO Bug 1156817: reftests don't have most of GeckoView infra so we
       // can't register this actor
       ChromeUtils.unregisterWindowActor("LoadURIDelegate");
-      ChromeUtils.unregisterWindowActor("WebBrowserChrome");
     } else {
       document.getElementById("reftest-window").appendChild(g.browser);
-    }
-
-    // reftests should have the test plugins enabled, not click-to-play
-    let plugin1 = getTestPlugin("Test Plug-in");
-    let plugin2 = getTestPlugin("Second Test Plug-in");
-    if (plugin1 && plugin2) {
-      g.testPluginEnabledStates = [plugin1.enabledState, plugin2.enabledState];
-      plugin1.enabledState = Ci.nsIPluginTag.STATE_ENABLED;
-      plugin2.enabledState = Ci.nsIPluginTag.STATE_ENABLED;
-    } else {
-      logger.warning("Could not get test plugin tags.");
     }
 
     g.browserMessageManager = g.browser.frameLoader.messageManager;
@@ -403,8 +377,26 @@ function ReadTests() {
             manifests = JSON.parse(manifests);
             g.urlsFilterRegex = manifests[null];
 
-            var globalFilter = manifests.hasOwnProperty("") ? new RegExp(manifests[""]) : null;
-            delete manifests[""];
+            var globalFilter = null;
+            if (manifests.hasOwnProperty("")) {
+                let filterAndId = manifests[""];
+                if (!Array.isArray(filterAndId)) {
+                    logger.error(`manifest[""] should be an array`);
+                    DoneTests();
+                }
+                if (filterAndId.length === 0) {
+                    logger.error(`manifest[""] should contain a filter pattern in the 1st item`);
+                    DoneTests();
+                }
+                let filter = filterAndId[0];
+                if (typeof filter !== "string") {
+                    logger.error(`The first item of manifest[""] should be a string`);
+                    DoneTests();
+                }
+                globalFilter = new RegExp(filter);
+                delete manifests[""];
+            }
+
             var manifestURLs = Object.keys(manifests);
 
             // Ensure we read manifests from higher up the directory tree first so that we
@@ -561,14 +553,6 @@ function StartTests()
 
 function OnRefTestUnload()
 {
-  let plugin1 = getTestPlugin("Test Plug-in");
-  let plugin2 = getTestPlugin("Second Test Plug-in");
-  if (plugin1 && plugin2) {
-    plugin1.enabledState = g.testPluginEnabledStates[0];
-    plugin2.enabledState = g.testPluginEnabledStates[1];
-  } else {
-    logger.warning("Failed to get test plugin tags.");
-  }
 }
 
 function AddURIUseCount(uri)
@@ -894,8 +878,14 @@ function UpdateCanvasCache(url, canvas)
 // asynchronously resized (e.g. by the window manager, to make
 // it fit on screen) at unpredictable times.
 // Fortunately this is pretty cheap.
-function DoDrawWindow(ctx, x, y, w, h)
+async function DoDrawWindow(ctx, x, y, w, h)
 {
+    if (g.useDrawSnapshot) {
+      let image = await g.browser.drawSnapshot(x, y, w, h, 1.0, "#fff");
+      ctx.drawImage(image, x, y);
+      return;
+    }
+
     var flags = ctx.DRAWWINDOW_DRAW_CARET | ctx.DRAWWINDOW_DRAW_VIEW;
     var testRect = g.browser.getBoundingClientRect();
     if (g.ignoreWindowSize ||
@@ -930,11 +920,14 @@ function DoDrawWindow(ctx, x, y, w, h)
     }
 
     TestBuffer("DoDrawWindow " + x + "," + y + "," + w + "," + h);
+    ctx.save();
+    ctx.translate(x, y);
     ctx.drawWindow(g.containingWindow, x, y, w, h, "rgb(255,255,255)",
                    g.drawWindowFlags);
+    ctx.restore();
 }
 
-function InitCurrentCanvasWithSnapshot()
+async function InitCurrentCanvasWithSnapshot()
 {
     TestBuffer("Initializing canvas snapshot");
 
@@ -948,11 +941,11 @@ function InitCurrentCanvasWithSnapshot()
     }
 
     var ctx = g.currentCanvas.getContext("2d");
-    DoDrawWindow(ctx, 0, 0, g.currentCanvas.width, g.currentCanvas.height);
+    await DoDrawWindow(ctx, 0, 0, g.currentCanvas.width, g.currentCanvas.height);
     return true;
 }
 
-function UpdateCurrentCanvasForInvalidation(rects)
+async function UpdateCurrentCanvasForInvalidation(rects)
 {
     TestBuffer("Updating canvas for invalidation");
 
@@ -975,14 +968,11 @@ function UpdateCurrentCanvasForInvalidation(rects)
         right = Math.max(0, Math.min(right, g.currentCanvas.width));
         bottom = Math.max(0, Math.min(bottom, g.currentCanvas.height));
 
-        ctx.save();
-        ctx.translate(left, top);
-        DoDrawWindow(ctx, left, top, right - left, bottom - top);
-        ctx.restore();
+        await DoDrawWindow(ctx, left, top, right - left, bottom - top);
     }
 }
 
-function UpdateWholeCurrentCanvasForInvalidation()
+async function UpdateWholeCurrentCanvasForInvalidation()
 {
     TestBuffer("Updating entire canvas for invalidation");
 
@@ -991,7 +981,7 @@ function UpdateWholeCurrentCanvasForInvalidation()
     }
 
     var ctx = g.currentCanvas.getContext("2d");
-    DoDrawWindow(ctx, 0, 0, g.currentCanvas.width, g.currentCanvas.height);
+    await DoDrawWindow(ctx, 0, 0, g.currentCanvas.width, g.currentCanvas.height);
 }
 
 function RecordResult(testRunTime, errorMsg, typeSpecificResults)
@@ -1545,7 +1535,7 @@ function RegisterMessageListenersAndLoadContentScript(aReload)
     );
     g.browserMessageManager.addMessageListener(
         "reftest:InitCanvasWithSnapshot",
-        function (m) { return RecvInitCanvasWithSnapshot(); }
+        function (m) { RecvInitCanvasWithSnapshot(); }
     );
     g.browserMessageManager.addMessageListener(
         "reftest:Log",
@@ -1654,10 +1644,10 @@ function RecvFailedAssignedLayer(why) {
     g.failedAssignedLayerMessages.push(why);
 }
 
-function RecvInitCanvasWithSnapshot()
+async function RecvInitCanvasWithSnapshot()
 {
-    var painted = InitCurrentCanvasWithSnapshot();
-    return { painted: painted };
+    var painted = await InitCurrentCanvasWithSnapshot();
+    SendUpdateCurrentCanvasWithSnapshotDone(painted);
 }
 
 function RecvLog(type, msg)
@@ -1714,7 +1704,7 @@ function RecvStartPrint(isPrintSelection, printRange)
                 getService(Ci.nsIPrefBranch);
     ps.printInColor = prefs.getBoolPref("print.print_in_color", true);
 
-    g.browser.print(g.browser.outerWindowID, ps)
+    g.browser.browsingContext.print(ps)
         .then(() => SendPrintDone(Cr.NS_OK, file.path))
         .catch(exception => SendPrintDone(exception.code, file.path));
 }
@@ -1733,14 +1723,16 @@ function RecvTestDone(runtimeMs)
     RecordResult(runtimeMs, '', [ ]);
 }
 
-function RecvUpdateCanvasForInvalidation(rects)
+async function RecvUpdateCanvasForInvalidation(rects)
 {
-    UpdateCurrentCanvasForInvalidation(rects);
+    await UpdateCurrentCanvasForInvalidation(rects);
+    SendUpdateCurrentCanvasWithSnapshotDone(true);
 }
 
-function RecvUpdateWholeCanvasForInvalidation()
+async function RecvUpdateWholeCanvasForInvalidation()
 {
-    UpdateWholeCurrentCanvasForInvalidation();
+    await UpdateWholeCurrentCanvasForInvalidation();
+    SendUpdateCurrentCanvasWithSnapshotDone(true);
 }
 
 function OnProcessCrashed(subject, topic, data)
@@ -1749,10 +1741,7 @@ function OnProcessCrashed(subject, topic, data)
     let additionalDumps;
     let propbag = subject.QueryInterface(Ci.nsIPropertyBag2);
 
-    if (topic == "plugin-crashed") {
-        id = propbag.get("pluginDumpID");
-        additionalDumps = propbag.getPropertyAsACString("additionalMinidumps");
-    } else if (topic == "ipc:content-shutdown") {
+    if (topic == "ipc:content-shutdown") {
         id = propbag.get("dumpID");
     }
 
@@ -1772,7 +1761,6 @@ function RegisterProcessCrashObservers()
 {
     var os = Cc[NS_OBSERVER_SERVICE_CONTRACTID]
              .getService(Ci.nsIObserverService);
-    os.addObserver(OnProcessCrashed, "plugin-crashed");
     os.addObserver(OnProcessCrashed, "ipc:content-shutdown");
 }
 
@@ -1815,6 +1803,11 @@ function SendResetRenderingState()
 function SendPrintDone(status, fileName)
 {
     g.browserMessageManager.sendAsyncMessage("reftest:PrintDone", { status, fileName });
+}
+
+function SendUpdateCurrentCanvasWithSnapshotDone(painted)
+{
+    g.browserMessageManager.sendAsyncMessage("reftest:UpdateCanvasWithSnapshotDone", { painted });
 }
 
 var pdfjsHasLoaded;

@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 <!DOCTYPE html [
-  <!ENTITY % htmlDTD PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "DTD/xhtml1-strict.dtd"> %htmlDTD;
+  <!ENTITY % htmlDTD PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"> %htmlDTD;
   <!ENTITY % brandDTD SYSTEM "chrome://branding/locale/brand.dtd"> %brandDTD;
 ]>
 
@@ -38,8 +38,8 @@
         <button id="reset-box-button" data-l10n-id="refresh-profile-button"/>
       </div>
       <div id="safe-mode-box">
-        <h3 data-l10n-id="safe-mode-title"/>
-        <button id="restart-in-safe-mode-button" data-l10n-id="restart-in-safe-mode-label"/>
+        <h3 data-l10n-id="troubleshoot-mode-title"/>
+        <button id="restart-in-safe-mode-button" data-l10n-id="restart-in-troubleshoot-mode-label"/>
       </div>
       <div id="clear-startup-cache-box">
         <h3 data-l10n-id="clear-startup-cache-title"/>
@@ -200,6 +200,16 @@
             </td>
           </tr>
 
+#if defined(XP_WIN)
+          <tr class="no-copy">
+            <th class="column" data-l10n-id="app-basics-third-party"/>
+
+            <td>
+              <a href="about:third-party">about:third-party</a>
+            </td>
+          </tr>
+#endif
+
 #if defined(XP_WIN) && defined(MOZ_LAUNCHER_PROCESS)
           <tr>
             <th class="column" data-l10n-id="app-basics-launcher-process-status"/>
@@ -320,6 +330,22 @@
         </tbody>
       </table>
 
+#ifdef MOZ_NORMANDY
+      <!-- - - - - - - - - - - - - - - - - - - - - -->
+
+      <h2 class="major-section" data-l10n-id="support-remote-features-title"/>
+
+      <table class="prefs-table">
+        <thead class="no-copy">
+          <th data-l10n-id="support-remote-features-name"/>
+          <th data-l10n-id="support-remote-features-status"/>
+        </thead>
+
+        <tbody id="remote-features-tbody">
+        </tbody>
+      </table>
+
+#endif
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
       <h2 class="major-section" data-l10n-id="processes-title" id="remote-processes"/>
@@ -528,6 +554,28 @@
         <tbody id="experimental-features-tbody">
         </tbody>
       </table>
+
+#endif
+#ifdef MOZ_NORMANDY
+      <!-- - - - - - - - - - - - - - - - - - - - - -->
+      <h2 class="major-section" data-l10n-id="support-remote-experiments-title"/>
+
+      <table class="prefs-table">
+        <thead class="no-copy">
+          <th data-l10n-id="support-remote-experiments-name"/>
+          <th data-l10n-id="support-remote-experiments-branch"/>
+        </thead>
+
+        <tbody id="remote-experiments-tbody">
+        </tbody>
+      </table>
+
+      <section id="about-studies-section" class="no-copy">
+        <p data-l10n-id="support-remote-experiments-see-about-studies">
+          <a data-l10n-name="support-about-studies-link" href="about:studies"></a>
+        </p>
+      </section>
+
 #endif
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
@@ -739,7 +787,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-#if defined(ENABLE_REMOTE_AGENT)
+#if defined(ENABLE_WEBDRIVER)
       <h2 class="major-section" data-l10n-id="remote-debugging-title"/>
 
       <table>
@@ -780,25 +828,6 @@
         </thead>
 
         <tbody id="support-printing-prefs-tbody">
-        </tbody>
-      </table>
-#endif
-
-#ifdef XP_WIN
-      <h2 id="third-party-modules" class="major-section" hidden="true"
-          data-l10n-id="support-third-party-modules-title"/>
-      <table id="third-party-modules-table" class="prefs-table" hidden="true">
-        <thead id="third-party-modules-thead">
-          <th data-l10n-id="support-third-party-modules-module"/>
-          <th class="third-party-modules-column-version"
-              data-l10n-id="support-third-party-modules-version"/>
-          <th data-l10n-id="support-third-party-modules-vendor"/>
-          <th class="third-party-modules-header-occurrence" colspan="2"
-              data-l10n-id="support-third-party-modules-occurrence"/>
-        </thead>
-        <tbody id="third-party-modules-tbody">
-          <tr><td id="third-party-modules-no-data" colspan="5" hidden="true"
-                  data-l10n-id="support-third-party-modules-empty"></td></tr>
         </tbody>
       </table>
 #endif

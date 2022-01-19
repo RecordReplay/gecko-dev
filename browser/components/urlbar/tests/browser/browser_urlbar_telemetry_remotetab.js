@@ -103,8 +103,6 @@ add_task(async function setup() {
       // Clear historical search suggestions to avoid interference from previous
       // tests.
       ["browser.urlbar.maxHistoricalSearchSuggestions", 0],
-      // Use the default matching bucket configuration.
-      ["browser.urlbar.matchBuckets", "general:5,suggestion:4"],
       // Turn autofill off.
       ["browser.urlbar.autoFill", false],
       // Special prefs for remote tabs.
@@ -138,7 +136,7 @@ add_task(async function setup() {
         url: "http://example.com",
         icon: UrlbarUtils.ICON.DEFAULT,
         client: "7cqCr77ptzX3",
-        lastUsed: 1452124677,
+        lastUsed: Math.floor(Date.now() / 1000),
       },
     ],
   };

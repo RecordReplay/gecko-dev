@@ -24,21 +24,18 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #include "mozilla/nsRedirectHistoryEntry.h"
-#include "URIUtils.h"
 #include "mozilla/dom/nsCSPUtils.h"
 #include "mozilla/dom/nsCSPContext.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/WindowGlobalParent.h"
+#include "mozilla/LoadInfo.h"
+
+using namespace mozilla::dom;
+using namespace mozilla::net;
 
 namespace mozilla {
-
-using mozilla::BasePrincipal;
-using mozilla::Maybe;
-using mozilla::dom::BrowsingContext;
-using mozilla::dom::ServiceWorkerDescriptor;
-using namespace mozilla::net;
 
 namespace ipc {
 
@@ -162,7 +159,6 @@ Result<nsCOMPtr<nsIPrincipal>, nsresult> PrincipalInfoToPrincipal(
     default:
       return Err(NS_ERROR_FAILURE);
   }
-  return Err(NS_ERROR_FAILURE);
 }
 
 already_AddRefed<nsIContentSecurityPolicy> CSPInfoToCSP(
@@ -502,6 +498,9 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
     maybeCspToInheritInfo.emplace(cspToInheritInfo);
   }
 
+  nsCOMPtr<nsIURI> unstrippedURI;
+  Unused << aLoadInfo->GetUnstrippedURI(getter_AddRefs(unstrippedURI));
+
   *aOptionalLoadInfoArgs = Some(LoadInfoArgs(
       loadingPrincipalInfo, triggeringPrincipalInfo, principalToInheritInfo,
       sandboxedLoadingPrincipalInfo, topLevelPrincipalInfo,
@@ -517,7 +516,6 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
       aLoadInfo->GetBrowserWouldUpgradeInsecureRequests(),
       aLoadInfo->GetForceAllowDataURI(),
       aLoadInfo->GetAllowInsecureRedirectToDataURI(),
-      aLoadInfo->GetBypassCORSChecks(),
       aLoadInfo->GetSkipContentPolicyCheckForWebRequest(),
       aLoadInfo->GetOriginalFrameSrcLoad(),
       aLoadInfo->GetForceInheritPrincipalDropped(),
@@ -535,15 +533,17 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
       aLoadInfo->GetServiceWorkerTaintingSynthesized(),
       aLoadInfo->GetDocumentHasUserInteracted(),
       aLoadInfo->GetAllowListFutureDocumentsCreatedFromThisRedirectChain(),
-      cspNonce, aLoadInfo->GetSkipContentSniffing(),
-      aLoadInfo->GetHttpsOnlyStatus(),
+      aLoadInfo->GetNeedForCheckingAntiTrackingHeuristic(), cspNonce,
+      aLoadInfo->GetSkipContentSniffing(), aLoadInfo->GetHttpsOnlyStatus(),
       aLoadInfo->GetHasValidUserGestureActivation(),
       aLoadInfo->GetAllowDeprecatedSystemRequests(),
       aLoadInfo->GetIsInDevToolsContext(), aLoadInfo->GetParserCreatedScript(),
-      aLoadInfo->GetIsFromProcessingFrameAttributes(), cookieJarSettingsArgs,
+      aLoadInfo->GetIsFromProcessingFrameAttributes(),
+      aLoadInfo->GetIsMediaRequest(), aLoadInfo->GetIsMediaInitialRequest(),
+      aLoadInfo->GetIsFromObjectOrEmbed(), cookieJarSettingsArgs,
       aLoadInfo->GetRequestBlockingReason(), maybeCspToInheritInfo,
-      aLoadInfo->GetHasStoragePermission(),
-      aLoadInfo->GetLoadingEmbedderPolicy()));
+      aLoadInfo->GetHasStoragePermission(), aLoadInfo->GetIsMetaRefresh(),
+      aLoadInfo->GetLoadingEmbedderPolicy(), unstrippedURI));
 
   return NS_OK;
 }
@@ -760,7 +760,7 @@ nsresult LoadInfoArgsToLoadInfo(
     loadingContext = frameBrowsingContext->GetEmbedderElement();
   }
 
-  RefPtr<mozilla::LoadInfo> loadInfo = new mozilla::LoadInfo(
+  RefPtr<mozilla::net::LoadInfo> loadInfo = new mozilla::net::LoadInfo(
       loadingPrincipal, triggeringPrincipal, principalToInherit,
       sandboxedLoadingPrincipal, topLevelPrincipal,
       topLevelStorageAreaPrincipal, resultPrincipalURI, cookieJarSettings,
@@ -775,7 +775,6 @@ nsresult LoadInfoArgsToLoadInfo(
       loadInfoArgs.browserWouldUpgradeInsecureRequests(),
       loadInfoArgs.forceAllowDataURI(),
       loadInfoArgs.allowInsecureRedirectToDataURI(),
-      loadInfoArgs.bypassCORSChecks(),
       loadInfoArgs.skipContentPolicyCheckForWebRequest(),
       loadInfoArgs.originalFrameSrcLoad(),
       loadInfoArgs.forceInheritPrincipalDropped(), loadInfoArgs.innerWindowID(),
@@ -793,16 +792,30 @@ nsresult LoadInfoArgsToLoadInfo(
       loadInfoArgs.serviceWorkerTaintingSynthesized(),
       loadInfoArgs.documentHasUserInteracted(),
       loadInfoArgs.allowListFutureDocumentsCreatedFromThisRedirectChain(),
+      loadInfoArgs.needForCheckingAntiTrackingHeuristic(),
       loadInfoArgs.cspNonce(), loadInfoArgs.skipContentSniffing(),
       loadInfoArgs.httpsOnlyStatus(),
       loadInfoArgs.hasValidUserGestureActivation(),
       loadInfoArgs.allowDeprecatedSystemRequests(),
       loadInfoArgs.isInDevToolsContext(), loadInfoArgs.parserCreatedScript(),
-      loadInfoArgs.hasStoragePermission(), loadInfoArgs.requestBlockingReason(),
-      loadingContext, loadInfoArgs.loadingEmbedderPolicy());
+      loadInfoArgs.hasStoragePermission(), loadInfoArgs.isMetaRefresh(),
+      loadInfoArgs.requestBlockingReason(), loadingContext,
+      loadInfoArgs.loadingEmbedderPolicy(), loadInfoArgs.unstrippedURI());
 
   if (loadInfoArgs.isFromProcessingFrameAttributes()) {
     loadInfo->SetIsFromProcessingFrameAttributes();
+  }
+
+  if (loadInfoArgs.isMediaRequest()) {
+    loadInfo->SetIsMediaRequest(true);
+
+    if (loadInfoArgs.isMediaInitialRequest()) {
+      loadInfo->SetIsMediaInitialRequest(true);
+    }
+  }
+
+  if (loadInfoArgs.isFromObjectOrEmbed()) {
+    loadInfo->SetIsFromObjectOrEmbed(true);
   }
 
   loadInfo.forget(outLoadInfo);
@@ -833,9 +846,11 @@ void LoadInfoToParentLoadInfoForwarder(
     cookieJarSettingsArgs = Some(args);
   }
 
+  nsCOMPtr<nsIURI> unstrippedURI;
+  Unused << aLoadInfo->GetUnstrippedURI(getter_AddRefs(unstrippedURI));
+
   *aForwarderArgsOut = ParentLoadInfoForwarderArgs(
-      aLoadInfo->GetAllowInsecureRedirectToDataURI(),
-      aLoadInfo->GetBypassCORSChecks(), ipcController, tainting,
+      aLoadInfo->GetAllowInsecureRedirectToDataURI(), ipcController, tainting,
       aLoadInfo->GetSkipContentSniffing(), aLoadInfo->GetHttpsOnlyStatus(),
       aLoadInfo->GetHasValidUserGestureActivation(),
       aLoadInfo->GetAllowDeprecatedSystemRequests(),
@@ -845,9 +860,9 @@ void LoadInfoToParentLoadInfoForwarder(
       aLoadInfo->GetDocumentHasUserInteracted(),
       aLoadInfo->GetAllowListFutureDocumentsCreatedFromThisRedirectChain(),
       cookieJarSettingsArgs, aLoadInfo->GetRequestBlockingReason(),
-      aLoadInfo->GetHasStoragePermission(),
+      aLoadInfo->GetHasStoragePermission(), aLoadInfo->GetIsMetaRefresh(),
       aLoadInfo->GetIsThirdPartyContextToTopWindow(),
-      aLoadInfo->GetIsInThirdPartyContext());
+      aLoadInfo->GetIsInThirdPartyContext(), unstrippedURI);
 }
 
 nsresult MergeParentLoadInfoForwarder(
@@ -856,9 +871,6 @@ nsresult MergeParentLoadInfoForwarder(
 
   rv = aLoadInfo->SetAllowInsecureRedirectToDataURI(
       aForwarderArgs.allowInsecureRedirectToDataURI());
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = aLoadInfo->SetBypassCORSChecks(aForwarderArgs.bypassCORSChecks());
   NS_ENSURE_SUCCESS(rv, rv);
 
   aLoadInfo->ClearController();
@@ -923,12 +935,18 @@ nsresult MergeParentLoadInfoForwarder(
       aLoadInfo->SetHasStoragePermission(aForwarderArgs.hasStoragePermission());
   NS_ENSURE_SUCCESS(rv, rv);
 
+  rv = aLoadInfo->SetIsMetaRefresh(aForwarderArgs.isMetaRefresh());
+  NS_ENSURE_SUCCESS(rv, rv);
+
   rv = aLoadInfo->SetIsThirdPartyContextToTopWindow(
       aForwarderArgs.isThirdPartyContextToTopWindow());
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = aLoadInfo->SetIsInThirdPartyContext(
       aForwarderArgs.isInThirdPartyContext());
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = aLoadInfo->SetUnstrippedURI(aForwarderArgs.unstrippedURI());
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;

@@ -159,6 +159,7 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   void NotifyWebRenderError(wr::WebRenderError aError);
   void OnInProcessDeviceReset(bool aTrackThreshold);
   void OnRemoteProcessDeviceReset(GPUProcessHost* aHost) override;
+  void OnProcessDeclaredStable() override;
   void NotifyListenersOnCompositeDeviceReset();
 
   // Notify the GPUProcessManager that a top-level PGPU protocol has been
@@ -186,7 +187,7 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   GPUChild* GetGPUChild() { return mGPUChild; }
 
   // Returns whether or not a GPU process was ever launched.
-  bool AttemptedGPUProcess() const { return mNumProcessAttempts > 0; }
+  bool AttemptedGPUProcess() const { return mTotalProcessAttempts > 0; }
 
   // Returns the process host
   GPUProcessHost* Process() { return mProcess; }
@@ -239,6 +240,11 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   // Permanently disable the GPU process and record a message why.
   void DisableGPUProcess(const char* aMessage);
 
+  // May permanently disable the GPU process and record a message why. May
+  // return false if the fallback process decided we should retry the GPU
+  // process, but only if aAllowRestart is also true.
+  bool MaybeDisableGPUProcess(const char* aMessage, bool aAllowRestart);
+
   // Shutdown the GPU process.
   void CleanShutdown();
   void DestroyProcess();
@@ -288,7 +294,10 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   uint32_t mNextNamespace;
   uint32_t mIdNamespace;
   uint32_t mResourceId;
-  uint32_t mNumProcessAttempts;
+
+  uint32_t mUnstableProcessAttempts;
+  uint32_t mTotalProcessAttempts;
+  TimeStamp mProcessAttemptLastTime;
 
   nsTArray<RefPtr<RemoteCompositorSession>> mRemoteSessions;
   nsTArray<RefPtr<InProcessCompositorSession>> mInProcessSessions;
@@ -300,6 +309,7 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   // Fields that are associated with the current GPU process.
   GPUProcessHost* mProcess;
   uint64_t mProcessToken;
+  bool mProcessStable;
   GPUChild* mGPUChild;
   RefPtr<VsyncBridgeChild> mVsyncBridge;
   // Collects any pref changes that occur during process launch (after

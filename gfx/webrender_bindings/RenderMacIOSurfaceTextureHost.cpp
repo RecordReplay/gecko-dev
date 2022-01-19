@@ -72,6 +72,10 @@ gfx::IntSize RenderMacIOSurfaceTextureHost::GetSize(
                       mSurface->GetDevicePixelHeight(aChannelIndex));
 }
 
+size_t RenderMacIOSurfaceTextureHost::Bytes() {
+  return mSurface->GetAllocSize();
+}
+
 wr::WrExternalImage RenderMacIOSurfaceTextureHost::Lock(
     uint8_t aChannelIndex, gl::GLContext* aGL, wr::ImageRendering aRendering) {
   if (mGL.get() != aGL) {
@@ -141,8 +145,10 @@ gfx::ColorDepth RenderMacIOSurfaceTextureHost::GetColorDepth() const {
   return gfx::ColorDepth::COLOR_8;
 }
 
-gfx::YUVColorSpace RenderMacIOSurfaceTextureHost::GetYUVColorSpace() const {
-  return mSurface->GetYUVColorSpace();
+gfx::YUVRangedColorSpace RenderMacIOSurfaceTextureHost::GetYUVColorSpace()
+    const {
+  return ToYUVRangedColorSpace(mSurface->GetYUVColorSpace(),
+                               mSurface->GetColorRange());
 }
 
 bool RenderMacIOSurfaceTextureHost::MapPlane(RenderCompositor* aCompositor,

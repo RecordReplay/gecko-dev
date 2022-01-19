@@ -12,14 +12,14 @@
 // Global includes
 #include <utility>
 #include "mozilla/StaticPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
 
 namespace mozilla::dom {
 
 namespace {
 
-typedef nsDataHashtable<nsCStringHashKey, LSObserver*> LSObserverHashtable;
+typedef nsTHashMap<nsCStringHashKey, LSObserver*> LSObserverHashtable;
 
 StaticAutoPtr<LSObserverHashtable> gLSObservers;
 
@@ -33,8 +33,8 @@ LSObserver::LSObserver(const nsACString& aOrigin)
     gLSObservers = new LSObserverHashtable();
   }
 
-  MOZ_ASSERT(!gLSObservers->Get(mOrigin));
-  gLSObservers->Put(mOrigin, this);
+  MOZ_ASSERT(!gLSObservers->Contains(mOrigin));
+  gLSObservers->InsertOrUpdate(mOrigin, this);
 }
 
 LSObserver::~LSObserver() {

@@ -191,9 +191,9 @@ class Selection final : public nsSupportsWeakReference,
 
  public:
   nsresult RemoveCollapsedRanges();
-  nsresult Clear(nsPresContext* aPresContext);
+  void Clear(nsPresContext* aPresContext);
   MOZ_CAN_RUN_SCRIPT nsresult CollapseInLimiter(nsINode* aContainer,
-                                                int32_t aOffset) {
+                                                uint32_t aOffset) {
     if (!aContainer) {
       return NS_ERROR_INVALID_ARG;
     }
@@ -210,8 +210,7 @@ class Selection final : public nsSupportsWeakReference,
     CollapseInternal(InLimiter::eYes, aPoint, aRv);
   }
 
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  nsresult Extend(nsINode* aContainer, int32_t aOffset);
+  MOZ_CAN_RUN_SCRIPT nsresult Extend(nsINode* aContainer, int32_t aOffset);
 
   /**
    * See mStyledRanges.mRanges.
@@ -329,11 +328,11 @@ class Selection final : public nsSupportsWeakReference,
   MOZ_CAN_RUN_SCRIPT void CollapseToStartJS(mozilla::ErrorResult& aRv);
   MOZ_CAN_RUN_SCRIPT void CollapseToEndJS(mozilla::ErrorResult& aRv);
 
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  void ExtendJS(nsINode& aContainer, uint32_t aOffset,
-                mozilla::ErrorResult& aRv);
+  MOZ_CAN_RUN_SCRIPT void ExtendJS(nsINode& aContainer, uint32_t aOffset,
+                                   mozilla::ErrorResult& aRv);
 
-  void SelectAllChildrenJS(nsINode& aNode, mozilla::ErrorResult& aRv);
+  MOZ_CAN_RUN_SCRIPT void SelectAllChildrenJS(nsINode& aNode,
+                                              mozilla::ErrorResult& aRv);
 
   /**
    * Deletes this selection from document the nodes belong to.
@@ -355,7 +354,7 @@ class Selection final : public nsSupportsWeakReference,
   MOZ_CAN_RUN_SCRIPT void RemoveRangeAndUnselectFramesAndNotifyListeners(
       nsRange& aRange, mozilla::ErrorResult& aRv);
 
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY void RemoveAllRanges(mozilla::ErrorResult& aRv);
+  MOZ_CAN_RUN_SCRIPT void RemoveAllRanges(mozilla::ErrorResult& aRv);
 
   /**
    * Whether Stringify should flush layout or not.
@@ -428,6 +427,11 @@ class Selection final : public nsSupportsWeakReference,
   }
   SelectionType Type() const { return mSelectionType; }
 
+  /**
+   * See documentation of `GetRangesForInterval` in Selection.webidl.
+   *
+   * @param aReturn references, not copies, of the internal ranges.
+   */
   void GetRangesForInterval(nsINode& aBeginNode, int32_t aBeginOffset,
                             nsINode& aEndNode, int32_t aEndOffset,
                             bool aAllowAdjacent,
@@ -456,7 +460,7 @@ class Selection final : public nsSupportsWeakReference,
    * in the given node. When the selection is collapsed, and the content
    * is focused and editable, the caret will blink there.
    * @param aContainer The given node where the selection will be set
-   * @param offset      Where in given dom node to place the selection (the
+   * @param aOffset     Where in given dom node to place the selection (the
    *                    offset into the given node)
    */
   MOZ_CAN_RUN_SCRIPT void CollapseInLimiter(nsINode& aContainer,
@@ -504,8 +508,8 @@ class Selection final : public nsSupportsWeakReference,
    * @param aOffset    Where in aContainer to place the offset of the new
    *                   selection end.
    */
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  void Extend(nsINode& aContainer, uint32_t aOffset, ErrorResult& aRv);
+  MOZ_CAN_RUN_SCRIPT void Extend(nsINode& aContainer, uint32_t aOffset,
+                                 ErrorResult& aRv);
 
   MOZ_CAN_RUN_SCRIPT void AddRangeAndSelectFramesAndNotifyListeners(
       nsRange& aRange, mozilla::ErrorResult& aRv);
@@ -514,8 +518,8 @@ class Selection final : public nsSupportsWeakReference,
    * Adds all children of the specified node to the selection.
    * @param aNode the parent of the children to be added to the selection.
    */
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  void SelectAllChildren(nsINode& aNode, mozilla::ErrorResult& aRv);
+  MOZ_CAN_RUN_SCRIPT void SelectAllChildren(nsINode& aNode,
+                                            mozilla::ErrorResult& aRv);
 
   /**
    * SetStartAndEnd() removes all ranges and sets new range as given range.
@@ -555,6 +559,10 @@ class Selection final : public nsSupportsWeakReference,
     SetStartAndEndInLimiter(RawRangeBoundary(&aStartContainer, aStartOffset),
                             RawRangeBoundary(&aEndContainer, aEndOffset), aRv);
   }
+  MOZ_CAN_RUN_SCRIPT
+  Result<Ok, nsresult> SetStartAndEndInLimiter(
+      nsINode& aStartContainer, uint32_t aStartOffset, nsINode& aEndContainer,
+      uint32_t aEndOffset, nsDirection aDirection, int16_t aReason);
 
   /**
    * SetBaseAndExtent() is alternative of the JS API for internal use.
@@ -692,11 +700,13 @@ class Selection final : public nsSupportsWeakReference,
 
   SelectionCustomColors* GetCustomColors() const { return mCustomColors.get(); }
 
-  MOZ_CAN_RUN_SCRIPT nsresult NotifySelectionListeners(bool aCalledByJS);
-  MOZ_CAN_RUN_SCRIPT nsresult NotifySelectionListeners();
+  MOZ_CAN_RUN_SCRIPT void NotifySelectionListeners(bool aCalledByJS);
+  MOZ_CAN_RUN_SCRIPT void NotifySelectionListeners();
 
   friend struct AutoUserInitiated;
   struct MOZ_RAII AutoUserInitiated {
+    explicit AutoUserInitiated(Selection& aSelectionRef)
+        : AutoUserInitiated(&aSelectionRef) {}
     explicit AutoUserInitiated(Selection* aSelection)
         : mSavedValue(aSelection->mUserInitiated) {
       aSelection->mUserInitiated = true;
@@ -860,7 +870,7 @@ class Selection final : public nsSupportsWeakReference,
      */
     Element* GetCommonEditingHost() const;
 
-    MOZ_CAN_RUN_SCRIPT_BOUNDARY void MaybeFocusCommonEditingHost(
+    MOZ_CAN_RUN_SCRIPT void MaybeFocusCommonEditingHost(
         PresShell* aPresShell) const;
 
     static nsresult SubtractRange(StyledRange& aRange, nsRange& aSubtract,
@@ -925,10 +935,15 @@ class Selection final : public nsSupportsWeakReference,
 class MOZ_STACK_CLASS SelectionBatcher final {
  private:
   RefPtr<Selection> mSelection;
+  int16_t mReason;
 
  public:
-  explicit SelectionBatcher(Selection* aSelection) {
+  explicit SelectionBatcher(Selection& aSelectionRef)
+      : SelectionBatcher(&aSelectionRef) {}
+  explicit SelectionBatcher(Selection* aSelection,
+                            int16_t aReason = nsISelectionListener::NO_REASON) {
     mSelection = aSelection;
+    mReason = aReason;
     if (mSelection) {
       mSelection->StartBatchChanges();
     }
@@ -936,31 +951,33 @@ class MOZ_STACK_CLASS SelectionBatcher final {
 
   ~SelectionBatcher() {
     if (mSelection) {
-      mSelection->EndBatchChanges();
+      mSelection->EndBatchChanges(mReason);
     }
   }
 };
 
 class MOZ_RAII AutoHideSelectionChanges final {
- private:
-  RefPtr<Selection> mSelection;
-
  public:
   explicit AutoHideSelectionChanges(const nsFrameSelection* aFrame);
 
-  explicit AutoHideSelectionChanges(Selection* aSelection)
-      : mSelection(aSelection) {
-    mSelection = aSelection;
-    if (mSelection) {
-      mSelection->AddSelectionChangeBlocker();
-    }
-  }
+  explicit AutoHideSelectionChanges(Selection& aSelectionRef)
+      : AutoHideSelectionChanges(&aSelectionRef) {}
 
   ~AutoHideSelectionChanges() {
     if (mSelection) {
       mSelection->RemoveSelectionChangeBlocker();
     }
   }
+
+ private:
+  explicit AutoHideSelectionChanges(Selection* aSelection)
+      : mSelection(aSelection) {
+    if (mSelection) {
+      mSelection->AddSelectionChangeBlocker();
+    }
+  }
+
+  RefPtr<Selection> mSelection;
 };
 
 }  // namespace dom

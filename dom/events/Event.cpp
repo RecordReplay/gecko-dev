@@ -17,6 +17,7 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
+#include "mozilla/PointerLockManager.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/TextEvents.h"
@@ -517,7 +518,7 @@ WidgetEvent* Event::WidgetEventPtr() { return mEvent; }
 CSSIntPoint Event::GetScreenCoords(nsPresContext* aPresContext,
                                    WidgetEvent* aEvent,
                                    LayoutDeviceIntPoint aPoint) {
-  if (EventStateManager::sIsPointerLocked) {
+  if (PointerLockManager::IsLocked()) {
     return EventStateManager::sLastScreenPoint;
   }
 
@@ -587,7 +588,7 @@ CSSIntPoint Event::GetClientCoords(nsPresContext* aPresContext,
                                    WidgetEvent* aEvent,
                                    LayoutDeviceIntPoint aPoint,
                                    CSSIntPoint aDefaultPoint) {
-  if (EventStateManager::sIsPointerLocked) {
+  if (PointerLockManager::IsLocked()) {
     return EventStateManager::sLastClientPoint;
   }
 
@@ -666,11 +667,11 @@ CSSIntPoint Event::GetOffsetCoords(nsPresContext* aPresContext,
 // To be called ONLY by Event::GetType (which has the additional
 // logic for handling user-defined events).
 // static
-const char* Event::GetEventName(EventMessage aEventType) {
+const char16_t* Event::GetEventName(EventMessage aEventType) {
   switch (aEventType) {
 #define MESSAGE_TO_EVENT(name_, _message, _type, _struct) \
   case _message:                                          \
-    return #name_;
+    return u"" #name_;
 #include "mozilla/EventNameList.h"
 #undef MESSAGE_TO_EVENT
     default:
@@ -827,10 +828,10 @@ void Event::GetWidgetEventType(WidgetEvent* aEvent, nsAString& aType) {
     return;
   }
 
-  const char* name = GetEventName(aEvent->mMessage);
+  const char16_t* name = GetEventName(aEvent->mMessage);
 
   if (name) {
-    CopyASCIItoUTF16(mozilla::MakeStringSpan(name), aType);
+    aType.Assign(name);
     return;
   } else if (aEvent->mMessage == eUnidentifiedEvent &&
              aEvent->mSpecifiedEventType) {

@@ -4,7 +4,9 @@
 
 "use strict";
 
-ChromeUtils.import("resource:///modules/SitePermissions.jsm", this);
+const { SitePermissions } = ChromeUtils.import(
+  "resource:///modules/SitePermissions.jsm"
+);
 
 function newPrincipal(origin) {
   return Services.scriptSecurityManager.createContentPrincipalFromOrigin(
@@ -75,7 +77,7 @@ add_task(async function testTemporaryPermissionTabURLs() {
         );
       }
 
-      SitePermissions.clearTemporaryPermissions(browser);
+      SitePermissions.clearTemporaryBlockPermissions(browser);
     }
 
     for (let principal of different) {
@@ -124,7 +126,7 @@ add_task(async function testTemporaryPermissionTabURLs() {
         }
       }
 
-      SitePermissions.clearTemporaryPermissions(browser);
+      SitePermissions.clearTemporaryBlockPermissions(browser);
     }
   });
 });

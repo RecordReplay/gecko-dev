@@ -47,7 +47,7 @@ this.ContentSearchUIController = (function() {
     this._idPrefix = idPrefix;
     this._healthReportKey = healthReportKey;
     this._searchPurpose = searchPurpose;
-    this._isPrivateWindow = false;
+    this._isPrivateEngine = false;
 
     let tableID = idPrefix + "searchSuggestionTable";
     this.input.autocomplete = "off";
@@ -88,7 +88,7 @@ this.ContentSearchUIController = (function() {
       if (engine.iconData) {
         icon = this._getFaviconURIFromIconData(engine.iconData);
       } else {
-        icon = "chrome://mozapps/skin/places/defaultFavicon.svg";
+        icon = "chrome://global/skin/icons/defaultFavicon.svg";
       }
       this._defaultEngine = {
         name: engine.name,
@@ -636,13 +636,13 @@ this.ContentSearchUIController = (function() {
     _onMsgState(state) {
       // Not all state messages broadcast the windows' privateness info.
       if ("isPrivateWindow" in state) {
-        this._isPrivateWindow = state.isPrivateWindow;
+        this._isPrivateEngine = state.isPrivateEngine;
       }
 
       this.engines = state.engines;
 
       let currentEngine = state.currentEngine;
-      if (this._isPrivateWindow) {
+      if (this._isPrivateEngine) {
         currentEngine = state.currentPrivateEngine;
       }
 
@@ -662,7 +662,7 @@ this.ContentSearchUIController = (function() {
     },
 
     _onMsgCurrentEngine(engine) {
-      if (this._isPrivateWindow) {
+      if (this._isPrivateEngine) {
         return;
       }
       this.defaultEngine = engine;
@@ -670,7 +670,7 @@ this.ContentSearchUIController = (function() {
     },
 
     _onMsgCurrentPrivateEngine(engine) {
-      if (!this._isPrivateWindow) {
+      if (!this._isPrivateEngine) {
         return;
       }
       this.defaultEngine = engine;
@@ -691,7 +691,7 @@ this.ContentSearchUIController = (function() {
       // a default. xref https://bugzilla.mozilla.org/show_bug.cgi?id=1449338#c19
       let icon = this.defaultEngine.isAppProvided
         ? this.defaultEngine.icon
-        : "chrome://browser/skin/search-glass.svg";
+        : "chrome://global/skin/icons/search-glass.svg";
 
       document.body.style.setProperty(
         "--newtab-search-icon",
@@ -993,7 +993,7 @@ this.ContentSearchUIController = (function() {
         );
         button.appendChild(img);
         button.style.width = buttonWidth + "px";
-        button.setAttribute("title", engine.name);
+        button.setAttribute("engine-name", engine.name);
 
         button.engineName = engine.name;
         button.addEventListener("click", this);

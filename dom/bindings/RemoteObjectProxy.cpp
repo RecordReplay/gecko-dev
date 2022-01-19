@@ -14,9 +14,9 @@ namespace mozilla::dom {
 
 bool RemoteObjectProxyBase::getOwnPropertyDescriptor(
     JSContext* aCx, JS::Handle<JSObject*> aProxy, JS::Handle<jsid> aId,
-    JS::MutableHandle<JS::PropertyDescriptor> aDesc) const {
+    JS::MutableHandle<Maybe<JS::PropertyDescriptor>> aDesc) const {
   bool ok = CrossOriginGetOwnPropertyHelper(aCx, aProxy, aId, aDesc);
-  if (!ok || aDesc.object()) {
+  if (!ok || aDesc.isSome()) {
     return ok;
   }
 
@@ -132,8 +132,7 @@ void RemoteObjectProxyBase::GetOrCreateProxyObject(
   xpc::CompartmentPrivate* priv =
       xpc::CompartmentPrivate::Get(JS::CurrentGlobalOrNull(aCx));
   xpc::CompartmentPrivate::RemoteProxyMap& map = priv->GetRemoteProxyMap();
-  auto result = map.lookupForAdd(aNative);
-  if (result) {
+  if (auto result = map.lookup(aNative)) {
     MOZ_ASSERT(!aTransplantTo,
                "No existing value allowed if we're doing a transplant");
 
@@ -170,7 +169,7 @@ void RemoteObjectProxyBase::GetOrCreateProxyObject(
   // the middle of a transplant.
   MOZ_ASSERT_IF(aTransplantTo, JS::GetClass(aTransplantTo) != aClasp);
 
-  if (!map.add(result, aNative, aTransplantTo ? aTransplantTo : obj)) {
+  if (!map.put(aNative, aTransplantTo ? aTransplantTo : obj)) {
     return;
   }
 

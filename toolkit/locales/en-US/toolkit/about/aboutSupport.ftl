@@ -64,6 +64,7 @@ app-basics-rosetta = Rosetta Translated
 app-basics-memory-use = Memory Use
 app-basics-performance = Performance
 app-basics-service-workers = Registered Service Workers
+app-basics-third-party = Third-party Modules
 app-basics-profiles = Profiles
 app-basics-launcher-process-status = Launcher Process
 app-basics-multi-process-support = Multiprocess Windows
@@ -127,12 +128,12 @@ sandbox-sys-call-tid = TID
 sandbox-sys-call-proc-type = Process Type
 sandbox-sys-call-number = Syscall
 sandbox-sys-call-args = Arguments
-safe-mode-title = Try Safe Mode
-restart-in-safe-mode-label = Restart with Add-ons Disabled…
+troubleshoot-mode-title = Diagnose issues
+restart-in-troubleshoot-mode-label = Troubleshoot Mode…
 clear-startup-cache-title = Try clearing the startup cache
 clear-startup-cache-label = Clear startup cache…
-startup-cache-dialog-title = Clear startup cache
-startup-cache-dialog-body = Restart { -brand-short-name } to clear startup cache. This will not change your settings or remove extensions you’ve added to { -brand-short-name }.
+startup-cache-dialog-title2 = Restart { -brand-short-name } to clear startup cache?
+startup-cache-dialog-body2 = This will not change your settings or remove extensions.
 restart-button-label = Restart
 
 ## Media titles
@@ -156,6 +157,7 @@ media-device-latency = Latency
 media-capabilities-title = Media Capabilities
 # List all the entries of the database.
 media-capabilities-enumerate = Enumerate database
+
 ##
 
 intl-title = Internationalization & Localization
@@ -180,38 +182,8 @@ intl-regional-prefs = Regional Preferences
 remote-debugging-title = Remote Debugging (Chromium Protocol)
 remote-debugging-accepting-connections = Accepting Connections
 remote-debugging-url = URL
-##
 
-support-third-party-modules-title = Third-Party Modules
-support-third-party-modules-module = Module File
-support-third-party-modules-version = File Version
-support-third-party-modules-vendor = Vendor Info
-support-third-party-modules-occurrence = Occurrence
-support-third-party-modules-process = Process Type & ID
-support-third-party-modules-thread = Thread
-support-third-party-modules-base = Imagebase Address
-support-third-party-modules-uptime = Process Uptime (ms)
-support-third-party-modules-duration = Loading Duration (ms)
-support-third-party-modules-status = Status
-support-third-party-modules-status-loaded = Loaded
-support-third-party-modules-status-blocked = Blocked
-support-third-party-modules-status-redirected = Redirected
-support-third-party-modules-empty = No third-party modules were loaded.
-support-third-party-modules-no-value = (No value)
-support-third-party-modules-button-open =
-    .title = Open file location…
-support-third-party-modules-expand =
-    .title = Show detailed information
-support-third-party-modules-collapse =
-    .title = Collapse detailed information
-support-third-party-modules-unsigned-icon =
-    .title = This module is not signed
-support-third-party-modules-folder-icon =
-    .title = Open file location…
-support-third-party-modules-down-icon =
-    .title = Show detailed information
-support-third-party-modules-up-icon =
-    .title = Collapse detailed information
+##
 
 # Variables
 # $days (Integer) - Number of days of crashes to log
@@ -257,6 +229,7 @@ raw-data-copied = Raw data copied to clipboard
 text-copied = Text copied to clipboard
 
 ## The verb "blocked" here refers to a graphics feature such as "Direct2D" or "OpenGL layers".
+
 blocked-driver = Blocked for your graphics driver version.
 blocked-gfx-card = Blocked for your graphics card because of unresolved driver issues.
 blocked-os-version = Blocked for your operating system version.
@@ -280,6 +253,7 @@ virtual-monitor-disp = Virtual Monitor Display
 ## The following strings indicate if an API key has been found.
 ## In some development versions, it's expected for some API keys that they are
 ## not found.
+
 found = Found
 missing = Missing
 
@@ -339,6 +313,7 @@ can-sandbox-content = Content Process Sandboxing
 can-sandbox-media = Media Plugin Sandboxing
 content-sandbox-level = Content Process Sandbox Level
 effective-content-sandbox-level = Effective Content Process Sandbox Level
+content-win32k-lockdown-state = Win32k Lockdown State for Content Process
 sandbox-proc-type-content = content
 sandbox-proc-type-file = file content
 sandbox-proc-type-media-plugin = media plugin
@@ -373,6 +348,7 @@ fission-status-disabled-by-default = Disabled by default
 fission-status-enabled-by-user-pref = Enabled by user
 fission-status-disabled-by-user-pref = Disabled by user
 fission-status-disabled-by-e10s-other = E10s disabled
+fission-status-enabled-by-rollout = Enabled by phased rollout
 
 async-pan-zoom = Asynchronous Pan/Zoom
 apz-none = none
@@ -385,10 +361,12 @@ zooming-enabled = smooth pinch-zoom enabled
 
 ## Variables
 ## $preferenceKey (string) - String ID of preference
+
 wheel-warning = async wheel input disabled due to unsupported pref: { $preferenceKey }
 touch-warning = async touch input disabled due to unsupported pref: { $preferenceKey }
 
 ## Strings representing the status of the Enterprise Policies engine.
+
 policies-inactive = Inactive
 policies-active = Active
 policies-error = Error
@@ -401,3 +379,14 @@ support-printing-clear-settings-button = Clear saved print settings
 support-printing-modified-settings = Modified print settings
 support-printing-prefs-name = Name
 support-printing-prefs-value = Value
+
+## Normandy sections
+
+support-remote-experiments-title = Remote Experiments
+support-remote-experiments-name = Name
+support-remote-experiments-branch = Experiment Branch
+support-remote-experiments-see-about-studies = See <a data-l10n-name="support-about-studies-link">about:studies</a> for more information, including how to disable individual experiments or to disable { -brand-short-name } from running this type of experiment in the future.
+
+support-remote-features-title = Remote Features
+support-remote-features-name = Name
+support-remote-features-status = Status

@@ -17,6 +17,9 @@ namespace js {
 namespace jit {
 
 class ICEntry;
+class ICStub;
+class ICCacheIRStub;
+class ICFallbackStub;
 
 // [SMDOC] CacheIR Health Report
 //
@@ -31,15 +34,17 @@ class ICEntry;
 //
 // There are a few ways to generate a health report for a script:
 // 1. Simply running a JS program with the evironment variable
-//    SPEW=RateMyCacheIR. We generate a health report for a script whenever we
-//    reach the trial inlining threshold.
-//      ex) SPEW=RateMyCacheIR dist/bin/js jsprogram.js
-// 2. In the shell you can call rateMyCacheIR() with no arguments and a report
+//    SPEW=CacheIRHealthReport. We generate a health report for a script
+//    whenever we reach the trial inlining threshold.
+//      ex) SPEW=CacheIRHealthReport dist/bin/js jsprogram.js
+// 2. In the shell you can call cacheIRHealthReport() with no arguments and a
+// report
 //    will be generated for all scripts in the current zone.
-//      ex) rateMyCacheIR()
-// 3. You may also call rateMyCacheIR() on a particular function to see the
+//      ex) cacheIRHealthReport()
+// 3. You may also call cacheIRHealthReport() on a particular function to see
+// the
 //    health report associated with that function's script.
-//      ex) rateMyCacheIR(foo)
+//      ex) cacheIRHealthReport(foo)
 //
 // Once you have generated a health report, you may go to
 // https://carolinecullen.github.io/cacheirhealthreport/ to visualize the data
@@ -57,14 +62,15 @@ class CacheIRHealth {
   Happiness determineStubHappiness(uint32_t stubHealthScore);
   // Health of an individual stub.
   Happiness spewStubHealth(AutoStructuredSpewer& spew, ICCacheIRStub* stub);
+  // If there is more than just a fallback stub in an IC Entry, then additional
+  // information about the IC entry.
+  bool spewNonFallbackICInformation(AutoStructuredSpewer& spew,
+                                    ICStub* firstStub,
+                                    Happiness* entryHappiness);
   // Health of all the stubs in an individual CacheIR Entry.
-  Happiness spewHealthForStubsInCacheIREntry(AutoStructuredSpewer& spew,
-                                             ICEntry* entry);
-  // Show JSOps present in the script, formatted for CacheIR
-  // health report.
-  Happiness spewJSOpAndCacheIRHealth(AutoStructuredSpewer& spew,
-                                     HandleScript script, jit::ICEntry* entry,
-                                     jsbytecode* pc, JSOp op);
+  bool spewICEntryHealth(AutoStructuredSpewer& spew, HandleScript script,
+                         ICEntry* entry, ICFallbackStub* fallback,
+                         jsbytecode* pc, JSOp op, Happiness* entryHappiness);
 
  public:
   // Spews the final hit count for scripts where we care about its final hit
@@ -72,11 +78,13 @@ class CacheIRHealth {
   void spewScriptFinalWarmUpCount(JSContext* cx, const char* filename,
                                   JSScript* script, uint32_t warmUpCount);
   // Spew the health of a particular ICEntry only.
-  void rateIC(JSContext* cx, ICEntry* entry, HandleScript script,
-              SpewContext context);
+  void healthReportForIC(JSContext* cx, ICEntry* entry,
+                         ICFallbackStub* fallback, HandleScript script,
+                         SpewContext context);
   // If a JitScript exists, spew the health of all ICEntries that exist
   // for the specified script.
-  void rateScript(JSContext* cx, HandleScript script, SpewContext context);
+  void healthReportForScript(JSContext* cx, HandleScript script,
+                             SpewContext context);
 };
 
 }  // namespace jit

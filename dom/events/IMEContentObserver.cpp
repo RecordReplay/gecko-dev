@@ -163,6 +163,10 @@ void IMEContentObserver::Init(nsIWidget& aWidget, nsPresContext& aPresContext,
   mIMENotificationRequests = &mWidget->IMENotificationRequestsRef();
 
   if (!InitWithEditor(aPresContext, aContent, aEditorBase)) {
+    MOZ_LOG(sIMECOLog, LogLevel::Debug,
+            ("0x%p IMEContentObserver::Init() FAILED, due to InitWithEditor() "
+             "failure",
+             this));
     Clear();
     return;
   }
@@ -713,10 +717,10 @@ bool IMEContentObserver::OnMouseButtonEvent(nsPresContext* aPresContext,
   notification.mMouseButtonEventData.mEventMessage = aMouseEvent->mMessage;
   notification.mMouseButtonEventData.mOffset =
       queryCharAtPointEvent.mReply->StartOffset();
-  notification.mMouseButtonEventData.mCursorPos.Set(
-      queryCharAtPointEvent.mRefPoint.ToUnknownPoint());
-  notification.mMouseButtonEventData.mCharRect.Set(
-      queryCharAtPointEvent.mReply->mRect.ToUnknownRect());
+  notification.mMouseButtonEventData.mCursorPos =
+      queryCharAtPointEvent.mRefPoint;
+  notification.mMouseButtonEventData.mCharRect =
+      queryCharAtPointEvent.mReply->mRect;
   notification.mMouseButtonEventData.mButton = aMouseEvent->mButton;
   notification.mMouseButtonEventData.mButtons = aMouseEvent->mButtons;
   notification.mMouseButtonEventData.mModifiers = aMouseEvent->mModifiers;
@@ -735,7 +739,10 @@ bool IMEContentObserver::OnMouseButtonEvent(nsPresContext* aPresContext,
 
 void IMEContentObserver::CharacterDataWillChange(
     nsIContent* aContent, const CharacterDataChangeInfo& aInfo) {
-  NS_ASSERTION(aContent->IsText(), "character data changed for non-text node");
+  if (!aContent->IsText()) {
+    return;  // Ignore if it's a comment node or something other invisible data
+             // node.
+  }
   MOZ_ASSERT(mPreCharacterDataChangeLength < 0,
              "CharacterDataChanged() should've reset "
              "mPreCharacterDataChangeLength");
@@ -763,7 +770,10 @@ void IMEContentObserver::CharacterDataWillChange(
 
 void IMEContentObserver::CharacterDataChanged(
     nsIContent* aContent, const CharacterDataChangeInfo& aInfo) {
-  NS_ASSERTION(aContent->IsText(), "character data changed for non-text node");
+  if (!aContent->IsText()) {
+    return;  // Ignore if it's a comment node or something other invisible data
+             // node.
+  }
 
   if (!NeedsTextChangeNotification() ||
       !nsContentUtils::IsInSameAnonymousTree(mRootContent, aContent)) {

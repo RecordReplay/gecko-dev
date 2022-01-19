@@ -2,9 +2,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-template <typename P>
+template <bool COMPOSITE, typename P>
+static inline void copy_row(P* dst, const P* src, int span) {
+  // No scaling, so just do a fast copy.
+  memcpy(dst, src, span * sizeof(P));
+}
+
+template <>
+void copy_row<true, uint32_t>(uint32_t* dst, const uint32_t* src, int span) {
+  // No scaling, so just do a fast composite.
+  auto* end = dst + span;
+  while (dst + 4 <= end) {
+    WideRGBA8 srcpx = unpack(unaligned_load<PackedRGBA8>(src));
+    WideRGBA8 dstpx = unpack(unaligned_load<PackedRGBA8>(dst));
+    PackedRGBA8 r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
+    unaligned_store(dst, r);
+    src += 4;
+    dst += 4;
+  }
+  if (dst < end) {
+    WideRGBA8 srcpx = unpack(partial_load_span<PackedRGBA8>(src, end - dst));
+    WideRGBA8 dstpx = unpack(partial_load_span<PackedRGBA8>(dst, end - dst));
+    auto r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
+    partial_store_span(dst, r, end - dst);
+  }
+}
+
+template <bool COMPOSITE, typename P>
 static inline void scale_row(P* dst, int dstWidth, const P* src, int srcWidth,
                              int span, int frac) {
+  // Do scaling with different source and dest widths.
   for (P* end = dst + span; dst < end; dst++) {
     *dst = *src;
     // Step source according to width ratio.
@@ -14,74 +41,132 @@ static inline void scale_row(P* dst, int dstWidth, const P* src, int srcWidth,
   }
 }
 
+template <>
+void scale_row<true, uint32_t>(uint32_t* dst, int dstWidth, const uint32_t* src,
+                               int srcWidth, int span, int frac) {
+  // Do scaling with different source and dest widths.
+  // Gather source pixels four at a time for better packing.
+  auto* end = dst + span;
+  for (; dst + 4 <= end; dst += 4) {
+    U32 srcn;
+    srcn.x = *src;
+    for (frac += srcWidth; frac >= dstWidth; frac -= dstWidth) {
+      src++;
+    }
+    srcn.y = *src;
+    for (frac += srcWidth; frac >= dstWidth; frac -= dstWidth) {
+      src++;
+    }
+    srcn.z = *src;
+    for (frac += srcWidth; frac >= dstWidth; frac -= dstWidth) {
+      src++;
+    }
+    srcn.w = *src;
+    for (frac += srcWidth; frac >= dstWidth; frac -= dstWidth) {
+      src++;
+    }
+    WideRGBA8 srcpx = unpack(bit_cast<PackedRGBA8>(srcn));
+    WideRGBA8 dstpx = unpack(unaligned_load<PackedRGBA8>(dst));
+    PackedRGBA8 r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
+    unaligned_store(dst, r);
+  }
+  if (dst < end) {
+    // Process any remaining pixels. Try to gather as many pixels as possible
+    // into a single source chunk for compositing.
+    U32 srcn = {*src, 0, 0, 0};
+    if (end - dst > 1) {
+      for (frac += srcWidth; frac >= dstWidth; frac -= dstWidth) {
+        src++;
+      }
+      srcn.y = *src;
+      if (end - dst > 2) {
+        for (frac += srcWidth; frac >= dstWidth; frac -= dstWidth) {
+          src++;
+        }
+        srcn.z = *src;
+      }
+    }
+    WideRGBA8 srcpx = unpack(bit_cast<PackedRGBA8>(srcn));
+    WideRGBA8 dstpx = unpack(partial_load_span<PackedRGBA8>(dst, end - dst));
+    auto r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
+    partial_store_span(dst, r, end - dst);
+  }
+}
+
+template <bool COMPOSITE = false>
 static NO_INLINE void scale_blit(Texture& srctex, const IntRect& srcReq,
-                                 int srcZ, Texture& dsttex,
-                                 const IntRect& dstReq, int dstZ, bool invertY,
-                                 const IntRect& clipRect) {
+                                 Texture& dsttex, const IntRect& dstReq,
+                                 bool invertY, const IntRect& clipRect) {
+  assert(!COMPOSITE || (srctex.internal_format == GL_RGBA8 &&
+                        dsttex.internal_format == GL_RGBA8));
   // Cache scaling ratios
   int srcWidth = srcReq.width();
   int srcHeight = srcReq.height();
   int dstWidth = dstReq.width();
   int dstHeight = dstReq.height();
   // Compute valid dest bounds
-  IntRect dstBounds = dsttex.sample_bounds(dstReq);
+  IntRect dstBounds = dsttex.sample_bounds(dstReq).intersect(clipRect);
   // Compute valid source bounds
-  // Scale source to dest, rounding inward to avoid sampling outside source
-  IntRect srcBounds = srctex.sample_bounds(srcReq, invertY).scale(
-      srcWidth, srcHeight, dstWidth, dstHeight, true);
-  // Limit dest sampling bounds to overlap source bounds
-  dstBounds.intersect(srcBounds);
-  // Compute the clipped bounds, relative to dstBounds.
-  IntRect clippedDest = dstBounds.intersection(clipRect) - dstBounds.origin();
+  IntRect srcBounds = srctex.sample_bounds(srcReq, invertY);
+  // If srcReq is outside the source texture, we need to clip the sampling
+  // bounds so that we never sample outside valid source bounds. Get texture
+  // bounds relative to srcReq and scale to dest-space rounding inward, using
+  // this rect to limit the dest bounds further.
+  IntRect srcClip = srctex.bounds() - srcReq.origin();
+  if (invertY) {
+    srcClip.invert_y(srcReq.height());
+  }
+  srcClip.scale(srcWidth, srcHeight, dstWidth, dstHeight, true);
+  dstBounds.intersect(srcClip);
   // Check if clipped sampling bounds are empty
-  if (clippedDest.is_empty()) {
+  if (dstBounds.is_empty()) {
     return;
   }
-  // Compute final source bounds from clamped dest sampling bounds
-  srcBounds =
-      IntRect(dstBounds).scale(dstWidth, dstHeight, srcWidth, srcHeight);
+
   // Calculate source and dest pointers from clamped offsets
   int bpp = srctex.bpp();
   int srcStride = srctex.stride();
   int destStride = dsttex.stride();
-  char* dest = dsttex.sample_ptr(dstReq, dstBounds, dstZ);
-  char* src = srctex.sample_ptr(srcReq, srcBounds, srcZ, invertY);
+  char* dest = dsttex.sample_ptr(dstReq, dstBounds);
+  // Clip the source bounds by the destination offset.
+  int fracX = srcWidth * dstBounds.x0;
+  int fracY = srcHeight * dstBounds.y0;
+  srcBounds.x0 = max(fracX / dstWidth, srcBounds.x0);
+  srcBounds.y0 = max(fracY / dstHeight, srcBounds.y0);
+  fracX %= dstWidth;
+  fracY %= dstHeight;
+  char* src = srctex.sample_ptr(srcReq, srcBounds, invertY);
   // Inverted Y must step downward along source rows
   if (invertY) {
     srcStride = -srcStride;
   }
-  int span = clippedDest.width();
-  int fracX = srcWidth * clippedDest.x0;
-  int fracY = srcHeight * clippedDest.y0;
-  dest += destStride * clippedDest.y0;
-  dest += bpp * clippedDest.x0;
-  src += srcStride * (fracY / dstHeight);
-  src += bpp * (fracX / dstWidth);
-  fracY %= dstHeight;
-  fracX %= dstWidth;
-  for (int rows = clippedDest.height(); rows > 0; rows--) {
-    if (srcWidth == dstWidth) {
-      // No scaling, so just do a fast copy.
-      memcpy(dest, src, span * bpp);
-    } else {
-      // Do scaling with different source and dest widths.
-      switch (bpp) {
-        case 1:
-          scale_row((uint8_t*)dest, dstWidth, (uint8_t*)src, srcWidth, span,
-                    fracX);
-          break;
-        case 2:
-          scale_row((uint16_t*)dest, dstWidth, (uint16_t*)src, srcWidth, span,
-                    fracX);
-          break;
-        case 4:
-          scale_row((uint32_t*)dest, dstWidth, (uint32_t*)src, srcWidth, span,
-                    fracX);
-          break;
-        default:
-          assert(false);
-          break;
-      }
+  int span = dstBounds.width();
+  for (int rows = dstBounds.height(); rows > 0; rows--) {
+    switch (bpp) {
+      case 1:
+        if (srcWidth == dstWidth)
+          copy_row<COMPOSITE>((uint8_t*)dest, (uint8_t*)src, span);
+        else
+          scale_row<COMPOSITE>((uint8_t*)dest, dstWidth, (uint8_t*)src,
+                               srcWidth, span, fracX);
+        break;
+      case 2:
+        if (srcWidth == dstWidth)
+          copy_row<COMPOSITE>((uint16_t*)dest, (uint16_t*)src, span);
+        else
+          scale_row<COMPOSITE>((uint16_t*)dest, dstWidth, (uint16_t*)src,
+                               srcWidth, span, fracX);
+        break;
+      case 4:
+        if (srcWidth == dstWidth)
+          copy_row<COMPOSITE>((uint32_t*)dest, (uint32_t*)src, span);
+        else
+          scale_row<COMPOSITE>((uint32_t*)dest, dstWidth, (uint32_t*)src,
+                               srcWidth, span, fracX);
+        break;
+      default:
+        assert(false);
+        break;
     }
     dest += destStride;
     // Step source according to height ratio.
@@ -91,121 +176,28 @@ static NO_INLINE void scale_blit(Texture& srctex, const IntRect& srcReq,
   }
 }
 
+template <bool COMPOSITE>
 static void linear_row_blit(uint32_t* dest, int span, const vec2_scalar& srcUV,
-                            float srcDU, int srcZOffset,
-                            sampler2DArray sampler) {
+                            float srcDU, sampler2D sampler) {
   vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
   for (; span >= 4; span -= 4) {
-    auto srcpx = textureLinearPackedRGBA8(sampler, ivec2(uv), srcZOffset);
+    auto srcpx = textureLinearPackedRGBA8(sampler, ivec2(uv));
     unaligned_store(dest, srcpx);
     dest += 4;
     uv.x += 4 * srcDU;
   }
   if (span > 0) {
-    auto srcpx = textureLinearPackedRGBA8(sampler, ivec2(uv), srcZOffset);
+    auto srcpx = textureLinearPackedRGBA8(sampler, ivec2(uv));
     partial_store_span(dest, srcpx, span);
   }
 }
 
-static void linear_row_blit(uint8_t* dest, int span, const vec2_scalar& srcUV,
-                            float srcDU, int srcZOffset,
-                            sampler2DArray sampler) {
+template <>
+void linear_row_blit<true>(uint32_t* dest, int span, const vec2_scalar& srcUV,
+                           float srcDU, sampler2D sampler) {
   vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
   for (; span >= 4; span -= 4) {
-    auto srcpx = textureLinearPackedR8(sampler, ivec2(uv), srcZOffset);
-    unaligned_store(dest, srcpx);
-    dest += 4;
-    uv.x += 4 * srcDU;
-  }
-  if (span > 0) {
-    auto srcpx = textureLinearPackedR8(sampler, ivec2(uv), srcZOffset);
-    partial_store_span(dest, srcpx, span);
-  }
-}
-
-static void linear_row_blit(uint16_t* dest, int span, const vec2_scalar& srcUV,
-                            float srcDU, int srcZOffset,
-                            sampler2DArray sampler) {
-  vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
-  for (; span >= 4; span -= 4) {
-    auto srcpx = textureLinearPackedRG8(sampler, ivec2(uv), srcZOffset);
-    unaligned_store(dest, srcpx);
-    dest += 4;
-    uv.x += 4 * srcDU;
-  }
-  if (span > 0) {
-    auto srcpx = textureLinearPackedRG8(sampler, ivec2(uv), srcZOffset);
-    partial_store_span(dest, srcpx, span);
-  }
-}
-
-static NO_INLINE void linear_blit(Texture& srctex, const IntRect& srcReq,
-                                  int srcZ, Texture& dsttex,
-                                  const IntRect& dstReq, int dstZ, bool invertY,
-                                  const IntRect& clipRect) {
-  assert(srctex.internal_format == GL_RGBA8 ||
-         srctex.internal_format == GL_R8 || srctex.internal_format == GL_RG8);
-  // Compute valid dest bounds
-  IntRect dstBounds = dsttex.sample_bounds(dstReq);
-  dstBounds.intersect(clipRect);
-  // Check if sampling bounds are empty
-  if (dstBounds.is_empty()) {
-    return;
-  }
-  // Initialize sampler for source texture
-  sampler2DArray_impl sampler;
-  init_sampler(&sampler, srctex);
-  init_depth(&sampler, srctex);
-  sampler.filter = TextureFilter::LINEAR;
-  // Compute source UVs
-  int srcZOffset = srcZ * sampler.height_stride;
-  vec2_scalar srcUV(srcReq.x0, srcReq.y0);
-  vec2_scalar srcDUV(float(srcReq.width()) / dstReq.width(),
-                     float(srcReq.height()) / dstReq.height());
-  // Inverted Y must step downward along source rows
-  if (invertY) {
-    srcUV.y += srcReq.height();
-    srcDUV.y = -srcDUV.y;
-  }
-  // Skip to clamped source start
-  srcUV += srcDUV * (vec2_scalar(dstBounds.x0, dstBounds.y0) + 0.5f);
-  // Scale UVs by lerp precision
-  srcUV = linearQuantize(srcUV, 128);
-  srcDUV *= 128.0f;
-  // Calculate dest pointer from clamped offsets
-  int bpp = dsttex.bpp();
-  int destStride = dsttex.stride();
-  char* dest = dsttex.sample_ptr(dstReq, dstBounds, dstZ);
-  int span = dstBounds.width();
-  for (int rows = dstBounds.height(); rows > 0; rows--) {
-    switch (bpp) {
-      case 1:
-        linear_row_blit((uint8_t*)dest, span, srcUV, srcDUV.x, srcZOffset,
-                        &sampler);
-        break;
-      case 2:
-        linear_row_blit((uint16_t*)dest, span, srcUV, srcDUV.x, srcZOffset,
-                        &sampler);
-        break;
-      case 4:
-        linear_row_blit((uint32_t*)dest, span, srcUV, srcDUV.x, srcZOffset,
-                        &sampler);
-        break;
-      default:
-        assert(false);
-        break;
-    }
-    dest += destStride;
-    srcUV.y += srcDUV.y;
-  }
-}
-
-static void linear_row_composite(uint32_t* dest, int span,
-                                 const vec2_scalar& srcUV, float srcDU,
-                                 sampler2D sampler) {
-  vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
-  for (; span >= 4; span -= 4) {
-    WideRGBA8 srcpx = textureLinearUnpackedRGBA8(sampler, ivec2(uv), 0);
+    WideRGBA8 srcpx = textureLinearUnpackedRGBA8(sampler, ivec2(uv));
     WideRGBA8 dstpx = unpack(unaligned_load<PackedRGBA8>(dest));
     PackedRGBA8 r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
     unaligned_store(dest, r);
@@ -214,18 +206,53 @@ static void linear_row_composite(uint32_t* dest, int span,
     uv.x += 4 * srcDU;
   }
   if (span > 0) {
-    WideRGBA8 srcpx = textureLinearUnpackedRGBA8(sampler, ivec2(uv), 0);
+    WideRGBA8 srcpx = textureLinearUnpackedRGBA8(sampler, ivec2(uv));
     WideRGBA8 dstpx = unpack(partial_load_span<PackedRGBA8>(dest, span));
     PackedRGBA8 r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
     partial_store_span(dest, r, span);
   }
 }
 
-static NO_INLINE void linear_composite(Texture& srctex, const IntRect& srcReq,
-                                       Texture& dsttex, const IntRect& dstReq,
-                                       bool invertY, const IntRect& clipRect) {
-  assert(srctex.bpp() == 4);
-  assert(dsttex.bpp() == 4);
+template <bool COMPOSITE>
+static void linear_row_blit(uint8_t* dest, int span, const vec2_scalar& srcUV,
+                            float srcDU, sampler2D sampler) {
+  vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
+  for (; span >= 4; span -= 4) {
+    auto srcpx = textureLinearPackedR8(sampler, ivec2(uv));
+    unaligned_store(dest, srcpx);
+    dest += 4;
+    uv.x += 4 * srcDU;
+  }
+  if (span > 0) {
+    auto srcpx = textureLinearPackedR8(sampler, ivec2(uv));
+    partial_store_span(dest, srcpx, span);
+  }
+}
+
+template <bool COMPOSITE>
+static void linear_row_blit(uint16_t* dest, int span, const vec2_scalar& srcUV,
+                            float srcDU, sampler2D sampler) {
+  vec2 uv = init_interp(srcUV, vec2_scalar(srcDU, 0.0f));
+  for (; span >= 4; span -= 4) {
+    auto srcpx = textureLinearPackedRG8(sampler, ivec2(uv));
+    unaligned_store(dest, srcpx);
+    dest += 4;
+    uv.x += 4 * srcDU;
+  }
+  if (span > 0) {
+    auto srcpx = textureLinearPackedRG8(sampler, ivec2(uv));
+    partial_store_span(dest, srcpx, span);
+  }
+}
+
+template <bool COMPOSITE = false>
+static NO_INLINE void linear_blit(Texture& srctex, const IntRect& srcReq,
+                                  Texture& dsttex, const IntRect& dstReq,
+                                  bool invertY, const IntRect& clipRect) {
+  assert(srctex.internal_format == GL_RGBA8 ||
+         srctex.internal_format == GL_R8 || srctex.internal_format == GL_RG8);
+  assert(!COMPOSITE || (srctex.internal_format == GL_RGBA8 &&
+                        dsttex.internal_format == GL_RGBA8));
   // Compute valid dest bounds
   IntRect dstBounds = dsttex.sample_bounds(dstReq);
   dstBounds.intersect(clipRect);
@@ -252,11 +279,28 @@ static NO_INLINE void linear_composite(Texture& srctex, const IntRect& srcReq,
   srcUV = linearQuantize(srcUV, 128);
   srcDUV *= 128.0f;
   // Calculate dest pointer from clamped offsets
+  int bpp = dsttex.bpp();
   int destStride = dsttex.stride();
-  char* dest = dsttex.sample_ptr(dstReq, dstBounds, 0);
+  char* dest = dsttex.sample_ptr(dstReq, dstBounds);
   int span = dstBounds.width();
   for (int rows = dstBounds.height(); rows > 0; rows--) {
-    linear_row_composite((uint32_t*)dest, span, srcUV, srcDUV.x, &sampler);
+    switch (bpp) {
+      case 1:
+        linear_row_blit<COMPOSITE>((uint8_t*)dest, span, srcUV, srcDUV.x,
+                                   &sampler);
+        break;
+      case 2:
+        linear_row_blit<COMPOSITE>((uint16_t*)dest, span, srcUV, srcDUV.x,
+                                   &sampler);
+        break;
+      case 4:
+        linear_row_blit<COMPOSITE>((uint32_t*)dest, span, srcUV, srcDUV.x,
+                                   &sampler);
+        break;
+      default:
+        assert(false);
+        break;
+    }
     dest += destStride;
     srcUV.y += srcDUV.y;
   }
@@ -269,13 +313,13 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                      GLbitfield mask, GLenum filter) {
   assert(mask == GL_COLOR_BUFFER_BIT);
   Framebuffer* srcfb = get_framebuffer(GL_READ_FRAMEBUFFER);
-  if (!srcfb || srcfb->layer < 0) return;
+  if (!srcfb) return;
   Framebuffer* dstfb = get_framebuffer(GL_DRAW_FRAMEBUFFER);
-  if (!dstfb || dstfb->layer < 0) return;
+  if (!dstfb) return;
   Texture& srctex = ctx->textures[srcfb->color_attachment];
-  if (!srctex.buf || srcfb->layer >= max(srctex.depth, 1)) return;
+  if (!srctex.buf) return;
   Texture& dsttex = ctx->textures[dstfb->color_attachment];
-  if (!dsttex.buf || dstfb->layer >= max(dsttex.depth, 1)) return;
+  if (!dsttex.buf) return;
   assert(!dsttex.locked);
   if (srctex.internal_format != dsttex.internal_format) {
     assert(false);
@@ -301,11 +345,9 @@ void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
   if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR &&
       (srctex.internal_format == GL_RGBA8 || srctex.internal_format == GL_R8 ||
        srctex.internal_format == GL_RG8)) {
-    linear_blit(srctex, srcReq, srcfb->layer, dsttex, dstReq, dstfb->layer,
-                invertY, dstReq);
+    linear_blit(srctex, srcReq, dsttex, dstReq, invertY, dstReq);
   } else {
-    scale_blit(srctex, srcReq, srcfb->layer, dsttex, dstReq, dstfb->layer,
-               invertY, clipRect);
+    scale_blit(srctex, srcReq, dsttex, dstReq, invertY, clipRect);
   }
 }
 
@@ -328,11 +370,9 @@ LockedTexture* LockTexture(GLuint texId) {
 // Lock the given framebuffer's color attachment to prevent modification.
 LockedTexture* LockFramebuffer(GLuint fboId) {
   Framebuffer& fb = ctx->framebuffers[fboId];
-  // Only allow locking a framebuffer if it has a valid color attachment and
-  // only if targeting the first layer.
-  if (!fb.color_attachment || fb.layer > 0) {
+  // Only allow locking a framebuffer if it has a valid color attachment.
+  if (!fb.color_attachment) {
     assert(fb.color_attachment != 0);
-    assert(fb.layer == 0);
     return nullptr;
   }
   return LockTexture(fb.color_attachment);
@@ -366,47 +406,6 @@ void* GetResourceBuffer(LockedTexture* resource, int32_t* width,
   return resource->buf;
 }
 
-static void unscaled_row_composite(uint32_t* dest, const uint32_t* src,
-                                   int span) {
-  const uint32_t* end = src + span;
-  while (src + 4 <= end) {
-    WideRGBA8 srcpx = unpack(unaligned_load<PackedRGBA8>(src));
-    WideRGBA8 dstpx = unpack(unaligned_load<PackedRGBA8>(dest));
-    PackedRGBA8 r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
-    unaligned_store(dest, r);
-    src += 4;
-    dest += 4;
-  }
-  if (src < end) {
-    WideRGBA8 srcpx = unpack(partial_load_span<PackedRGBA8>(src, end - src));
-    WideRGBA8 dstpx = unpack(partial_load_span<PackedRGBA8>(dest, end - src));
-    auto r = pack(srcpx + dstpx - muldiv255(dstpx, alphas(srcpx)));
-    partial_store_span(dest, r, end - src);
-  }
-}
-
-static NO_INLINE void unscaled_composite(Texture& srctex, const IntRect& srcReq,
-                                         Texture& dsttex, const IntRect& dstReq,
-                                         bool invertY,
-                                         const IntRect& clipRect) {
-  IntRect bounds = dsttex.sample_bounds(dstReq);
-  bounds.intersect(clipRect);
-  bounds.intersect(srctex.sample_bounds(srcReq, invertY));
-  char* dest = dsttex.sample_ptr(dstReq, bounds, 0);
-  char* src = srctex.sample_ptr(srcReq, bounds, 0, invertY);
-  int srcStride = srctex.stride();
-  int destStride = dsttex.stride();
-  if (invertY) {
-    srcStride = -srcStride;
-  }
-  for (int rows = bounds.height(); rows > 0; rows--) {
-    unscaled_row_composite((uint32_t*)dest, (const uint32_t*)src,
-                           bounds.width());
-    dest += destStride;
-    src += srcStride;
-  }
-}
-
 // Extension for optimized compositing of textures or framebuffers that may be
 // safely used across threads. The source and destination must be locked to
 // ensure that they can be safely accessed while the SWGL context might be used
@@ -438,15 +437,15 @@ void Composite(LockedTexture* lockedDst, LockedTexture* lockedSrc, GLint srcX,
     // Ensure we have rows of at least 2 pixels when using the linear filter
     // to avoid overreading the row.
     if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR) {
-      linear_blit(srctex, srcReq, 0, dsttex, dstReq, 0, flip, clipRect);
+      linear_blit<false>(srctex, srcReq, dsttex, dstReq, flip, clipRect);
     } else {
-      scale_blit(srctex, srcReq, 0, dsttex, dstReq, 0, flip, clipRect);
+      scale_blit<false>(srctex, srcReq, dsttex, dstReq, flip, clipRect);
     }
   } else {
-    if (!srcReq.same_size(dstReq) && srctex.width >= 2) {
-      linear_composite(srctex, srcReq, dsttex, dstReq, flip, clipRect);
+    if (!srcReq.same_size(dstReq) && srctex.width >= 2 && filter == GL_LINEAR) {
+      linear_blit<true>(srctex, srcReq, dsttex, dstReq, flip, clipRect);
     } else {
-      unscaled_composite(srctex, srcReq, dsttex, dstReq, flip, clipRect);
+      scale_blit<true>(srctex, srcReq, dsttex, dstReq, flip, clipRect);
     }
   }
 }
@@ -483,8 +482,6 @@ static inline PackedRGBA8 packYUV(V8<int16_t> gg, V8<int16_t> br) {
          PackedRGBA8{0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255};
 }
 
-enum YUVColorSpace { REC_601 = 0, REC_709, REC_2020, IDENTITY };
-
 // clang-format off
 // Supports YUV color matrixes of the form:
 // [R]   [1.1643835616438356,  0.0,  rv ]   [Y -  16]
@@ -500,87 +497,126 @@ enum YUVColorSpace { REC_601 = 0, REC_709, REC_2020, IDENTITY };
 // require clamping back into range, so we use saturated additions to do this
 // efficiently at no extra cost.
 // clang-format on
-template <const double MATRIX[4]>
-struct YUVConverterImpl {
-  static inline PackedRGBA8 convert(V8<int16_t> yy, V8<int16_t> uv) {
-    // Convert matrix coefficients to fixed-point representation.
-    constexpr int16_t mrv = int16_t(MATRIX[0] * 64.0 + 0.5);
-    constexpr int16_t mgu = -int16_t(MATRIX[1] * -64.0 + 0.5);
-    constexpr int16_t mgv = -int16_t(MATRIX[2] * -64.0 + 0.5);
-    constexpr int16_t mbu = int16_t(MATRIX[3] * 64.0 + 0.5);
+struct YUVMatrix {
+  // These constants are loaded off the "this" pointer via relative addressing
+  // modes and should be about as quick to load as directly addressed SIMD
+  // constant memory.
 
-    // Bias Y values by -16 and multiply by 74.5. Add 2^5 offset to round to
-    // nearest 2^6.
-    yy = yy * 74 + (yy >> 1) + (int16_t(-16 * 74.5) + (1 << 5));
+  V8<int16_t> br_uvCoeffs;  // biased by 6 bits [b_from_u, r_from_v, repeats]
+  V8<int16_t> gg_uvCoeffs;  // biased by 6 bits [g_from_u, g_from_v, repeats]
+  V8<uint16_t> yCoeffs;     // biased by 7 bits
+  V8<int16_t> yBias;        // 0 or 16
+  V8<int16_t> uvBias;       // 128
+  V8<int16_t> br_yMask;
 
-    // Bias U/V values by -128.
-    uv -= 128;
+  // E.g. rec709-narrow:
+  // [ 1.16,     0,  1.79, -0.97 ]
+  // [ 1.16, -0.21, -0.53,  0.30 ]
+  // [ 1.16,  2.11,     0, -1.13 ]
+  // =
+  // [ yScale,        0, r_from_v ]   ([Y ]              )
+  // [ yScale, g_from_u, g_from_v ] x ([cb] - ycbcr_bias )
+  // [ yScale, b_from_u,        0 ]   ([cr]              )
+  static YUVMatrix From(const vec3_scalar& ycbcr_bias,
+                        const mat3_scalar& rgb_from_debiased_ycbcr) {
+    assert(ycbcr_bias.z == ycbcr_bias.y);
 
-    // Compute (R, B) = (74.5*Y + rv*V, 74.5*Y + bu*U)
-    auto br = V8<int16_t>{mbu, mrv, mbu, mrv, mbu, mrv, mbu, mrv} * uv;
-    br = addsat(yy, br);
+    const auto rgb_from_y = rgb_from_debiased_ycbcr[0].y;
+    assert(rgb_from_debiased_ycbcr[0].x == rgb_from_debiased_ycbcr[0].z);
+
+    int16_t br_from_y_mask = -1;
+    if (rgb_from_debiased_ycbcr[0].x == 0.0) {
+      // gbr-identity matrix?
+      assert(rgb_from_debiased_ycbcr[0].x == 0);
+      assert(rgb_from_debiased_ycbcr[0].y == 1);
+      assert(rgb_from_debiased_ycbcr[0].z == 0);
+
+      assert(rgb_from_debiased_ycbcr[1].x == 0);
+      assert(rgb_from_debiased_ycbcr[1].y == 0);
+      assert(rgb_from_debiased_ycbcr[1].z == 1);
+
+      assert(rgb_from_debiased_ycbcr[2].x == 1);
+      assert(rgb_from_debiased_ycbcr[2].y == 0);
+      assert(rgb_from_debiased_ycbcr[2].z == 0);
+
+      assert(ycbcr_bias.x == 0);
+      assert(ycbcr_bias.y == 0);
+      assert(ycbcr_bias.z == 0);
+
+      br_from_y_mask = 0;
+    } else {
+      assert(rgb_from_debiased_ycbcr[0].x == rgb_from_y);
+    }
+
+    assert(rgb_from_debiased_ycbcr[1].x == 0.0);
+    const auto g_from_u = rgb_from_debiased_ycbcr[1].y;
+    const auto b_from_u = rgb_from_debiased_ycbcr[1].z;
+
+    const auto r_from_v = rgb_from_debiased_ycbcr[2].x;
+    const auto g_from_v = rgb_from_debiased_ycbcr[2].y;
+    assert(rgb_from_debiased_ycbcr[2].z == 0.0);
+
+    return YUVMatrix({ycbcr_bias.x, ycbcr_bias.y}, rgb_from_y, br_from_y_mask,
+                     r_from_v, g_from_u, g_from_v, b_from_u);
+  }
+
+  // Convert matrix coefficients to fixed-point representation.
+  YUVMatrix(vec2_scalar yuv_bias, double yCoeff, int16_t br_yMask_, double rv,
+            double gu, double gv, double bu)
+      : br_uvCoeffs(zip(I16(int16_t(bu * (1 << 6) + 0.5)),
+                        I16(int16_t(rv * (1 << 6) + 0.5)))),
+        gg_uvCoeffs(zip(I16(-int16_t(-gu * (1 << 6) +
+                                     0.5)),  // These are negative coeffs, so
+                                             // round them away from zero
+                        I16(-int16_t(-gv * (1 << 6) + 0.5)))),
+        yCoeffs(uint16_t(yCoeff * (1 << (6 + 1)) + 0.5)),
+        // We have a +0.5 fudge-factor for -ybias.
+        // Without this, we get white=254 not 255.
+        // This approximates rounding rather than truncation during `gg >>= 6`.
+        yBias(int16_t( ((yuv_bias.x * 255 * yCoeff) - 0.5 ) * (1<<6) )),
+        uvBias(int16_t(yuv_bias.y * 255 + 0.5)),
+        br_yMask(br_yMask_) {
+    assert(yuv_bias.x >= 0);
+    assert(yuv_bias.y >= 0);
+    assert(yCoeff > 0);
+    assert(br_yMask_ == 0 || br_yMask_ == -1);
+    assert(bu > 0);
+    assert(rv > 0);
+    assert(gu <= 0);
+    assert(gv <= 0);
+  }
+
+  ALWAYS_INLINE PackedRGBA8 convert(V8<int16_t> yy, V8<int16_t> uv) const {
+    // We gave ourselves an extra bit (7 instead of 6) of bias to give us some
+    // extra precision for the more-sensitive y scaling.
+    // Note that we have to use an unsigned multiply with a 2x scale to
+    // represent a fractional scale and to avoid shifting with the sign bit.
+
+    // Note: if you subtract the bias before multiplication, we see more
+    // underflows. This could be fixed by an unsigned subsat.
+    yy = bit_cast<V8<int16_t>>((bit_cast<V8<uint16_t>>(yy) * yCoeffs) >> 1);
+    yy -= yBias;
+
+    // Compute [B] = [yCoeff*Y + bu*U +  0*V]
+    //         [R]   [yCoeff*Y +  0*U + rv*V]
+    uv -= uvBias;
+    auto br = br_uvCoeffs * uv;
+    br = addsat(yy & br_yMask, br);
     br >>= 6;
 
-    // Compute G = 74.5*Y + -gu*U + -gv*V
-    auto gg = V8<int16_t>{mgu, mgv, mgu, mgv, mgu, mgv, mgu, mgv} * uv;
-    gg = addsat(
-        yy,
-        addsat(gg, bit_cast<V8<int16_t>>(bit_cast<V4<uint32_t>>(gg) >> 16)));
+    // Compute G = yCoeff*Y + gu*U + gv*V
+    // First calc [gu*U, gv*V, ...]:
+    auto gg = gg_uvCoeffs * uv;
+    // Then cross the streams to get `gu*U + gv*V`:
+    gg = addsat(gg, bit_cast<V8<int16_t>>(bit_cast<V4<uint32_t>>(gg) >> 16));
+    // Add the other parts:
+    gg = addsat(yy, gg);  // This is the part that needs the most headroom
+                          // usually. In particular, ycbcr(255,255,255) hugely
+                          // saturates.
     gg >>= 6;
 
-    // Interleave B/R and G values. Force alpha to opaque.
+    // Interleave B/R and G values. Force alpha (high-gg half) to opaque.
     return packYUV(gg, br);
-  }
-};
-
-template <YUVColorSpace COLOR_SPACE>
-struct YUVConverter {};
-
-// clang-format off
-// From Rec601:
-// [R]   [1.1643835616438356,  0.0,                 1.5960267857142858   ]   [Y -  16]
-// [G] = [1.1643835616438358, -0.3917622900949137, -0.8129676472377708   ] x [U - 128]
-// [B]   [1.1643835616438356,  2.017232142857143,   8.862867620416422e-17]   [V - 128]
-// clang-format on
-constexpr double YUVMatrix601[4] = {1.5960267857142858, -0.3917622900949137,
-                                    -0.8129676472377708, 2.017232142857143};
-template <>
-struct YUVConverter<REC_601> : YUVConverterImpl<YUVMatrix601> {};
-
-// clang-format off
-// From Rec709:
-// [R]   [1.1643835616438356,  0.0,                    1.7927410714285714]   [Y -  16]
-// [G] = [1.1643835616438358, -0.21324861427372963,   -0.532909328559444 ] x [U - 128]
-// [B]   [1.1643835616438356,  2.1124017857142854,     0.0               ]   [V - 128]
-// clang-format on
-static constexpr double YUVMatrix709[4] = {
-    1.7927410714285714, -0.21324861427372963, -0.532909328559444,
-    2.1124017857142854};
-template <>
-struct YUVConverter<REC_709> : YUVConverterImpl<YUVMatrix709> {};
-
-// clang-format off
-// From Re2020:
-// [R]   [1.16438356164384,  0.0,                    1.678674107142860 ]   [Y -  16]
-// [G] = [1.16438356164384, -0.187326104219343,     -0.650424318505057 ] x [U - 128]
-// [B]   [1.16438356164384,  2.14177232142857,       0.0               ]   [V - 128]
-// clang-format on
-static constexpr double YUVMatrix2020[4] = {
-    1.678674107142860, -0.187326104219343, -0.650424318505057,
-    2.14177232142857};
-template <>
-struct YUVConverter<REC_2020> : YUVConverterImpl<YUVMatrix2020> {};
-
-// clang-format off
-// [R]   [V]
-// [G] = [Y]
-// [B]   [U]
-// clang-format on
-template <>
-struct YUVConverter<IDENTITY> {
-  static inline PackedRGBA8 convert(V8<int16_t> y, V8<int16_t> uv) {
-    // Map U/V directly to B/R and map Y directly to G with opaque alpha.
-    return packYUV(y, uv);
   }
 };
 
@@ -596,13 +632,13 @@ static ALWAYS_INLINE V8<int16_t> linearRowTapsR8(S sampler, I32 ix,
   auto b0 = unaligned_load<V2<uint8_t>>(&buf[ix.y]);
   auto c0 = unaligned_load<V2<uint8_t>>(&buf[ix.z]);
   auto d0 = unaligned_load<V2<uint8_t>>(&buf[ix.w]);
-  auto abcd0 = CONVERT(combine(combine(a0, b0), combine(c0, d0)), V8<int16_t>);
+  auto abcd0 = CONVERT(combine(a0, b0, c0, d0), V8<int16_t>);
   buf += stridey;
   auto a1 = unaligned_load<V2<uint8_t>>(&buf[ix.x]);
   auto b1 = unaligned_load<V2<uint8_t>>(&buf[ix.y]);
   auto c1 = unaligned_load<V2<uint8_t>>(&buf[ix.z]);
   auto d1 = unaligned_load<V2<uint8_t>>(&buf[ix.w]);
-  auto abcd1 = CONVERT(combine(combine(a1, b1), combine(c1, d1)), V8<int16_t>);
+  auto abcd1 = CONVERT(combine(a1, b1, c1, d1), V8<int16_t>);
   abcd0 += ((abcd1 - abcd0) * fracy) >> 7;
   return abcd0;
 }
@@ -674,17 +710,145 @@ static inline V8<int16_t> textureLinearRowPairedR8(S sampler, S sampler2,
   return abcdxyzwl;
 }
 
-template <YUVColorSpace COLOR_SPACE>
-static void linear_row_yuv(uint32_t* dest, int span, const vec2_scalar& srcUV,
-                           float srcDU, const vec2_scalar& chromaUV,
-                           float chromaDU, sampler2D_impl sampler[3],
-                           int colorDepth) {
-  // Casting to int loses some precision while stepping that can offset the
-  // image, so shift the values by some extra bits of precision to minimize
-  // this. We support up to 16 bits of image size, 7 bits of quantization,
-  // and 1 bit for sign, which leaves 8 bits left for extra precision.
-  const int STEP_BITS = 8;
+// Casting to int loses some precision while stepping that can offset the
+// image, so shift the values by some extra bits of precision to minimize
+// this. We support up to 16 bits of image size, 7 bits of quantization,
+// and 1 bit for sign, which leaves 8 bits left for extra precision.
+const int STEP_BITS = 8;
 
+// Optimized version of textureLinearPackedR8 for Y R8 texture with
+// half-resolution paired U/V R8 textures. This allows us to more efficiently
+// pack YUV samples into vectors to substantially reduce math operations even
+// further.
+template <bool BLEND>
+static inline void upscaleYUV42R8(uint32_t* dest, int span, uint8_t* yRow,
+                                  I32 yU, int32_t yDU, int32_t yStrideV,
+                                  int16_t yFracV, uint8_t* cRow1,
+                                  uint8_t* cRow2, I32 cU, int32_t cDU,
+                                  int32_t cStrideV, int16_t cFracV,
+                                  const YUVMatrix& colorSpace) {
+  // As much as possible try to utilize the fact that we're only using half
+  // the UV samples to combine Y and UV samples into single vectors. Here we
+  // need to initialize several useful vector quantities for stepping fractional
+  // offsets. For the UV samples, we take the average of the first+second and
+  // third+fourth samples in a chunk which conceptually correspond to offsets
+  // 0.5 and 1.5 (in 0..2 range). This allows us to reconstruct intermediate
+  // samples 0.25, 0.75, 1.25, and 1.75 later. X fraction is shifted over into
+  // the top 7 bits of an unsigned short so that we can mask off the exact
+  // fractional bits we need to blend merely by right shifting them into
+  // position.
+  cU = (cU.xzxz + cU.ywyw) >> 1;
+  auto ycFracX = CONVERT(combine(yU, cU), V8<uint16_t>)
+                 << (16 - (STEP_BITS + 7));
+  auto ycFracDX = combine(I16(yDU), I16(cDU)) << (16 - (STEP_BITS + 7));
+  auto ycFracV = combine(I16(yFracV), I16(cFracV));
+  I32 yI = yU >> (STEP_BITS + 7);
+  I32 cI = cU >> (STEP_BITS + 7);
+  // Load initial combined YUV samples for each row and blend them.
+  auto ycSrc0 =
+      CONVERT(combine(unaligned_load<V4<uint8_t>>(&yRow[yI.x]),
+                      combine(unaligned_load<V2<uint8_t>>(&cRow1[cI.x]),
+                              unaligned_load<V2<uint8_t>>(&cRow2[cI.x]))),
+              V8<int16_t>);
+  auto ycSrc1 = CONVERT(
+      combine(unaligned_load<V4<uint8_t>>(&yRow[yI.x + yStrideV]),
+              combine(unaligned_load<V2<uint8_t>>(&cRow1[cI.x + cStrideV]),
+                      unaligned_load<V2<uint8_t>>(&cRow2[cI.x + cStrideV]))),
+      V8<int16_t>);
+  auto ycSrc = ycSrc0 + (((ycSrc1 - ycSrc0) * ycFracV) >> 7);
+
+  // Here we shift in results from the next sample while caching results from
+  // the previous sample. This allows us to reduce the multiplications in the
+  // inner loop down to only two since we just need to blend the new samples
+  // horizontally and then vertically once each.
+  for (uint32_t* end = dest + span; dest < end; dest += 4) {
+    yU += yDU;
+    I32 yIn = yU >> (STEP_BITS + 7);
+    cU += cDU;
+    I32 cIn = cU >> (STEP_BITS + 7);
+    // Load combined YUV samples for the next chunk on each row and blend them.
+    auto ycSrc0n =
+        CONVERT(combine(unaligned_load<V4<uint8_t>>(&yRow[yIn.x]),
+                        combine(unaligned_load<V2<uint8_t>>(&cRow1[cIn.x]),
+                                unaligned_load<V2<uint8_t>>(&cRow2[cIn.x]))),
+                V8<int16_t>);
+    auto ycSrc1n = CONVERT(
+        combine(unaligned_load<V4<uint8_t>>(&yRow[yIn.x + yStrideV]),
+                combine(unaligned_load<V2<uint8_t>>(&cRow1[cIn.x + cStrideV]),
+                        unaligned_load<V2<uint8_t>>(&cRow2[cIn.x + cStrideV]))),
+        V8<int16_t>);
+    auto ycSrcn = ycSrc0n + (((ycSrc1n - ycSrc0n) * ycFracV) >> 7);
+
+    // The source samples for the chunk may not match the actual tap offsets.
+    // Since we're upscaling, we know the tap offsets fall within all the
+    // samples in a 4-wide chunk. Since we can't rely on PSHUFB or similar,
+    // instead we do laborious shuffling here for the Y samples and then the UV
+    // samples.
+    auto yshuf = lowHalf(ycSrc);
+    auto yshufn =
+        SHUFFLE(yshuf, yIn.x == yI.w ? lowHalf(ycSrcn).yyyy : lowHalf(ycSrcn),
+                1, 2, 3, 4);
+    if (yI.y == yI.x) {
+      yshuf = yshuf.xxyz;
+      yshufn = yshufn.xxyz;
+    }
+    if (yI.z == yI.y) {
+      yshuf = yshuf.xyyz;
+      yshufn = yshufn.xyyz;
+    }
+    if (yI.w == yI.z) {
+      yshuf = yshuf.xyzz;
+      yshufn = yshufn.xyzz;
+    }
+
+    auto cshuf = highHalf(ycSrc);
+    auto cshufn =
+        SHUFFLE(cshuf, cIn.x == cI.y ? highHalf(ycSrcn).yyww : highHalf(ycSrcn),
+                1, 4, 3, 6);
+    if (cI.y == cI.x) {
+      cshuf = cshuf.xxzz;
+      cshufn = cshufn.xxzz;
+    }
+
+    // After shuffling, combine the Y and UV samples back into a single vector
+    // for blending. Shift X fraction into position as unsigned to mask off top
+    // bits and get rid of low bits to avoid multiplication overflow.
+    auto yuvPx = combine(yshuf, cshuf);
+    yuvPx += ((combine(yshufn, cshufn) - yuvPx) *
+              bit_cast<V8<int16_t>>(ycFracX >> (16 - 7))) >>
+             7;
+
+    // Cache the new samples as the current samples on the next iteration.
+    ycSrc = ycSrcn;
+    ycFracX += ycFracDX;
+    yI = yIn;
+    cI = cIn;
+
+    // De-interleave the Y and UV results. We need to average the UV results
+    // to produce values for intermediate samples. Taps for UV were collected at
+    // offsets 0.5 and 1.5, such that if we take a quarter of the difference
+    // (1.5-0.5)/4, subtract it from even samples, and add it to odd samples,
+    // we can estimate samples 0.25, 0.75, 1.25, and 1.75.
+    auto yPx = SHUFFLE(yuvPx, yuvPx, 0, 0, 1, 1, 2, 2, 3, 3);
+    auto uvPx = SHUFFLE(yuvPx, yuvPx, 4, 6, 4, 6, 5, 7, 5, 7) +
+                ((SHUFFLE(yuvPx, yuvPx, 4, 6, 5, 7, 4, 6, 5, 7) -
+                  SHUFFLE(yuvPx, yuvPx, 5, 7, 4, 6, 5, 7, 4, 6)) >>
+                 2);
+
+    commit_blend_span<BLEND>(dest, colorSpace.convert(yPx, uvPx));
+  }
+}
+
+// This is the inner loop driver of CompositeYUV that processes an axis-aligned
+// YUV span, dispatching based on appropriate format and scaling. This is also
+// reused by blendYUV to accelerate some cases of texture sampling in the
+// shader.
+template <bool BLEND = false>
+static void linear_row_yuv(uint32_t* dest, int span, sampler2DRect samplerY,
+                           const vec2_scalar& srcUV, float srcDU,
+                           sampler2DRect samplerU, sampler2DRect samplerV,
+                           const vec2_scalar& chromaUV, float chromaDU,
+                           int colorDepth, const YUVMatrix& colorSpace) {
   // Calculate varying and constant interp data for Y plane.
   I32 yU = cast(init_interp(srcUV.x, srcDU) * (1 << STEP_BITS));
   int32_t yV = int32_t(srcUV.y);
@@ -697,45 +861,41 @@ static void linear_row_yuv(uint32_t* dest, int span, const vec2_scalar& srcUV,
   int32_t yDU = int32_t((4 << STEP_BITS) * srcDU);
   int32_t cDU = int32_t((4 << STEP_BITS) * chromaDU);
 
-  if (sampler[0].width < 2 || sampler[1].width < 2) {
+  if (samplerY->width < 2 || samplerU->width < 2) {
     // If the source row has less than 2 pixels, it's not safe to use a linear
     // filter because it may overread the row. Just convert the single pixel
     // with nearest filtering and fill the row with it.
-    I16 yuv =
-        CONVERT(round_pixel((Float){
-                    texelFetch(&sampler[0], ivec2(srcUV), 0).x.x,
-                    texelFetch(&sampler[1], ivec2(chromaUV), 0).x.x,
-                    texelFetch(&sampler[2], ivec2(chromaUV), 0).x.x, 1.0f}),
-                I16);
-    auto rgb = YUVConverter<COLOR_SPACE>::convert(zip(I16(yuv.x), I16(yuv.x)),
-                                                  zip(I16(yuv.y), I16(yuv.z)));
-    for (; span >= 4; span -= 4) {
-      unaligned_store(dest, rgb);
-      dest += 4;
-    }
-    if (span > 0) {
-      partial_store_span(dest, rgb, span);
-    }
-  } else if (sampler[0].format == TextureFormat::R16) {
-    // Sample each YUV plane, rescale it to fit in low 8 bits of word, and then
-    // transform them by the appropriate color space.
+    I16 yuv = CONVERT(
+        round_pixel((Float){texelFetch(samplerY, ivec2(srcUV)).x.x,
+                            texelFetch(samplerU, ivec2(chromaUV)).x.x,
+                            texelFetch(samplerV, ivec2(chromaUV)).x.x, 1.0f}),
+        I16);
+    commit_solid_span<BLEND>(
+        dest,
+        unpack(colorSpace.convert(V8<int16_t>(yuv.x),
+                                  zip(I16(yuv.y), I16(yuv.z)))),
+        span);
+  } else if (samplerY->format == TextureFormat::R16) {
+    // Sample each YUV plane, rescale it to fit in low 8 bits of word, and
+    // then transform them by the appropriate color space.
     assert(colorDepth > 8);
-    // Need to right shift the sample by the amount of bits over 8 it occupies.
-    // On output from textureLinearUnpackedR16, we have lost 1 bit of precision
-    // at the low end already, hence 1 is subtracted from the color depth.
+    // Need to right shift the sample by the amount of bits over 8 it
+    // occupies. On output from textureLinearUnpackedR16, we have lost 1 bit
+    // of precision at the low end already, hence 1 is subtracted from the
+    // color depth.
     int rescaleBits = (colorDepth - 1) - 8;
     for (; span >= 4; span -= 4) {
       auto yPx =
-          textureLinearUnpackedR16(&sampler[0], ivec2(yU >> STEP_BITS, yV)) >>
+          textureLinearUnpackedR16(samplerY, ivec2(yU >> STEP_BITS, yV)) >>
           rescaleBits;
       auto uPx =
-          textureLinearUnpackedR16(&sampler[1], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(samplerU, ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
       auto vPx =
-          textureLinearUnpackedR16(&sampler[2], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(samplerV, ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
-      unaligned_store(dest, YUVConverter<COLOR_SPACE>::convert(zip(yPx, yPx),
-                                                               zip(uPx, vPx)));
+      commit_blend_span<BLEND>(
+          dest, colorSpace.convert(zip(yPx, yPx), zip(uPx, vPx)));
       dest += 4;
       yU += yDU;
       cU += cDU;
@@ -743,65 +903,98 @@ static void linear_row_yuv(uint32_t* dest, int span, const vec2_scalar& srcUV,
     if (span > 0) {
       // Handle any remaining pixels...
       auto yPx =
-          textureLinearUnpackedR16(&sampler[0], ivec2(yU >> STEP_BITS, yV)) >>
+          textureLinearUnpackedR16(samplerY, ivec2(yU >> STEP_BITS, yV)) >>
           rescaleBits;
       auto uPx =
-          textureLinearUnpackedR16(&sampler[1], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(samplerU, ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
       auto vPx =
-          textureLinearUnpackedR16(&sampler[2], ivec2(cU >> STEP_BITS, cV)) >>
+          textureLinearUnpackedR16(samplerV, ivec2(cU >> STEP_BITS, cV)) >>
           rescaleBits;
-      partial_store_span(
-          dest,
-          YUVConverter<COLOR_SPACE>::convert(zip(yPx, yPx), zip(uPx, vPx)),
-          span);
+      commit_blend_span<BLEND>(
+          dest, colorSpace.convert(zip(yPx, yPx), zip(uPx, vPx)), span);
     }
   } else {
-    assert(sampler[0].format == TextureFormat::R8);
+    assert(samplerY->format == TextureFormat::R8);
     assert(colorDepth == 8);
 
     // Calculate varying and constant interp data for Y plane.
     int16_t yFracV = yV & 0x7F;
     yV >>= 7;
-    int32_t yOffsetV = clampCoord(yV, sampler[0].height) * sampler[0].stride;
+    int32_t yOffsetV = clampCoord(yV, samplerY->height) * samplerY->stride;
     int32_t yStrideV =
-        yV >= 0 && yV < int32_t(sampler[0].height) - 1 ? sampler[0].stride : 0;
+        yV >= 0 && yV < int32_t(samplerY->height) - 1 ? samplerY->stride : 0;
 
     // Calculate varying and constant interp data for chroma planes.
     int16_t cFracV = cV & 0x7F;
     cV >>= 7;
-    int32_t cOffsetV = clampCoord(cV, sampler[1].height) * sampler[1].stride;
+    int32_t cOffsetV = clampCoord(cV, samplerU->height) * samplerU->stride;
     int32_t cStrideV =
-        cV >= 0 && cV < int32_t(sampler[1].height) - 1 ? sampler[1].stride : 0;
+        cV >= 0 && cV < int32_t(samplerU->height) - 1 ? samplerU->stride : 0;
 
+    // If we're sampling the UV planes at half the resolution of the Y plane,
+    // then try to use half resolution fast-path.
+    if (yDU >= cDU && cDU > 0 && yDU <= (4 << (STEP_BITS + 7)) &&
+        cDU <= (2 << (STEP_BITS + 7))) {
+      // Ensure that samples don't fall outside of the valid bounds of each
+      // planar texture. Step until the initial X coordinates are positive.
+      for (; (yU.x < 0 || cU.x < 0) && span >= 4; span -= 4) {
+        auto yPx = textureLinearRowR8(samplerY, yU >> STEP_BITS, yOffsetV,
+                                      yStrideV, yFracV);
+        auto uvPx = textureLinearRowPairedR8(
+            samplerU, samplerV, cU >> STEP_BITS, cOffsetV, cStrideV, cFracV);
+        commit_blend_span<BLEND>(dest, colorSpace.convert(yPx, uvPx));
+        dest += 4;
+        yU += yDU;
+        cU += cDU;
+      }
+      // Calculate the number of aligned chunks that we can step inside the
+      // bounds of each planar texture without overreading.
+      int inside = min(
+          min((((int(samplerY->width) - 4) << (STEP_BITS + 7)) - yU.x) / yDU,
+              (((int(samplerU->width) - 4) << (STEP_BITS + 7)) - cU.x) / cDU) *
+              4,
+          span & ~3);
+      if (inside > 0) {
+        uint8_t* yRow = (uint8_t*)samplerY->buf + yOffsetV;
+        uint8_t* cRow1 = (uint8_t*)samplerU->buf + cOffsetV;
+        uint8_t* cRow2 = (uint8_t*)samplerV->buf + cOffsetV;
+        upscaleYUV42R8<BLEND>(dest, inside, yRow, yU, yDU, yStrideV, yFracV,
+                              cRow1, cRow2, cU, cDU, cStrideV, cFracV,
+                              colorSpace);
+        span -= inside;
+        dest += inside;
+        yU += (inside / 4) * yDU;
+        cU += (inside / 4) * cDU;
+      }
+      // If there are any remaining chunks that weren't inside, handle them
+      // below.
+    }
     for (; span >= 4; span -= 4) {
-      // Sample each YUV plane and then transform them by the appropriate color
-      // space.
-      auto yPx = textureLinearRowR8(&sampler[0], yU >> STEP_BITS, yOffsetV,
+      // Sample each YUV plane and then transform them by the appropriate
+      // color space.
+      auto yPx = textureLinearRowR8(samplerY, yU >> STEP_BITS, yOffsetV,
                                     yStrideV, yFracV);
-      auto uvPx =
-          textureLinearRowPairedR8(&sampler[1], &sampler[2], cU >> STEP_BITS,
-                                   cOffsetV, cStrideV, cFracV);
-      unaligned_store(dest, YUVConverter<COLOR_SPACE>::convert(yPx, uvPx));
+      auto uvPx = textureLinearRowPairedR8(samplerU, samplerV, cU >> STEP_BITS,
+                                           cOffsetV, cStrideV, cFracV);
+      commit_blend_span<BLEND>(dest, colorSpace.convert(yPx, uvPx));
       dest += 4;
       yU += yDU;
       cU += cDU;
     }
     if (span > 0) {
       // Handle any remaining pixels...
-      auto yPx = textureLinearRowR8(&sampler[0], yU >> STEP_BITS, yOffsetV,
+      auto yPx = textureLinearRowR8(samplerY, yU >> STEP_BITS, yOffsetV,
                                     yStrideV, yFracV);
-      auto uvPx =
-          textureLinearRowPairedR8(&sampler[1], &sampler[2], cU >> STEP_BITS,
-                                   cOffsetV, cStrideV, cFracV);
-      partial_store_span(dest, YUVConverter<COLOR_SPACE>::convert(yPx, uvPx),
-                         span);
+      auto uvPx = textureLinearRowPairedR8(samplerU, samplerV, cU >> STEP_BITS,
+                                           cOffsetV, cStrideV, cFracV);
+      commit_blend_span<BLEND>(dest, colorSpace.convert(yPx, uvPx), span);
     }
   }
 }
 
 static void linear_convert_yuv(Texture& ytex, Texture& utex, Texture& vtex,
-                               YUVColorSpace colorSpace, int colorDepth,
+                               const YUVMatrix& rgbFromYcbcr, int colorDepth,
                                const IntRect& srcReq, Texture& dsttex,
                                const IntRect& dstReq, bool invertY,
                                const IntRect& clipRect) {
@@ -813,7 +1006,7 @@ static void linear_convert_yuv(Texture& ytex, Texture& utex, Texture& vtex,
     return;
   }
   // Initialize samplers for source textures
-  sampler2D_impl sampler[3];
+  sampler2DRect_impl sampler[3];
   init_sampler(&sampler[0], ytex);
   init_sampler(&sampler[1], utex);
   init_sampler(&sampler[2], vtex);
@@ -844,36 +1037,140 @@ static void linear_convert_yuv(Texture& ytex, Texture& utex, Texture& vtex,
   }
   // Calculate dest pointer from clamped offsets
   int destStride = dsttex.stride();
-  char* dest = dsttex.sample_ptr(dstReq, dstBounds, 0);
+  char* dest = dsttex.sample_ptr(dstReq, dstBounds);
   int span = dstBounds.width();
   for (int rows = dstBounds.height(); rows > 0; rows--) {
-    switch (colorSpace) {
-      case REC_601:
-        linear_row_yuv<REC_601>((uint32_t*)dest, span, srcUV, srcDUV.x,
-                                chromaUV, chromaDUV.x, sampler, colorDepth);
-        break;
-      case REC_709:
-        linear_row_yuv<REC_709>((uint32_t*)dest, span, srcUV, srcDUV.x,
-                                chromaUV, chromaDUV.x, sampler, colorDepth);
-        break;
-      case REC_2020:
-        linear_row_yuv<REC_2020>((uint32_t*)dest, span, srcUV, srcDUV.x,
-                                 chromaUV, chromaDUV.x, sampler, colorDepth);
-        break;
-      case IDENTITY:
-        linear_row_yuv<IDENTITY>((uint32_t*)dest, span, srcUV, srcDUV.x,
-                                 chromaUV, chromaDUV.x, sampler, colorDepth);
-        break;
-      default:
-        debugf("unknown YUV color space %d\n", colorSpace);
-        assert(false);
-        break;
-    }
+    linear_row_yuv((uint32_t*)dest, span, &sampler[0], srcUV, srcDUV.x,
+                   &sampler[1], &sampler[2], chromaUV, chromaDUV.x, colorDepth,
+                   rgbFromYcbcr);
     dest += destStride;
     srcUV.y += srcDUV.y;
     chromaUV.y += chromaDUV.y;
   }
 }
+
+// -
+// This section must match gfx/2d/Types.h
+
+enum class YUVRangedColorSpace : uint8_t {
+  BT601_Narrow = 0,
+  BT601_Full,
+  BT709_Narrow,
+  BT709_Full,
+  BT2020_Narrow,
+  BT2020_Full,
+  GbrIdentity,
+};
+
+// -
+// This section must match yuv.glsl
+
+vec4_scalar get_ycbcr_zeros_ones(const YUVRangedColorSpace color_space,
+                                 const GLuint color_depth) {
+  // For SWGL's 8bpc-only pipeline, our extra care here probably doesn't matter.
+  // However, technically e.g. 10-bit achromatic zero for cb and cr is
+  // (128 << 2) / ((1 << 10) - 1) = 512 / 1023, which != 128 / 255, and affects
+  // our matrix values subtly. Maybe not enough to matter? But it's the most
+  // correct thing to do.
+  // Unlike the glsl version, our texture samples are u8([0,255]) not
+  // u16([0,1023]) though.
+  switch (color_space) {
+    case YUVRangedColorSpace::BT601_Narrow:
+    case YUVRangedColorSpace::BT709_Narrow:
+    case YUVRangedColorSpace::BT2020_Narrow: {
+      auto extra_bit_count = color_depth - 8;
+      vec4_scalar zo = {
+          float(16 << extra_bit_count),
+          float(128 << extra_bit_count),
+          float(235 << extra_bit_count),
+          float(240 << extra_bit_count),
+      };
+      float all_bits = (1 << color_depth) - 1;
+      zo /= all_bits;
+      return zo;
+    }
+
+    case YUVRangedColorSpace::BT601_Full:
+    case YUVRangedColorSpace::BT709_Full:
+    case YUVRangedColorSpace::BT2020_Full: {
+      const auto narrow =
+          get_ycbcr_zeros_ones(YUVRangedColorSpace::BT601_Narrow, color_depth);
+      return {0.0, narrow.y, 1.0, 1.0};
+    }
+
+    case YUVRangedColorSpace::GbrIdentity:
+      break;
+  }
+  return {0.0, 0.0, 1.0, 1.0};
+}
+
+constexpr mat3_scalar RgbFromYuv_Rec601 = {
+    {1.00000, 1.00000, 1.00000},
+    {0.00000, -0.17207, 0.88600},
+    {0.70100, -0.35707, 0.00000},
+};
+constexpr mat3_scalar RgbFromYuv_Rec709 = {
+    {1.00000, 1.00000, 1.00000},
+    {0.00000, -0.09366, 0.92780},
+    {0.78740, -0.23406, 0.00000},
+};
+constexpr mat3_scalar RgbFromYuv_Rec2020 = {
+    {1.00000, 1.00000, 1.00000},
+    {0.00000, -0.08228, 0.94070},
+    {0.73730, -0.28568, 0.00000},
+};
+constexpr mat3_scalar RgbFromYuv_GbrIdentity = {
+    {0, 1, 0},
+    {0, 0, 1},
+    {1, 0, 0},
+};
+
+inline mat3_scalar get_rgb_from_yuv(const YUVRangedColorSpace color_space) {
+  switch (color_space) {
+    case YUVRangedColorSpace::BT601_Narrow:
+    case YUVRangedColorSpace::BT601_Full:
+      return RgbFromYuv_Rec601;
+    case YUVRangedColorSpace::BT709_Narrow:
+    case YUVRangedColorSpace::BT709_Full:
+      return RgbFromYuv_Rec709;
+    case YUVRangedColorSpace::BT2020_Narrow:
+    case YUVRangedColorSpace::BT2020_Full:
+      return RgbFromYuv_Rec2020;
+    case YUVRangedColorSpace::GbrIdentity:
+      break;
+  }
+  return RgbFromYuv_GbrIdentity;
+}
+
+struct YcbcrInfo final {
+  vec3_scalar ycbcr_bias;
+  mat3_scalar rgb_from_debiased_ycbcr;
+};
+
+inline YcbcrInfo get_ycbcr_info(const YUVRangedColorSpace color_space,
+                                GLuint color_depth) {
+  // SWGL always does 8bpc math, so don't scale the matrix for 10bpc!
+  color_depth = 8;
+
+  const auto zeros_ones = get_ycbcr_zeros_ones(color_space, color_depth);
+  const auto zeros = vec2_scalar{zeros_ones.x, zeros_ones.y};
+  const auto ones = vec2_scalar{zeros_ones.z, zeros_ones.w};
+  const auto scale = 1.0f / (ones - zeros);
+
+  const auto rgb_from_yuv = get_rgb_from_yuv(color_space);
+  const mat3_scalar yuv_from_debiased_ycbcr = {
+      {scale.x, 0, 0},
+      {0, scale.y, 0},
+      {0, 0, scale.y},
+  };
+
+  YcbcrInfo ret;
+  ret.ycbcr_bias = {zeros.x, zeros.y, zeros.y};
+  ret.rgb_from_debiased_ycbcr = rgb_from_yuv * yuv_from_debiased_ycbcr;
+  return ret;
+}
+
+// -
 
 extern "C" {
 
@@ -882,7 +1179,7 @@ extern "C" {
 // transform from YUV to BGRA after sampling.
 void CompositeYUV(LockedTexture* lockedDst, LockedTexture* lockedY,
                   LockedTexture* lockedU, LockedTexture* lockedV,
-                  YUVColorSpace colorSpace, GLuint colorDepth, GLint srcX,
+                  YUVRangedColorSpace colorSpace, GLuint colorDepth, GLint srcX,
                   GLint srcY, GLsizei srcWidth, GLsizei srcHeight, GLint dstX,
                   GLint dstY, GLsizei dstWidth, GLsizei dstHeight,
                   GLboolean flip, GLint clipX, GLint clipY, GLsizei clipWidth,
@@ -890,6 +1187,14 @@ void CompositeYUV(LockedTexture* lockedDst, LockedTexture* lockedY,
   if (!lockedDst || !lockedY || !lockedU || !lockedV) {
     return;
   }
+  if (colorSpace > YUVRangedColorSpace::GbrIdentity) {
+    assert(false);
+    return;
+  }
+  const auto ycbcrInfo = get_ycbcr_info(colorSpace, colorDepth);
+  const auto rgbFromYcbcr =
+      YUVMatrix::From(ycbcrInfo.ycbcr_bias, ycbcrInfo.rgb_from_debiased_ycbcr);
+
   Texture& ytex = *lockedY;
   Texture& utex = *lockedU;
   Texture& vtex = *lockedV;
@@ -915,7 +1220,7 @@ void CompositeYUV(LockedTexture* lockedDst, LockedTexture* lockedY,
   // For now, always use a linear filter path that would be required for
   // scaling. Further fast-paths for non-scaled video might be desirable in the
   // future.
-  linear_convert_yuv(ytex, utex, vtex, colorSpace, colorDepth, srcReq, dsttex,
+  linear_convert_yuv(ytex, utex, vtex, rgbFromYcbcr, colorDepth, srcReq, dsttex,
                      dstReq, flip, clipRect);
 }
 

@@ -21,10 +21,6 @@
 
 #include <thread>
 
-#if defined(XP_WIN)
-#  include "mozilla/audio/AudioNotificationReceiver.h"
-#endif
-
 struct cubeb_stream;
 
 template <>
@@ -560,13 +556,7 @@ enum class AudioInputType { Unknown, Voice };
  *   API, we have to do block processing at 128 frames per block, we need to
  *   keep a little spill buffer to store the extra frames.
  */
-class AudioCallbackDriver : public GraphDriver,
-                            public MixerCallbackReceiver
-#if defined(XP_WIN)
-    ,
-                            public audio::DeviceChangeListener
-#endif
-{
+class AudioCallbackDriver : public GraphDriver, public MixerCallbackReceiver {
   using IterationResult = GraphInterface::IterationResult;
   enum class FallbackDriverState;
   class FallbackWrapper;
@@ -584,9 +574,6 @@ class AudioCallbackDriver : public GraphDriver,
 
   void Start() override;
   MOZ_CAN_RUN_SCRIPT void Shutdown() override;
-#if defined(XP_WIN)
-  void ResetDefaultDevice() override;
-#endif
 
   /* Static wrapper function cubeb calls back. */
   static long DataCallback_s(cubeb_stream* aStream, void* aUser,

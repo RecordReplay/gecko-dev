@@ -80,7 +80,8 @@ bool SharedStringMap::Find(const nsCString& aKey, size_t* aIndex) {
 
 void SharedStringMapBuilder::Add(const nsCString& aKey,
                                  const nsString& aValue) {
-  mEntries.Put(aKey, {mKeyTable.Add(aKey), mValueTable.Add(aValue)});
+  mEntries.InsertOrUpdate(aKey,
+                          Entry{mKeyTable.Add(aKey), mValueTable.Add(aValue)});
 }
 
 Result<Ok, nsresult> SharedStringMapBuilder::Finalize(
@@ -89,10 +90,7 @@ Result<Ok, nsresult> SharedStringMapBuilder::Finalize(
 
   MOZ_ASSERT(mEntries.Count() == mKeyTable.Count());
 
-  nsTArray<nsCString> keys(mEntries.Count());
-  for (auto iter = mEntries.Iter(); !iter.Done(); iter.Next()) {
-    keys.AppendElement(iter.Key());
-  }
+  auto keys = ToTArray<nsTArray<nsCString>>(mEntries.Keys());
   keys.Sort();
 
   Header header = {kSharedStringMapMagic, uint32_t(keys.Length())};

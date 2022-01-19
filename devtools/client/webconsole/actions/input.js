@@ -12,9 +12,7 @@ const {
   EDITOR_PRETTY_PRINT,
 } = require("devtools/client/webconsole/constants");
 const { getAllPrefs } = require("devtools/client/webconsole/selectors/prefs");
-const {
-  ResourceWatcher,
-} = require("devtools/shared/resources/resource-watcher");
+const ResourceCommand = require("devtools/shared/commands/resource/resource-command");
 const l10n = require("devtools/client/webconsole/utils/l10n");
 
 loader.lazyServiceGetter(
@@ -22,11 +20,6 @@ loader.lazyServiceGetter(
   "clipboardHelper",
   "@mozilla.org/widget/clipboardhelper;1",
   "nsIClipboardHelper"
-);
-loader.lazyRequireGetter(
-  this,
-  "saveScreenshot",
-  "devtools/client/shared/save-screenshot"
 );
 loader.lazyRequireGetter(
   this,
@@ -50,6 +43,13 @@ loader.lazyRequireGetter(
   "devtools/client/netmonitor/src/actions/request-blocking"
 );
 
+loader.lazyRequireGetter(
+  this,
+  ["saveScreenshot", "captureAndSaveScreenshot"],
+  "devtools/client/shared/screenshot",
+  true
+);
+
 const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
 
 async function getMappedExpression(hud, expression) {
@@ -68,7 +68,7 @@ async function getMappedExpression(hud, expression) {
 }
 
 function evaluateExpression(expression, from = "input") {
-  return async ({ dispatch, toolbox, webConsoleUI, hud, client }) => {
+  return async ({ dispatch, toolbox, webConsoleUI, hud, commands }) => {
     if (!expression) {
       expression = hud.getInputSelection() || hud.getInputValue();
     }
@@ -102,8 +102,8 @@ function evaluateExpression(expression, from = "input") {
     // we still need to pass the error response to onExpressionEvaluated.
     const onSettled = res => res;
 
-    const response = await client
-      .evaluateJSAsync(expression, {
+    const response = await commands.scriptCommand
+      .execute(expression, {
         frameActor: webConsoleUI.getFrameActor(),
         selectedNodeActor: webConsoleUI.getSelectedNodeActorID(),
         selectedTargetFront: toolbox && toolbox.getSelectedTargetFront(),
@@ -171,13 +171,13 @@ function handleHelperResult(response) {
   return async ({ dispatch, hud, toolbox, webConsoleUI }) => {
     const { result, helperResult } = response;
     const helperHasRawOutput = !!helperResult?.rawOutput;
-    const hasNetworkResourceWatcherSupport = hud.resourceWatcher.hasResourceWatcherSupport(
-      hud.resourceWatcher.TYPES.NETWORK_EVENT
+    const hasNetworkResourceCommandSupport = hud.resourceCommand.hasResourceCommandSupport(
+      hud.resourceCommand.TYPES.NETWORK_EVENT
     );
     let networkFront = null;
     // @backward-compat { version 86 } default network events watcher support
-    if (hasNetworkResourceWatcherSupport) {
-      networkFront = await hud.resourceWatcher.watcherFront.getNetworkParentActor();
+    if (hasNetworkResourceCommandSupport) {
+      networkFront = await hud.resourceCommand.watcherFront.getNetworkParentActor();
     }
 
     if (helperResult?.type) {
@@ -205,19 +205,43 @@ function handleHelperResult(response) {
           break;
         case "screenshotOutput":
           const { args, value } = helperResult;
-          const screenshotMessages = await saveScreenshot(
-            webConsoleUI.getPanelWindow(),
-            args,
-            value
-          );
-          dispatch(
-            messagesActions.messagesAdd(
-              screenshotMessages.map(message => ({
-                message,
-                resourceType: ResourceWatcher.TYPES.PLATFORM_MESSAGE,
-              }))
-            )
-          );
+          const targetFront =
+            toolbox?.getSelectedTargetFront() || hud.currentTarget;
+          let screenshotMessages;
+
+          // @backward-compat { version 87 } The screenshot-content actor isn't available
+          // in older server.
+          // With an old server, the console actor captures the screenshot when handling
+          // the command, and send it to the client which only needs to save it to a file.
+          // With a new server, the server simply acknowledges the command,
+          // and the client will drive the whole screenshot process (capture and save).
+          if (targetFront.hasActor("screenshotContent")) {
+            screenshotMessages = await captureAndSaveScreenshot(
+              targetFront,
+              webConsoleUI.getPanelWindow(),
+              args
+            );
+          } else {
+            screenshotMessages = await saveScreenshot(
+              webConsoleUI.getPanelWindow(),
+              args,
+              value
+            );
+          }
+
+          if (screenshotMessages && screenshotMessages.length > 0) {
+            dispatch(
+              messagesActions.messagesAdd(
+                screenshotMessages.map(message => ({
+                  message: {
+                    level: message.level || "log",
+                    arguments: [message.text],
+                  },
+                  resourceType: ResourceCommand.TYPES.CONSOLE_MESSAGE,
+                }))
+              )
+            );
+          }
           break;
         case "blockURL":
           const blockURL = helperResult.args.url;
@@ -226,7 +250,7 @@ function handleHelperResult(response) {
           // Then, calling the Netmonitor action will only update the visual state of the Netmonitor,
           // but we also have to block the request via the NetworkParentActor.
           // @backward-compat { version 86 } default network events watcher support
-          if (hasNetworkResourceWatcherSupport && networkFront) {
+          if (hasNetworkResourceCommandSupport && networkFront) {
             await networkFront.blockRequest({ url: blockURL });
           }
           toolbox
@@ -238,7 +262,7 @@ function handleHelperResult(response) {
           dispatch(
             messagesActions.messagesAdd([
               {
-                resourceType: ResourceWatcher.TYPES.PLATFORM_MESSAGE,
+                resourceType: ResourceCommand.TYPES.PLATFORM_MESSAGE,
                 message: l10n.getFormatStr(
                   "webconsole.message.commands.blockedURL",
                   [blockURL]
@@ -250,7 +274,7 @@ function handleHelperResult(response) {
         case "unblockURL":
           const unblockURL = helperResult.args.url;
           // @backward-compat { version 86 } see related comments in block url above
-          if (hasNetworkResourceWatcherSupport && networkFront) {
+          if (hasNetworkResourceCommandSupport && networkFront) {
             await networkFront.unblockRequest({ url: unblockURL });
           }
           toolbox
@@ -262,7 +286,7 @@ function handleHelperResult(response) {
           dispatch(
             messagesActions.messagesAdd([
               {
-                resourceType: ResourceWatcher.TYPES.PLATFORM_MESSAGE,
+                resourceType: ResourceCommand.TYPES.PLATFORM_MESSAGE,
                 message: l10n.getFormatStr(
                   "webconsole.message.commands.unblockedURL",
                   [unblockURL]
@@ -310,7 +334,14 @@ function setInputValue(value) {
  *                         the previous evaluation.
  */
 function terminalInputChanged(expression, force = false) {
-  return async ({ dispatch, webConsoleUI, hud, toolbox, client, getState }) => {
+  return async ({
+    dispatch,
+    webConsoleUI,
+    hud,
+    toolbox,
+    commands,
+    getState,
+  }) => {
     const prefs = getAllPrefs(getState());
     if (!prefs.eagerEvaluation) {
       return null;
@@ -346,7 +377,7 @@ function terminalInputChanged(expression, force = false) {
     let mapped;
     ({ expression, mapped } = await getMappedExpression(hud, expression));
 
-    const response = await client.evaluateJSAsync(expression, {
+    const response = await commands.scriptCommand.execute(expression, {
       frameActor: await webConsoleUI.getFrameActor(),
       selectedNodeActor: webConsoleUI.getSelectedNodeActorID(),
       selectedTargetFront: toolbox && toolbox.getSelectedTargetFront(),

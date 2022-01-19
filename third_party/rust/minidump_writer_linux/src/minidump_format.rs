@@ -67,6 +67,16 @@ pub const MD_HEADER_SIGNATURE: u32 = 0x504d444d; /* 'PMDM' */
 pub const MD_HEADER_VERSION: u32 = 0x0000a793; /* 42899 */
 /* MINIDUMP_VERSION */
 
+/// The name of a thread, found in the ThreadNamesStream.
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MDRawThreadName {
+    /// The id of the thread.
+    pub thread_id: u32,
+    /// Where the name of the thread is stored (yes, the legendary RVA64 is real!!).
+    pub thread_name_rva: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Default, PartialEq)]
 pub struct MDRawThread {
@@ -178,6 +188,7 @@ pub struct MDCPUInformation {
 pub struct MDCPUInformation {
     pub cpuid: u32,
     pub elf_hwcaps: u32, /* linux specific, 0 otherwise */
+    _padding: [u32; 4],
 }
 
 #[cfg(target_arch = "mips")]
@@ -185,6 +196,7 @@ pub struct MDCPUInformation {
 #[derive(Debug, Default, PartialEq)]
 pub struct MDCPUInformation {
     pub cpuid: [u64; 2],
+    _padding: [u32; 2],
 }
 
 /* For (MDCPUInformation).arm_cpu_info.elf_hwcaps.
@@ -401,6 +413,8 @@ pub enum MDStreamType {
     JavascriptDataStream = 20,
     SystemMemoryInfoStream = 21,
     ProcessVmCountersStream = 22,
+    IptTraceStream = 23,
+    ThreadNamesStream = 24,
     LastReservedStream = 0x0000ffff,
 
     /* Breakpad extension types.  0x4767 = "Gg" */

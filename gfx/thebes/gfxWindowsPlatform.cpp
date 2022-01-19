@@ -20,7 +20,8 @@
 #include "nsUnicodeProperties.h"
 
 #include "mozilla/Preferences.h"
-#include "mozilla/Services.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/Components.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/WindowsVersion.h"
 #include "nsIGfxInfo.h"
@@ -28,7 +29,6 @@
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "mozilla/Telemetry.h"
-#include "GeckoProfiler.h"
 
 #include "plbase64.h"
 #include "nsIXULRuntime.h"
@@ -381,20 +381,6 @@ void gfxWindowsPlatform::InitAcceleration() {
 
 void gfxWindowsPlatform::InitWebRenderConfig() {
   gfxPlatform::InitWebRenderConfig();
-  if (XRE_IsParentProcess()) {
-    bool prev =
-        Preferences::GetBool("sanity-test.webrender.force-disabled", false);
-    bool current = Preferences::GetBool("gfx.webrender.force-disabled", false);
-    // When "gfx.webrender.force-disabled" pref is changed from false to true,
-    // set "layers.mlgpu.sanity-test-failed" pref to false.
-    // "layers.mlgpu.sanity-test-failed" pref is re-tested by SanityTest.jsm.
-    bool doRetest = !prev && current;
-    if (doRetest) {
-      Preferences::SetBool("layers.mlgpu.sanity-test-failed", false);
-    }
-    // Need to be called after gfxPlatform::InitWebRenderConfig().
-    InitializeAdvancedLayersConfig();
-  }
 
   if (gfxVars::UseWebRender()) {
     UpdateBackendPrefs();
@@ -444,13 +430,11 @@ bool gfxWindowsPlatform::HandleDeviceReset() {
   gfxAlphaBoxBlur::ShutdownBlurCache();
 
   gfxConfig::Reset(Feature::D3D11_COMPOSITING);
-  gfxConfig::Reset(Feature::ADVANCED_LAYERS);
   gfxConfig::Reset(Feature::D3D11_HW_ANGLE);
   gfxConfig::Reset(Feature::DIRECT2D);
 
   InitializeConfig();
   // XXX Add InitWebRenderConfig() calling.
-  InitializeAdvancedLayersConfig();
   if (mInitializedDevices) {
     InitGPUProcessSupport();
     InitializeDevices();
@@ -483,13 +467,18 @@ void gfxWindowsPlatform::UpdateBackendPrefs() {
   BackendPrefsData data = GetBackendPrefs();
   // Remove DIRECT2D1 preference if D2D1Device does not exist.
   if (!Factory::HasD2D1Device()) {
-    data.mCanvasBitmask &= ~BackendTypeBit(BackendType::DIRECT2D1_1);
     data.mContentBitmask &= ~BackendTypeBit(BackendType::DIRECT2D1_1);
-    if (data.mCanvasDefault == BackendType::DIRECT2D1_1) {
-      data.mCanvasDefault = BackendType::SKIA;
-    }
     if (data.mContentDefault == BackendType::DIRECT2D1_1) {
       data.mContentDefault = BackendType::SKIA;
+    }
+
+    // Don't exclude DIRECT2D1_1 if using remote canvas, because DIRECT2D1_1 and
+    // hence the device will be used in the GPU process.
+    if (!gfxPlatform::UseRemoteCanvas()) {
+      data.mCanvasBitmask &= ~BackendTypeBit(BackendType::DIRECT2D1_1);
+      if (data.mCanvasDefault == BackendType::DIRECT2D1_1) {
+        data.mCanvasDefault = BackendType::SKIA;
+      }
     }
   }
   InitBackendPrefs(std::move(data));
@@ -569,20 +558,16 @@ mozilla::gfx::BackendType gfxWindowsPlatform::GetPreferredCanvasBackend() {
   return backend;
 }
 
-gfxPlatformFontList* gfxWindowsPlatform::CreatePlatformFontList() {
-  gfxPlatformFontList* pfl;
-
+bool gfxWindowsPlatform::CreatePlatformFontList() {
   // bug 630201 - older pre-RTM versions of Direct2D/DirectWrite cause odd
   // crashers so block them altogether
   if (IsNotWin7PreRTM() && DWriteEnabled()) {
-    pfl = new gfxDWriteFontList();
-    if (NS_SUCCEEDED(pfl->InitFontList())) {
-      return pfl;
+    if (gfxPlatformFontList::Initialize(new gfxDWriteFontList)) {
+      return true;
     }
     // DWrite font initialization failed! Don't know why this would happen,
     // but apparently it can - see bug 594865.
     // So we're going to fall back to GDI fonts & rendering.
-    gfxPlatformFontList::Shutdown();
     DisableD2D(FeatureStatus::Failed, "Failed to initialize fonts",
                "FEATURE_FAILURE_FONT_FAIL"_ns);
   }
@@ -591,14 +576,7 @@ gfxPlatformFontList* gfxWindowsPlatform::CreatePlatformFontList() {
   // permit it, as we're using GDI fonts.
   mHasVariationFontSupport = false;
 
-  pfl = new gfxGDIFontList();
-
-  if (NS_SUCCEEDED(pfl->InitFontList())) {
-    return pfl;
-  }
-
-  gfxPlatformFontList::Shutdown();
-  return nullptr;
+  return gfxPlatformFontList::Initialize(new gfxGDIFontList);
 }
 
 // This function will permanently disable D2D for the session. It's intended to
@@ -1335,7 +1313,7 @@ void gfxWindowsPlatform::InitializeD3D11Config() {
   if (!IsWin8OrLater() &&
       !DeviceManagerDx::Get()->CheckRemotePresentSupport()) {
     nsCOMPtr<nsIGfxInfo> gfxInfo;
-    gfxInfo = services::GetGfxInfo();
+    gfxInfo = components::GfxInfo::Service();
     nsAutoString adaptorId;
     gfxInfo->GetAdapterDeviceID(adaptorId);
     // Blocklist Intel HD Graphics 510/520/530 on Windows 7 without platform
@@ -1358,44 +1336,6 @@ void gfxWindowsPlatform::InitializeD3D11Config() {
       !gfxPlatform::IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS,
                                         &message, failureId)) {
     d3d11.Disable(FeatureStatus::Blocklisted, message.get(), failureId);
-  }
-}
-
-/* static */
-void gfxWindowsPlatform::InitializeAdvancedLayersConfig() {
-  // Only enable Advanced Layers if D3D11 succeeded.
-  if (!gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
-    return;
-  }
-
-  FeatureState& al = gfxConfig::GetFeature(Feature::ADVANCED_LAYERS);
-  al.SetDefaultFromPref(StaticPrefs::GetPrefName_layers_mlgpu_enabled(),
-                        true /* aIsEnablePref */,
-                        StaticPrefs::GetPrefDefault_layers_mlgpu_enabled());
-
-  // Windows 7 has an extra pref since it uses totally different buffer paths
-  // that haven't been performance tested yet.
-  if (al.IsEnabled() && !IsWin8OrLater()) {
-    if (StaticPrefs::layers_mlgpu_enable_on_windows7_AtStartup()) {
-      al.UserEnable("Enabled for Windows 7 via user-preference");
-    } else {
-      al.Disable(FeatureStatus::Disabled,
-                 "Advanced Layers is disabled on Windows 7 by default",
-                 "FEATURE_FAILURE_DISABLED_ON_WIN7"_ns);
-    }
-  }
-
-  nsCString message, failureId;
-  if (!IsGfxInfoStatusOkay(nsIGfxInfo::FEATURE_ADVANCED_LAYERS, &message,
-                           failureId)) {
-    al.Disable(FeatureStatus::Blocklisted, message.get(), failureId);
-  } else if (gfxVars::UseWebRender()) {
-    al.Disable(FeatureStatus::Blocked,
-               "Blocked from fallback candidate by WebRender usage",
-               "FEATURE_BLOCKED_BY_WEBRENDER_USAGE"_ns);
-  } else if (Preferences::GetBool("layers.mlgpu.sanity-test-failed", false)) {
-    al.Disable(FeatureStatus::Broken, "Failed to render sanity test",
-               "FEATURE_FAILURE_FAILED_TO_RENDER"_ns);
   }
 }
 

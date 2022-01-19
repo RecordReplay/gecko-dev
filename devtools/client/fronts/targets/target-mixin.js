@@ -45,40 +45,54 @@ function TargetMixin(parentClass) {
 
       this.threadFront = null;
 
-      // This flag will be set to true from:
-      // - TabDescriptorFront getTarget(), for local tab targets
-      // - targetFromURL(), for local targets (about:debugging)
-      // - initToolbox(), for some test-only targets
-      this.shouldCloseClient = false;
-
       this._client = client;
 
       // Cache of already created targed-scoped fronts
       // [typeName:string => Front instance]
       this.fronts = new Map();
 
-      // `resource-available-form` events can be emitted by target actors before the
-      // ResourceWatcher could add event listeners. The target front will cache those
-      // events until the ResourceWatcher has added the listeners.
-      this._resourceCache = [];
-      this._onResourceAvailable = this._onResourceAvailable.bind(this);
-      // In order to avoid destroying the `_resourceCache`, we need to call `super.on()`
-      // instead of `this.on()`.
-      super.on("resource-available-form", this._onResourceAvailable);
+      // `resource-available-form` and `resource-updated-form` events can be emitted
+      // by target actors before the ResourceCommand could add event listeners.
+      // The target front will cache those events until the ResourceCommand has
+      // added the listeners.
+      this._resourceCache = {};
 
-      this._addListeners();
+      // In order to avoid destroying the `_resourceCache[event]`, we need to call `super.on()`
+      // instead of `this.on()`.
+      const offResourceAvailable = super.on(
+        "resource-available-form",
+        this._onResourceEvent.bind(this, "resource-available-form")
+      );
+      const offResourceUpdated = super.on(
+        "resource-updated-form",
+        this._onResourceEvent.bind(this, "resource-updated-form")
+      );
+
+      this._offResourceEvent = new Map([
+        ["resource-available-form", offResourceAvailable],
+        ["resource-updated-form", offResourceUpdated],
+      ]);
     }
 
     on(eventName, listener) {
-      if (eventName === "resource-available-form" && this._resourceCache) {
-        this.off("resource-available-form", this._onResourceAvailable);
-        for (const cache of this._resourceCache) {
-          listener(cache);
+      if (this._offResourceEvent && this._offResourceEvent.has(eventName)) {
+        // If a callsite sets an event listener for resource-(available|update)-form:
+
+        // we want to remove the listener we set here in the constructor…
+        const off = this._offResourceEvent.get(eventName);
+        this._offResourceEvent.delete(eventName);
+        off();
+
+        // …and call the new listener with the resources that were put in the cache.
+        if (this._resourceCache[eventName]) {
+          for (const cache of this._resourceCache[eventName]) {
+            listener(cache);
+          }
+          delete this._resourceCache[eventName];
         }
-        this._resourceCache = null;
       }
 
-      super.on(eventName, listener);
+      return super.on(eventName, listener);
     }
 
     /**
@@ -98,14 +112,31 @@ function TargetMixin(parentClass) {
      */
     get descriptorFront() {
       if (this.isDestroyed()) {
-        // If the target was already destroyed, parentFront will be null.
-        return null;
+        throw new Error("Descriptor already destroyed for target: " + this);
+      }
+
+      if (this.isWorkerTarget) {
+        return this;
+      }
+
+      if (this._descriptorFront) {
+        return this._descriptorFront;
       }
 
       if (this.parentFront.typeName.endsWith("Descriptor")) {
         return this.parentFront;
       }
-      return null;
+      throw new Error("Missing descriptor for target: " + this);
+    }
+
+    /**
+     * Top-level targets created on the server will not be created and managed
+     * by a descriptor front. Instead they are created by the Watcher actor.
+     * On the client side we manually re-establish a link between the descriptor
+     * and the new top-level target.
+     */
+    setDescriptor(descriptorFront) {
+      this._descriptorFront = descriptorFront;
     }
 
     get targetType() {
@@ -113,7 +144,14 @@ function TargetMixin(parentClass) {
     }
 
     get isTopLevel() {
-      return this._isTopLevel;
+      // We can't use `getTrait` here as this might be called from a destroyed target (e.g.
+      // from an onTargetDestroyed callback that was triggered by a legacy listener), which
+      // means `this.client` would be null, which would make `getTrait` throw (See Bug 1714974)
+      if (!this.targetForm.hasOwnProperty("isTopLevelTarget")) {
+        return !!this._isTopLevel;
+      }
+
+      return this.targetForm.isTopLevelTarget;
     }
 
     setTargetType(type) {
@@ -121,7 +159,9 @@ function TargetMixin(parentClass) {
     }
 
     setIsTopLevel(isTopLevel) {
-      this._isTopLevel = isTopLevel;
+      if (!this.getTrait("supportsTopLevelTargetFlag")) {
+        this._isTopLevel = isTopLevel;
+      }
     }
 
     /**
@@ -241,10 +281,20 @@ function TargetMixin(parentClass) {
     }
 
     get isLocalTab() {
+      // Worker Target is also the Descriptor,
+      // so avoid infinite loop.
+      if (this.isWorkerTarget) {
+        return false;
+      }
       return !!this.descriptorFront?.isLocalTab;
     }
 
     get localTab() {
+      // Worker Target is also the Descriptor,
+      // so avoid infinite loop.
+      if (this.isWorkerTarget) {
+        return null;
+      }
       return this.descriptorFront?.localTab || null;
     }
 
@@ -299,7 +349,6 @@ function TargetMixin(parentClass) {
         this.isAddon ||
         this.isContentProcess ||
         this.isParentProcess ||
-        this.isWindowTarget ||
         this._forceChrome
       );
     }
@@ -380,14 +429,6 @@ function TargetMixin(parentClass) {
       );
     }
 
-    get isWindowTarget() {
-      return !!(
-        this.targetForm &&
-        this.targetForm.actor &&
-        this.targetForm.actor.match(/conn\d+\.chromeWindowTarget\d+/)
-      );
-    }
-
     get isMultiProcess() {
       return !this.window;
     }
@@ -437,15 +478,15 @@ function TargetMixin(parentClass) {
      * initialization process once; on subsequent call the original promise (_onThreadInitialized)
      * will be returned.
      *
-     * @param {TargetList} targetList
+     * @param {TargetCommand} targetCommand
      * @returns {Promise} A promise that resolves once the thread is attached and resumed.
      */
-    attachAndInitThread(targetList) {
+    attachAndInitThread(targetCommand) {
       if (this._onThreadInitialized) {
         return this._onThreadInitialized;
       }
 
-      this._onThreadInitialized = this._attachAndInitThread(targetList);
+      this._onThreadInitialized = this._attachAndInitThread(targetCommand);
       return this._onThreadInitialized;
     }
 
@@ -454,10 +495,10 @@ function TargetMixin(parentClass) {
      * options it needs (e.g. breakpoints, pause on exception setting, …)
      *
      * @private
-     * @param {TargetList} targetList
+     * @param {TargetCommand} targetCommand
      * @returns {Promise} A promise that resolves once the thread is attached and resumed.
      */
-    async _attachAndInitThread(targetList) {
+    async _attachAndInitThread(targetCommand) {
       // If the target is destroyed or soon will be, don't go further
       if (this.isDestroyedOrBeingDestroyed()) {
         return;
@@ -469,15 +510,22 @@ function TargetMixin(parentClass) {
         await this.attach();
       }
 
-      const isBrowserToolbox = targetList.targetFront.isParentProcess;
+      const isBrowserToolbox =
+        targetCommand.descriptorFront.isParentProcessDescriptor;
       const isNonTopLevelFrameTarget =
-        !this.isTopLevel && this.targetType === targetList.TYPES.FRAME;
+        !this.isTopLevel && this.targetType === targetCommand.TYPES.FRAME;
 
       if (isBrowserToolbox && isNonTopLevelFrameTarget) {
         // In the BrowserToolbox, non-top-level frame targets are already
         // debugged via content-process targets.
         // Do not attach the thread here, as it was already done by the
         // corresponding content-process target.
+        return;
+      }
+
+      // Avoid attaching any thread actor in the browser console
+      // in order to avoid trigerring any type of breakpoint.
+      if (targetCommand.descriptorFront.createdForBrowserConsole) {
         return;
       }
 
@@ -501,7 +549,7 @@ function TargetMixin(parentClass) {
         await threadFront.resume();
       } catch (ex) {
         if (ex.error === "wrongOrder") {
-          targetList.emit("target-thread-wrong-order-on-resume");
+          targetCommand.emit("target-thread-wrong-order-on-resume");
         } else {
           throw ex;
         }
@@ -516,6 +564,28 @@ function TargetMixin(parentClass) {
         );
       }
       this.threadFront = await this.getFront("thread");
+
+      // Avoid attaching if the thread actor was already attached on target creation from the server side.
+      // This doesn't include:
+      // * targets that aren't yet supported by the Watcher (like web extensions),
+      // * workers, which still use a unique codepath for thread actor attach
+      // * all targets when connecting to an older server
+      // @backward-compat { version 87 } If all targets are supported by watcher actor, and workers no longer use
+      //                                 its unique attach sequence, we can assume the thread front is always attached.
+      const isAttached =
+        this.getTrait("supportsThreadActorIsAttached") &&
+        (await this.threadFront.isAttached());
+      if (isAttached) {
+        // If the Thread actor has already been attached from the server side
+        // by the Watcher Actor, we still have to pass options that aren't yet managed via
+        // the Watcher actor's addWatcherDataEntry codepath (bug 1687261).
+
+        // @backward-compat { version 91 } Thread configuration actor now supports most thread options
+        if (!this.getTrait("supportsThreadConfigurationOptions")) {
+          await this.threadFront.reconfigure(options);
+        }
+        return this.threadFront;
+      }
       if (
         this.isDestroyedOrBeingDestroyed() ||
         this.threadFront.isDestroyed()
@@ -526,38 +596,6 @@ function TargetMixin(parentClass) {
       await this.threadFront.attach(options);
 
       return this.threadFront;
-    }
-
-    /**
-     * Setup listeners.
-     */
-    _addListeners() {
-      this.client.on("closed", this.destroy);
-
-      // `tabDetached` is sent by all target targets types: frame, process and workers.
-      // This is sent when the target is destroyed:
-      // * the target context destroys itself (the tab closes for ex, or the worker shuts down)
-      //   in this case, it may be the connector that send this event in the name of the target actor
-      // * the target actor is destroyed, but the target context stays up and running (for ex, when we call Watcher.unwatchTargets)
-      // * the DevToolsServerConnection closes (client closes the connection)
-      this.on("tabDetached", this.destroy);
-    }
-
-    /**
-     * Teardown listeners.
-     */
-    _removeListeners() {
-      // Remove listeners set in _addListeners
-      if (this.client) {
-        this.client.off("closed", this.destroy);
-      }
-      this.off("tabDetached", this.destroy);
-
-      // Remove listeners set in attachConsole
-      if (this.removeOnInspectObjectListener) {
-        this.removeOnInspectObjectListener();
-        this.removeOnInspectObjectListener = null;
-      }
     }
 
     isDestroyedOrBeingDestroyed() {
@@ -584,9 +622,6 @@ function TargetMixin(parentClass) {
     }
 
     async _destroyTarget() {
-      // Before taking any action, notify listeners that destruction is imminent.
-      this.emit("close");
-
       // If the target is being attached, try to wait until it's done, to prevent having
       // pending connection to the server when the toolbox is destroyed.
       if (this._onThreadInitialized) {
@@ -612,22 +647,22 @@ function TargetMixin(parentClass) {
         }
       }
 
-      this._removeListeners();
+      // Remove listeners set in attachConsole
+      if (this.removeOnInspectObjectListener) {
+        this.removeOnInspectObjectListener();
+        this.removeOnInspectObjectListener = null;
+      }
 
       this.threadFront = null;
+      this._offResourceEvent = null;
 
-      if (this.shouldCloseClient) {
-        try {
-          await this._client.close();
-        } catch (e) {
-          // Ignore any errors while closing, since there is not much that can be done
-          // at this point.
-          console.warn("Error while closing client:", e);
-        }
+      // This event should be emitted before calling super.destroy(), because
+      // super.destroy() will remove all event listeners attached to this front.
+      this.emit("target-destroyed");
 
-        // Not all targets supports attach/detach. For example content process doesn't.
-        // Also ensure that the front is still active before trying to do the request.
-      } else if (this.detach && !this.isDestroyed()) {
+      // Not all targets supports attach/detach. For example content process doesn't.
+      // Also ensure that the front is still active before trying to do the request.
+      if (this.detach && !this.isDestroyed()) {
         // The client was handed to us, so we are not responsible for closing
         // it. We just need to detach from the tab, if already attached.
         // |detach| may fail if the connection is already dead, so proceed with
@@ -638,10 +673,6 @@ function TargetMixin(parentClass) {
           this.logDetachError(e);
         }
       }
-
-      // This event should be emitted before calling super.destroy(), because
-      // super.destroy() will remove all event listeners attached to this front.
-      this.emit("target-destroyed");
 
       // Do that very last in order to let a chance to dispatch `detach` requests.
       super.destroy();
@@ -694,10 +725,11 @@ function TargetMixin(parentClass) {
       this._url = null;
     }
 
-    _onResourceAvailable(resources) {
-      if (this._resourceCache) {
-        this._resourceCache.push(resources);
+    _onResourceEvent(eventName, resources) {
+      if (!this._resourceCache[eventName]) {
+        this._resourceCache[eventName] = [];
       }
+      this._resourceCache[eventName].push(resources);
     }
 
     toString() {

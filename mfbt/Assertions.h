@@ -9,7 +9,8 @@
 #ifndef mozilla_Assertions_h
 #define mozilla_Assertions_h
 
-#if defined(MOZILLA_INTERNAL_API) && defined(__cplusplus)
+#if (defined(MOZ_HAS_MOZGLUE) || defined(MOZILLA_INTERNAL_API)) && \
+    !defined(__wasi__)
 #  define MOZ_DUMP_ASSERTION_STACK
 #endif
 
@@ -20,11 +21,7 @@
 #include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/Types.h"
 #ifdef MOZ_DUMP_ASSERTION_STACK
-#  include "nsTraceRefcnt.h"
-#  ifdef ANDROID
-#    include "mozilla/StackWalk.h"
-#    include <algorithm>
-#  endif
+#  include "mozilla/StackWalk.h"
 #endif
 
 /*
@@ -63,6 +60,10 @@ __declspec(dllimport) int __stdcall TerminateProcess(void* hProcess,
                                                      unsigned int uExitCode);
 __declspec(dllimport) void* __stdcall GetCurrentProcess(void);
 MOZ_END_EXTERN_C
+#elif defined(__wasi__)
+/*
+ * On Wasm/WASI platforms, we just call __builtin_trap().
+ */
 #else
 #  include <signal.h>
 #endif
@@ -71,6 +72,13 @@ MOZ_END_EXTERN_C
 #endif
 
 MOZ_BEGIN_EXTERN_C
+
+#if defined(ANDROID) && defined(MOZ_DUMP_ASSERTION_STACK)
+MOZ_MAYBE_UNUSED static void MOZ_ReportAssertionFailurePrintFrame(
+    const char* aBuf) {
+  __android_log_print(ANDROID_LOG_FATAL, "MOZ_Assert", "%s\n", aBuf);
+}
+#endif
 
 /*
  * Prints |aStr| as an assertion failure (using aFilename and aLine as the
@@ -88,24 +96,13 @@ MOZ_ReportAssertionFailure(const char* aStr, const char* aFilename,
                       "Assertion failure: %s, at %s:%d\n", aStr, aFilename,
                       aLine);
 #  if defined(MOZ_DUMP_ASSERTION_STACK)
-  nsTraceRefcnt::WalkTheStack(
-      [](uint32_t aFrameNumber, void* aPC, void* aSP, void* aClosure) {
-        MozCodeAddressDetails details;
-        static const size_t buflen = 1024;
-        char buf[buflen + 1];  // 1 for trailing '\n'
-
-        MozDescribeCodeAddress(aPC, &details);
-        MozFormatCodeAddressDetails(buf, buflen, aFrameNumber, aPC, &details);
-        size_t len = std::min(strlen(buf), buflen + 1 - 2);
-        buf[len++] = '\n';
-        buf[len] = '\0';
-        __android_log_print(ANDROID_LOG_FATAL, "MOZ_Assert", "%s", buf);
-      });
+  MozWalkTheStackWithWriter(MOZ_ReportAssertionFailurePrintFrame, CallerPC(),
+                            /* aMaxFrames */ 0);
 #  endif
 #else
   fprintf(stderr, "Assertion failure: %s, at %s:%d\n", aStr, aFilename, aLine);
 #  if defined(MOZ_DUMP_ASSERTION_STACK)
-  nsTraceRefcnt::WalkTheStack(stderr);
+  MozWalkTheStack(stderr, CallerPC(), /* aMaxFrames */ 0);
 #  endif
   fflush(stderr);
 #endif
@@ -120,7 +117,7 @@ MOZ_MAYBE_UNUSED static MOZ_COLD MOZ_NEVER_INLINE void MOZ_ReportCrash(
 #else
   fprintf(stderr, "Hit MOZ_CRASH(%s) at %s:%d\n", aStr, aFilename, aLine);
 #  if defined(MOZ_DUMP_ASSERTION_STACK)
-  nsTraceRefcnt::WalkTheStack(stderr);
+  MozWalkTheStack(stderr, CallerPC(), /* aMaxFrames */ 0);
 #  endif
   fflush(stderr);
 #endif
@@ -164,6 +161,11 @@ MOZ_NoReturn(int aLine) {
       __debugbreak();            \
       MOZ_NoReturn(line);        \
     } while (false)
+
+#elif __wasi__
+
+#  define MOZ_REALLY_CRASH(line) __builtin_trap()
+
 #else
 
 /*
@@ -594,7 +596,7 @@ struct AssertionConditionType {
 #define MOZ_ALWAYS_TRUE(expr)              \
   do {                                     \
     if (MOZ_LIKELY(expr)) {                \
-      /* Silence MOZ_MUST_USE. */          \
+      /* Silence [[nodiscard]]. */         \
     } else {                               \
       MOZ_DIAGNOSTIC_ASSERT(false, #expr); \
     }                                      \

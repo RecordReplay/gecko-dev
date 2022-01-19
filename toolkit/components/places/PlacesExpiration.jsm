@@ -397,25 +397,29 @@ const EXPIRATION_QUERIES = {
       ACTION.IDLE_DAILY |
       ACTION.DEBUG,
   },
-};
 
-/**
- * Sends a bookmarks notification through the given observers.
- *
- * @param observers
- *        array of nsINavBookmarkObserver objects.
- * @param notification
- *        the notification name.
- * @param args
- *        array of arguments to pass to the notification.
- */
-function notify(observers, notification, args = []) {
-  for (let observer of observers) {
-    try {
-      observer[notification](...args);
-    } catch (ex) {}
-  }
-}
+  // Expire interactions older than N days.
+  QUERY_EXPIRE_INTERACTIONS: {
+    sql: `DELETE FROM moz_places_metadata
+          WHERE id IN (
+            SELECT id FROM moz_places_metadata
+            WHERE updated_at < strftime('%s','now','localtime','-' || :days_interactions || ' day','start of day','utc') * 1000
+            ORDER BY updated_at ASC
+            LIMIT :limit_interactions
+          )`,
+    get disabled() {
+      return !Services.prefs.getBoolPref(
+        "browser.places.interactions.enabled",
+        false
+      );
+    },
+    actions:
+      ACTION.SHUTDOWN_DIRTY |
+      ACTION.IDLE_DIRTY |
+      ACTION.IDLE_DAILY |
+      ACTION.DEBUG,
+  },
+};
 
 function nsPlacesExpiration() {
   // Allows other components to easily access getPagesLimit.
@@ -611,8 +615,6 @@ nsPlacesExpiration.prototype = {
     let mostRecentExpiredVisit = row.getResultByName(
       "most_recent_expired_visit"
     );
-    let reason = Ci.nsINavHistoryObserver.REASON_EXPIRED;
-    let observers = PlacesUtils.history.getObservers();
 
     if (mostRecentExpiredVisit) {
       let days = parseInt(
@@ -626,17 +628,16 @@ nsPlacesExpiration.prototype = {
     }
 
     // Dispatch expiration notifications to history.
-    if (wholeEntry) {
-      notify(observers, "onDeleteURI", [uri, guid, reason]);
-    } else {
-      notify(observers, "onDeleteVisits", [
-        uri,
-        visitDate > 0,
-        guid,
-        reason,
-        0,
-      ]);
-    }
+    const isRemovedFromStore = !!wholeEntry;
+    PlacesObservers.notifyListeners([
+      new PlacesVisitRemoved({
+        url: uri.spec,
+        pageGuid: guid,
+        reason: PlacesVisitRemoved.REASON_EXPIRED,
+        isRemovedFromStore,
+        isPartialVisistsRemoval: !isRemovedFromStore && visitDate > 0,
+      }),
+    ]);
   },
 
   _shuttingDown: false,
@@ -779,7 +780,7 @@ nsPlacesExpiration.prototype = {
           await db.executeTransaction(async () => {
             for (let queryType in EXPIRATION_QUERIES) {
               let query = EXPIRATION_QUERIES[queryType];
-              if (query.actions & aAction) {
+              if (query.actions & aAction && !query.disabled) {
                 let params = await this._getQueryParams(
                   queryType,
                   aLimit,
@@ -918,6 +919,15 @@ nsPlacesExpiration.prototype = {
         return {
           limit_inputhistory: baseLimit,
         };
+      case "QUERY_EXPIRE_INTERACTIONS":
+        return {
+          days_interactions: Services.prefs.getIntPref(
+            "browser.places.interactions.expireDays",
+            60
+          ),
+          limit_interactions:
+            aLimit == LIMIT.DEBUG && baseLimit == -1 ? 0 : baseLimit,
+        };
     }
     return undefined;
   },
@@ -955,7 +965,6 @@ nsPlacesExpiration.prototype = {
 
   QueryInterface: ChromeUtils.generateQI([
     "nsIObserver",
-    "nsINavHistoryObserver",
     "nsITimerCallback",
     "nsISupportsWeakReference",
   ]),

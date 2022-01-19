@@ -6,7 +6,6 @@
  * UrlbarProviderHeuristicFallback.
  */
 
-const ENGINE_NAME = "engine-suggestions.xml";
 const SUGGEST_PREF = "browser.urlbar.suggest.searches";
 const SUGGEST_ENABLED_PREF = "browser.search.suggest.enabled";
 const PRIVATE_SEARCH_PREF = "browser.search.separatePrivateDefault.ui.enabled";
@@ -18,10 +17,9 @@ const PRIVATE_SEARCH_PREF = "browser.search.separatePrivateDefault.ui.enabled";
 const TEST_SPACES = [" ", "\u3000", " \u3000", "\u3000 "];
 
 add_task(async function setup() {
-  // Install a test engine so we're sure of ENGINE_NAME.
+  // Install a test engine.
   let engine = await addTestSuggestionsEngine();
 
-  // Install the test engine.
   let oldDefaultEngine = await Services.search.getDefault();
   registerCleanupFunction(async () => {
     Services.search.setDefault(oldDefaultEngine);
@@ -50,7 +48,7 @@ add_task(async function() {
         heuristic: true,
       }),
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
       }),
     ],
   });
@@ -68,7 +66,7 @@ add_task(async function() {
         heuristic: true,
       }),
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
       }),
     ],
   });
@@ -86,7 +84,7 @@ add_task(async function() {
         heuristic: true,
       }),
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
       }),
     ],
   });
@@ -200,7 +198,7 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
       }),
     ],
@@ -213,7 +211,7 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
       }),
     ],
@@ -237,7 +235,7 @@ add_task(async function() {
         heuristic: true,
       }),
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
       }),
     ],
   });
@@ -352,7 +350,7 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
         query: "bacon",
       }),
@@ -367,7 +365,7 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
       }),
     ],
@@ -427,7 +425,7 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
       }),
     ],
@@ -440,7 +438,7 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
       }),
     ],
@@ -482,19 +480,21 @@ add_task(async function() {
     context,
     matches: [
       makeSearchResult(context, {
-        engineName: ENGINE_NAME,
+        engineName: SUGGESTIONS_ENGINE_NAME,
         heuristic: true,
       }),
     ],
   });
 
   info("change default engine");
-  let originalTestEngine = Services.search.getEngineByName(ENGINE_NAME);
-  let engine2 = await Services.search.addEngineWithDetails("AliasEngine", {
-    alias: "alias",
-    method: "GET",
-    template: "http://example.com/?q={searchTerms}",
+  let originalTestEngine = Services.search.getEngineByName(
+    SUGGESTIONS_ENGINE_NAME
+  );
+  await SearchTestUtils.installSearchExtension({
+    name: "AliasEngine",
+    keyword: "alias",
   });
+  let engine2 = Services.search.getEngineByName("AliasEngine");
   Assert.notEqual(
     Services.search.defaultEngine,
     engine2,
@@ -532,7 +532,7 @@ add_task(async function() {
       };
       if (token == UrlbarTokenizer.RESTRICT.SEARCH) {
         payload.source = UrlbarUtils.RESULT_SOURCE.SEARCH;
-        payload.engineName = ENGINE_NAME;
+        payload.engineName = SUGGESTIONS_ENGINE_NAME;
       }
       await check_results({
         context,
@@ -560,7 +560,7 @@ add_task(async function() {
       };
       if (token == UrlbarTokenizer.RESTRICT.SEARCH) {
         payload.source = UrlbarUtils.RESULT_SOURCE.SEARCH;
-        payload.engineName = ENGINE_NAME;
+        payload.engineName = SUGGESTIONS_ENGINE_NAME;
       }
       await check_results({
         context,
@@ -589,14 +589,90 @@ add_task(async function() {
           makeSearchResult(context, {
             heuristic: true,
             query: expectedQuery,
-            engineName: ENGINE_NAME,
+            engineName: SUGGESTIONS_ENGINE_NAME,
           }),
         ],
       });
     }
   }
 
-  await Services.search.removeEngine(engine2);
+  info(
+    "Test the format inputed is user@host, and the host is in domainwhitelist"
+  );
+  Services.prefs.setBoolPref("browser.fixup.domainwhitelist.test-host", true);
+  registerCleanupFunction(() => {
+    Services.prefs.clearUserPref("browser.fixup.domainwhitelist.test-host");
+  });
+
+  query = "any@test-host";
+  context = createContext(query, { isPrivate: false });
+  await check_results({
+    context,
+    matches: [
+      makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+        uri: `http://${query}/`,
+        title: `http://${query}/`,
+        heuristic: true,
+      }),
+      makeSearchResult(context, {
+        engineName: SUGGESTIONS_ENGINE_NAME,
+      }),
+    ],
+  });
+
+  info(
+    "Test the format inputed is user@host, but the host is not in domainwhitelist"
+  );
+  query = "any@not-host";
+  context = createContext(query, { isPrivate: false });
+  await check_results({
+    context,
+    matches: [
+      makeSearchResult(context, {
+        heuristic: true,
+        query,
+        engineName: SUGGESTIONS_ENGINE_NAME,
+      }),
+    ],
+  });
+
+  info(
+    "Test if the format of user:pass@host is handled as visit even if the host is not in domainwhitelist"
+  );
+  query = "user:pass@not-host";
+  context = createContext(query, { isPrivate: false });
+  await check_results({
+    context,
+    matches: [
+      makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+        uri: "http://user:pass@not-host/",
+        title: "http://user:pass@not-host/",
+        heuristic: true,
+      }),
+    ],
+  });
+
+  info("Test if the format of user@ipaddress is handled as visit");
+  query = "user@192.168.0.1";
+  context = createContext(query, { isPrivate: false });
+  await check_results({
+    context,
+    matches: [
+      makeVisitResult(context, {
+        source: UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
+        uri: "http://user@192.168.0.1/",
+        title: "http://user@192.168.0.1/",
+        heuristic: true,
+      }),
+      makeSearchResult(context, {
+        heuristic: false,
+        query,
+        engineName: SUGGESTIONS_ENGINE_NAME,
+      }),
+    ],
+  });
 });
 
 /**

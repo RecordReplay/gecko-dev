@@ -172,7 +172,6 @@
       } else {
         Services.search.defaultEngine = val;
       }
-      return val;
     }
 
     get currentEngine() {
@@ -194,7 +193,7 @@
     }
 
     set value(val) {
-      return (this._textbox.value = val);
+      this._textbox.value = val;
     }
 
     get value() {
@@ -486,6 +485,10 @@
       this.addEventListener(
         "blur",
         event => {
+          // Reset the flag since we can't capture enter keyup event if the event happens
+          // after moving the focus.
+          this._needBrowserFocusAtEnterKeyUp = false;
+
           // If the input field is still focused then a different window has
           // received focus, ignore the next focus event.
           this._ignoreFocus = document.activeElement == this._textbox;
@@ -644,7 +647,6 @@
         },
         set(val) {
           this.setAttribute("autocompletesearchparam", val);
-          return val;
         },
       });
 
@@ -653,7 +655,7 @@
           return this.popup.oneOffButtons.selectedButton;
         },
         set(val) {
-          return (this.popup.oneOffButtons.selectedButton = val);
+          this.popup.oneOffButtons.selectedButton = val;
         },
       });
 
@@ -736,18 +738,16 @@
           // clear any previous selection, see bugs 400671 and 488357
           popup.selectedIndex = -1;
 
-          document.popupNode = null;
-
           // Ensure the panel has a meaningful initial size and doesn't grow
           // unconditionally.
           requestAnimationFrame(() => {
             let { width } = window.windowUtils.getBoundsWithoutFlushing(this);
             if (popup.oneOffButtons) {
               // We have a min-width rule on search-panel-one-offs to show at
-              // least 3 buttons, so take that into account here.
-              width = Math.max(width, popup.oneOffButtons.buttonWidth * 3);
+              // least 4 buttons, so take that into account here.
+              width = Math.max(width, popup.oneOffButtons.buttonWidth * 4);
             }
-            popup.style.width = width + "px";
+            popup.style.setProperty("--panel-width", width + "px");
           });
 
           popup._invalidate();
@@ -813,13 +813,13 @@
     _buildContextMenu() {
       const raw = `
         <menuitem data-l10n-id="text-action-undo" cmd="cmd_undo"/>
+        <menuitem data-l10n-id="text-action-redo" cmd="cmd_redo"/>
         <menuseparator/>
         <menuitem data-l10n-id="text-action-cut" cmd="cmd_cut"/>
         <menuitem data-l10n-id="text-action-copy" cmd="cmd_copy"/>
         <menuitem data-l10n-id="text-action-paste" cmd="cmd_paste"/>
         <menuitem class="searchbar-paste-and-search"/>
         <menuitem data-l10n-id="text-action-delete" cmd="cmd_delete"/>
-        <menuseparator/>
         <menuitem data-l10n-id="text-action-select-all" cmd="cmd_selectAll"/>
         <menuseparator/>
         <menuitem class="searchbar-clear-history"/>

@@ -139,6 +139,13 @@ class KnowsCompositor {
     return lock.ref().mTextureFactoryIdentifier.mUseCompositorWnd;
   }
 
+  WebRenderBackend GetWebRenderBackend() const {
+    auto lock = mData.Lock();
+    MOZ_ASSERT(lock.ref().mTextureFactoryIdentifier.mParentBackend ==
+               layers::LayersBackend::LAYERS_WR);
+    return lock.ref().mTextureFactoryIdentifier.mWebRenderBackend;
+  }
+
   bool UsingSoftwareWebRender() const {
     auto lock = mData.Lock();
     return lock.ref().mTextureFactoryIdentifier.mParentBackend ==
@@ -155,6 +162,16 @@ class KnowsCompositor {
                WebRenderBackend::SOFTWARE &&
            lock.ref().mTextureFactoryIdentifier.mWebRenderCompositor ==
                layers::WebRenderCompositor::D3D11;
+  }
+
+  bool UsingSoftwareWebRenderOpenGL() const {
+    auto lock = mData.Lock();
+    return lock.ref().mTextureFactoryIdentifier.mParentBackend ==
+               layers::LayersBackend::LAYERS_WR &&
+           lock.ref().mTextureFactoryIdentifier.mWebRenderBackend ==
+               WebRenderBackend::SOFTWARE &&
+           lock.ref().mTextureFactoryIdentifier.mWebRenderCompositor ==
+               layers::WebRenderCompositor::OPENGL;
   }
 
   TextureFactoryIdentifier GetTextureFactoryIdentifier() const {

@@ -4,7 +4,6 @@ browser/components/translation/cld2/
 browser/extensions/formautofill/content/third-party/
 browser/extensions/formautofill/test/fixtures/third_party/
 browser/extensions/screenshots/build/raven.js
-devtools/client/debugger/flow-typed/npm/
 devtools/client/inspector/markup/test/lib_*
 devtools/client/jsonview/lib/require.js
 devtools/client/shared/demangle.js
@@ -134,13 +133,14 @@ modules/woff2/
 modules/xz-embedded/
 modules/zlib/
 mozglue/misc/decimal/
+mozglue/tests/glibc_printf_tests/
 netwerk/dns/nsIDNKitInterface.h
 netwerk/sctp/src/
 netwerk/srtp/src/
 nsprpub/
 other-licenses/
 parser/expat/
-remote/test/browser/chrome-remote-interface.js
+remote/cdp/test/browser/chrome-remote-interface.js
 remote/test/puppeteer/
 security/nss/
 security/sandbox/chromium/
@@ -161,10 +161,12 @@ testing/web-platform/tests/tools/third_party/
 testing/xpcshell/dns-packet/
 testing/xpcshell/node-ip/
 testing/xpcshell/node-http2/
+testing/xpcshell/odoh-wasm/
 third_party/
 toolkit/components/certviewer/content/vendor/
 toolkit/components/jsoncpp/
 toolkit/components/normandy/vendor/
+toolkit/components/passwordmgr/PasswordRulesParser.jsm
 toolkit/components/protobuf/
 toolkit/components/url-classifier/chromium/
 toolkit/components/utils/mozjexl.js

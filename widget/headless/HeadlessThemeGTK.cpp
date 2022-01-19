@@ -18,7 +18,7 @@ NS_IMETHODIMP
 HeadlessThemeGTK::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                        StyleAppearance aAppearance,
                                        const nsRect& aRect,
-                                       const nsRect& aDirtyRect) {
+                                       const nsRect& aDirtyRect, DrawOverflow) {
   return NS_OK;
 }
 
@@ -53,7 +53,6 @@ LayoutDeviceIntMargin HeadlessThemeGTK::GetWidgetBorder(
     case StyleAppearance::SpinnerTextfield:
     case StyleAppearance::Textarea:
     case StyleAppearance::Menupopup:
-    case StyleAppearance::MozGtkInfoBar:
       result.top = 1;
       result.right = 1;
       result.bottom = 1;
@@ -149,6 +148,14 @@ bool HeadlessThemeGTK::GetWidgetPadding(nsDeviceContext* aContext,
   return false;
 }
 
+static const int32_t kMinimumScrollbarSize = 10;
+
+// TODO: Should probably deal with scrollbar-width somehow.
+auto HeadlessThemeGTK::GetScrollbarSizes(nsPresContext*, StyleScrollbarWidth,
+                                         Overlay) -> ScrollbarSizes {
+  return {kMinimumScrollbarSize, kMinimumScrollbarSize};
+}
+
 NS_IMETHODIMP
 HeadlessThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                        nsIFrame* aFrame,
@@ -227,10 +234,10 @@ HeadlessThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
       break;
     case StyleAppearance::ScrollbarHorizontal:
       aResult->width = 31;
-      aResult->height = 10;
+      aResult->height = kMinimumScrollbarSize;
       break;
     case StyleAppearance::ScrollbarVertical:
-      aResult->width = 10;
+      aResult->width = kMinimumScrollbarSize;
       aResult->height = 31;
       break;
     case StyleAppearance::ScrollbarbuttonUp:
@@ -373,7 +380,6 @@ HeadlessThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case StyleAppearance::Radiomenuitem:
     case StyleAppearance::Menuseparator:
     case StyleAppearance::Menuarrow:
-    case StyleAppearance::MozGtkInfoBar:
       return !IsWidgetStyled(aPresContext, aFrame, aAppearance);
     case StyleAppearance::MozMenulistArrowButton:
       return (!aFrame ||

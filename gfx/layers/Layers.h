@@ -35,6 +35,7 @@
 #include "mozilla/layers/LayerAttributes.h"  // for SimpleLayerAttributes, ScrollbarData (ptr only)
 #include "mozilla/layers/LayerManager.h"  // for LayerManager, LayerManager::PaintedLayerCreationHint
 #include "mozilla/layers/ScrollableLayerGuid.h"  // for ScrollableLayerGuid, ScrollableLayerGuid::ViewID
+#include "mozilla/layers/BSPTree.h"
 #include "nsISupports.h"    // for NS_INLINE_DECL_REFCOUNTING
 #include "nsPoint.h"        // for nsIntPoint
 #include "nsRect.h"         // for nsIntRect
@@ -77,7 +78,6 @@ class ShadowableLayer;
 class SpecificLayerAttributes;
 class Compositor;
 class TransformData;
-struct LayerPolygon;
 struct PropertyAnimationGroup;
 
 namespace layerscope {
@@ -528,10 +528,10 @@ class Layer {
     }
   }
 
-  void SetIsAsyncZoomContainer(const Maybe<FrameMetrics::ViewID>& aViewId) {
-    if (mSimpleAttrs.SetIsAsyncZoomContainer(aViewId)) {
+  void SetAsyncZoomContainerId(const Maybe<FrameMetrics::ViewID>& aViewId) {
+    if (mSimpleAttrs.SetAsyncZoomContainerId(aViewId)) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(
-          this, ("Layer::Mutated(%p) IsAsyncZoomContainer", this));
+          this, ("Layer::Mutated(%p) AsyncZoomContainerId", this));
       MutatedSimple();
     }
   }
@@ -679,8 +679,8 @@ class Layer {
   virtual float GetPostXScale() const { return mSimpleAttrs.GetPostXScale(); }
   virtual float GetPostYScale() const { return mSimpleAttrs.GetPostYScale(); }
   bool GetIsFixedPosition() { return mSimpleAttrs.IsFixedPosition(); }
-  Maybe<FrameMetrics::ViewID> IsAsyncZoomContainer() {
-    return mSimpleAttrs.IsAsyncZoomContainer();
+  Maybe<FrameMetrics::ViewID> GetAsyncZoomContainerId() {
+    return mSimpleAttrs.GetAsyncZoomContainerId();
   }
   bool GetTransformIsPerspective() const {
     return mSimpleAttrs.GetTransformIsPerspective();

@@ -10,14 +10,20 @@
 #include "js/GCAPI.h"
 #include "jsapi.h"
 #include "mozilla/HoldDropJSObjects.h"
+#include "PerformanceEventTiming.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/Event.h"
+#include "mozilla/dom/EventCounts.h"
+#include "mozilla/dom/PerformanceEventTimingBinding.h"
 #include "mozilla/dom/PerformanceNavigationTiming.h"
 #include "mozilla/dom/PerformanceResourceTiming.h"
 #include "mozilla/dom/PerformanceTiming.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_privacy.h"
+#include "mozilla/PresShell.h"
 #include "nsIChannel.h"
 #include "nsIHttpChannel.h"
+#include "nsIDocShell.h"
 
 namespace mozilla::dom {
 
@@ -52,14 +58,19 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(PerformanceMainThread)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(PerformanceMainThread,
                                                 Performance)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mTiming, mNavigation, mDocEntry, mFCPTiming)
-  tmp->mMozMemory = nullptr;
-  mozilla::DropJSObjects(this);
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mTiming, mNavigation, mDocEntry, mFCPTiming,
+                                  mEventTimingEntries, mFirstInputEvent,
+                                  mPendingPointerDown,
+                                  mPendingEventTimingEntries, mEventCounts)
+  mozilla::DropJSObjects(tmp);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(PerformanceMainThread,
                                                   Performance)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTiming, mNavigation, mDocEntry, mFCPTiming)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTiming, mNavigation, mDocEntry, mFCPTiming,
+                                    mEventTimingEntries, mFirstInputEvent,
+                                    mPendingPointerDown,
+                                    mPendingEventTimingEntries, mEventCounts)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(PerformanceMainThread,
@@ -85,6 +96,9 @@ PerformanceMainThread::PerformanceMainThread(nsPIDOMWindowInner* aWindow,
       mChannel(aChannel),
       mCrossOriginIsolated(aWindow->AsGlobal()->CrossOriginIsolated()) {
   MOZ_ASSERT(aWindow, "Parent window object should be provided");
+  if (StaticPrefs::dom_enable_event_timing()) {
+    mEventCounts = new class EventCounts(GetParentObject());
+  }
   CreateNavigationTimingEntry();
 }
 
@@ -114,8 +128,9 @@ void PerformanceMainThread::GetMozMemory(JSContext* aCx,
 PerformanceTiming* PerformanceMainThread::Timing() {
   if (!mTiming) {
     // For navigation timing, the third argument (an nsIHttpChannel) is null
-    // since the cross-domain redirect were already checked.  The last argument
-    // (zero time) for performance.timing is the navigation start value.
+    // since the cross-domain redirect were already checked.  The last
+    // argument (zero time) for performance.timing is the navigation start
+    // value.
     mTiming = new PerformanceTiming(this, mChannel, nullptr,
                                     mDOMTiming->GetNavigationStart());
   }
@@ -181,6 +196,95 @@ void PerformanceMainThread::SetFCPTimingEntry(PerformancePaintTiming* aEntry) {
   if (!mFCPTiming) {
     mFCPTiming = aEntry;
     QueueEntry(aEntry);
+  }
+}
+
+void PerformanceMainThread::InsertEventTimingEntry(
+    PerformanceEventTiming* aEventEntry) {
+  mPendingEventTimingEntries.insertBack(aEventEntry);
+
+  if (mHasQueuedRefreshdriverObserver) {
+    return;
+  }
+
+  PresShell* presShell = GetPresShell();
+  if (!presShell) {
+    return;
+  }
+
+  nsPresContext* presContext = presShell->GetPresContext();
+  if (!presContext) {
+    return;
+  }
+
+  // Using PostRefreshObserver is fine because we don't
+  // run any JS between the `mark paint timing` step and the
+  // `pending Event Timing entries` step. So mixing the order
+  // here is fine.
+  mHasQueuedRefreshdriverObserver = true;
+  presContext->RegisterManagedPostRefreshObserver(
+      new ManagedPostRefreshObserver(
+          presContext, [performance = RefPtr<PerformanceMainThread>(this)](
+                           bool aWasCanceled) {
+            if (!aWasCanceled) {
+              // XXX Should we do this even if canceled?
+              performance->DispatchPendingEventTimingEntries();
+            }
+            performance->mHasQueuedRefreshdriverObserver = false;
+            return ManagedPostRefreshObserver::Unregister::Yes;
+          }));
+}
+
+void PerformanceMainThread::BufferEventTimingEntryIfNeeded(
+    PerformanceEventTiming* aEventEntry) {
+  if (mEventTimingEntries.Length() < kDefaultEventTimingBufferSize) {
+    mEventTimingEntries.AppendElement(aEventEntry);
+  }
+}
+
+void PerformanceMainThread::DispatchPendingEventTimingEntries() {
+  DOMHighResTimeStamp renderingTime = NowUnclamped();
+
+  while (!mPendingEventTimingEntries.isEmpty()) {
+    RefPtr<PerformanceEventTiming> entry =
+        mPendingEventTimingEntries.popFirst();
+
+    entry->SetDuration(renderingTime - entry->RawStartTime());
+    IncEventCount(entry->GetName());
+
+    if (entry->RawDuration() >= kDefaultEventTimingMinDuration) {
+      QueueEntry(entry);
+    }
+
+    if (!mHasDispatchedInputEvent) {
+      switch (entry->GetMessage()) {
+        case ePointerDown: {
+          mPendingPointerDown = entry->Clone();
+          mPendingPointerDown->SetEntryType(u"first-input"_ns);
+          break;
+        }
+        case ePointerUp: {
+          if (mPendingPointerDown) {
+            MOZ_ASSERT(!mFirstInputEvent);
+            mFirstInputEvent = mPendingPointerDown.forget();
+            QueueEntry(mFirstInputEvent);
+            mHasDispatchedInputEvent = true;
+          }
+          break;
+        }
+        case eMouseClick:
+        case eKeyDown:
+        case eMouseDown: {
+          mFirstInputEvent = entry->Clone();
+          mFirstInputEvent->SetEntryType(u"first-input"_ns);
+          QueueEntry(mFirstInputEvent);
+          mHasDispatchedInputEvent = true;
+          break;
+        }
+        default:
+          break;
+      }
+    }
   }
 }
 
@@ -384,6 +488,11 @@ bool PerformanceMainThread::CrossOriginIsolated() const {
   return mCrossOriginIsolated;
 }
 
+EventCounts* PerformanceMainThread::EventCounts() {
+  MOZ_ASSERT(StaticPrefs::dom_enable_event_timing());
+  return mEventCounts;
+}
+
 void PerformanceMainThread::GetEntries(
     nsTArray<RefPtr<PerformanceEntry>>& aRetval) {
   // We return an empty list when 'privacy.resistFingerprinting' is on.
@@ -413,7 +522,8 @@ void PerformanceMainThread::GetEntriesByType(
     return;
   }
 
-  if (aEntryType.EqualsLiteral("navigation")) {
+  RefPtr<nsAtom> type = NS_Atomize(aEntryType);
+  if (type == nsGkAtoms::navigation) {
     aRetval.Clear();
 
     if (mDocEntry) {
@@ -422,14 +532,27 @@ void PerformanceMainThread::GetEntriesByType(
     return;
   }
 
-  if (aEntryType.EqualsLiteral("paint")) {
+  if (type == nsGkAtoms::paint) {
     if (mFCPTiming) {
       aRetval.AppendElement(mFCPTiming);
       return;
     }
   }
 
+  if (type == nsGkAtoms::firstInput && mFirstInputEvent) {
+    aRetval.AppendElement(mFirstInputEvent);
+    return;
+  }
+
   Performance::GetEntriesByType(aEntryType, aRetval);
+}
+void PerformanceMainThread::GetEntriesByTypeForObserver(
+    const nsAString& aEntryType, nsTArray<RefPtr<PerformanceEntry>>& aRetval) {
+  if (aEntryType.EqualsLiteral("event")) {
+    aRetval.AppendElements(mEventTimingEntries);
+    return;
+  }
+  return GetEntriesByType(aEntryType, aRetval);
 }
 
 void PerformanceMainThread::GetEntriesByName(
@@ -458,4 +581,42 @@ void PerformanceMainThread::GetEntriesByName(
   }
 }
 
+mozilla::PresShell* PerformanceMainThread::GetPresShell() {
+  nsIGlobalObject* ownerGlobal = GetOwnerGlobal();
+  if (!ownerGlobal) {
+    return nullptr;
+  }
+  if (Document* doc = ownerGlobal->AsInnerWindow()->GetExtantDoc()) {
+    return doc->GetPresShell();
+  }
+  return nullptr;
+}
+
+void PerformanceMainThread::IncEventCount(const nsAtom* aType) {
+  MOZ_ASSERT(StaticPrefs::dom_enable_event_timing());
+
+  // This occurs when the pref was false when the performance
+  // object was first created, and became true later. It's
+  // okay to return early because eventCounts is not exposed.
+  if (!mEventCounts) {
+    return;
+  }
+
+  ErrorResult rv;
+  uint64_t count = EventCounts_Binding::MaplikeHelpers::Get(
+      mEventCounts, nsDependentAtomString(aType), rv);
+  MOZ_ASSERT(!rv.Failed());
+  EventCounts_Binding::MaplikeHelpers::Set(
+      mEventCounts, nsDependentAtomString(aType), ++count, rv);
+  MOZ_ASSERT(!rv.Failed());
+}
+
+size_t PerformanceMainThread::SizeOfEventEntries(
+    mozilla::MallocSizeOf aMallocSizeOf) const {
+  size_t eventEntries = 0;
+  for (const PerformanceEventTiming* entry : mEventTimingEntries) {
+    eventEntries += entry->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  return eventEntries;
+}
 }  // namespace mozilla::dom

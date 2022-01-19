@@ -7,6 +7,7 @@
 #include "SharedStyleSheetCache.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/StoragePrincipalHelper.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/css/SheetLoadData.h"
 #include "mozilla/dom/ContentParent.h"
@@ -28,13 +29,16 @@ using IsAlternate = css::Loader::IsAlternate;
 
 SharedStyleSheetCache* SharedStyleSheetCache::sInstance;
 
-void SharedStyleSheetCache::Clear(nsIPrincipal* aForPrincipal) {
+void SharedStyleSheetCache::Clear(nsIPrincipal* aForPrincipal,
+                                  const nsACString* aBaseDomain) {
   using ContentParent = dom::ContentParent;
 
   if (XRE_IsParentProcess()) {
     auto forPrincipal = aForPrincipal ? Some(RefPtr(aForPrincipal)) : Nothing();
+    auto baseDomain = aBaseDomain ? Some(nsCString(*aBaseDomain)) : Nothing();
+
     for (auto* cp : ContentParent::AllProcesses(ContentParent::eLive)) {
-      Unused << cp->SendClearStyleSheetCache(forPrincipal);
+      Unused << cp->SendClearStyleSheetCache(forPrincipal, baseDomain);
     }
   }
 
@@ -42,14 +46,40 @@ void SharedStyleSheetCache::Clear(nsIPrincipal* aForPrincipal) {
     return;
   }
 
-  if (!aForPrincipal) {
+  // No filter, clear all.
+  if (!aForPrincipal && !aBaseDomain) {
     sInstance->mCompleteSheets.Clear();
     return;
   }
 
   for (auto iter = sInstance->mCompleteSheets.Iter(); !iter.Done();
        iter.Next()) {
-    if (iter.Key().Principal()->Equals(aForPrincipal)) {
+    const bool shouldRemove = [&] {
+      if (aForPrincipal && iter.Key().Principal()->Equals(aForPrincipal)) {
+        return true;
+      }
+      if (!aBaseDomain) {
+        return false;
+      }
+      // Clear by baseDomain.
+      nsIPrincipal* partitionPrincipal = iter.Key().PartitionPrincipal();
+
+      // Clear entries with matching base domain. This includes entries
+      // which are partitioned under other top level sites (= have a
+      // partitionKey set).
+      nsAutoCString principalBaseDomain;
+      nsresult rv = partitionPrincipal->GetBaseDomain(principalBaseDomain);
+      if (NS_SUCCEEDED(rv) && principalBaseDomain.Equals(*aBaseDomain)) {
+        return true;
+      }
+
+      // Clear entries partitioned under aBaseDomain.
+      return StoragePrincipalHelper::PartitionKeyHasBaseDomain(
+          partitionPrincipal->OriginAttributesRef().mPartitionKey,
+          *aBaseDomain);
+    }();
+
+    if (shouldRemove) {
       iter.Remove();
     }
   }
@@ -242,9 +272,9 @@ size_t SharedStyleSheetCache::SizeOfIncludingThis(
   size_t n = aMallocSizeOf(this);
 
   n += mCompleteSheets.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto iter = mCompleteSheets.ConstIter(); !iter.Done(); iter.Next()) {
-    n += iter.Data().mSheet->SizeOfIncludingThis(aMallocSizeOf);
-    n += aMallocSizeOf(iter.Data().mUseCounters.get());
+  for (const auto& data : mCompleteSheets.Values()) {
+    n += data.mSheet->SizeOfIncludingThis(aMallocSizeOf);
+    n += aMallocSizeOf(data.mUseCounters.get());
   }
 
   // Measurement of the following members may be added later if DMD finds it is
@@ -260,7 +290,7 @@ void SharedStyleSheetCache::DeferSheetLoad(const SheetLoadDataHashKey& aKey,
   MOZ_DIAGNOSTIC_ASSERT(!aData.mNext, "Should only defer loads once");
 
   aData.mMustNotify = true;
-  mPendingDatas.Put(aKey, RefPtr{&aData});
+  mPendingDatas.InsertOrUpdate(aKey, RefPtr{&aData});
 }
 
 void SharedStyleSheetCache::LoadStarted(const SheetLoadDataHashKey& aKey,
@@ -269,7 +299,7 @@ void SharedStyleSheetCache::LoadStarted(const SheetLoadDataHashKey& aKey,
   MOZ_ASSERT(!aData.mIsLoading, "Already loading? How?");
   MOZ_ASSERT(SheetLoadDataHashKey(aData).KeyEquals(aKey));
   aData.mIsLoading = true;
-  mLoadingDatas.Put(aKey, &aData);
+  mLoadingDatas.InsertOrUpdate(aKey, &aData);
 }
 
 void SharedStyleSheetCache::LoadCompleted(SharedStyleSheetCache* aCache,
@@ -313,7 +343,7 @@ void SharedStyleSheetCache::LoadCompletedInternal(
   if (aData.mIsLoading) {
     MOZ_ASSERT(aCache);
     SheetLoadDataHashKey key(aData);
-    Maybe<SheetLoadData*> loadingData = aCache->mLoadingDatas.GetAndRemove(key);
+    Maybe<SheetLoadData*> loadingData = aCache->mLoadingDatas.Extract(key);
     MOZ_DIAGNOSTIC_ASSERT(loadingData);
     MOZ_DIAGNOSTIC_ASSERT(loadingData.value() == &aData);
     Unused << loadingData;
@@ -342,17 +372,11 @@ void SharedStyleSheetCache::LoadCompletedInternal(
       // Insert the sheet into the tree now the sheet has loaded, but only if
       // the sheet is still relevant, and if this is a top-level sheet.
       const bool needInsertIntoTree = [&] {
-        if (StaticPrefs::dom_expose_incomplete_stylesheets()) {
-          // No need to do that, it's already done. This is technically a bit
-          // racy, but having to reload if you hit an in-progress load while
-          // switching the pref from about:config is not a big deal.
-          return false;
-        }
         if (!data->mLoader->GetDocument()) {
           // Not a document load, nothing to do.
           return false;
         }
-        if (data->mIsPreload != css::Loader::IsPreload::No) {
+        if (data->IsPreload()) {
           // Preloads are not supposed to be observable.
           return false;
         }
@@ -484,8 +508,9 @@ void SharedStyleSheetCache::InsertIntoCompleteCacheIfNeeded(
       Servo_UseCounters_Merge(counters.get(), aData.mUseCounters.get());
     }
 
-    mCompleteSheets.Put(
-        key, {aData.mExpirationTime, std::move(counters), std::move(sheet)});
+    mCompleteSheets.InsertOrUpdate(
+        key, CompleteSheet{aData.mExpirationTime, std::move(counters),
+                           std::move(sheet)});
   }
 }
 
@@ -564,11 +589,11 @@ void SharedStyleSheetCache::CancelLoadsForLoader(css::Loader& aLoader) {
 
   // We can't stop in-progress loads because some other loader may care about
   // them.
-  for (auto iter = mLoadingDatas.Iter(); !iter.Done(); iter.Next()) {
-    MOZ_DIAGNOSTIC_ASSERT(iter.Data(),
+  for (SheetLoadData* data : mLoadingDatas.Values()) {
+    MOZ_DIAGNOSTIC_ASSERT(data,
                           "We weren't properly notified and the load was "
                           "incorrectly dropped on the floor");
-    for (SheetLoadData* data = iter.Data(); data; data = data->mNext) {
+    for (; data; data = data->mNext) {
       if (data->mLoader == &aLoader) {
         data->mIsCancelled = true;
       }
@@ -578,8 +603,8 @@ void SharedStyleSheetCache::CancelLoadsForLoader(css::Loader& aLoader) {
 
 void SharedStyleSheetCache::RegisterLoader(css::Loader& aLoader) {
   MOZ_ASSERT(aLoader.GetDocument());
-  mLoaderPrincipalRefCnt.LookupForAdd(aLoader.GetDocument()->NodePrincipal())
-      .OrInsert([] { return 0; }) += 1;
+  mLoaderPrincipalRefCnt.LookupOrInsert(aLoader.GetDocument()->NodePrincipal(),
+                                        0) += 1;
 }
 
 void SharedStyleSheetCache::UnregisterLoader(css::Loader& aLoader) {

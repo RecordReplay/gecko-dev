@@ -33,16 +33,28 @@ XPCOMUtils.defineLazyGetter(this, "logger", () =>
 // List of available local providers, each is implemented in its own jsm module
 // and will track different queries internally by queryContext.
 var localProviderModules = {
-  UrlbarProviderUnifiedComplete:
-    "resource:///modules/UrlbarProviderUnifiedComplete.jsm",
+  UrlbarProviderAboutPages: "resource:///modules/UrlbarProviderAboutPages.jsm",
+  UrlbarProviderAliasEngines:
+    "resource:///modules/UrlbarProviderAliasEngines.jsm",
   UrlbarProviderAutofill: "resource:///modules/UrlbarProviderAutofill.jsm",
+  UrlbarProviderBookmarkKeywords:
+    "resource:///modules/UrlbarProviderBookmarkKeywords.jsm",
+  UrlbarProviderCalculator: "resource:///modules/UrlbarProviderCalculator.jsm",
   UrlbarProviderHeuristicFallback:
     "resource:///modules/UrlbarProviderHeuristicFallback.jsm",
+  UrlbarProviderInputHistory:
+    "resource:///modules/UrlbarProviderInputHistory.jsm",
   UrlbarProviderInterventions:
     "resource:///modules/UrlbarProviderInterventions.jsm",
   UrlbarProviderOmnibox: "resource:///modules/UrlbarProviderOmnibox.jsm",
+  UrlbarProviderPlaces: "resource:///modules/UrlbarProviderPlaces.jsm",
+  UrlbarProviderPreloadedSites:
+    "resource:///modules/UrlbarProviderPreloadedSites.jsm",
   UrlbarProviderPrivateSearch:
     "resource:///modules/UrlbarProviderPrivateSearch.jsm",
+  UrlbarProviderQuickSuggest:
+    "resource:///modules/UrlbarProviderQuickSuggest.jsm",
+  UrlbarProviderRemoteTabs: "resource:///modules/UrlbarProviderRemoteTabs.jsm",
   UrlbarProviderSearchTips: "resource:///modules/UrlbarProviderSearchTips.jsm",
   UrlbarProviderSearchSuggestions:
     "resource:///modules/UrlbarProviderSearchSuggestions.jsm",
@@ -51,6 +63,8 @@ var localProviderModules = {
   UrlbarProviderTokenAliasEngines:
     "resource:///modules/UrlbarProviderTokenAliasEngines.jsm",
   UrlbarProviderTopSites: "resource:///modules/UrlbarProviderTopSites.jsm",
+  UrlbarProviderUnitConversion:
+    "resource:///modules/UrlbarProviderUnitConversion.jsm",
 };
 
 // List of available local muxers, each is implemented in its own jsm module.
@@ -281,15 +295,27 @@ class ProvidersManager {
 
   /**
    * Notifies all providers when the user starts and ends an engagement with the
-   * urlbar.
+   * urlbar.  For details on parameters, see UrlbarProvider.onEngagement().
    *
-   * @param {boolean} isPrivate True if the engagement is in a private context.
-   * @param {string} state The state of the engagement, one of: start,
-   *        engagement, abandonment, discard.
+   * @param {boolean} isPrivate
+   *   True if the engagement is in a private context.
+   * @param {string} state
+   *   The state of the engagement, one of: start, engagement, abandonment,
+   *   discard
+   * @param {UrlbarQueryContext} queryContext
+   *   The engagement's query context, if available.
+   * @param {object} details
+   *   An object that describes the search string and the picked result, if any.
    */
-  notifyEngagementChange(isPrivate, state) {
+  notifyEngagementChange(isPrivate, state, queryContext, details) {
     for (let provider of this.providers) {
-      provider.tryMethod("onEngagement", isPrivate, state);
+      provider.tryMethod(
+        "onEngagement",
+        isPrivate,
+        state,
+        queryContext,
+        details
+      );
     }
   }
 }
@@ -603,20 +629,6 @@ class Query {
       return;
     }
 
-    // Crop results to the requested number, taking their result spans into
-    // account.
-    let resultCount = this.context.maxResults;
-    for (let i = 0; i < this.context.results.length; i++) {
-      resultCount -= UrlbarUtils.getSpanForResult(this.context.results[i]);
-      if (resultCount < 0) {
-        logger.debug(
-          `Splicing results from ${i} to crop results to ${this.context.maxResults}`
-        );
-        this.context.results.splice(i, this.context.results.length - i);
-        break;
-      }
-    }
-
     this.context.firstResultChanged = !ObjectUtils.deepEqual(
       this.context.firstResult,
       this.context.results[0]
@@ -640,7 +652,7 @@ function updateSourcesIfEmpty(context) {
     return false;
   }
   let acceptedSources = [];
-  // There can be only one restrict token about sources.
+  // There can be only one restrict token per query.
   let restrictToken = context.tokens.find(t =>
     [
       UrlbarTokenizer.TYPE.RESTRICT_HISTORY,
@@ -648,9 +660,19 @@ function updateSourcesIfEmpty(context) {
       UrlbarTokenizer.TYPE.RESTRICT_TAG,
       UrlbarTokenizer.TYPE.RESTRICT_OPENPAGE,
       UrlbarTokenizer.TYPE.RESTRICT_SEARCH,
+      UrlbarTokenizer.TYPE.RESTRICT_TITLE,
+      UrlbarTokenizer.TYPE.RESTRICT_URL,
     ].includes(t.type)
   );
-  let restrictTokenType = restrictToken ? restrictToken.type : undefined;
+
+  // RESTRICT_TITLE and RESTRICT_URL do not affect query sources.
+  let restrictTokenType =
+    restrictToken &&
+    restrictToken.type != UrlbarTokenizer.TYPE.RESTRICT_TITLE &&
+    restrictToken.type != UrlbarTokenizer.TYPE.RESTRICT_URL
+      ? restrictToken.type
+      : undefined;
+
   for (let source of Object.values(UrlbarUtils.RESULT_SOURCE)) {
     // Skip sources that the context doesn't care about.
     if (context.sources && !context.sources.includes(source)) {

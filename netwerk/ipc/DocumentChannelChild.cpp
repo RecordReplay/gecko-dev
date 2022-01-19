@@ -11,10 +11,15 @@
 #include "mozilla/net/HttpBaseChannel.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/StaticPrefs_fission.h"
 #include "nsHashPropertyBag.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIObjectLoadingContent.h"
+#include "nsIXULRuntime.h"
 #include "nsIWritablePropertyBag.h"
+#include "nsFrameLoader.h"
+#include "nsFrameLoaderOwner.h"
+#include "nsQueryObject.h"
 
 using namespace mozilla::dom;
 using namespace mozilla::ipc;
@@ -42,6 +47,7 @@ DocumentChannelChild::DocumentChannelChild(nsDocShellLoadState* aLoadState,
                                            bool aUriModified, bool aIsXFOError)
     : DocumentChannel(aLoadState, aLoadInfo, aLoadFlags, aCacheKey,
                       aUriModified, aIsXFOError) {
+  mLoadingContext = nullptr;
   LOG(("DocumentChannelChild ctor [this=%p, uri=%s]", this,
        aLoadState->URI()->GetSpecOrDefault().get()));
 }
@@ -96,6 +102,7 @@ DocumentChannelChild::AsyncOpen(nsIStreamListener* aListener) {
   if (!loadingContext || loadingContext->IsDiscarded()) {
     return NS_ERROR_FAILURE;
   }
+  mLoadingContext = loadingContext;
 
   DocumentChannelCreationArgs args;
 
@@ -163,6 +170,21 @@ DocumentChannelChild::AsyncOpen(nsIStreamListener* aListener) {
 
 IPCResult DocumentChannelChild::RecvFailedAsyncOpen(
     const nsresult& aStatusCode) {
+  if (aStatusCode == NS_ERROR_RECURSIVE_DOCUMENT_LOAD) {
+    // This exists so that we are able to fire an error event
+    // for when there are too many recursive iframe or object loads.
+    // This is an incomplete solution, because right now we don't have a unified
+    // way of firing error events due to errors in document channel.
+    // This should be fixed in bug 1629201.
+    MOZ_DIAGNOSTIC_ASSERT(mLoadingContext);
+    if (RefPtr<Element> embedder = mLoadingContext->GetEmbedderElement()) {
+      if (RefPtr<nsFrameLoaderOwner> flo = do_QueryObject(embedder)) {
+        if (RefPtr<nsFrameLoader> fl = flo->GetFrameLoader()) {
+          fl->FireErrorEvent();
+        }
+      }
+    }
+  }
   ShutdownListeners(aStatusCode);
   return IPC_OK();
 }
@@ -170,13 +192,34 @@ IPCResult DocumentChannelChild::RecvFailedAsyncOpen(
 IPCResult DocumentChannelChild::RecvDisconnectChildListeners(
     const nsresult& aStatus, const nsresult& aLoadGroupStatus,
     bool aSwitchedProcess) {
-  // If this is a normal failure, then we want to disconnect our listeners and
-  // notify them of the failure. If this is a process switch, then we can just
-  // ignore it silently, and trust that the switch will shut down our docshell
-  // and cancel us when it's ready.
+  // If this disconnect is not due to a process switch, perform the disconnect
+  // immediately.
   if (!aSwitchedProcess) {
     DisconnectChildListeners(aStatus, aLoadGroupStatus);
+    return IPC_OK();
   }
+
+  // Otherwise, the disconnect will occur later using some other mechanism,
+  // depending on what's happening to the loading DocShell. If this is a
+  // toplevel navigation, and this BrowsingContext enters the BFCache, we will
+  // cancel this channel when the PageHide event is firing, whereas if it does
+  // not enter BFCache (e.g. due to being an object, subframe or non-bfcached
+  // toplevel navigation), we will cancel this channel when the DocShell is
+  // destroyed.
+  nsDocShell* shell = GetDocShell();
+  if (mLoadInfo->GetExternalContentPolicyType() ==
+          ExtContentPolicy::TYPE_DOCUMENT &&
+      shell) {
+    MOZ_ASSERT(shell->GetBrowsingContext()->IsTop());
+    if (mozilla::SessionHistoryInParent() &&
+        shell->GetBrowsingContext()->IsInBFCache()) {
+      DisconnectChildListeners(aStatus, aLoadGroupStatus);
+    } else {
+      // Tell the DocShell which channel to cancel if it enters the BFCache.
+      shell->SetChannelToDisconnectOnPageHide(mChannelId);
+    }
+  }
+
   return IPC_OK();
 }
 
@@ -207,7 +250,7 @@ IPCResult DocumentChannelChild::RecvRedirectToRealChannel(
   mRedirectResolver = std::move(aResolve);
 
   nsCOMPtr<nsIChannel> newChannel;
-  MOZ_ASSERT((aArgs.loadStateLoadFlags() &
+  MOZ_ASSERT((aArgs.loadStateInternalLoadFlags() &
               nsDocShell::InternalLoad::INTERNAL_LOAD_FLAGS_IS_SRCDOC) ||
              aArgs.srcdocData().IsVoid());
   nsresult rv = nsDocShell::CreateRealChannelForDocument(

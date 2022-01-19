@@ -15,6 +15,7 @@
 
 .textLayer {
   position: absolute;
+  text-align: initial;
   left: 0;
   top: 0;
   right: 0;
@@ -24,7 +25,8 @@
   line-height: 1;
 }
 
-.textLayer > span {
+.textLayer span,
+.textLayer br {
   color: transparent;
   position: absolute;
   white-space: pre;
@@ -37,6 +39,10 @@
   padding: 1px;
   background-color: rgba(180, 0, 170, 1);
   border-radius: 4px;
+}
+
+.textLayer .highlight.appended {
+  position: initial;
 }
 
 .textLayer .highlight.begin {
@@ -57,6 +63,11 @@
 
 .textLayer ::selection {
   background: rgba(0, 0, 255, 1);
+}
+
+/* Avoids https://github.com/mozilla/pdf.js/issues/13840 in Chrome */
+.textLayer br::selection {
+  background: transparent;
 }
 
 .textLayer .endOfContent {
@@ -158,6 +169,14 @@
   border: 1px solid transparent;
 }
 
+.annotationLayer .textWidgetAnnotation input :focus,
+.annotationLayer .textWidgetAnnotation textarea :focus,
+.annotationLayer .choiceWidgetAnnotation select :focus,
+.annotationLayer .buttonWidgetAnnotation.checkBox :focus,
+.annotationLayer .buttonWidgetAnnotation.radioButton :focus {
+  outline: auto;
+}
+
 .annotationLayer .buttonWidgetAnnotation.checkBox input:checked:before,
 .annotationLayer .buttonWidgetAnnotation.checkBox input:checked:after,
 .annotationLayer .buttonWidgetAnnotation.radioButton input:checked:before {
@@ -203,7 +222,7 @@
    * area, causing horizontal scrolling. We avoid this by extending the width
    * when the element has focus and revert this when it loses focus.
    */
-  width: 115%;
+  width: 103%;
 }
 
 .annotationLayer .buttonWidgetAnnotation.checkBox input,
@@ -269,6 +288,338 @@
   cursor: pointer;
 }
 
+
+:root {
+  --unfocused-field-background: url("data:image/svg+xml;charset=UTF-8,<svg width='1px' height='1px' xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' style='fill:rgba(0, 54, 255, 0.13);'/></svg>");
+}
+
+.xfaLayer .highlight {
+  margin: -1px;
+  padding: 1px;
+  background-color: rgba(239, 203, 237, 1);
+  border-radius: 4px;
+}
+
+.xfaLayer .highlight.appended {
+  position: initial;
+}
+
+.xfaLayer .highlight.begin {
+  border-radius: 4px 0 0 4px;
+}
+
+.xfaLayer .highlight.end {
+  border-radius: 0 4px 4px 0;
+}
+
+.xfaLayer .highlight.middle {
+  border-radius: 0;
+}
+
+.xfaLayer .highlight.selected {
+  background-color: rgba(203, 223, 203, 1);
+}
+
+.xfaLayer ::selection {
+  background: rgba(0, 0, 255, 1);
+}
+
+.xfaPage {
+  overflow: hidden;
+  position: relative;
+}
+
+.xfaContentarea {
+  position: absolute;
+}
+
+.xfaPrintOnly {
+  display: none;
+}
+
+.xfaLayer {
+  position: absolute;
+  text-align: initial;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  line-height: 1.2;
+}
+
+.xfaLayer * {
+  color: inherit;
+  font: inherit;
+  font-style: inherit;
+  font-weight: inherit;
+  font-kerning: inherit;
+  letter-spacing: -0.01px;
+  text-align: inherit;
+  text-decoration: inherit;
+  box-sizing: border-box;
+  background-color: transparent;
+  padding: 0;
+  margin: 0;
+  pointer-events: auto;
+  line-height: inherit;
+}
+
+.xfaLayer div {
+  pointer-events: none;
+}
+
+.xfaLayer svg {
+  pointer-events: none;
+}
+
+.xfaLayer svg * {
+  pointer-events: none;
+}
+
+.xfaLayer a {
+  color: blue;
+}
+
+.xfaRich li {
+  margin-left: 3em;
+}
+
+.xfaFont {
+  color: black;
+  font-weight: normal;
+  font-kerning: none;
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0;
+  text-decoration: none;
+  vertical-align: 0;
+}
+
+.xfaCaption {
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.xfaCaptionForCheckButton {
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+
+.xfaLabel {
+  height: 100%;
+  width: 100%;
+}
+
+.xfaLeft {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.xfaRight {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
+.xfaLeft > .xfaCaption,
+.xfaLeft > .xfaCaptionForCheckButton,
+.xfaRight > .xfaCaption,
+.xfaRight > .xfaCaptionForCheckButton {
+  max-height: 100%;
+}
+
+.xfaTop {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.xfaBottom {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+}
+
+.xfaTop > .xfaCaption,
+.xfaTop > .xfaCaptionForCheckButton,
+.xfaBottom > .xfaCaption,
+.xfaBottom > .xfaCaptionForCheckButton {
+  width: 100%;
+}
+
+.xfaBorder {
+  background-color: transparent;
+  position: absolute;
+  pointer-events: none;
+}
+
+.xfaWrapped {
+  width: 100%;
+  height: 100%;
+}
+
+.xfaTextfield:focus,
+.xfaSelect:focus {
+  background-image: none;
+  background-color: transparent;
+  outline: auto;
+  outline-offset: -1px;
+}
+
+.xfaCheckbox:focus,
+.xfaRadio:focus {
+  outline: auto;
+}
+
+.xfaTextfield,
+.xfaSelect {
+  height: 100%;
+  width: 100%;
+  flex: 1 1 auto;
+  border: none;
+  resize: none;
+  background-image: var(--unfocused-field-background);
+}
+
+.xfaTop > .xfaTextfield,
+.xfaTop > .xfaSelect,
+.xfaBottom > .xfaTextfield,
+.xfaBottom > .xfaSelect {
+  flex: 0 1 auto;
+}
+
+.xfaButton {
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  border: none;
+  text-align: center;
+}
+
+.xfaCheckbox,
+.xfaRadio {
+  width: 100%;
+  height: 100%;
+  flex: 0 0 auto;
+  border: none;
+}
+
+.xfaRich {
+  white-space: pre-wrap;
+  width: 100%;
+  height: 100%;
+}
+
+.xfaImage {
+  object-position: left top;
+  object-fit: contain;
+  width: 100%;
+  height: 100%;
+}
+
+.xfaLrTb,
+.xfaRlTb,
+.xfaTb {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.xfaLr {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.xfaRl {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: stretch;
+}
+
+.xfaTb > div {
+  justify-content: left;
+}
+
+.xfaPosition {
+  position: relative;
+}
+
+.xfaArea {
+  position: relative;
+}
+
+.xfaValignMiddle {
+  display: flex;
+  align-items: center;
+}
+
+.xfaTable {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.xfaTable .xfaRow {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.xfaTable .xfaRlRow {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  flex: 1;
+}
+
+.xfaTable .xfaRlRow > div {
+  flex: 1;
+}
+
+.xfaNonInteractive input,
+.xfaNonInteractive textarea,
+.xfaDisabled input,
+.xfaDisabled textarea,
+.xfaReadOnly input,
+.xfaReadOnly textarea {
+  background: initial;
+}
+
+@media print {
+  .xfaTextfield,
+  .xfaSelect {
+    background: transparent;
+  }
+
+  .xfaSelect {
+    appearance: none;
+    text-indent: 1px;
+    text-overflow: "";
+  }
+}
+
+:root {
+  --pdfViewer-padding-bottom: none;
+  --page-margin: 1px auto -8px;
+  --page-border: 9px solid transparent;
+  --spreadHorizontalWrapped-margin-LR: -3.5px;
+  --zoom-factor: 1;
+}
+
+@media screen and (forced-colors: active) {
+  :root {
+    --pdfViewer-padding-bottom: 9px;
+    --page-margin: 9px auto 0;
+    --page-border: none;
+    --spreadHorizontalWrapped-margin-LR: 4.5px;
+  }
+}
+
+.pdfViewer {
+  padding-bottom: var(--pdfViewer-padding-bottom);
+}
+
 .pdfViewer .canvasWrapper {
   overflow: hidden;
 }
@@ -277,17 +628,17 @@
   direction: ltr;
   width: 816px;
   height: 1056px;
-  margin: 1px auto -8px auto;
+  margin: var(--page-margin);
   position: relative;
   overflow: visible;
-  border: 9px solid transparent;
+  border: var(--page-border);
   background-clip: content-box;
   border-image: url(images/shadow.png) 9 9 repeat;
   background-color: rgba(255, 255, 255, 1);
 }
 
 .pdfViewer.removePageBorders .page {
-  margin: 0 auto 10px auto;
+  margin: 0 auto 10px;
   border: none;
 }
 
@@ -332,8 +683,8 @@
 .spread .page,
 .pdfViewer.scrollHorizontal .page,
 .pdfViewer.scrollWrapped .page {
-  margin-left: -3.5px;
-  margin-right: -3.5px;
+  margin-left: var(--spreadHorizontalWrapped-margin-LR);
+  margin-right: var(--spreadHorizontalWrapped-margin-LR);
 }
 
 .pdfViewer.removePageBorders .spread .page,
@@ -387,6 +738,8 @@
   --sidebar-width: 200px;
   --sidebar-transition-duration: 200ms;
   --sidebar-transition-timing-function: ease;
+  --scale-select-container-width: 140px;
+  --scale-select-overflow: 22px;
   --loadingBar-end-offset: 0;
 
   --toolbar-icon-opacity: 0.7;
@@ -394,18 +747,21 @@
 
   --main-color: rgba(12, 12, 13, 1);
   --body-bg-color: rgba(237, 237, 240, 1);
-  --errorWrapper-bg-color: rgba(255, 74, 74, 1);
+  --errorWrapper-bg-color: rgba(255, 110, 110, 1);
   --progressBar-color: rgba(10, 132, 255, 1);
   --progressBar-indeterminate-bg-color: rgba(221, 221, 222, 1);
   --progressBar-indeterminate-blend-color: rgba(116, 177, 239, 1);
   --scrollbar-color: auto;
   --scrollbar-bg-color: auto;
   --toolbar-icon-bg-color: rgba(0, 0, 0, 1);
+  --toolbar-icon-hover-bg-color: rgba(0, 0, 0, 1);
 
-  --sidebar-bg-color: rgba(245, 246, 247, 1);
+  --sidebar-narrow-bg-color: rgba(237, 237, 240, 0.9);
+  --sidebar-toolbar-bg-color: rgba(245, 246, 247, 1);
   --toolbar-bg-color: rgba(249, 249, 250, 1);
   --toolbar-border-color: rgba(204, 204, 204, 1);
   --button-hover-color: rgba(221, 222, 223, 1);
+  --toggled-btn-color: rgba(0, 0, 0, 1);
   --toggled-btn-bg-color: rgba(0, 0, 0, 0.3);
   --toggled-hover-active-btn-color: rgba(0, 0, 0, 0.4);
   --dropdown-btn-bg-color: rgba(215, 215, 219, 1);
@@ -421,10 +777,12 @@
   --sidebaritem-bg-color: rgba(0, 0, 0, 0.15);
   --doorhanger-bg-color: rgba(255, 255, 255, 1);
   --doorhanger-border-color: rgba(12, 12, 13, 0.2);
-  --doorhanger-hover-color: rgba(237, 237, 237, 1);
+  --doorhanger-hover-color: rgba(12, 12, 13, 1);
+  --doorhanger-hover-bg-color: rgba(237, 237, 237, 1);
   --doorhanger-separator-color: rgba(222, 222, 222, 1);
+  --overlay-button-border: 0 none;
   --overlay-button-bg-color: rgba(12, 12, 13, 0.1);
-  --overlay-button-hover-color: rgba(12, 12, 13, 0.3);
+  --overlay-button-hover-bg-color: rgba(12, 12, 13, 0.3);
 
   --loading-icon: url(images/loading.svg);
   --treeitem-expanded-icon: url(images/treeitem-expanded.svg);
@@ -464,22 +822,25 @@
   --secondaryToolbarButton-documentProperties-icon: url(images/secondaryToolbarButton-documentProperties.svg);
 }
 
-@media (prefers-color-scheme: dark) {
+@media (-moz-toolbar-prefers-color-scheme: dark) {
   :root {
     --main-color: rgba(249, 249, 250, 1);
     --body-bg-color: rgba(42, 42, 46, 1);
-    --errorWrapper-bg-color: rgba(199, 17, 17, 1);
+    --errorWrapper-bg-color: rgba(169, 14, 14, 1);
     --progressBar-color: rgba(0, 96, 223, 1);
     --progressBar-indeterminate-bg-color: rgba(40, 40, 43, 1);
     --progressBar-indeterminate-blend-color: rgba(20, 68, 133, 1);
     --scrollbar-color: rgba(121, 121, 123, 1);
     --scrollbar-bg-color: rgba(35, 35, 39, 1);
     --toolbar-icon-bg-color: rgba(255, 255, 255, 1);
+    --toolbar-icon-hover-bg-color: rgba(255, 255, 255, 1);
 
-    --sidebar-bg-color: rgba(50, 50, 52, 1);
+    --sidebar-narrow-bg-color: rgba(42, 42, 46, 0.9);
+    --sidebar-toolbar-bg-color: rgba(50, 50, 52, 1);
     --toolbar-bg-color: rgba(56, 56, 61, 1);
     --toolbar-border-color: rgba(12, 12, 13, 1);
     --button-hover-color: rgba(102, 102, 103, 1);
+    --toggled-btn-color: rgba(255, 255, 255, 1);
     --toggled-btn-bg-color: rgba(0, 0, 0, 0.3);
     --toggled-hover-active-btn-color: rgba(0, 0, 0, 0.4);
     --dropdown-btn-bg-color: rgba(74, 74, 79, 1);
@@ -495,15 +856,36 @@
     --sidebaritem-bg-color: rgba(255, 255, 255, 0.15);
     --doorhanger-bg-color: rgba(74, 74, 79, 1);
     --doorhanger-border-color: rgba(39, 39, 43, 1);
-    --doorhanger-hover-color: rgba(93, 94, 98, 1);
+    --doorhanger-hover-color: rgba(249, 249, 250, 1);
+    --doorhanger-hover-bg-color: rgba(93, 94, 98, 1);
     --doorhanger-separator-color: rgba(92, 92, 97, 1);
     --overlay-button-bg-color: rgba(92, 92, 97, 1);
-    --overlay-button-hover-color: rgba(115, 115, 115, 1);
+    --overlay-button-hover-bg-color: rgba(115, 115, 115, 1);
 
     /* This image is used in <input> elements, which unfortunately means that
      * the `mask-image` approach used with all of the other images doesn't work
      * here; hence why we still have two versions of this particular image. */
     --loading-icon: url(images/loading-dark.svg);
+  }
+}
+
+@media screen and (forced-colors: active) {
+  :root {
+    --main-color: ButtonText;
+    --button-hover-color: Highlight;
+    --doorhanger-hover-bg-color: Highlight;
+    --toolbar-icon-opacity: 1;
+    --toolbar-icon-bg-color: ButtonText;
+    --toolbar-icon-hover-bg-color: ButtonFace;
+    --toggled-btn-color: HighlightText;
+    --toggled-btn-bg-color: LinkText;
+    --doorhanger-hover-color: ButtonFace;
+    --doorhanger-border-color-whcm: 1px solid ButtonText;
+    --doorhanger-triangle-opacity-whcm: 0;
+    --overlay-button-border: 1px solid Highlight;
+    --overlay-button-hover-bg-color: Highlight;
+    --overlay-button-hover-color: ButtonFace;
+    --field-border-color: ButtonText;
   }
 }
 
@@ -541,7 +923,7 @@ select {
   display: none !important;
 }
 
-.pdfViewer.enablePermissions .textLayer > span {
+.pdfViewer.enablePermissions .textLayer span {
   user-select: none !important;
   cursor: not-allowed;
 }
@@ -561,12 +943,12 @@ select {
   display: none;
 }
 
-.pdfPresentationMode:fullscreen .textLayer > span {
+.pdfPresentationMode:fullscreen .textLayer span {
   cursor: none;
 }
 
 .pdfPresentationMode.pdfPresentationModeControls > *,
-.pdfPresentationMode.pdfPresentationModeControls .textLayer > span {
+.pdfPresentationMode.pdfPresentationModeControls .textLayer span {
   cursor: default;
 }
 
@@ -590,10 +972,12 @@ select {
 html[dir="ltr"] #sidebarContainer {
   transition-property: left;
   left: calc(0px - var(--sidebar-width));
+  border-right: var(--doorhanger-border-color-whcm);
 }
 html[dir="rtl"] #sidebarContainer {
   transition-property: right;
   right: calc(0px - var(--sidebar-width));
+  border-left: var(--doorhanger-border-color-whcm);
 }
 
 #outerContainer.sidebarResizing #sidebarContainer {
@@ -687,7 +1071,7 @@ html[dir="rtl"]
 #toolbarSidebar {
   width: 100%;
   height: 32px;
-  background-color: var(--sidebar-bg-color);
+  background-color: var(--sidebar-toolbar-bg-color);
 }
 html[dir="ltr"] #toolbarSidebar {
   box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.25), 0 1px 0 rgba(0, 0, 0, 0.15),
@@ -822,8 +1206,8 @@ html[dir="rtl"] #outerContainer.sidebarOpen #loadingBar {
   z-index: 10000;
   height: auto;
   min-width: 16px;
-  padding: 0 4px 0 4px;
-  margin: 4px 2px 4px 2px;
+  padding: 0 4px;
+  margin: 4px 2px;
   color: rgba(217, 217, 217, 1);
   font-size: 12px;
   line-height: 14px;
@@ -899,6 +1283,7 @@ html[dir="rtl"] .findbar .splitToolbarButton > .findNext {
 
 .findbar label:hover,
 .findbar input:focus + label {
+  color: var(--toggled-btn-color);
   background-color: var(--button-hover-color);
 }
 
@@ -913,6 +1298,7 @@ html[dir="rtl"] #findInput {
 
 .findbar .toolbarField[type="checkbox"]:checked + .toolbarLabel {
   background-color: var(--toggled-btn-bg-color) !important;
+  color: var(--toggled-btn-color);
 }
 
 #findInput {
@@ -934,7 +1320,7 @@ html[dir="rtl"] #findInput[data-status="pending"] {
 }
 
 .secondaryToolbar {
-  padding: 6px 0 10px 0;
+  padding: 6px 0 10px;
   height: auto;
   z-index: 30000;
   background-color: var(--doorhanger-bg-color);
@@ -963,6 +1349,7 @@ html[dir="rtl"] .secondaryToolbar {
   border-radius: 2px;
   box-shadow: 0 1px 5px var(--doorhanger-border-color),
     0 0 0 1px var(--doorhanger-border-color);
+  border: var(--doorhanger-border-color-whcm);
 }
 .doorHanger:after,
 .doorHanger:before,
@@ -975,6 +1362,7 @@ html[dir="rtl"] .secondaryToolbar {
   width: 0;
   position: absolute;
   pointer-events: none;
+  opacity: var(--doorhanger-triangle-opacity-whcm);
 }
 .doorHanger:after,
 .doorHangerRight:after {
@@ -1020,7 +1408,7 @@ html[dir="ltr"] .doorHangerRight:before {
   background-color: rgba(217, 217, 217, 1);
   color: rgba(82, 82, 82, 1);
   text-align: center;
-  padding: 3px 4px;
+  padding: 4px 5px;
   margin: 5px;
 }
 
@@ -1087,13 +1475,15 @@ html[dir="rtl"] .splitToolbarButton > .toolbarButton {
   width: 28px;
   height: 28px;
 }
-.overlayButton {
-  background-color: var(--overlay-button-bg-color);
-}
 
 .overlayButton:hover,
 .overlayButton:focus {
-  background-color: var(--overlay-button-hover-color);
+  background-color: var(--overlay-button-hover-bg-color);
+}
+
+.overlayButton:hover > span,
+.overlayButton:focus > span {
+  color: var(--overlay-button-hover-color);
 }
 
 .toolbarButton > span {
@@ -1186,13 +1576,23 @@ html[dir="rtl"] #toolbarViewerLeft > .toolbarButton:first-child {
 }
 .secondaryToolbarButton:hover,
 .secondaryToolbarButton:focus {
-  background-color: var(--doorhanger-hover-color);
+  background-color: var(--doorhanger-hover-bg-color);
+  color: var(--doorhanger-hover-color);
 }
 
 .toolbarButton.toggled,
 .splitToolbarButton.toggled > .toolbarButton.toggled,
 .secondaryToolbarButton.toggled {
   background-color: var(--toggled-btn-bg-color);
+  color: var(--toggled-btn-color);
+}
+
+.secondaryToolbarButton.toggled::before {
+  background-color: var(--toggled-btn-color);
+}
+
+.toolbarButton.toggled::before {
+  background-color: var(--toggled-btn-color);
 }
 
 .toolbarButton.toggled:hover:active,
@@ -1202,7 +1602,7 @@ html[dir="rtl"] #toolbarViewerLeft > .toolbarButton:first-child {
 }
 
 .dropdownToolbarButton {
-  width: 140px;
+  width: var(--scale-select-container-width);
   padding: 0;
   overflow: hidden;
   background-color: var(--dropdown-btn-bg-color);
@@ -1222,7 +1622,9 @@ html[dir="rtl"] .dropdownToolbarButton::after {
 }
 
 .dropdownToolbarButton > select {
-  width: 162px;
+  width: calc(
+    var(--scale-select-container-width) + var(--scale-select-overflow)
+  );
   height: 28px;
   font-size: 12px;
   color: var(--main-color);
@@ -1237,16 +1639,15 @@ html[dir="ltr"] .dropdownToolbarButton > select {
 html[dir="rtl"] .dropdownToolbarButton > select {
   padding-right: 4px;
 }
-.dropdownToolbarButton > select:hover {
-  background-color: var(--button-hover-color);
-}
-
+.dropdownToolbarButton > select:hover,
 .dropdownToolbarButton > select:focus {
   background-color: var(--button-hover-color);
+  color: var(--toggled-btn-color);
 }
 
 .dropdownToolbarButton > select > option {
   background: var(--doorhanger-bg-color);
+  color: var(--main-color);
 }
 
 #customScaleOption {
@@ -1279,10 +1680,23 @@ html[dir="rtl"] .dropdownToolbarButton > select {
   mask-size: cover;
 }
 
+.dropdownToolbarButton:hover::after,
+.dropdownToolbarButton:focus::after,
+.dropdownToolbarButton:active::after {
+  background-color: var(--toolbar-icon-hover-bg-color);
+}
+
 .toolbarButton::before {
   opacity: var(--toolbar-icon-opacity);
   top: 6px;
   left: 6px;
+}
+
+.toolbarButton:hover::before,
+.toolbarButton:focus::before,
+.secondaryToolbarButton:hover::before,
+.secondaryToolbarButton:focus::before {
+  background-color: var(--toolbar-icon-hover-bg-color);
 }
 
 .secondaryToolbarButton::before {
@@ -1420,7 +1834,7 @@ html[dir="rtl"] .toolbarButton.pdfSidebarNotification::after {
 .secondaryToolbarButton {
   position: relative;
   margin: 0;
-  padding: 0 0 1px 0;
+  padding: 0 0 1px;
   height: auto;
   min-height: 26px;
   width: auto;
@@ -1513,7 +1927,7 @@ html[dir="rtl"] .verticalToolbarSeparator {
 
 .horizontalToolbarSeparator {
   display: block;
-  margin: 6px 0 5px 0;
+  margin: 6px 0 5px;
   height: 1px;
   width: 100%;
   border-top: 1px solid var(--doorhanger-separator-color);
@@ -1521,7 +1935,7 @@ html[dir="rtl"] .verticalToolbarSeparator {
 
 .toolbarField {
   padding: 4px 7px;
-  margin: 3px 0 3px 0;
+  margin: 3px 0;
   border-radius: 2px;
   background-color: var(--field-bg-color);
   background-clip: padding-box;
@@ -1568,9 +1982,8 @@ html[dir="rtl"] .toolbarField[type="checkbox"] {
 
 .toolbarLabel {
   min-width: 16px;
-  padding: 6px;
+  padding: 7px;
   margin: 2px;
-  border: 1px solid rgba(0, 0, 0, 0);
   border-radius: 2px;
   color: var(--main-color);
   font-size: 12px;
@@ -1581,10 +1994,10 @@ html[dir="rtl"] .toolbarField[type="checkbox"] {
 }
 
 html[dir="ltr"] #numPages.toolbarLabel {
-  padding-left: 2px;
+  padding-left: 3px;
 }
 html[dir="rtl"] #numPages.toolbarLabel {
-  padding-right: 2px;
+  padding-right: 3px;
 }
 
 #thumbnailView {
@@ -1602,7 +2015,7 @@ html[dir="rtl"] #numPages.toolbarLabel {
 }
 
 .thumbnail {
-  margin: 0 10px 5px 10px;
+  margin: 0 10px 5px;
 }
 html[dir="ltr"] .thumbnail {
   float: left;
@@ -1621,7 +2034,7 @@ html[dir="rtl"] .thumbnail {
 
 .thumbnail:not([data-loaded]) {
   border: 1px dashed rgba(132, 132, 132, 1);
-  margin: -1px 9px 4px 9px;
+  margin: -1px 9px 4px;
 }
 
 .thumbnailImage {
@@ -1797,8 +2210,11 @@ html[dir="rtl"] .treeItemToggler::before {
 
 .overlayButton {
   width: auto;
-  margin: 3px 4px 2px 4px !important;
-  padding: 2px 11px 2px 11px;
+  margin: 3px 4px 2px !important;
+  padding: 2px 11px;
+  color: var(--main-color);
+  background-color: var(--overlay-button-bg-color);
+  border: var(--overlay-button-border) !important;
 }
 
 #overlayContainer {
@@ -1846,7 +2262,7 @@ html[dir="rtl"] .treeItemToggler::before {
 
 .dialog .separator {
   display: block;
-  margin: 4px 0 4px 0;
+  margin: 4px 0;
   height: 1px;
   width: 100%;
   background-color: var(--separator-color);
@@ -1954,6 +2370,19 @@ html[dir="rtl"] #documentPropertiesOverlay .row > * {
 #PDFBug table {
   font-size: 10px;
 }
+#PDFBug table.showText {
+  border-collapse: collapse;
+  text-align: center;
+}
+#PDFBug table.showText,
+#PDFBug table.showText tr,
+#PDFBug table.showText td {
+  border: 1px solid black;
+  padding: 1px;
+}
+#PDFBug table.showText td.advance {
+  color: grey;
+}
 
 #viewer.textLayer-visible .textLayer {
   opacity: 1;
@@ -1967,19 +2396,19 @@ html[dir="rtl"] #documentPropertiesOverlay .row > * {
   mix-blend-mode: screen;
 }
 
-#viewer.textLayer-visible .textLayer > span {
+#viewer.textLayer-visible .textLayer span {
   background-color: rgba(255, 255, 0, 0.1);
   color: rgba(0, 0, 0, 1);
   border: solid 1px rgba(255, 0, 0, 0.5);
   box-sizing: border-box;
 }
 
-#viewer.textLayer-hover .textLayer > span:hover {
+#viewer.textLayer-hover .textLayer span:hover {
   background-color: rgba(255, 255, 255, 1);
   color: rgba(0, 0, 0, 1);
 }
 
-#viewer.textLayer-shadow .textLayer > span {
+#viewer.textLayer-shadow .textLayer span {
   background-color: rgba(255, 255, 255, 0.6);
   color: rgba(0, 0, 0, 1);
 }
@@ -2027,7 +2456,8 @@ html[dir="rtl"] #documentPropertiesOverlay .row > * {
   .toolbar,
   #loadingBox,
   #errorWrapper,
-  .textLayer {
+  .textLayer,
+  .canvasWrapper {
     display: none;
   }
   #viewerContainer {
@@ -2071,18 +2501,38 @@ html[dir="rtl"] #documentPropertiesOverlay .row > * {
     height: 100%;
   }
   /* wrapper around (scaled) print canvas elements */
-  #printContainer > div {
-    position: relative;
-    top: 0;
-    left: 0;
-    width: 1px;
-    height: 1px;
-    overflow: visible;
+  #printContainer > .printedPage {
     page-break-after: always;
     page-break-inside: avoid;
+
+    /* The wrapper always cover the whole page. */
+    height: 100%;
+    width: 100%;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
   }
-  #printContainer canvas,
-  #printContainer img {
+
+  #printContainer > .xfaPrintedPage .xfaPage {
+    position: absolute;
+  }
+
+  #printContainer > .xfaPrintedPage {
+    page-break-after: always;
+    page-break-inside: avoid;
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  #printContainer > .printedPage canvas,
+  #printContainer > .printedPage img {
+    /* The intrinsic canvas / image size will make sure that we fit the page. */
+    max-width: 100%;
+    max-height: 100%;
+
     direction: ltr;
     display: block;
   }
@@ -2105,8 +2555,8 @@ html[dir="rtl"] #documentPropertiesOverlay .row > * {
 }
 
 @media all and (max-width: 840px) {
-  #sidebarContent {
-    background-color: rgba(0, 0, 0, 0.7);
+  #sidebarContainer {
+    background-color: var(--sidebar-narrow-bg-color);
   }
 
   html[dir="ltr"] #outerContainer.sidebarOpen #viewerContainer {

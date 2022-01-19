@@ -15,7 +15,8 @@
 #include "gfxEnv.h"
 #include "gfxRect.h"  // for gfxRect
 #include "gfxUtils.h"
-#include "mozilla/DebugOnly.h"          // for DebugOnly
+#include "mozilla/DebugOnly.h"  // for DebugOnly
+#include "mozilla/gfx/Logging.h"
 #include "mozilla/layers/Compositor.h"  // for BlendOpIsMixBlendMode
 #include "nsAString.h"
 #include "nsString.h"  // for nsAutoCString
@@ -1038,6 +1039,52 @@ void ShaderProgramOGL::SetYUVColorSpace(gfx::YUVColorSpace aYUVColorSpace) {
     const float offset[] = {0.06275, 0.50196, 0.50196};
     SetVec3fvUniform(KnownUniform::YuvOffsetVector, offset);
   }
+}
+
+ShaderProgramOGLsHolder::ShaderProgramOGLsHolder(gl::GLContext* aGL)
+    : mGL(aGL) {}
+
+ShaderProgramOGLsHolder::~ShaderProgramOGLsHolder() { Clear(); }
+
+ShaderProgramOGL* ShaderProgramOGLsHolder::GetShaderProgramFor(
+    const ShaderConfigOGL& aConfig) {
+  auto iter = mPrograms.find(aConfig);
+  if (iter != mPrograms.end()) {
+    return iter->second.get();
+  }
+
+  ProgramProfileOGL profile = ProgramProfileOGL::GetProfileFor(aConfig);
+  auto shader = MakeUnique<ShaderProgramOGL>(mGL, profile);
+  if (!shader->Initialize()) {
+    gfxCriticalError() << "Shader compilation failure, cfg:"
+                       << " features: " << gfx::hexa(aConfig.mFeatures)
+                       << " multiplier: " << aConfig.mMultiplier
+                       << " op: " << aConfig.mCompositionOp;
+    return nullptr;
+  }
+
+  mPrograms.emplace(aConfig, std::move(shader));
+  return mPrograms[aConfig].get();
+}
+
+void ShaderProgramOGLsHolder::Clear() { mPrograms.clear(); }
+
+ShaderProgramOGL* ShaderProgramOGLsHolder::ActivateProgram(
+    const ShaderConfigOGL& aConfig) {
+  ShaderProgramOGL* program = GetShaderProgramFor(aConfig);
+  MOZ_DIAGNOSTIC_ASSERT(program);
+  if (!program) {
+    return nullptr;
+  }
+  if (mCurrentProgram != program) {
+    mGL->fUseProgram(program->GetProgram());
+    mCurrentProgram = program;
+  }
+  return program;
+}
+
+void ShaderProgramOGLsHolder::ResetCurrentProgram() {
+  mCurrentProgram = nullptr;
 }
 
 }  // namespace layers

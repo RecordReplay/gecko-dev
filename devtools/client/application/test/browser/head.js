@@ -95,11 +95,14 @@ function getWorkerContainers(doc) {
 
 async function openNewTabAndApplicationPanel(url) {
   const tab = await addTab(url);
-  const target = await TargetFactory.forTab(tab);
 
-  const toolbox = await gDevTools.showToolbox(target, "application");
+  const toolbox = await gDevTools.showToolboxForTab(tab, {
+    toolId: "application",
+  });
   const panel = toolbox.getCurrentPanel();
-  return { panel, tab, target, toolbox };
+  const target = toolbox.target;
+  const commands = toolbox.commands;
+  return { panel, tab, target, toolbox, commands };
 }
 
 async function unregisterAllWorkers(client, doc) {

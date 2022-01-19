@@ -227,23 +227,21 @@ void nsInlineFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 /* virtual */
 void nsInlineFrame::AddInlineMinISize(gfxContext* aRenderingContext,
                                       nsIFrame::InlineMinISizeData* aData) {
-  DoInlineIntrinsicISize(aRenderingContext, aData,
-                         IntrinsicISizeType::MinISize);
+  DoInlineMinISize(aRenderingContext, aData);
 }
 
 /* virtual */
 void nsInlineFrame::AddInlinePrefISize(gfxContext* aRenderingContext,
                                        nsIFrame::InlinePrefISizeData* aData) {
-  DoInlineIntrinsicISize(aRenderingContext, aData,
-                         IntrinsicISizeType::PrefISize);
-  aData->mLineIsEmpty = false;
+  DoInlinePrefISize(aRenderingContext, aData);
 }
 
 /* virtual */
 nsIFrame::SizeComputationResult nsInlineFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
   // Inlines and text don't compute size before reflow.
   return {LogicalSize(aWM, NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE),
           AspectRatioUsage::None};

@@ -72,14 +72,16 @@ const HTML_NS = "http://www.w3.org/1999/xhtml";
  *   'error': An error occured
  *
  * @param {Toolbox} toolbox
+ * @param {Object} commands Object defined from devtools/shared/commands to interact with the devtools backend
  * @param {Document} panelDoc
  *        Document of the toolbox panel to populate UI in.
  * @param {CssProperties} A css properties database.
  */
-function StyleEditorUI(toolbox, panelDoc, cssProperties) {
+function StyleEditorUI(toolbox, commands, panelDoc, cssProperties) {
   EventEmitter.decorate(this);
 
   this._toolbox = toolbox;
+  this._commands = commands;
   this._panelDoc = panelDoc;
   this._cssProperties = cssProperties;
   this._window = this._panelDoc.defaultView;
@@ -120,7 +122,7 @@ StyleEditorUI.prototype = {
   },
 
   get currentTarget() {
-    return this._toolbox.targetList.targetFront;
+    return this._commands.targetCommand.targetFront;
   },
 
   /*
@@ -133,24 +135,24 @@ StyleEditorUI.prototype = {
   },
 
   /**
-   * Initiates the style editor ui creation, and start to track TargetList updates.
+   * Initiates the style editor ui creation, and start to track TargetCommand updates.
    */
   async initialize() {
     this.createUI();
 
-    await this._toolbox.targetList.watchTargets(
-      [this._toolbox.targetList.TYPES.FRAME],
+    await this._commands.targetCommand.watchTargets(
+      [this._commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable
     );
 
-    await this._toolbox.resourceWatcher.watchResources(
-      [this._toolbox.resourceWatcher.TYPES.DOCUMENT_EVENT],
+    await this._toolbox.resourceCommand.watchResources(
+      [this._toolbox.resourceCommand.TYPES.DOCUMENT_EVENT],
       { onAvailable: this._onResourceAvailable }
     );
 
     this._startLoadingStyleSheets();
-    await this._toolbox.resourceWatcher.watchResources(
-      [this._toolbox.resourceWatcher.TYPES.STYLESHEET],
+    await this._toolbox.resourceCommand.watchResources(
+      [this._toolbox.resourceCommand.TYPES.STYLESHEET],
       {
         onAvailable: this._onResourceAvailable,
         onUpdated: this._onResourceUpdated,
@@ -254,11 +256,11 @@ StyleEditorUI.prototype = {
   async _onOrigSourcesPrefChanged() {
     this._clear();
     // When we toggle the source-map preference, we clear the panel and re-fetch the exact
-    // same stylesheet resources from ResourceWatcher, but `_addStyleSheet` will trigger
+    // same stylesheet resources from ResourceCommand, but `_addStyleSheet` will trigger
     // or ignore the additional source-map mapping.
     this._root.classList.add("loading");
-    for (const resource of this._toolbox.resourceWatcher.getAllResources(
-      this._toolbox.resourceWatcher.TYPES.STYLESHEET
+    for (const resource of this._toolbox.resourceCommand.getAllResources(
+      this._toolbox.resourceCommand.TYPES.STYLESHEET
     )) {
       await this._handleStyleSheetResource(resource);
     }
@@ -307,7 +309,7 @@ StyleEditorUI.prototype = {
    * instead (e.g. Sass sources), if applicable.
    *
    * @param  {Resource} resource
-   *         The STYLESHEET resource which is received from resource watcher.
+   *         The STYLESHEET resource which is received from resource command.
    * @return {Promise}
    *         A promise that resolves to the style sheet's editor when the style sheet has
    *         been fully loaded.  If the style sheet has a source map, and source mapping
@@ -404,7 +406,7 @@ StyleEditorUI.prototype = {
    * Add a new editor to the UI for a source.
    *
    * @param  {Resource} resource
-   *         The resource which is received from resource watcher.
+   *         The resource which is received from resource command.
    * @return {Promise} that is resolved with the created StyleSheetEditor when
    *                   the editor is fully initialized or rejected on error.
    */
@@ -530,11 +532,8 @@ StyleEditorUI.prototype = {
    * below the list): hide the context menu
    */
   _updateContextMenuItems: function() {
-    this._openLinkNewTabItem.setAttribute(
-      "hidden",
-      !this._contextMenuStyleSheet
-    );
-    this._copyUrlItem.setAttribute("hidden", !this._contextMenuStyleSheet);
+    this._openLinkNewTabItem.hidden = !this._contextMenuStyleSheet;
+    this._copyUrlItem.hidden = !this._contextMenuStyleSheet;
 
     if (this._contextMenuStyleSheet) {
       this._openLinkNewTabItem.setAttribute(
@@ -1039,7 +1038,7 @@ StyleEditorUI.prototype = {
         if (!rule.matches) {
           cond.classList.add("media-condition-unmatched");
         }
-        if (this.currentTarget.isLocalTab) {
+        if (this._toolbox.descriptorFront.isLocalTab) {
           this._setConditionContents(cond, rule.conditionText);
         } else {
           cond.textContent = rule.conditionText;
@@ -1188,9 +1187,10 @@ StyleEditorUI.prototype = {
   },
 
   async _onResourceAvailable(resources) {
+    const promises = [];
     for (const resource of resources) {
       if (
-        resource.resourceType === this._toolbox.resourceWatcher.TYPES.STYLESHEET
+        resource.resourceType === this._toolbox.resourceCommand.TYPES.STYLESHEET
       ) {
         const onStyleSheetHandled = this._handleStyleSheetResource(resource);
 
@@ -1198,8 +1198,7 @@ StyleEditorUI.prototype = {
           // In case of reloading/navigating and panel's opening
           this._loadingStyleSheets.push(onStyleSheetHandled);
         }
-
-        await onStyleSheetHandled;
+        promises.push(onStyleSheetHandled);
         continue;
       }
 
@@ -1211,21 +1210,32 @@ StyleEditorUI.prototype = {
         // will-navigate doesn't work when we navigate to a new process,
         // and for now, onTargetAvailable/onTargetDestroyed doesn't fire on navigation and
         // only when navigating to another process.
-        // So we fallback on DOCUMENT_EVENTS to be notified when we navigates. When we
-        // navigate within the same process as well as when we navigate to a new process.
+        // So we fallback on DOCUMENT_EVENTS to be notified when we navigates.
+        // The only catch is that when starting up a DevToolsServer, a dom-loading event
+        // is fired, and it might come _after_ the stylesheet resources; and in such case
+        // we shouldn't clear the stylesheets that where already handled.
+        // So here we bail out if we get this kind of event. At the moment, this will only
+        // happen for the initial target and for target switching (and luckily, in those
+        // case onTargetAvailable is called before we get any stylesheets).
+        // This means we still want to clear the UI on dom-loading for same-process navigation.
         // (We would probably revisit that in bug 1632141)
+        if (resource.shouldBeIgnoredAsRedundantWithTargetAvailable) {
+          continue;
+        }
+
         this._startLoadingStyleSheets();
         this._clear();
       } else if (resource.name === "dom-complete") {
-        await this._waitForLoadingStyleSheets();
+        promises.push(this._waitForLoadingStyleSheets());
       }
     }
+    await Promise.all(promises);
   },
 
   async _onResourceUpdated(updates) {
     for (const { resource, update } of updates) {
       if (
-        update.resourceType === this._toolbox.resourceWatcher.TYPES.STYLESHEET
+        update.resourceType === this._toolbox.resourceCommand.TYPES.STYLESHEET
       ) {
         const editor = this.editors.find(
           e => e.resourceId === update.resourceId
@@ -1257,20 +1267,22 @@ StyleEditorUI.prototype = {
 
   async _onTargetAvailable({ targetFront }) {
     if (targetFront.isTopLevel) {
+      this._startLoadingStyleSheets();
+      this._clear();
       await this.initializeHighlighter(targetFront);
     }
   },
 
   destroy: function() {
-    this._toolbox.targetList.unwatchTargets(
-      [this._toolbox.targetList.TYPES.FRAME],
+    this._commands.targetCommand.unwatchTargets(
+      [this._commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable
     );
 
-    this._toolbox.resourceWatcher.unwatchResources(
+    this._toolbox.resourceCommand.unwatchResources(
       [
-        this._toolbox.resourceWatcher.TYPES.DOCUMENT_EVENT,
-        this._toolbox.resourceWatcher.TYPES.STYLESHEET,
+        this._toolbox.resourceCommand.TYPES.DOCUMENT_EVENT,
+        this._toolbox.resourceCommand.TYPES.STYLESHEET,
       ],
       {
         onAvailable: this._onResourceAvailable,

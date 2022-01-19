@@ -7,14 +7,16 @@
 use super::super::{IdleTimeout, Output, State, LOCAL_IDLE_TIMEOUT};
 use super::{
     connect, connect_force_idle, connect_with_rtt, default_client, default_server,
-    maybe_authenticate, send_something, AT_LEAST_PTO,
+    maybe_authenticate, send_and_receive, send_something, AT_LEAST_PTO,
 };
-use crate::frame::StreamType;
 use crate::packet::PacketBuilder;
+use crate::stats::FrameStats;
 use crate::tparams::{self, TransportParameter};
-use crate::tracking::PNSpace;
+use crate::tracking::PacketNumberSpace;
+use crate::StreamType;
 
 use neqo_common::Encoder;
+use std::mem;
 use std::time::Duration;
 use test_fixture::{self, now, split_datagram};
 
@@ -30,10 +32,10 @@ fn idle_timeout() {
     assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
 
     // Still connected after 29 seconds. Idle timer not reset
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT - Duration::from_secs(1));
+    mem::drop(client.process(None, now + LOCAL_IDLE_TIMEOUT - Duration::from_secs(1)));
     assert!(matches!(client.state(), State::Confirmed));
 
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT);
+    mem::drop(client.process(None, now + LOCAL_IDLE_TIMEOUT));
 
     // Not connected after LOCAL_IDLE_TIMEOUT seconds.
     assert!(matches!(client.state(), State::Closed(_)));
@@ -58,13 +60,19 @@ fn asymmetric_idle_timeout() {
     server.idle_timeout = IdleTimeout::new(LOWER_TIMEOUT);
 
     // Now connect and force idleness manually.
+    // We do that by following what `force_idle` does and have each endpoint
+    // send two packets, which are delivered out of order.  See `force_idle`.
     connect(&mut client, &mut server);
-    let p1 = send_something(&mut server, now());
-    let p2 = send_something(&mut server, now());
-    client.process_input(p2, now());
-    let ack = client.process(Some(p1), now()).dgram();
+    let c1 = send_something(&mut client, now());
+    let c2 = send_something(&mut client, now());
+    server.process_input(c2, now());
+    server.process_input(c1, now());
+    let s1 = send_something(&mut server, now());
+    let s2 = send_something(&mut server, now());
+    client.process_input(s2, now());
+    let ack = client.process(Some(s1), now()).dgram();
     assert!(ack.is_some());
-    // Now the server has its ACK and both should be idle.
+    // Now both should have received ACK frames so should be idle.
     assert_eq!(server.process(ack, now()), Output::Callback(LOWER_TIMEOUT));
     assert_eq!(client.process(None, now()), Output::Callback(LOWER_TIMEOUT));
 }
@@ -91,11 +99,16 @@ fn tiny_idle_timeout() {
 
     // Now connect with an RTT and force idleness manually.
     let mut now = connect_with_rtt(&mut client, &mut server, now(), RTT);
-    let p1 = send_something(&mut server, now);
-    let p2 = send_something(&mut server, now);
+    let c1 = send_something(&mut client, now);
+    let c2 = send_something(&mut client, now);
     now += RTT / 2;
-    client.process_input(p2, now);
-    let ack = client.process(Some(p1), now).dgram();
+    server.process_input(c2, now);
+    server.process_input(c1, now);
+    let s1 = send_something(&mut server, now);
+    let s2 = send_something(&mut server, now);
+    now += RTT / 2;
+    client.process_input(s2, now);
+    let ack = client.process(Some(s1), now).dgram();
     assert!(ack.is_some());
 
     // The client should be idle now, but with a different timer.
@@ -116,61 +129,67 @@ fn tiny_idle_timeout() {
 
 #[test]
 fn idle_send_packet1() {
+    const DELTA: Duration = Duration::from_millis(10);
+
     let mut client = default_client();
     let mut server = default_server();
+    let mut now = now();
     connect_force_idle(&mut client, &mut server);
 
-    let now = now();
+    let timeout = client.process(None, now).callback();
+    assert_eq!(timeout, LOCAL_IDLE_TIMEOUT);
 
-    let res = client.process(None, now);
-    assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
+    now += Duration::from_secs(10);
+    let dgram = send_and_receive(&mut client, &mut server, now);
+    assert!(dgram.is_none());
 
-    assert_eq!(client.stream_create(StreamType::UniDi).unwrap(), 2);
-    assert_eq!(client.stream_send(2, b"hello").unwrap(), 5);
-
-    let out = client.process(None, now + Duration::from_secs(10));
-    let out = server.process(out.dgram(), now + Duration::from_secs(10));
-
-    // Still connected after 39 seconds because idle timer reset by outgoing
-    // packet
-    let _ = client.process(
-        out.dgram(),
-        now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(9),
-    );
-    assert!(matches!(client.state(), State::Confirmed));
+    // Still connected after 39 seconds because idle timer reset by the
+    // outgoing packet.
+    now += LOCAL_IDLE_TIMEOUT - DELTA;
+    let dgram = client.process(None, now).dgram();
+    assert!(dgram.is_some()); // PTO
+    assert!(client.state().connected());
 
     // Not connected after 40 seconds.
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(10));
-
-    assert!(matches!(client.state(), State::Closed(_)));
+    now += DELTA;
+    let out = client.process(None, now);
+    assert!(matches!(out, Output::None));
+    assert!(client.state().closed());
 }
 
 #[test]
 fn idle_send_packet2() {
+    const GAP: Duration = Duration::from_secs(10);
+    const DELTA: Duration = Duration::from_millis(10);
+
     let mut client = default_client();
     let mut server = default_server();
     connect_force_idle(&mut client, &mut server);
 
-    let now = now();
+    let mut now = now();
 
-    let res = client.process(None, now);
-    assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
+    let timeout = client.process(None, now).callback();
+    assert_eq!(timeout, LOCAL_IDLE_TIMEOUT);
 
-    assert_eq!(client.stream_create(StreamType::UniDi).unwrap(), 2);
-    assert_eq!(client.stream_send(2, b"hello").unwrap(), 5);
+    // First transmission at t=GAP.
+    now += GAP;
+    mem::drop(send_something(&mut client, now));
 
-    let _out = client.process(None, now + Duration::from_secs(10));
+    // Second transmission at t=2*GAP.
+    mem::drop(send_something(&mut client, now + GAP));
+    assert!((GAP * 2 + DELTA) < LOCAL_IDLE_TIMEOUT);
 
-    assert_eq!(client.stream_send(2, b"there").unwrap(), 5);
-    let _out = client.process(None, now + Duration::from_secs(20));
-
-    // Still connected after 39 seconds.
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(9));
+    // Still connected just before GAP + LOCAL_IDLE_TIMEOUT.
+    now += LOCAL_IDLE_TIMEOUT - DELTA;
+    let dgram = client.process(None, now).dgram();
+    assert!(dgram.is_some()); // PTO
     assert!(matches!(client.state(), State::Confirmed));
 
     // Not connected after 40 seconds because timer not reset by second
     // outgoing packet
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(10));
+    now += DELTA;
+    let out = client.process(None, now);
+    assert!(matches!(out, Output::None));
     assert!(matches!(client.state(), State::Closed(_)));
 }
 
@@ -195,16 +214,16 @@ fn idle_recv_packet() {
     let out = server.process_output(now + Duration::from_secs(10));
     assert_ne!(out.as_dgram_ref(), None);
 
-    let _ = client.process(out.dgram(), now + Duration::from_secs(20));
+    mem::drop(client.process(out.dgram(), now + Duration::from_secs(20)));
     assert!(matches!(client.state(), State::Confirmed));
 
     // Still connected after 49 seconds because idle timer reset by received
     // packet
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(19));
+    mem::drop(client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(19)));
     assert!(matches!(client.state(), State::Confirmed));
 
     // Not connected after 50 seconds.
-    let _ = client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(20));
+    mem::drop(client.process(None, now + LOCAL_IDLE_TIMEOUT + Duration::from_secs(20)));
 
     assert!(matches!(client.state(), State::Closed(_)));
 }
@@ -229,26 +248,40 @@ fn idle_caching() {
     // Perform an exchange and keep the connection alive.
     // Only allow a packet containing a PING to pass.
     let middle = start + AT_LEAST_PTO;
-    let _ = client.process_output(middle);
+    mem::drop(client.process_output(middle));
     let dgram = client.process_output(middle).dgram();
 
     // Get the server to send its first probe and throw that away.
-    let _ = server.process_output(middle).dgram();
+    mem::drop(server.process_output(middle).dgram());
     // Now let the server process the client PING.  This causes the server
     // to send CRYPTO frames again, so manually extract and discard those.
     let ping_before_s = server.stats().frame_rx.ping;
     server.process_input(dgram.unwrap(), middle);
     assert_eq!(server.stats().frame_rx.ping, ping_before_s + 1);
-    let crypto = server
+    let mut tokens = Vec::new();
+    server
         .crypto
         .streams
-        .write_frame(PNSpace::Initial, &mut builder);
-    assert!(crypto.is_some());
-    let crypto = server
+        .write_frame(
+            PacketNumberSpace::Initial,
+            &mut builder,
+            &mut tokens,
+            &mut FrameStats::default(),
+        )
+        .unwrap();
+    assert_eq!(tokens.len(), 1);
+    tokens.clear();
+    server
         .crypto
         .streams
-        .write_frame(PNSpace::Initial, &mut builder);
-    assert!(crypto.is_none());
+        .write_frame(
+            PacketNumberSpace::Initial,
+            &mut builder,
+            &mut tokens,
+            &mut FrameStats::default(),
+        )
+        .unwrap();
+    assert!(tokens.is_empty());
     let dgram = server.process_output(middle).dgram();
 
     // Now only allow the Initial packet from the server through;
@@ -264,7 +297,8 @@ fn idle_caching() {
     // Now let the server Initial through, with the CRYPTO frame.
     let dgram = server.process_output(end).dgram();
     let (initial, _) = split_datagram(&dgram.unwrap());
-    let _ = client.process(Some(initial), end);
+    neqo_common::qwarn!("client ingests initial, finally");
+    mem::drop(client.process(Some(initial), end));
     maybe_authenticate(&mut client);
     let dgram = client.process_output(end).dgram();
     let dgram = server.process(dgram, end).dgram();

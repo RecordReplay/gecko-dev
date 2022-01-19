@@ -9,7 +9,8 @@ use std::time::Duration;
 use miow::iocp::CompletionStatus;
 use miow::net::*;
 use net2::{TcpBuilder, TcpStreamExt as Net2TcpExt};
-use winapi::*;
+use winapi::um::minwinbase::OVERLAPPED_ENTRY;
+use winapi::um::winnt::HANDLE;
 use iovec::IoVec;
 
 use {poll, Ready, Poll, PollOpt, Token};
@@ -81,7 +82,6 @@ struct ListenerInner {
     iocp: ReadyBinding,
     accept: State<net::TcpStream, (net::TcpStream, SocketAddr)>,
     accept_buf: AcceptAddrsBuf,
-    instant_notify: bool,
 }
 
 enum State<T, U> {
@@ -666,7 +666,6 @@ impl TcpListener {
                         iocp: ReadyBinding::new(),
                         accept: State::Empty,
                         accept_buf: AcceptAddrsBuf::new(),
-                        instant_notify: false,
                     }),
                 }),
             },
@@ -744,10 +743,14 @@ impl ListenerImp {
         let res = match self.inner.family {
             Family::V4 => TcpBuilder::new_v4(),
             Family::V6 => TcpBuilder::new_v6(),
-        }.and_then(|builder| unsafe {
+        }
+        .and_then(|builder| builder.to_tcp_stream())
+        .and_then(|stream| unsafe {
             trace!("scheduling an accept");
-            self.inner.socket.accept_overlapped(&builder, &mut me.accept_buf,
-                                                self.inner.accept.as_mut_ptr())
+            self.inner
+                .socket
+                .accept_overlapped(&stream, &mut me.accept_buf, self.inner.accept.as_mut_ptr())
+                .map(|x| (stream, x))
         });
         match res {
             Ok((socket, _)) => {
@@ -803,7 +806,6 @@ impl Evented for TcpListener {
 
         unsafe {
             super::no_notify_on_instant_completion(self.imp.inner.socket.as_raw_socket() as HANDLE)?;
-            me.instant_notify = true;
         }
 
         self.imp.schedule_accept(&mut me);

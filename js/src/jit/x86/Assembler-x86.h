@@ -58,9 +58,9 @@ static constexpr FloatRegister ReturnDoubleReg =
     FloatRegister(X86Encoding::xmm0, FloatRegisters::Double);
 static constexpr FloatRegister ReturnSimd128Reg =
     FloatRegister(X86Encoding::xmm0, FloatRegisters::Simd128);
-static constexpr FloatRegister ScratchFloat32Reg =
+static constexpr FloatRegister ScratchFloat32Reg_ =
     FloatRegister(X86Encoding::xmm7, FloatRegisters::Single);
-static constexpr FloatRegister ScratchDoubleReg =
+static constexpr FloatRegister ScratchDoubleReg_ =
     FloatRegister(X86Encoding::xmm7, FloatRegisters::Double);
 static constexpr FloatRegister ScratchSimd128Reg =
     FloatRegister(X86Encoding::xmm7, FloatRegisters::Simd128);
@@ -96,7 +96,7 @@ static constexpr Register ABINonArgReg2 = ecx;
 static constexpr Register ABINonArgReg3 = edx;
 
 // This register may be volatile or nonvolatile. Avoid xmm7 which is the
-// ScratchDoubleReg.
+// ScratchDoubleReg_.
 static constexpr FloatRegister ABINonArgDoubleReg =
     FloatRegister(X86Encoding::xmm0, FloatRegisters::Double);
 
@@ -127,6 +127,10 @@ static constexpr Register WasmTableCallIndexReg = ABINonArgReg3;
 // code.  This must not overlap ReturnReg, JSReturnOperand, or WasmTlsReg. It
 // must be a volatile register.
 static constexpr Register WasmJitEntryReturnScratch = ebx;
+
+// Register used to store a reference to an exception thrown by Wasm to an
+// exception handling block. Should not overlap with WasmTlsReg.
+static constexpr Register WasmExceptionReg = ABINonArgReg0;
 
 static constexpr Register OsrFrameReg = edx;
 static constexpr Register PreBarrierReg = edx;
@@ -178,10 +182,12 @@ static_assert(JitStackAlignment % SimdMemoryAlignment == 0,
 static constexpr uint32_t WasmStackAlignment = SimdMemoryAlignment;
 static constexpr uint32_t WasmTrapInstructionLength = 2;
 
-// The offsets are dynamically asserted during
-// code generation in the prologue/epilogue.
+// See comments in wasm::GenerateFunctionPrologue.  The difference between these
+// is the size of the largest callable prologue on the platform.  (We could make
+// the tail offset 3, but I have opted for 4 as that results in a better-aligned
+// branch target.)
 static constexpr uint32_t WasmCheckedCallEntryOffset = 0u;
-static constexpr uint32_t WasmCheckedTailEntryOffset = 16u;
+static constexpr uint32_t WasmCheckedTailEntryOffset = 4u;
 
 struct ImmTag : public Imm32 {
   explicit ImmTag(JSValueTag mask) : Imm32(int32_t(mask)) {}

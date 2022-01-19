@@ -325,6 +325,24 @@ static nsresult GetDownloadDirectory(nsIFile** _directory,
   }
 #elif defined(ANDROID)
   return NS_ERROR_FAILURE;
+#elif defined(XP_WIN)
+  // On windows, use default downloads directory if pref is set
+  const char* directory_to_save_file =
+      StaticPrefs::browser_download_improvements_to_download_panel()
+          ? NS_WIN_DEFAULT_DOWNLOAD_DIR
+          : NS_OS_TEMP_DIR;
+  nsresult rv =
+      NS_GetSpecialDirectory(directory_to_save_file, getter_AddRefs(dir));
+  NS_ENSURE_SUCCESS(rv, rv);
+#elif defined(XP_UNIX)
+  // On unix, use default downloads directory if pref is set
+  const char* directory_to_save_file =
+      StaticPrefs::browser_download_improvements_to_download_panel()
+          ? NS_UNIX_DEFAULT_DOWNLOAD_DIR
+          : NS_OS_TEMP_DIR;
+  nsresult rv =
+      NS_GetSpecialDirectory(directory_to_save_file, getter_AddRefs(dir));
+  NS_ENSURE_SUCCESS(rv, rv);
 #else
   // On all other platforms, we default to the systems temporary directory.
   nsresult rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(dir));
@@ -536,6 +554,7 @@ static const nsExtraMimeTypeEntry extraMimeEntries[] = {
     {IMAGE_SVG_XML, "svg", "Scalable Vector Graphics"},
     {IMAGE_WEBP, "webp", "WebP Image"},
     {IMAGE_AVIF, "avif", "AV1 Image File"},
+    {IMAGE_JXL, "jxl", "JPEG XL Image File"},
 
     {MESSAGE_RFC822, "eml", "RFC-822 data"},
     {TEXT_PLAIN, "txt,text", "Text File"},
@@ -551,7 +570,7 @@ static const nsExtraMimeTypeEntry extraMimeEntries[] = {
     {TEXT_XML, "xml,xsl,xbl", "Extensible Markup Language"},
     {TEXT_CSS, "css", "Style Sheet"},
     {TEXT_VCARD, "vcf,vcard", "Contact Information"},
-    {TEXT_CALENDAR, "ics", "iCalendar"},
+    {TEXT_CALENDAR, "ics,ical,ifb,icalendar", "iCalendar"},
     {VIDEO_OGG, "ogv", "Ogg Video"},
     {VIDEO_OGG, "ogg", "Ogg Video"},
     {APPLICATION_OGG, "ogg", "Ogg Video"},
@@ -592,33 +611,12 @@ static const nsDefaultMimeTypeEntry nonDecodableExtensions[] = {
  * image/ mimetypes.
  */
 static const char* forcedExtensionMimetypes[] = {
-    // OpenDocument formats
-    "application/vnd.oasis.opendocument.text",
-    "application/vnd.oasis.opendocument.presentation",
-    "application/vnd.oasis.opendocument.spreadsheet",
-    "application/vnd.oasis.opendocument.graphics",
-
-    // Legacy Microsoft Office
-    "application/msword", "application/vnd.ms-powerpoint",
-    "application/vnd.ms-excel",
-
-    // Office Open XML
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-
     // Note: zip and json mimetypes are commonly used with a variety of
     // extensions; don't add them here. It's a similar story for text/xml,
     // but slightly worse because we can use it when sniffing for a mimetype
     // if one hasn't been provided, so don't re-add that here either.
-
-    APPLICATION_PDF,
-
-    APPLICATION_OGG,
-
-    APPLICATION_WASM,
-
-    TEXT_CALENDAR, TEXT_CSS, TEXT_VCARD};
+    APPLICATION_PDF, APPLICATION_OGG, APPLICATION_WASM,
+    TEXT_CALENDAR,   TEXT_CSS,        TEXT_VCARD};
 
 /**
  * Primary extensions of types whose descriptions should be overwritten.
@@ -627,7 +625,7 @@ static const char* forcedExtensionMimetypes[] = {
  * NOTE: These MUST be lower-case and ASCII.
  */
 static const char* descriptionOverwriteExtensions[] = {
-    "avif", "pdf", "svg", "webp", "xml",
+    "avif", "jxl", "pdf", "svg", "webp", "xml",
 };
 
 static StaticRefPtr<nsExternalHelperAppService> sExtHelperAppSvcSingleton;
@@ -1014,33 +1012,44 @@ static const char kExternalProtocolPrefPrefix[] =
 static const char kExternalProtocolDefaultPref[] =
     "network.protocol-handler.external-default";
 
-NS_IMETHODIMP
-nsExternalHelperAppService::LoadURI(nsIURI* aURI,
-                                    nsIPrincipal* aTriggeringPrincipal,
-                                    BrowsingContext* aBrowsingContext) {
-  NS_ENSURE_ARG_POINTER(aURI);
-
-  if (XRE_IsContentProcess()) {
-    mozilla::dom::ContentChild::GetSingleton()->SendLoadURIExternal(
-        aURI, aTriggeringPrincipal, aBrowsingContext);
-    return NS_OK;
-  }
+// static
+nsresult nsExternalHelperAppService::EscapeURI(nsIURI* aURI, nsIURI** aResult) {
+  MOZ_ASSERT(aURI);
+  MOZ_ASSERT(aResult);
 
   nsAutoCString spec;
   aURI->GetSpec(spec);
 
   if (spec.Find("%00") != -1) return NS_ERROR_MALFORMED_URI;
 
-  spec.ReplaceSubstring("\"", "%22");
-  spec.ReplaceSubstring("`", "%60");
+  nsAutoCString escapedSpec;
+  nsresult rv = NS_EscapeURL(spec, esc_AlwaysCopy | esc_ExtHandler, escapedSpec,
+                             fallible);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIIOService> ios(do_GetIOService());
-  nsCOMPtr<nsIURI> uri;
-  nsresult rv = ios->NewURI(spec, nullptr, nullptr, getter_AddRefs(uri));
+  return ios->NewURI(escapedSpec, nullptr, nullptr, aResult);
+}
+
+NS_IMETHODIMP
+nsExternalHelperAppService::LoadURI(nsIURI* aURI,
+                                    nsIPrincipal* aTriggeringPrincipal,
+                                    BrowsingContext* aBrowsingContext,
+                                    bool aTriggeredExternally) {
+  NS_ENSURE_ARG_POINTER(aURI);
+
+  if (XRE_IsContentProcess()) {
+    mozilla::dom::ContentChild::GetSingleton()->SendLoadURIExternal(
+        aURI, aTriggeringPrincipal, aBrowsingContext, aTriggeredExternally);
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIURI> escapedURI;
+  nsresult rv = EscapeURI(aURI, getter_AddRefs(escapedURI));
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString scheme;
-  uri->GetScheme(scheme);
+  escapedURI->GetScheme(scheme);
   if (scheme.IsEmpty()) return NS_OK;  // must have a scheme
 
   // Deny load if the prefs say to do so
@@ -1123,8 +1132,8 @@ nsExternalHelperAppService::LoadURI(nsIURI* aURI,
       do_CreateInstance("@mozilla.org/content-dispatch-chooser;1", &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return chooser->HandleURI(handler, uri, aTriggeringPrincipal,
-                            aBrowsingContext);
+  return chooser->HandleURI(handler, escapedURI, aTriggeringPrincipal,
+                            aBrowsingContext, aTriggeredExternally);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1475,7 +1484,7 @@ NS_IMETHODIMP nsExternalAppHandler::GetContentLength(int64_t* aContentLength) {
 
 NS_IMETHODIMP nsExternalAppHandler::GetBrowsingContextId(
     uint64_t* aBrowsingContextId) {
-  *aBrowsingContextId = mBrowsingContext->Id();
+  *aBrowsingContextId = mBrowsingContext ? mBrowsingContext->Id() : 0;
   return NS_OK;
 }
 
@@ -1855,7 +1864,18 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest* request) {
   // check mReason and the preferred action to see what we should do.
 
   bool alwaysAsk = true;
-  mMimeInfo->GetAlwaysAskBeforeHandling(&alwaysAsk);
+
+  // Skip showing UnknownContentType dialog, unless it is explicitly
+  // set in preferences.
+  bool skipShowingDialog =
+      Preferences::GetBool("browser.download.useDownloadDir") &&
+      StaticPrefs::browser_download_improvements_to_download_panel();
+
+  if (skipShowingDialog) {
+    alwaysAsk = false;
+  } else {
+    mMimeInfo->GetAlwaysAskBeforeHandling(&alwaysAsk);
+  }
 
   if (isIntercepted) {
     return NS_OK;
@@ -1907,18 +1927,28 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest* request) {
   int32_t action = nsIMIMEInfo::saveToDisk;
   mMimeInfo->GetPreferredAction(&action);
 
+  bool forcePrompt =
+      mReason == nsIHelperAppLauncherDialog::REASON_TYPESNIFFED ||
+      (mReason == nsIHelperAppLauncherDialog::REASON_SERVERREQUEST &&
+       !skipShowingDialog);
+
   // OK, now check why we're here
-  if (!alwaysAsk && mReason != nsIHelperAppLauncherDialog::REASON_CANTHANDLE) {
+  if (!alwaysAsk && forcePrompt) {
     // Force asking if we're not saving.  See comment back when we fetched the
     // alwaysAsk boolean for details.
     alwaysAsk = (action != nsIMIMEInfo::saveToDisk);
   }
 
+  bool shouldAutomaticallyHandleInternally =
+      action == nsIMIMEInfo::handleInternally &&
+      StaticPrefs::browser_download_improvements_to_download_panel();
+
   // If we're not asking, check we actually know what to do:
   if (!alwaysAsk) {
     alwaysAsk = action != nsIMIMEInfo::saveToDisk &&
                 action != nsIMIMEInfo::useHelperApp &&
-                action != nsIMIMEInfo::useSystemDefault;
+                action != nsIMIMEInfo::useSystemDefault &&
+                !shouldAutomaticallyHandleInternally;
   }
 
   // if we were told that we _must_ save to disk without asking, all the stuff
@@ -1927,7 +1957,13 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest* request) {
     alwaysAsk = false;
     action = nsIMIMEInfo::saveToDisk;
   }
-
+  // Additionally, if we are asked by the OS to open a local file,
+  // automatically downloading it to create a second copy of that file doesn't
+  // really make sense. We should ask the user what they want to do.
+  if (mSourceUrl->SchemeIs("file") && !alwaysAsk &&
+      action == nsIMIMEInfo::saveToDisk) {
+    alwaysAsk = true;
+  }
   if (alwaysAsk) {
     // Display the dialog
     mDialog = do_CreateInstance(NS_HELPERAPPLAUNCHERDLG_CONTRACTID, &rv);
@@ -1975,8 +2011,9 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest* request) {
 
 #endif
     if (action == nsIMIMEInfo::useHelperApp ||
-        action == nsIMIMEInfo::useSystemDefault) {
-      rv = LaunchWithApplication(mHandleInternally);
+        action == nsIMIMEInfo::useSystemDefault ||
+        shouldAutomaticallyHandleInternally) {
+      rv = LaunchWithApplication(shouldAutomaticallyHandleInternally);
     } else {
       rv = PromptForSaveDestination();
     }
@@ -1996,7 +2033,6 @@ void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv,
       msgId = "noMemory";
       break;
 
-    case NS_ERROR_FILE_DISK_FULL:
     case NS_ERROR_FILE_NO_DEVICE_SPACE:
       // Out of space on target volume.
       msgId = "diskFull";
@@ -2067,7 +2103,7 @@ void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv,
 
   // Get properties file bundle and extract status string.
   nsCOMPtr<nsIStringBundleService> stringService =
-      mozilla::services::GetStringBundleService();
+      mozilla::components::StringBundle::Service();
   if (stringService) {
     nsCOMPtr<nsIStringBundle> bundle;
     if (NS_SUCCEEDED(stringService->CreateBundle(
@@ -2414,20 +2450,36 @@ nsresult nsExternalAppHandler::CreateFailedTransfer() {
       do_CreateInstance(NS_TRANSFER_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // If we don't have a download directory we're kinda screwed but it's OK
-  // we'll still report the error via the prompter.
-  nsCOMPtr<nsIFile> pseudoFile;
-  rv = GetDownloadDirectory(getter_AddRefs(pseudoFile), true);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // Append the default suggested filename. If the user restarts the transfer
-  // we will re-trigger a filename check anyway to ensure that it is unique.
-  rv = pseudoFile->Append(mSuggestedFileName);
-  NS_ENSURE_SUCCESS(rv, rv);
+  // We won't pass the temp file to the transfer, so if we have one it needs to
+  // get deleted now.
+  if (mTempFile) {
+    if (mSaver) {
+      mSaver->Finish(NS_BINDING_ABORTED);
+      mSaver = nullptr;
+    }
+    mTempFile->Remove(false);
+  }
 
   nsCOMPtr<nsIURI> pseudoTarget;
-  rv = NS_NewFileURI(getter_AddRefs(pseudoTarget), pseudoFile);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (!mFinalFileDestination) {
+    // If we don't have a download directory we're kinda screwed but it's OK
+    // we'll still report the error via the prompter.
+    nsCOMPtr<nsIFile> pseudoFile;
+    rv = GetDownloadDirectory(getter_AddRefs(pseudoFile), true);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // Append the default suggested filename. If the user restarts the transfer
+    // we will re-trigger a filename check anyway to ensure that it is unique.
+    rv = pseudoFile->Append(mSuggestedFileName);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = NS_NewFileURI(getter_AddRefs(pseudoTarget), pseudoFile);
+    NS_ENSURE_SUCCESS(rv, rv);
+  } else {
+    // Initialize the target, if present
+    rv = NS_NewFileURI(getter_AddRefs(pseudoTarget), mFinalFileDestination);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
 
   nsCOMPtr<nsIChannel> channel = do_QueryInterface(mRequest);
   if (mBrowsingContext) {
@@ -2926,13 +2978,6 @@ nsExternalHelperAppService::GetTypeFromExtension(const nsACString& aFileExt,
   // Check extras array.
   bool found = GetTypeFromExtras(aFileExt, aContentType);
   if (found) {
-    return NS_OK;
-  }
-
-  // Try the plugins
-  RefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();
-  if (pluginHost &&
-      pluginHost->HavePluginForExtension(aFileExt, aContentType)) {
     return NS_OK;
   }
 

@@ -59,7 +59,7 @@ nsDeviceContextSpecX::nsDeviceContextSpecX()
 }
 
 nsDeviceContextSpecX::~nsDeviceContextSpecX() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   if (mPrintSession) {
     ::PMRelease(mPrintSession);
@@ -71,14 +71,14 @@ nsDeviceContextSpecX::~nsDeviceContextSpecX() {
     ::PMRelease(mPrintSettings);
   }
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 NS_IMPL_ISUPPORTS(nsDeviceContextSpecX, nsIDeviceContextSpec)
 
 NS_IMETHODIMP nsDeviceContextSpecX::Init(nsIWidget* aWidget, nsIPrintSettings* aPS,
                                          bool aIsPrintPreview) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   RefPtr<nsPrintSettingsX> settings(do_QueryObject(aPS));
   if (!settings) {
@@ -160,21 +160,21 @@ NS_IMETHODIMP nsDeviceContextSpecX::Init(nsIWidget* aWidget, nsIPrintSettings* a
 
   return NS_OK;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 NS_IMETHODIMP nsDeviceContextSpecX::BeginDocument(const nsAString& aTitle,
                                                   const nsAString& aPrintToFileName,
                                                   int32_t aStartPage, int32_t aEndPage) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   return NS_OK;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 NS_IMETHODIMP nsDeviceContextSpecX::EndDocument() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
 #ifdef MOZ_ENABLE_SKIA_PDF
   if (mPrintViaSkPDF) {
@@ -260,12 +260,12 @@ NS_IMETHODIMP nsDeviceContextSpecX::EndDocument() {
 
   return NS_OK;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 void nsDeviceContextSpecX::GetPaperRect(double* aTop, double* aLeft, double* aBottom,
                                         double* aRight) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   PMRect paperRect;
   ::PMGetAdjustedPaperRect(mPageFormat, &paperRect);
@@ -275,7 +275,7 @@ void nsDeviceContextSpecX::GetPaperRect(double* aTop, double* aLeft, double* aBo
   *aBottom = paperRect.bottom;
   *aRight = paperRect.right;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 already_AddRefed<PrintTarget> nsDeviceContextSpecX::MakePrintTarget() {

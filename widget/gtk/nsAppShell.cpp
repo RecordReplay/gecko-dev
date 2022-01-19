@@ -40,10 +40,9 @@ using mozilla::widget::ScreenManager;
 #define NOTIFY_TOKEN 0xFA
 
 LazyLogModule gWidgetLog("Widget");
-LazyLogModule gWidgetFocusLog("WidgetFocus");
 LazyLogModule gWidgetDragLog("WidgetDrag");
-LazyLogModule gWidgetDrawLog("WidgetDraw");
 LazyLogModule gWidgetWaylandLog("WidgetWayland");
+LazyLogModule gWidgetPopupLog("WidgetPopup");
 LazyLogModule gDmabufLog("Dmabuf");
 LazyLogModule gClipboardLog("WidgetClipboard");
 

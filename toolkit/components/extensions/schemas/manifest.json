@@ -190,10 +190,12 @@
             "onError": "warn",
             "choices": [
               {
+                "max_manifest_version": 2,
                 "type": "string",
                 "format": "contentSecurityPolicy"
               },
               {
+                "min_manifest_version": 3,
                 "type": "object",
                 "additionalProperties": {
                   "$ref": "UnrecognizedProperty"
@@ -231,9 +233,31 @@
           },
 
           "web_accessible_resources": {
-            "type": "array",
-            "items": { "type": "string" },
-            "optional": true
+            "optional": true,
+            "choices": [
+              {
+                "max_manifest_version": 2,
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              {
+                "min_manifest_version": 3,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "resources": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": { "$ref": "MatchPatternRestricted" }
+                    }
+                  }
+                }
+              }
+            ]
           },
 
           "developer": {

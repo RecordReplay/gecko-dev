@@ -45,6 +45,7 @@
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/NotNull.h"
+#include "mozilla/PointerLockManager.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/PresShellForwards.h"
 #include "mozilla/ReflowOutput.h"
@@ -343,8 +344,11 @@ EventStates Element::IntrinsicState() const {
 }
 
 void Element::NotifyStateChange(EventStates aStates) {
-  Document* doc = GetComposedDoc();
-  if (doc) {
+  if (aStates.IsEmpty()) {
+    return;
+  }
+
+  if (Document* doc = GetComposedDoc()) {
     nsAutoScriptBlocker scriptBlocker;
     doc->ContentStateChanged(this, aStates);
   }
@@ -454,7 +458,7 @@ void Element::Focus(const FocusOptions& aOptions, CallerType aCallerType,
     fm->NeedsFlushBeforeEventHandling(this);
     return;
   }
-  uint32_t fmFlags = nsFocusManager::FocusOptionsToFocusManagerFlags(aOptions);
+  uint32_t fmFlags = nsFocusManager::ProgrammaticFocusFlags(aOptions);
   if (aCallerType == CallerType::NonSystem) {
     fmFlags |= nsIFocusManager::FLAG_NONSYSTEMCALLER;
   }
@@ -1013,10 +1017,7 @@ already_AddRefed<DOMRect> Element::GetBoundingClientRect() {
     return rect.forget();
   }
 
-  nsRect r = nsLayoutUtils::GetAllInFlowRectsUnion(
-      frame, nsLayoutUtils::GetContainingBlockForClientRect(frame),
-      nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS);
-  rect->SetLayoutRect(r);
+  rect->SetLayoutRect(frame->GetBoundingClientRect());
   return rect.forget();
 }
 
@@ -1232,8 +1233,8 @@ already_AddRefed<ShadowRoot> Element::AttachShadowWithoutNameChecks(
    */
   SetShadowRoot(shadowRoot);
 
-  // Dispatch a "shadowrootattached" event for devtools.
-  {
+  // Dispatch a "shadowrootattached" event for devtools if needed.
+  if (MOZ_UNLIKELY(nim->GetDocument()->ShadowRootAttachedEventEnabled())) {
     AsyncEventDispatcher* dispatcher = new AsyncEventDispatcher(
         this, u"shadowrootattached"_ns, CanBubble::eYes,
         ChromeOnlyDispatch::eYes, Composed::eYes);
@@ -1759,10 +1760,8 @@ nsresult Element::BindToTree(BindContext& aContext, nsINode& aParent) {
     HandleShadowDOMRelatedInsertionSteps(hadParent);
   }
 
-  if (MayHaveStyle() && !IsXULElement()) {
-    // XXXbz if we already have a style attr parsed, this won't do
-    // anything... need to fix that.
-    // If MayHaveStyle() is true, we must be an nsStyledElement
+  if (MayHaveStyle()) {
+    // If MayHaveStyle() is true, we must be an nsStyledElement.
     static_cast<nsStyledElement*>(this)->ReparseStyleAttribute(
         /* aForceInDataDoc = */ false);
   }
@@ -1830,7 +1829,7 @@ void Element::UnbindFromTree(bool aNullParent) {
   Document* document = GetComposedDoc();
 
   if (HasPointerLock()) {
-    Document::UnlockPointer();
+    PointerLockManager::Unlock();
   }
   if (mState.HasState(NS_EVENT_STATE_FULLSCREEN)) {
     // The element being removed is an ancestor of the fullscreen element,
@@ -2848,7 +2847,7 @@ void Element::DescribeAttribute(uint32_t index,
   aOutDescription.Append('"');
 }
 
-#ifdef DEBUG
+#ifdef MOZ_DOM_LIST
 void Element::ListAttributes(FILE* out) const {
   uint32_t index, count = mAttrs.AttrCount();
   for (index = 0; index < count; index++) {
@@ -3040,10 +3039,16 @@ nsresult Element::PostHandleEventForLinks(EventChainPostVisitor& aVisitor) {
 
   switch (aVisitor.mEvent->mMessage) {
     case eMouseDown: {
-      if (aVisitor.mEvent->AsMouseEvent()->mButton == MouseButton::ePrimary &&
-          OwnerDoc()->LinkHandlingEnabled()) {
-        aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+      if (!OwnerDoc()->LinkHandlingEnabled()) {
+        break;
+      }
 
+      WidgetMouseEvent* const mouseEvent = aVisitor.mEvent->AsMouseEvent();
+      mouseEvent->mFlags.mMultipleActionsPrevented |=
+          mouseEvent->mButton == MouseButton::ePrimary ||
+          mouseEvent->mButton == MouseButton::eMiddle;
+
+      if (mouseEvent->mButton == MouseButton::ePrimary) {
         if (IsInComposedDoc()) {
           if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
             RefPtr<Element> kungFuDeathGrip(this);
@@ -3107,8 +3112,8 @@ nsresult Element::PostHandleEventForLinks(EventChainPostVisitor& aVisitor) {
       WidgetKeyboardEvent* keyEvent = aVisitor.mEvent->AsKeyboardEvent();
       if (keyEvent && keyEvent->mKeyCode == NS_VK_RETURN) {
         nsEventStatus status = nsEventStatus_eIgnore;
-        rv = DispatchClickEvent(MOZ_KnownLive(aVisitor.mPresContext), keyEvent,
-                                this, false, nullptr, &status);
+        rv = DispatchClickEvent(aVisitor.mPresContext, keyEvent, this, false,
+                                nullptr, &status);
         if (NS_SUCCEEDED(rv)) {
           aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
         }
@@ -3339,7 +3344,7 @@ already_AddRefed<Promise> Element::RequestFullscreen(CallerType aCallerType,
 }
 
 void Element::RequestPointerLock(CallerType aCallerType) {
-  OwnerDoc()->RequestPointerLock(this, aCallerType);
+  PointerLockManager::RequestLock(this, aCallerType);
 }
 
 already_AddRefed<Flex> Element::GetAsFlexContainer() {
@@ -3934,8 +3939,7 @@ static void IntersectionObserverPropertyDtor(void* aObject,
                                              void* aData) {
   auto* element = static_cast<Element*>(aObject);
   auto* observers = static_cast<IntersectionObserverList*>(aPropertyValue);
-  for (auto iter = observers->Iter(); !iter.Done(); iter.Next()) {
-    DOMIntersectionObserver* observer = iter.Key();
+  for (DOMIntersectionObserver* observer : observers->Keys()) {
     observer->UnlinkTarget(*element);
   }
   delete observers;
@@ -3947,20 +3951,18 @@ void Element::RegisterIntersectionObserver(DOMIntersectionObserver* aObserver) {
 
   if (!observers) {
     observers = new IntersectionObserverList();
-    observers->Put(aObserver, eUninitialized);
+    observers->InsertOrUpdate(aObserver, eUninitialized);
     SetProperty(nsGkAtoms::intersectionobserverlist, observers,
                 IntersectionObserverPropertyDtor, /* aTransfer = */ true);
     return;
   }
 
-  observers->LookupForAdd(aObserver).OrInsert([]() {
-    // Value can be:
-    //   -2:   Makes sure next calculated threshold always differs, leading to a
-    //         notification task being scheduled.
-    //   -1:   Non-intersecting.
-    //   >= 0: Intersecting, valid index of aObserver->mThresholds.
-    return eUninitialized;
-  });
+  // Value can be:
+  //   -2:   Makes sure next calculated threshold always differs, leading to a
+  //         notification task being scheduled.
+  //   -1:   Non-intersecting.
+  //   >= 0: Intersecting, valid index of aObserver->mThresholds.
+  observers->LookupOrInsert(aObserver, eUninitialized);
 }
 
 void Element::UnregisterIntersectionObserver(
@@ -4480,6 +4482,27 @@ nsAtom* Element::GetEventNameForAttr(nsAtom* aAttr) {
     return nsGkAtoms::onwebkitTransitionEnd;
   }
   return aAttr;
+}
+
+void Element::RegUnRegAccessKey(bool aDoReg) {
+  // first check to see if we have an access key
+  nsAutoString accessKey;
+  GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, accessKey);
+  if (accessKey.IsEmpty()) {
+    return;
+  }
+
+  // We have an access key, so get the ESM from the pres context.
+  if (nsPresContext* presContext = GetPresContext(eForComposedDoc)) {
+    EventStateManager* esm = presContext->EventStateManager();
+
+    // Register or unregister as appropriate.
+    if (aDoReg) {
+      esm->RegisterAccessKey(this, (uint32_t)accessKey.First());
+    } else {
+      esm->UnregisterAccessKey(this, (uint32_t)accessKey.First());
+    }
+  }
 }
 
 }  // namespace mozilla::dom

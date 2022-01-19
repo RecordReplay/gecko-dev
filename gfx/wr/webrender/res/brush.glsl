@@ -46,13 +46,17 @@
 ///   other brush types don't use it.
 ///
 
+#if (defined(WR_FEATURE_ALPHA_PASS) || defined(WR_FEATURE_ANTIALIASING)) && !defined(SWGL_ANTIALIAS)
+varying vec2 v_local_pos;
+#endif
+
 #ifdef WR_VERTEX_SHADER
 
 void brush_vs(
     VertexInfo vi,
     int prim_address,
-    RectWithSize local_rect,
-    RectWithSize segment_rect,
+    RectWithEndpoint local_rect,
+    RectWithEndpoint segment_rect,
     ivec4 prim_user_data,
     int specific_resource_address,
     mat4 transform,
@@ -96,7 +100,7 @@ void brush_shader_main_vs(
 
     // Fetch the segment of this brush primitive we are drawing.
     vec4 segment_data;
-    RectWithSize segment_rect;
+    RectWithEndpoint segment_rect;
     if (instance.segment_index == INVALID_SEGMENT_INDEX) {
         segment_rect = ph.local_rect;
         segment_data = vec4(0.0);
@@ -106,8 +110,9 @@ void brush_shader_main_vs(
                               instance.segment_index * VECS_PER_SEGMENT;
 
         vec4[2] segment_info = fetch_from_gpu_cache_2(segment_address);
-        segment_rect = RectWithSize(segment_info[0].xy, segment_info[0].zw);
+        segment_rect = RectWithEndpoint(segment_info[0].xy, segment_info[0].zw);
         segment_rect.p0 += ph.local_rect.p0;
+        segment_rect.p1 += ph.local_rect.p0;
         segment_data = segment_info[1];
     }
 
@@ -117,7 +122,7 @@ void brush_shader_main_vs(
     if (transform.is_axis_aligned) {
 
         // Select the corner of the local rect that we are processing.
-        vec2 local_pos = segment_rect.p0 + segment_rect.size * aPosition.xy;
+        vec2 local_pos = mix(segment_rect.p0, segment_rect.p1, aPosition.xy);
 
         vi = write_vertex(
             local_pos,
@@ -133,17 +138,15 @@ void brush_shader_main_vs(
         //           items. For now, just ensure it has no
         //           effect. We can tidy this up as we move
         //           more items to be brush shaders.
-#ifdef WR_FEATURE_ALPHA_PASS
+#if defined(WR_FEATURE_ALPHA_PASS) && !defined(SWGL_ANTIALIAS)
         init_transform_vs(vec4(vec2(-1.0e16), vec2(1.0e16)));
 #endif
     } else {
-        bvec4 edge_mask = notEqual(edge_flags & ivec4(1, 2, 4, 8), ivec4(0));
-
         vi = write_transform_vertex(
             segment_rect,
             ph.local_rect,
             ph.local_clip_rect,
-            mix(vec4(0.0), vec4(1.0), edge_mask),
+            edge_flags,
             ph.z,
             transform,
             pic_task
@@ -156,7 +159,11 @@ void brush_shader_main_vs(
     //           shaders that don't clip in the future,
     //           but it's reasonable to assume that one
     //           implies the other, for now.
-#ifdef WR_FEATURE_ALPHA_PASS
+    // SW-WR may decay some requests for alpha-pass shaders to
+    // the opaque version if only the clip-mask is required. In
+    // that case the opaque vertex shader must still write out
+    // the clip information, which is cheap to do for SWGL.
+#if defined(WR_FEATURE_ALPHA_PASS) || defined(SWGL_CLIP_MASK)
     write_clip(
         vi.world_pos,
         clip_area,
@@ -177,6 +184,10 @@ void brush_shader_main_vs(
         brush_flags,
         segment_data
     );
+
+#if (defined(WR_FEATURE_ALPHA_PASS) || defined(WR_FEATURE_ANTIALIASING)) && !defined(SWGL_ANTIALIAS)
+    v_local_pos = vi.local_pos;
+#endif
 }
 
 #ifndef WR_VERTEX_SHADER_MAIN_FUNCTION
@@ -199,6 +210,14 @@ void main(void) {
 #endif // WR_VERTEX_SHADER
 
 #ifdef WR_FRAGMENT_SHADER
+
+float antialias_brush() {
+#if (defined(WR_FEATURE_ALPHA_PASS) || defined(WR_FEATURE_ANTIALIASING)) && !defined(SWGL_ANTIALIAS)
+    return init_transform_fs(v_local_pos);
+#else
+    return 1.0;
+#endif
+}
 
 Fragment brush_fs();
 

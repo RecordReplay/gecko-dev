@@ -56,7 +56,7 @@ Creating Try builds
 If for some reason you can't use the pre-built binaries mentioned in the
 previous section (e.g. you want a non-Linux build or you need to test a
 patch), you can either build Firefox yourself (see the following
-section) or use the :ref:`try server <Try Server>` to
+section) or use the :ref:`try server <Pushing to Try>` to
 create the customized build for you. Pushing to try requires L1 commit
 access. If you don't have this access yet you can request access (see
 `Becoming A Mozilla
@@ -94,22 +94,13 @@ Run ``mach bootstrap`` to get an updated clang-cl in your
 
 ::
 
-   ac_add_options --target=x86_64-pc-mingw32
-   ac_add_options --host=x86_64-pc-mingw32
-
    ac_add_options --enable-address-sanitizer
    ac_add_options --disable-jemalloc
-
-   export CC="clang-cl.exe"
-   export CXX="clang-cl.exe"
 
    export LDFLAGS="clang_rt.asan_dynamic-x86_64.lib clang_rt.asan_dynamic_runtime_thunk-x86_64.lib"
    CLANG_LIB_DIR="$(cd ~/.mozbuild/clang/lib/clang/*/lib/windows && pwd)"
    export MOZ_CLANG_RT_ASAN_LIB_PATH="${CLANG_LIB_DIR}/clang_rt.asan_dynamic-x86_64.dll"
    export LIB=$LIB:$CLANG_LIB_DIR
-
-If you want to use a different LLVM (see the :ref:`clang-cl instructions <Building Firefox On Windows>`),
-alter CLANG_LIB_DIR as appropriate.
 
 If you launch an ASan build under WinDbg, you may see spurious
 first-chance Access Violation exceptions. These come from ASan creating
@@ -155,16 +146,6 @@ content in your mozilla-central directory:
 
    # Enable ASan specific code and build workarounds
    ac_add_options --enable-address-sanitizer
-
-   # Add ASan to our compiler flags
-   export CFLAGS="-fsanitize=address -Dxmalloc=myxmalloc -fPIC"
-   export CXXFLAGS="-fsanitize=address -Dxmalloc=myxmalloc -fPIC"
-
-   # Additionally, we need the ASan flag during linking. Normally, our C/CXXFLAGS would
-   # be used during linking as well but there is at least one place in our build where
-   # our CFLAGS are not added during linking.
-   # Note: The use of this flag causes Clang to automatically link the ASan runtime :)
-   export LDFLAGS="-fsanitize=address"
 
    # These three are required by ASan
    ac_add_options --disable-jemalloc

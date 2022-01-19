@@ -10,6 +10,12 @@ const EMPTY_TEST_URL = TEST_BASE_HTTP + "doc_empty.html";
 const TEST_URL = TEST_BASE_HTTP + "doc_fetch_from_netmonitor.html";
 
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   info("Opening netmonitor");
   // Navigate first to an empty document in order to:
   // * avoid introducing a cross process navigation when calling navigateTo()
@@ -18,8 +24,9 @@ add_task(async function() {
   //   in the tab, we might have pending updates in the netmonitor which won't be
   //   awaited for by showToolbox)
   const tab = await addTab(EMPTY_TEST_URL);
-  const target = await TargetFactory.forTab(tab);
-  const toolbox = await gDevTools.showToolbox(target, "netmonitor");
+  const toolbox = await gDevTools.showToolboxForTab(tab, {
+    toolId: "netmonitor",
+  });
   const monitor = toolbox.getPanel("netmonitor");
   const { store, windowRequire } = monitor.panelWin;
   const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");

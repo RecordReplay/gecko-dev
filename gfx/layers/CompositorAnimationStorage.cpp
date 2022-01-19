@@ -100,8 +100,9 @@ void CompositorAnimationStorage::SetAnimatedValueForWebRender(
 
   if (!aPreviousValue) {
     MOZ_ASSERT(!mAnimatedValues.Contains(aId));
-    mAnimatedValues.Put(aId, MakeUnique<AnimatedValue>(gfx::Matrix4x4(),
-                                                       aFrameTransform, aData));
+    mAnimatedValues.InsertOrUpdate(
+        aId,
+        MakeUnique<AnimatedValue>(gfx::Matrix4x4(), aFrameTransform, aData));
     return;
   }
   MOZ_ASSERT(aPreviousValue->Is<AnimationTransform>());
@@ -118,8 +119,9 @@ void CompositorAnimationStorage::SetAnimatedValue(
 
   if (!aPreviousValue) {
     MOZ_ASSERT(!mAnimatedValues.Contains(aId));
-    mAnimatedValues.Put(aId, MakeUnique<AnimatedValue>(aTransformInDevSpace,
-                                                       aFrameTransform, aData));
+    mAnimatedValues.InsertOrUpdate(
+        aId, MakeUnique<AnimatedValue>(aTransformInDevSpace, aFrameTransform,
+                                       aData));
     return;
   }
   MOZ_ASSERT(aPreviousValue->Is<AnimationTransform>());
@@ -135,7 +137,7 @@ void CompositorAnimationStorage::SetAnimatedValue(uint64_t aId,
 
   if (!aPreviousValue) {
     MOZ_ASSERT(!mAnimatedValues.Contains(aId));
-    mAnimatedValues.Put(aId, MakeUnique<AnimatedValue>(aColor));
+    mAnimatedValues.InsertOrUpdate(aId, MakeUnique<AnimatedValue>(aColor));
     return;
   }
 
@@ -151,7 +153,7 @@ void CompositorAnimationStorage::SetAnimatedValue(uint64_t aId,
 
   if (!aPreviousValue) {
     MOZ_ASSERT(!mAnimatedValues.Contains(aId));
-    mAnimatedValues.Put(aId, MakeUnique<AnimatedValue>(aOpacity));
+    mAnimatedValues.InsertOrUpdate(aId, MakeUnique<AnimatedValue>(aOpacity));
     return;
   }
 
@@ -318,20 +320,21 @@ WrAnimations CompositorAnimationStorage::CollectWebRenderAnimations() const {
 
   WrAnimations animations;
 
-  for (auto iter = mAnimatedValues.ConstIter(); !iter.Done(); iter.Next()) {
-    AnimatedValue* value = iter.UserData();
+  for (const auto& animatedValueEntry : mAnimatedValues) {
+    AnimatedValue* value = animatedValueEntry.GetWeak();
     value->Value().match(
         [&](const AnimationTransform& aTransform) {
           animations.mTransformArrays.AppendElement(wr::ToWrTransformProperty(
-              iter.Key(), aTransform.mFrameTransform));
+              animatedValueEntry.GetKey(), aTransform.mFrameTransform));
         },
         [&](const float& aOpacity) {
           animations.mOpacityArrays.AppendElement(
-              wr::ToWrOpacityProperty(iter.Key(), aOpacity));
+              wr::ToWrOpacityProperty(animatedValueEntry.GetKey(), aOpacity));
         },
         [&](const nscolor& aColor) {
           animations.mColorArrays.AppendElement(wr::ToWrColorProperty(
-              iter.Key(), ToDeviceColor(gfx::sRGBColor::FromABGR(aColor))));
+              animatedValueEntry.GetKey(),
+              ToDeviceColor(gfx::sRGBColor::FromABGR(aColor))));
         });
   }
 

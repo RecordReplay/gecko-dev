@@ -14,16 +14,20 @@
 #include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/EventTarget.h"
+#include "mozilla/dom/PBackgroundSessionStorageCache.h"
+#include "mozilla/dom/PWindowGlobalParent.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/ContentProcessManager.h"
 #include "mozilla/dom/MediaController.h"
 #include "mozilla/dom/MediaControlService.h"
 #include "mozilla/dom/ContentPlaybackController.h"
-#include "mozilla/dom/SessionHistoryEntry.h"
 #include "mozilla/dom/SessionStorageManager.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/net/DocumentLoadListener.h"
 #include "mozilla/NullPrincipal.h"
+#include "mozilla/StaticPrefs_docshell.h"
+#include "mozilla/StaticPrefs_fission.h"
+#include "mozilla/Telemetry.h"
 #include "nsIWebNavigation.h"
 #include "mozilla/MozPromiseInlines.h"
 #include "nsDocShell.h"
@@ -38,14 +42,67 @@
 #include "nsQueryObject.h"
 #include "nsBrowserStatusFilter.h"
 #include "nsIBrowser.h"
+#include "nsTHashSet.h"
+#include "SessionStoreFunctions.h"
+#include "nsIXPConnect.h"
+#include "nsImportModule.h"
+
+#ifdef NS_PRINTING
+#  include "mozilla/embedding/printingui/PrintingParent.h"
+#  include "nsIWebBrowserPrint.h"
+#endif
 
 using namespace mozilla::ipc;
 
 extern mozilla::LazyLogModule gAutoplayPermissionLog;
 extern mozilla::LazyLogModule gSHLog;
+extern mozilla::LazyLogModule gSHIPBFCacheLog;
 
 #define AUTOPLAY_LOG(msg, ...) \
   MOZ_LOG(gAutoplayPermissionLog, LogLevel::Debug, (msg, ##__VA_ARGS__))
+
+static mozilla::LazyLogModule sPBContext("PBContext");
+
+// Global count of canonical browsing contexts with the private attribute set
+static uint32_t gNumberOfPrivateContexts = 0;
+
+static void IncreasePrivateCount() {
+  gNumberOfPrivateContexts++;
+  MOZ_LOG(sPBContext, mozilla::LogLevel::Debug,
+          ("%s: Private browsing context count %d -> %d", __func__,
+           gNumberOfPrivateContexts - 1, gNumberOfPrivateContexts));
+  if (gNumberOfPrivateContexts > 1) {
+    return;
+  }
+
+  static bool sHasSeenPrivateContext = false;
+  if (!sHasSeenPrivateContext) {
+    sHasSeenPrivateContext = true;
+    mozilla::Telemetry::ScalarSet(
+        mozilla::Telemetry::ScalarID::DOM_PARENTPROCESS_PRIVATE_WINDOW_USED,
+        true);
+  }
+}
+
+static void DecreasePrivateCount() {
+  MOZ_ASSERT(gNumberOfPrivateContexts > 0);
+  gNumberOfPrivateContexts--;
+
+  MOZ_LOG(sPBContext, mozilla::LogLevel::Debug,
+          ("%s: Private browsing context count %d -> %d", __func__,
+           gNumberOfPrivateContexts + 1, gNumberOfPrivateContexts));
+  if (!gNumberOfPrivateContexts &&
+      !mozilla::Preferences::GetBool("browser.privatebrowsing.autostart")) {
+    nsCOMPtr<nsIObserverService> observerService =
+        mozilla::services::GetObserverService();
+    if (observerService) {
+      MOZ_LOG(sPBContext, mozilla::LogLevel::Debug,
+              ("%s: last-pb-context-exited fired", __func__));
+      observerService->NotifyObservers(nullptr, "last-pb-context-exited",
+                                       nullptr);
+    }
+  }
+}
 
 namespace mozilla {
 namespace dom {
@@ -65,10 +122,27 @@ CanonicalBrowsingContext::CanonicalBrowsingContext(WindowContext* aParentWindow,
     : BrowsingContext(aParentWindow, aGroup, aBrowsingContextId, aType,
                       std::move(aInit)),
       mProcessId(aOwnerProcessId),
-      mEmbedderProcessId(aEmbedderProcessId) {
+      mEmbedderProcessId(aEmbedderProcessId),
+      mPermanentKey(JS::NullValue()) {
   // You are only ever allowed to create CanonicalBrowsingContexts in the
   // parent process.
   MOZ_RELEASE_ASSERT(XRE_IsParentProcess());
+
+  // The initial URI in a BrowsingContext is always "about:blank".
+  MOZ_ALWAYS_SUCCEEDS(
+      NS_NewURI(getter_AddRefs(mCurrentRemoteURI), "about:blank"));
+
+  mozilla::HoldJSObjects(this);
+}
+
+CanonicalBrowsingContext::~CanonicalBrowsingContext() {
+  mPermanentKey.setNull();
+
+  mozilla::DropJSObjects(this);
+
+  if (mSessionHistory) {
+    mSessionHistory->SetBrowsingContext(nullptr);
+  }
 }
 
 /* static */
@@ -143,35 +217,116 @@ nsISecureBrowserUI* CanonicalBrowsingContext::GetSecureBrowserUI() {
   return mSecureBrowserUI;
 }
 
+namespace {
+// The DocShellProgressBridge is attached to a root content docshell loaded in
+// the parent process. Notifications are paired up with the docshell which they
+// came from, so that they can be fired to the correct
+// BrowsingContextWebProgress and bubble through this tree separately.
+//
+// Notifications are filtered by a nsBrowserStatusFilter before being received
+// by the DocShellProgressBridge.
+class DocShellProgressBridge : public nsIWebProgressListener {
+ public:
+  NS_DECL_ISUPPORTS
+  // NOTE: This relies in the expansion of `NS_FORWARD_SAFE` and all listener
+  // methods accepting an `aWebProgress` argument. If this changes in the
+  // future, this may need to be written manually.
+  NS_FORWARD_SAFE_NSIWEBPROGRESSLISTENER(GetTargetContext(aWebProgress))
+
+  explicit DocShellProgressBridge(uint64_t aTopContextId)
+      : mTopContextId(aTopContextId) {}
+
+ private:
+  virtual ~DocShellProgressBridge() = default;
+
+  nsIWebProgressListener* GetTargetContext(nsIWebProgress* aWebProgress) {
+    RefPtr<CanonicalBrowsingContext> context;
+    if (nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(aWebProgress)) {
+      context = docShell->GetBrowsingContext()->Canonical();
+    } else {
+      context = CanonicalBrowsingContext::Get(mTopContextId);
+    }
+    return context && !context->IsDiscarded() ? context->GetWebProgress()
+                                              : nullptr;
+  }
+
+  uint64_t mTopContextId = 0;
+};
+
+NS_IMPL_ISUPPORTS(DocShellProgressBridge, nsIWebProgressListener)
+}  // namespace
+
 void CanonicalBrowsingContext::MaybeAddAsProgressListener(
     nsIWebProgress* aWebProgress) {
-  if (!GetWebProgress()) {
+  // Only add as a listener if the created docshell is a toplevel content
+  // docshell. We'll get notifications for all of our subframes through a single
+  // listener.
+  if (!IsTopContent()) {
     return;
   }
-  if (!mStatusFilter) {
+
+  if (!mDocShellProgressBridge) {
+    mDocShellProgressBridge = new DocShellProgressBridge(Id());
     mStatusFilter = new nsBrowserStatusFilter();
-    mStatusFilter->AddProgressListener(GetWebProgress(),
+    mStatusFilter->AddProgressListener(mDocShellProgressBridge,
                                        nsIWebProgress::NOTIFY_ALL);
   }
+
   aWebProgress->AddProgressListener(mStatusFilter, nsIWebProgress::NOTIFY_ALL);
 }
 
 void CanonicalBrowsingContext::ReplacedBy(
-    CanonicalBrowsingContext* aNewContext) {
-  MOZ_ASSERT(!aNewContext->EverAttached());
+    CanonicalBrowsingContext* aNewContext,
+    const RemotenessChangeOptions& aRemotenessOptions) {
+  MOZ_ASSERT(!aNewContext->mWebProgress);
+  MOZ_ASSERT(!aNewContext->mSessionHistory);
   MOZ_ASSERT(IsTop() && aNewContext->IsTop());
+
+  mIsReplaced = true;
+  aNewContext->mIsReplaced = false;
+
   if (mStatusFilter) {
-    mStatusFilter->RemoveProgressListener(mWebProgress);
+    mStatusFilter->RemoveProgressListener(mDocShellProgressBridge);
     mStatusFilter = nullptr;
   }
+
+  mWebProgress->ContextReplaced(aNewContext);
   aNewContext->mWebProgress = std::move(mWebProgress);
-  aNewContext->mFields.SetWithoutSyncing<IDX_BrowserId>(GetBrowserId());
-  aNewContext->mFields.SetWithoutSyncing<IDX_HistoryID>(GetHistoryID());
-  aNewContext->mFields.SetWithoutSyncing<IDX_ExplicitActive>(
-      GetExplicitActive());
+
+  // Use the Transaction for the fields which need to be updated whether or not
+  // the new context has been attached before.
+  // SetWithoutSyncing can be used if context hasn't been attached.
+  Transaction txn;
+  txn.SetBrowserId(GetBrowserId());
+  txn.SetHistoryID(GetHistoryID());
+  txn.SetExplicitActive(GetExplicitActive());
+  txn.SetHasRestoreData(GetHasRestoreData());
+  if (aNewContext->EverAttached()) {
+    MOZ_ALWAYS_SUCCEEDS(txn.Commit(aNewContext));
+  } else {
+    txn.CommitWithoutSyncing(aNewContext);
+  }
+
+  aNewContext->mRestoreState = mRestoreState.forget();
+  MOZ_ALWAYS_SUCCEEDS(SetHasRestoreData(false));
+
+  // XXXBFCache name handling is still a bit broken in Fission in general,
+  // at least in case name should be cleared.
+  if (aRemotenessOptions.mTryUseBFCache) {
+    MOZ_ASSERT(!aNewContext->EverAttached());
+    aNewContext->mFields.SetWithoutSyncing<IDX_Name>(GetName());
+    // We don't copy over HasLoadedNonInitialDocument here, we'll actually end
+    // up loading a new initial document at this point, before the real load.
+    // The real load will then end up setting HasLoadedNonInitialDocument to
+    // true.
+  }
 
   if (mSessionHistory) {
     mSessionHistory->SetBrowsingContext(aNewContext);
+    // At this point we will be creating a new ChildSHistory in the child.
+    // That means that the child's epoch will be reset, so it makes sense to
+    // reset the epoch in the parent too.
+    mSessionHistory->SetEpoch(0, Nothing());
     mSessionHistory.swap(aNewContext->mSessionHistory);
     RefPtr<ChildSHistory> childSHistory = ForgetChildSHistory();
     aNewContext->SetChildSHistory(childSHistory);
@@ -181,27 +336,23 @@ void CanonicalBrowsingContext::ReplacedBy(
     BackgroundSessionStorageManager::PropagateManager(Id(), aNewContext->Id());
   }
 
+  // Transfer the ownership of the priority active status from the old context
+  // to the new context.
+  aNewContext->mPriorityActive = mPriorityActive;
+  mPriorityActive = false;
+
   MOZ_ASSERT(aNewContext->mLoadingEntries.IsEmpty());
   mLoadingEntries.SwapElements(aNewContext->mLoadingEntries);
   MOZ_ASSERT(!aNewContext->mActiveEntry);
   mActiveEntry.swap(aNewContext->mActiveEntry);
+
+  aNewContext->mPermanentKey = mPermanentKey;
+  mPermanentKey.setNull();
 }
 
 void CanonicalBrowsingContext::UpdateSecurityState() {
   if (mSecureBrowserUI) {
     mSecureBrowserUI->RecomputeSecurityFlags();
-  }
-}
-
-void CanonicalBrowsingContext::SetInFlightProcessId(uint64_t aProcessId) {
-  MOZ_ASSERT(aProcessId);
-  mInFlightProcessId = aProcessId;
-}
-
-void CanonicalBrowsingContext::ClearInFlightProcessId(uint64_t aProcessId) {
-  MOZ_ASSERT(aProcessId);
-  if (mInFlightProcessId == aProcessId) {
-    mInFlightProcessId = 0;
   }
 }
 
@@ -307,6 +458,11 @@ SessionHistoryEntry* CanonicalBrowsingContext::GetActiveSessionHistoryEntry() {
   return mActiveEntry;
 }
 
+void CanonicalBrowsingContext::SetActiveSessionHistoryEntry(
+    SessionHistoryEntry* aEntry) {
+  mActiveEntry = aEntry;
+}
+
 bool CanonicalBrowsingContext::HasHistoryEntry(nsISHEntry* aEntry) {
   // XXX Should we check also loading entries?
   return aEntry && mActiveEntry == aEntry;
@@ -377,6 +533,7 @@ CanonicalBrowsingContext::CreateLoadingSessionHistoryEntryForLoad(
     if (!entry) {
       return nullptr;
     }
+    Unused << SetHistoryEntryCount(entry->BCHistoryLength());
   } else {
     entry = new SessionHistoryEntry(aLoadState, aChannel);
     if (IsTop()) {
@@ -412,34 +569,144 @@ CanonicalBrowsingContext::ReplaceLoadingSessionHistoryEntryForLoad(
   MOZ_ASSERT(aInfo);
   MOZ_ASSERT(aChannel);
 
-  UniquePtr<SessionHistoryInfo> newInfo = MakeUnique<SessionHistoryInfo>(
+  SessionHistoryInfo newInfo = SessionHistoryInfo(
       aChannel, aInfo->mInfo.LoadType(),
       aInfo->mInfo.GetPartitionedPrincipalToInherit(), aInfo->mInfo.GetCsp());
 
-  RefPtr<SessionHistoryEntry> newEntry = new SessionHistoryEntry(newInfo.get());
-  if (IsTop()) {
-    // Only top level pages care about Get/SetPersist.
-    nsCOMPtr<nsIURI> uri;
-    aChannel->GetURI(getter_AddRefs(uri));
-    newEntry->SetPersist(nsDocShell::ShouldAddToSessionHistory(uri, aChannel));
-  } else {
-    newEntry->SetIsSubFrame(aInfo->mInfo.IsSubFrame());
-  }
-  newEntry->SetDocshellID(GetHistoryID());
-  newEntry->SetIsDynamicallyAdded(CreatedDynamically());
-  newEntry->SetForInitialLoad(true);
-
-  // Replacing the old entry.
-  SessionHistoryEntry::SetByLoadId(aInfo->mLoadId, newEntry);
-
   for (size_t i = 0; i < mLoadingEntries.Length(); ++i) {
     if (mLoadingEntries[i].mLoadId == aInfo->mLoadId) {
-      mLoadingEntries[i].mEntry = newEntry;
-      break;
+      RefPtr<SessionHistoryEntry> loadingEntry = mLoadingEntries[i].mEntry;
+      loadingEntry->SetInfo(&newInfo);
+
+      if (IsTop()) {
+        // Only top level pages care about Get/SetPersist.
+        nsCOMPtr<nsIURI> uri;
+        aChannel->GetURI(getter_AddRefs(uri));
+        loadingEntry->SetPersist(
+            nsDocShell::ShouldAddToSessionHistory(uri, aChannel));
+      } else {
+        loadingEntry->SetIsSubFrame(aInfo->mInfo.IsSubFrame());
+      }
+      loadingEntry->SetDocshellID(GetHistoryID());
+      loadingEntry->SetIsDynamicallyAdded(CreatedDynamically());
+      return MakeUnique<LoadingSessionHistoryInfo>(loadingEntry, aInfo);
     }
   }
+  return nullptr;
+}
 
-  return MakeUnique<LoadingSessionHistoryInfo>(newEntry, aInfo->mLoadId);
+#ifdef NS_PRINTING
+class PrintListenerAdapter final : public nsIWebProgressListener {
+ public:
+  explicit PrintListenerAdapter(Promise* aPromise) : mPromise(aPromise) {}
+
+  NS_DECL_ISUPPORTS
+
+  // NS_DECL_NSIWEBPROGRESSLISTENER
+  NS_IMETHOD OnStateChange(nsIWebProgress* aWebProgress, nsIRequest* aRequest,
+                           uint32_t aStateFlags, nsresult aStatus) override {
+    if (aStateFlags & nsIWebProgressListener::STATE_STOP &&
+        aStateFlags & nsIWebProgressListener::STATE_IS_DOCUMENT && mPromise) {
+      mPromise->MaybeResolveWithUndefined();
+      mPromise = nullptr;
+    }
+    return NS_OK;
+  }
+  NS_IMETHOD OnStatusChange(nsIWebProgress* aWebProgress, nsIRequest* aRequest,
+                            nsresult aStatus,
+                            const char16_t* aMessage) override {
+    if (aStatus != NS_OK && mPromise) {
+      mPromise->MaybeReject(ErrorResult(aStatus));
+      mPromise = nullptr;
+    }
+    return NS_OK;
+  }
+  NS_IMETHOD OnProgressChange(nsIWebProgress* aWebProgress,
+                              nsIRequest* aRequest, int32_t aCurSelfProgress,
+                              int32_t aMaxSelfProgress,
+                              int32_t aCurTotalProgress,
+                              int32_t aMaxTotalProgress) override {
+    return NS_OK;
+  }
+  NS_IMETHOD OnLocationChange(nsIWebProgress* aWebProgress,
+                              nsIRequest* aRequest, nsIURI* aLocation,
+                              uint32_t aFlags) override {
+    return NS_OK;
+  }
+  NS_IMETHOD OnSecurityChange(nsIWebProgress* aWebProgress,
+                              nsIRequest* aRequest, uint32_t aState) override {
+    return NS_OK;
+  }
+  NS_IMETHOD OnContentBlockingEvent(nsIWebProgress* aWebProgress,
+                                    nsIRequest* aRequest,
+                                    uint32_t aEvent) override {
+    return NS_OK;
+  }
+
+ private:
+  ~PrintListenerAdapter() = default;
+
+  RefPtr<Promise> mPromise;
+};
+
+NS_IMPL_ISUPPORTS(PrintListenerAdapter, nsIWebProgressListener)
+#endif
+
+already_AddRefed<Promise> CanonicalBrowsingContext::Print(
+    nsIPrintSettings* aPrintSettings, ErrorResult& aRv) {
+  RefPtr<Promise> promise = Promise::Create(GetIncumbentGlobal(), aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return promise.forget();
+  }
+
+#ifndef NS_PRINTING
+  promise->MaybeReject(ErrorResult(NS_ERROR_NOT_AVAILABLE));
+  return promise.forget();
+#else
+
+  auto listener = MakeRefPtr<PrintListenerAdapter>(promise);
+  if (IsInProcess()) {
+    RefPtr<nsGlobalWindowOuter> outerWindow =
+        nsGlobalWindowOuter::Cast(GetDOMWindow());
+    if (NS_WARN_IF(!outerWindow)) {
+      promise->MaybeReject(ErrorResult(NS_ERROR_FAILURE));
+      return promise.forget();
+    }
+
+    ErrorResult rv;
+    outerWindow->Print(aPrintSettings, listener,
+                       /* aDocShellToCloneInto = */ nullptr,
+                       nsGlobalWindowOuter::IsPreview::No,
+                       nsGlobalWindowOuter::IsForWindowDotPrint::No,
+                       /* aPrintPreviewCallback = */ nullptr, rv);
+    if (rv.Failed()) {
+      promise->MaybeReject(std::move(rv));
+    }
+    return promise.forget();
+  }
+
+  auto* browserParent = GetBrowserParent();
+  if (NS_WARN_IF(!browserParent)) {
+    promise->MaybeReject(ErrorResult(NS_ERROR_FAILURE));
+    return promise.forget();
+  }
+
+  RefPtr<embedding::PrintingParent> printingParent =
+      browserParent->Manager()->GetPrintingParent();
+
+  embedding::PrintData printData;
+  nsresult rv = printingParent->SerializeAndEnsureRemotePrintJob(
+      aPrintSettings, listener, nullptr, &printData);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    promise->MaybeReject(ErrorResult(rv));
+    return promise.forget();
+  }
+
+  if (NS_WARN_IF(!browserParent->SendPrint(this, printData))) {
+    promise->MaybeReject(ErrorResult(NS_ERROR_FAILURE));
+  }
+  return promise.forget();
+#endif
 }
 
 void CanonicalBrowsingContext::CallOnAllTopDescendants(
@@ -509,27 +776,36 @@ void CanonicalBrowsingContext::SessionHistoryCommit(uint64_t aLoadId,
 
       bool addEntry = ShouldUpdateSessionHistory(aLoadType);
       if (IsTop()) {
+        if (mActiveEntry && !mActiveEntry->GetFrameLoader()) {
+          bool sharesDocument = true;
+          mActiveEntry->SharesDocumentWith(newActiveEntry, &sharesDocument);
+          if (!sharesDocument) {
+            // If the old page won't be in the bfcache,
+            // clear the dynamic entries.
+            RemoveDynEntriesFromActiveSessionHistoryEntry();
+          }
+        }
         mActiveEntry = newActiveEntry;
+
+        if (LOAD_TYPE_HAS_FLAGS(aLoadType,
+                                nsIWebNavigation::LOAD_FLAGS_REPLACE_HISTORY)) {
+          // Replace the current entry with the new entry.
+          int32_t index = shistory->GetIndexForReplace();
+
+          // If we're trying to replace an inexistant shistory entry then we
+          // should append instead.
+          addEntry = index < 0;
+          if (!addEntry) {
+            shistory->ReplaceEntry(index, mActiveEntry);
+          }
+        }
+
         if (loadFromSessionHistory) {
           // XXX Synchronize browsing context tree and session history tree?
           shistory->UpdateIndex();
-        } else {
-          if (LOAD_TYPE_HAS_FLAGS(
-                  aLoadType, nsIWebNavigation::LOAD_FLAGS_REPLACE_HISTORY)) {
-            // Replace the current entry with the new entry.
-            int32_t index = shistory->GetIndexForReplace();
-
-            // If we're trying to replace an inexistant shistory entry then we
-            // should append instead.
-            addEntry = index < 0;
-            if (!addEntry) {
-              shistory->ReplaceEntry(index, mActiveEntry);
-            }
-          }
-
-          if (addEntry) {
-            shistory->AddEntry(mActiveEntry, aPersist);
-          }
+        } else if (addEntry) {
+          shistory->AddEntry(mActiveEntry, aPersist);
+          shistory->InternalSetRequestedIndex(-1);
         }
       } else {
         // FIXME The old implementations adds it to the parent's mLSHE if there
@@ -575,6 +851,7 @@ void CanonicalBrowsingContext::SessionHistoryCommit(uint64_t aLoadId,
                   IsInProcess());
             }
           }
+          shistory->InternalSetRequestedIndex(-1);
         }
       }
 
@@ -694,6 +971,8 @@ void CanonicalBrowsingContext::SetActiveSessionHistoryEntry(
 
   ResetSHEntryHasUserInteractionCache();
 
+  shistory->InternalSetRequestedIndex(-1);
+
   // FIXME Need to do the equivalent of EvictContentViewersOrReplaceEntry.
   HistoryCommitIndexAndLength(aChangeID, caller);
 
@@ -728,9 +1007,10 @@ void CanonicalBrowsingContext::RemoveDynEntriesFromActiveSessionHistoryEntry() {
   shistory->RemoveDynEntries(shistory->GetIndexOfEntry(root), mActiveEntry);
 }
 
-void CanonicalBrowsingContext::RemoveFromSessionHistory() {
+void CanonicalBrowsingContext::RemoveFromSessionHistory(const nsID& aChangeID) {
   nsSHistory* shistory = static_cast<nsSHistory*>(GetSessionHistory());
   if (shistory) {
+    CallerWillNotifyHistoryIndexAndLengthChanges caller(shistory);
     nsCOMPtr<nsISHEntry> root = nsSHistory::GetRootSHEntry(mActiveEntry);
     bool didRemove;
     AutoTArray<nsID, 16> ids({GetHistoryID()});
@@ -747,12 +1027,13 @@ void CanonicalBrowsingContext::RemoveFromSessionHistory() {
         }
       }
     }
+    HistoryCommitIndexAndLength(aChangeID, caller);
   }
 }
 
 void CanonicalBrowsingContext::HistoryGo(
     int32_t aOffset, uint64_t aHistoryEpoch, bool aRequireUserInteraction,
-    Maybe<ContentParentId> aContentId,
+    bool aUserActivation, Maybe<ContentParentId> aContentId,
     std::function<void(int32_t&&)>&& aResolver) {
   if (aRequireUserInteraction && aOffset != -1 && aOffset != 1) {
     NS_ERROR(
@@ -808,7 +1089,8 @@ void CanonicalBrowsingContext::HistoryGo(
 
   // GoToIndex checks that index is >= 0 and < length.
   nsTArray<nsSHistory::LoadEntryResult> loadResults;
-  nsresult rv = shistory->GotoIndex(index.value(), loadResults, sameEpoch);
+  nsresult rv = shistory->GotoIndex(index.value(), loadResults, sameEpoch,
+                                    aUserActivation);
   if (NS_FAILED(rv)) {
     MOZ_LOG(gSHLog, LogLevel::Debug,
             ("Dropping HistoryGo - bad index or same epoch (not in same doc)"));
@@ -845,8 +1127,39 @@ void CanonicalBrowsingContext::CanonicalDiscard() {
     mTabMediaController = nullptr;
   }
 
+  if (mWebProgress) {
+    RefPtr<BrowsingContextWebProgress> progress = mWebProgress;
+    progress->ContextDiscarded();
+  }
+
   if (IsTop()) {
     BackgroundSessionStorageManager::RemoveManager(Id());
+  }
+
+  CancelSessionStoreUpdate();
+
+  if (UsePrivateBrowsing() && EverAttached() && IsContent()) {
+    DecreasePrivateCount();
+  }
+}
+
+void CanonicalBrowsingContext::CanonicalAttach() {
+  if (UsePrivateBrowsing() && IsContent()) {
+    IncreasePrivateCount();
+  }
+}
+
+void CanonicalBrowsingContext::AdjustPrivateBrowsingCount(
+    bool aPrivateBrowsing) {
+  if (IsDiscarded() || !EverAttached() || IsChrome()) {
+    return;
+  }
+
+  MOZ_DIAGNOSTIC_ASSERT(aPrivateBrowsing == UsePrivateBrowsing());
+  if (aPrivateBrowsing) {
+    IncreasePrivateCount();
+  } else {
+    DecreasePrivateCount();
   }
 }
 
@@ -881,7 +1194,7 @@ void CanonicalBrowsingContext::NotifyMediaMutedChanged(bool aMuted,
 uint32_t CanonicalBrowsingContext::CountSiteOrigins(
     GlobalObject& aGlobal,
     const Sequence<OwningNonNull<BrowsingContext>>& aRoots) {
-  nsTHashtable<nsCStringHashKey> uniqueSiteOrigins;
+  nsTHashSet<nsCString> uniqueSiteOrigins;
 
   for (const auto& root : aRoots) {
     root->PreOrderWalk([&](BrowsingContext* aContext) {
@@ -895,7 +1208,7 @@ uint32_t CanonicalBrowsingContext::CountSiteOrigins(
         if (isContentPrincipal) {
           nsCString siteOrigin;
           documentPrincipal->GetSiteOrigin(siteOrigin);
-          uniqueSiteOrigins.PutEntry(siteOrigin);
+          uniqueSiteOrigins.Insert(siteOrigin);
         }
       }
     });
@@ -937,7 +1250,7 @@ void CanonicalBrowsingContext::LoadURI(const nsAString& aURI,
 
 void CanonicalBrowsingContext::GoBack(
     const Optional<int32_t>& aCancelContentJSEpoch,
-    bool aRequireUserInteraction) {
+    bool aRequireUserInteraction, bool aUserActivation) {
   if (IsDiscarded()) {
     return;
   }
@@ -951,19 +1264,19 @@ void CanonicalBrowsingContext::GoBack(
     if (aCancelContentJSEpoch.WasPassed()) {
       docShell->SetCancelContentJSEpoch(aCancelContentJSEpoch.Value());
     }
-    docShell->GoBack(aRequireUserInteraction);
+    docShell->GoBack(aRequireUserInteraction, aUserActivation);
   } else if (ContentParent* cp = GetContentParent()) {
     Maybe<int32_t> cancelContentJSEpoch;
     if (aCancelContentJSEpoch.WasPassed()) {
       cancelContentJSEpoch = Some(aCancelContentJSEpoch.Value());
     }
     Unused << cp->SendGoBack(this, cancelContentJSEpoch,
-                             aRequireUserInteraction);
+                             aRequireUserInteraction, aUserActivation);
   }
 }
 void CanonicalBrowsingContext::GoForward(
     const Optional<int32_t>& aCancelContentJSEpoch,
-    bool aRequireUserInteraction) {
+    bool aRequireUserInteraction, bool aUserActivation) {
   if (IsDiscarded()) {
     return;
   }
@@ -977,18 +1290,19 @@ void CanonicalBrowsingContext::GoForward(
     if (aCancelContentJSEpoch.WasPassed()) {
       docShell->SetCancelContentJSEpoch(aCancelContentJSEpoch.Value());
     }
-    docShell->GoForward(aRequireUserInteraction);
+    docShell->GoForward(aRequireUserInteraction, aUserActivation);
   } else if (ContentParent* cp = GetContentParent()) {
     Maybe<int32_t> cancelContentJSEpoch;
     if (aCancelContentJSEpoch.WasPassed()) {
       cancelContentJSEpoch.emplace(aCancelContentJSEpoch.Value());
     }
     Unused << cp->SendGoForward(this, cancelContentJSEpoch,
-                                aRequireUserInteraction);
+                                aRequireUserInteraction, aUserActivation);
   }
 }
 void CanonicalBrowsingContext::GoToIndex(
-    int32_t aIndex, const Optional<int32_t>& aCancelContentJSEpoch) {
+    int32_t aIndex, const Optional<int32_t>& aCancelContentJSEpoch,
+    bool aUserActivation) {
   if (IsDiscarded()) {
     return;
   }
@@ -1002,13 +1316,14 @@ void CanonicalBrowsingContext::GoToIndex(
     if (aCancelContentJSEpoch.WasPassed()) {
       docShell->SetCancelContentJSEpoch(aCancelContentJSEpoch.Value());
     }
-    docShell->GotoIndex(aIndex);
+    docShell->GotoIndex(aIndex, aUserActivation);
   } else if (ContentParent* cp = GetContentParent()) {
     Maybe<int32_t> cancelContentJSEpoch;
     if (aCancelContentJSEpoch.WasPassed()) {
       cancelContentJSEpoch.emplace(aCancelContentJSEpoch.Value());
     }
-    Unused << cp->SendGoToIndex(this, aIndex, cancelContentJSEpoch);
+    Unused << cp->SendGoToIndex(this, aIndex, cancelContentJSEpoch,
+                                aUserActivation);
   }
 }
 void CanonicalBrowsingContext::Reload(uint32_t aReloadFlags) {
@@ -1047,6 +1362,25 @@ void CanonicalBrowsingContext::Stop(uint32_t aStopFlags) {
   }
 }
 
+void CanonicalBrowsingContext::PendingRemotenessChange::ProcessLaunched() {
+  if (!mPromise) {
+    return;
+  }
+
+  if (mContentParent) {
+    // If our new content process is still unloading from a previous process
+    // switch, wait for that unload to complete before continuing.
+    auto found = mTarget->FindUnloadingHost(mContentParent->ChildID());
+    if (found != mTarget->mUnloadingHosts.end()) {
+      found->mCallbacks.AppendElement(
+          [self = RefPtr{this}]() { self->ProcessReady(); });
+      return;
+    }
+  }
+
+  ProcessReady();
+}
+
 void CanonicalBrowsingContext::PendingRemotenessChange::ProcessReady() {
   if (!mPromise) {
     return;
@@ -1069,161 +1403,202 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Finish() {
     return;
   }
 
-  RefPtr<CanonicalBrowsingContext> target(mTarget);
-  if (target->IsDiscarded()) {
-    Cancel(NS_ERROR_FAILURE);
-    return;
+  // If this BrowsingContext is embedded within the parent process, perform the
+  // process switch directly.
+  nsresult rv = mTarget->IsTopContent() ? FinishTopContent() : FinishSubframe();
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Error finishing PendingRemotenessChange!");
+    Cancel(rv);
+  } else {
+    Clear();
   }
+}
+
+// Logic for finishing a toplevel process change embedded within the parent
+// process. Due to frontend integration the logic differs substantially from
+// subframe process switches, and is handled separately.
+nsresult CanonicalBrowsingContext::PendingRemotenessChange::FinishTopContent() {
+  MOZ_DIAGNOSTIC_ASSERT(mTarget->IsTop(),
+                        "We shouldn't be trying to change the remoteness of "
+                        "non-remote iframes");
 
   // While process switching, we need to check if any of our ancestors are
   // discarded or no longer current, in which case the process switch needs to
   // be aborted.
-  if (!target->AncestorsAreCurrent()) {
-    NS_WARNING("Ancestor context is no longer current");
-    Cancel(NS_ERROR_FAILURE);
-    return;
+  RefPtr<CanonicalBrowsingContext> target(mTarget);
+  if (target->IsDiscarded() || !target->AncestorsAreCurrent()) {
+    return NS_ERROR_FAILURE;
   }
 
-  // If this BrowsingContext is embedded within the parent process, perform the
-  // process switch directly.
-  if (Element* browserElement = target->GetEmbedderElement()) {
-    MOZ_DIAGNOSTIC_ASSERT(target->IsTop(),
-                          "We shouldn't be trying to change the remoteness of "
-                          "non-remote iframes");
+  Element* browserElement = target->GetEmbedderElement();
+  if (!browserElement) {
+    return NS_ERROR_FAILURE;
+  }
 
-    nsCOMPtr<nsIBrowser> browser = browserElement->AsBrowser();
-    if (!browser) {
-      Cancel(NS_ERROR_FAILURE);
-      return;
+  nsCOMPtr<nsIBrowser> browser = browserElement->AsBrowser();
+  if (!browser) {
+    return NS_ERROR_FAILURE;
+  }
+
+  RefPtr<nsFrameLoaderOwner> frameLoaderOwner = do_QueryObject(browserElement);
+  MOZ_RELEASE_ASSERT(frameLoaderOwner,
+                     "embedder browser must be nsFrameLoaderOwner");
+
+  // If we're process switching a browsing context in private browsing
+  // mode we might decrease the private browsing count to '0', which
+  // would make us fire "last-pb-context-exited" and drop the private
+  // session. To prevent that we artificially increment the number of
+  // private browsing contexts with '1' until the process switch is done.
+  bool usePrivateBrowsing = mTarget->UsePrivateBrowsing();
+  if (usePrivateBrowsing) {
+    IncreasePrivateCount();
+  }
+
+  auto restorePrivateCount = MakeScopeExit([usePrivateBrowsing]() {
+    if (usePrivateBrowsing) {
+      DecreasePrivateCount();
+    }
+  });
+
+  // Tell frontend code that this browser element is about to change process.
+  nsresult rv = browser->BeforeChangeRemoteness();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  // Some frontend code checks the value of the `remote` attribute on the
+  // browser to determine if it is remote, so update the value.
+  browserElement->SetAttr(kNameSpaceID_None, nsGkAtoms::remote,
+                          mContentParent ? u"true"_ns : u"false"_ns,
+                          /* notify */ true);
+
+  // The process has been created, hand off to nsFrameLoaderOwner to finish
+  // the process switch.
+  ErrorResult error;
+  frameLoaderOwner->ChangeRemotenessToProcess(mContentParent, mOptions,
+                                              mSpecificGroup, error);
+  if (error.Failed()) {
+    return error.StealNSResult();
+  }
+
+  // Tell frontend the load is done.
+  bool loadResumed = false;
+  rv = browser->FinishChangeRemoteness(mPendingSwitchId, &loadResumed);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  // We did it! The process switch is complete.
+  RefPtr<nsFrameLoader> frameLoader = frameLoaderOwner->GetFrameLoader();
+  RefPtr<BrowserParent> newBrowser = frameLoader->GetBrowserParent();
+  if (!newBrowser) {
+    if (mContentParent) {
+      // Failed to create the BrowserParent somehow! Abort the process switch
+      // attempt.
+      return NS_ERROR_UNEXPECTED;
     }
 
-    RefPtr<nsFrameLoaderOwner> frameLoaderOwner =
-        do_QueryObject(browserElement);
-    MOZ_RELEASE_ASSERT(frameLoaderOwner,
-                       "embedder browser must be nsFrameLoaderOwner");
-
-    // Tell frontend code that this browser element is about to change process.
-    nsresult rv = browser->BeforeChangeRemoteness();
-    if (NS_FAILED(rv)) {
-      Cancel(rv);
-      return;
-    }
-
-    // Some frontend code checks the value of the `remote` attribute on the
-    // browser to determine if it is remote, so update the value.
-    browserElement->SetAttr(kNameSpaceID_None, nsGkAtoms::remote,
-                            mContentParent ? u"true"_ns : u"false"_ns,
-                            /* notify */ true);
-
-    // The process has been created, hand off to nsFrameLoaderOwner to finish
-    // the process switch.
-    ErrorResult error;
-    frameLoaderOwner->ChangeRemotenessToProcess(
-        mContentParent, mReplaceBrowsingContext, mSpecificGroup, error);
-    if (error.Failed()) {
-      Cancel(error.StealNSResult());
-      return;
-    }
-
-    // Tell frontend the load is done.
-    bool loadResumed = false;
-    rv = browser->FinishChangeRemoteness(mPendingSwitchId, &loadResumed);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      Cancel(rv);
-      return;
-    }
-
-    // We did it! The process switch is complete.
-    RefPtr<nsFrameLoader> frameLoader = frameLoaderOwner->GetFrameLoader();
-    RefPtr<BrowserParent> newBrowser = frameLoader->GetBrowserParent();
-    if (!newBrowser) {
-      if (mContentParent) {
-        // Failed to create the BrowserParent somehow! Abort the process switch
-        // attempt.
-        Cancel(NS_ERROR_UNEXPECTED);
-        return;
+    if (!loadResumed) {
+      RefPtr<nsDocShell> newDocShell = frameLoader->GetDocShell(error);
+      if (error.Failed()) {
+        return error.StealNSResult();
       }
 
-      if (!loadResumed) {
-        RefPtr<nsDocShell> newDocShell = frameLoader->GetDocShell(error);
-        if (error.Failed()) {
-          Cancel(error.StealNSResult());
-          return;
-        }
-
-        rv = newDocShell->ResumeRedirectedLoad(mPendingSwitchId,
-                                               /* aHistoryIndex */ -1);
-        if (NS_FAILED(rv)) {
-          Cancel(error.StealNSResult());
-          return;
-        }
+      rv = newDocShell->ResumeRedirectedLoad(mPendingSwitchId,
+                                             /* aHistoryIndex */ -1);
+      if (NS_FAILED(rv)) {
+        return rv;
       }
-    } else if (!loadResumed) {
-      newBrowser->ResumeLoad(mPendingSwitchId);
     }
+  } else if (!loadResumed) {
+    newBrowser->ResumeLoad(mPendingSwitchId);
+  }
 
-    mPromise->Resolve(newBrowser, __func__);
-    Clear();
-    return;
+  mPromise->Resolve(newBrowser, __func__);
+  return NS_OK;
+}
+
+nsresult CanonicalBrowsingContext::PendingRemotenessChange::FinishSubframe() {
+  MOZ_DIAGNOSTIC_ASSERT(!mOptions.mReplaceBrowsingContext,
+                        "Cannot replace BC for subframe");
+  MOZ_DIAGNOSTIC_ASSERT(!mTarget->IsTop());
+
+  // While process switching, we need to check if any of our ancestors are
+  // discarded or no longer current, in which case the process switch needs to
+  // be aborted.
+  RefPtr<CanonicalBrowsingContext> target(mTarget);
+  if (target->IsDiscarded() || !target->AncestorsAreCurrent()) {
+    return NS_ERROR_FAILURE;
   }
 
   if (NS_WARN_IF(!mContentParent)) {
-    Cancel(NS_ERROR_FAILURE);
-    return;
+    return NS_ERROR_FAILURE;
   }
 
-  RefPtr<WindowGlobalParent> embedderWindow = target->GetEmbedderWindowGlobal();
+  RefPtr<WindowGlobalParent> embedderWindow = target->GetParentWindowContext();
   if (NS_WARN_IF(!embedderWindow) || NS_WARN_IF(!embedderWindow->CanSend())) {
-    Cancel(NS_ERROR_FAILURE);
-    return;
+    return NS_ERROR_FAILURE;
   }
 
   RefPtr<BrowserParent> embedderBrowser = embedderWindow->GetBrowserParent();
   if (NS_WARN_IF(!embedderBrowser)) {
-    Cancel(NS_ERROR_FAILURE);
-    return;
+    return NS_ERROR_FAILURE;
   }
 
-  // Pull load flags from our embedder browser.
-  nsCOMPtr<nsILoadContext> loadContext = embedderBrowser->GetLoadContext();
-  MOZ_DIAGNOSTIC_ASSERT(
-      loadContext->UseRemoteTabs() && loadContext->UseRemoteSubframes(),
-      "Not supported without fission");
+  RefPtr<BrowserParent> oldBrowser = target->GetBrowserParent();
+  target->SetCurrentBrowserParent(nullptr);
 
-  // NOTE: These are the only flags we actually care about
+  // If we were in a remote frame, trigger unloading of the remote window. The
+  // previous BrowserParent is registered in `mUnloadingHosts` and will only be
+  // cleared when the BrowserParent is fully destroyed.
+  bool wasRemote = oldBrowser && oldBrowser->GetBrowsingContext() == target;
+  if (wasRemote) {
+    MOZ_DIAGNOSTIC_ASSERT(oldBrowser != embedderBrowser);
+    MOZ_DIAGNOSTIC_ASSERT(oldBrowser->IsDestroyed() ||
+                          oldBrowser->GetBrowserBridgeParent());
+
+    // `oldBrowser` will clear the `UnloadingHost` status once the actor has
+    // been destroyed.
+    if (oldBrowser->CanSend()) {
+      target->StartUnloadingHost(oldBrowser->Manager()->ChildID());
+      Unused << oldBrowser->SendWillChangeProcess();
+      oldBrowser->Destroy();
+    }
+  }
+
+  // Update which process is considered the current owner
+  target->SetOwnerProcessId(mContentParent->ChildID());
+
+  // If we're switching from remote to local, we don't need to create a
+  // BrowserBridge, and can instead perform the switch directly.
+  if (mContentParent == embedderBrowser->Manager()) {
+    MOZ_DIAGNOSTIC_ASSERT(
+        mPendingSwitchId,
+        "We always have a PendingSwitchId, except for print-preview loads, "
+        "which will never perform a process-switch to being in-process with "
+        "their embedder");
+    MOZ_DIAGNOSTIC_ASSERT(wasRemote,
+                          "Attempt to process-switch from local to local?");
+
+    target->SetCurrentBrowserParent(embedderBrowser);
+    Unused << embedderWindow->SendMakeFrameLocal(target, mPendingSwitchId);
+    mPromise->Resolve(embedderBrowser, __func__);
+    return NS_OK;
+  }
+
+  // The BrowsingContext will be remote, either as an already-remote frame
+  // changing processes, or as a local frame becoming remote. Construct a new
+  // BrowserBridgeParent to host the remote content.
+  target->SetCurrentBrowserParent(nullptr);
+
+  MOZ_DIAGNOSTIC_ASSERT(target->UseRemoteTabs() && target->UseRemoteSubframes(),
+                        "Not supported without fission");
   uint32_t chromeFlags = nsIWebBrowserChrome::CHROME_REMOTE_WINDOW |
                          nsIWebBrowserChrome::CHROME_FISSION_WINDOW;
-  if (loadContext->UsePrivateBrowsing()) {
+  if (target->UsePrivateBrowsing()) {
     chromeFlags |= nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW;
   }
 
-  RefPtr<WindowGlobalParent> oldWindow = target->GetCurrentWindowGlobal();
-  RefPtr<BrowserParent> oldBrowser =
-      oldWindow ? oldWindow->GetBrowserParent() : nullptr;
-  bool wasRemote = oldWindow && oldWindow->IsProcessRoot();
-
-  // Update which process is considered the current owner
-  uint64_t inFlightProcessId = target->OwnerProcessId();
-  target->SetInFlightProcessId(inFlightProcessId);
-  target->SetOwnerProcessId(mContentParent->ChildID());
-
-  auto resetInFlightId = [target, inFlightProcessId] {
-    target->ClearInFlightProcessId(inFlightProcessId);
-  };
-
-  // If we were in a remote frame, trigger unloading of the remote window. When
-  // the original remote window acknowledges, we can clear the in-flight ID.
-  if (wasRemote) {
-    MOZ_DIAGNOSTIC_ASSERT(oldBrowser);
-    MOZ_DIAGNOSTIC_ASSERT(oldBrowser != embedderBrowser);
-    MOZ_DIAGNOSTIC_ASSERT(oldBrowser->GetBrowserBridgeParent());
-
-    auto callback = [resetInFlightId](auto) { resetInFlightId(); };
-    oldBrowser->SendWillChangeProcess(callback, callback);
-    oldBrowser->Destroy();
-  }
-
-  MOZ_ASSERT(!mReplaceBrowsingContext, "Cannot replace BC for subframe");
   nsCOMPtr<nsIPrincipal> initialPrincipal =
       NullPrincipal::CreateWithInheritedAttributes(
           target->OriginAttributesRef(),
@@ -1237,26 +1612,36 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Finish() {
   nsresult rv = bridge->InitWithProcess(embedderBrowser, mContentParent,
                                         windowInit, chromeFlags, tabId);
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    Cancel(rv);
-    return;
+    // If we've already destroyed our previous document, make a best-effort
+    // attempt to recover from this failure and show the crashed tab UI. We only
+    // do this in the previously-remote case, as previously in-process frames
+    // will have their navigation cancelled, and will remain visible.
+    if (wasRemote) {
+      target->ShowSubframeCrashedUI(oldBrowser->GetBrowserBridgeParent());
+    }
+    return rv;
   }
 
   // Tell the embedder process a remoteness change is in-process. When this is
   // acknowledged, reset the in-flight ID if it used to be an in-process load.
   RefPtr<BrowserParent> newBrowser = bridge->GetBrowserParent();
   {
-    auto callback = [wasRemote, resetInFlightId](auto) {
-      if (!wasRemote) {
-        resetInFlightId();
+    // If we weren't remote, mark our embedder window browser as unloading until
+    // our embedder process has acked our MakeFrameRemote message.
+    Maybe<uint64_t> clearChildID;
+    if (!wasRemote) {
+      clearChildID = Some(embedderBrowser->Manager()->ChildID());
+      target->StartUnloadingHost(*clearChildID);
+    }
+    auto callback = [target, clearChildID](auto&&) {
+      if (clearChildID) {
+        target->ClearUnloadingHost(*clearChildID);
       }
     };
 
     ManagedEndpoint<PBrowserBridgeChild> endpoint =
         embedderBrowser->OpenPBrowserBridgeEndpoint(bridge);
-    if (NS_WARN_IF(!endpoint.IsValid())) {
-      Cancel(NS_ERROR_UNEXPECTED);
-      return;
-    }
+    MOZ_DIAGNOSTIC_ASSERT(endpoint.IsValid());
     embedderWindow->SendMakeFrameRemote(target, std::move(endpoint), tabId,
                                         newBrowser->GetLayersId(), callback,
                                         callback);
@@ -1269,7 +1654,7 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Finish() {
 
   // We did it! The process switch is complete.
   mPromise->Resolve(newBrowser, __func__);
-  Clear();
+  return NS_OK;
 }
 
 void CanonicalBrowsingContext::PendingRemotenessChange::Cancel(nsresult aRv) {
@@ -1309,11 +1694,11 @@ void CanonicalBrowsingContext::PendingRemotenessChange::Clear() {
 
 CanonicalBrowsingContext::PendingRemotenessChange::PendingRemotenessChange(
     CanonicalBrowsingContext* aTarget, RemotenessPromise::Private* aPromise,
-    uint64_t aPendingSwitchId, bool aReplaceBrowsingContext)
+    uint64_t aPendingSwitchId, const RemotenessChangeOptions& aOptions)
     : mTarget(aTarget),
       mPromise(aPromise),
       mPendingSwitchId(aPendingSwitchId),
-      mReplaceBrowsingContext(aReplaceBrowsingContext) {}
+      mOptions(aOptions) {}
 
 CanonicalBrowsingContext::PendingRemotenessChange::~PendingRemotenessChange() {
   MOZ_ASSERT(!mPromise && !mTarget && !mContentParent && !mSpecificGroup &&
@@ -1322,26 +1707,40 @@ CanonicalBrowsingContext::PendingRemotenessChange::~PendingRemotenessChange() {
 }
 
 BrowserParent* CanonicalBrowsingContext::GetBrowserParent() const {
-  if (auto* wg = GetCurrentWindowGlobal()) {
-    return wg->GetBrowserParent();
-  }
-  return nullptr;
+  return mCurrentBrowserParent;
+}
+
+void CanonicalBrowsingContext::SetCurrentBrowserParent(
+    BrowserParent* aBrowserParent) {
+  MOZ_DIAGNOSTIC_ASSERT(!mCurrentBrowserParent || !aBrowserParent,
+                        "BrowsingContext already has a current BrowserParent!");
+  MOZ_DIAGNOSTIC_ASSERT_IF(aBrowserParent, aBrowserParent->CanSend());
+  MOZ_DIAGNOSTIC_ASSERT_IF(aBrowserParent,
+                           aBrowserParent->Manager()->ChildID() == mProcessId);
+
+  // BrowserParent must either be directly for this BrowsingContext, or the
+  // manager out our embedder WindowGlobal.
+  MOZ_DIAGNOSTIC_ASSERT_IF(
+      aBrowserParent && aBrowserParent->GetBrowsingContext() != this,
+      GetParentWindowContext() &&
+          GetParentWindowContext()->Manager() == aBrowserParent);
+
+  mCurrentBrowserParent = aBrowserParent;
 }
 
 RefPtr<CanonicalBrowsingContext::RemotenessPromise>
-CanonicalBrowsingContext::ChangeRemoteness(const nsACString& aRemoteType,
-                                           uint64_t aPendingSwitchId,
-                                           bool aReplaceBrowsingContext,
-                                           uint64_t aSpecificGroupId) {
+CanonicalBrowsingContext::ChangeRemoteness(
+    const RemotenessChangeOptions& aOptions, uint64_t aPendingSwitchId) {
   MOZ_DIAGNOSTIC_ASSERT(IsContent(),
                         "cannot change the process of chrome contexts");
   MOZ_DIAGNOSTIC_ASSERT(
       IsTop() == IsEmbeddedInProcess(0),
       "toplevel content must be embedded in the parent process");
-  MOZ_DIAGNOSTIC_ASSERT(!aReplaceBrowsingContext || IsTop(),
+  MOZ_DIAGNOSTIC_ASSERT(!aOptions.mReplaceBrowsingContext || IsTop(),
                         "Cannot replace BrowsingContext for subframes");
-  MOZ_DIAGNOSTIC_ASSERT(aSpecificGroupId == 0 || aReplaceBrowsingContext,
-                        "Cannot specify group ID unless replacing BC");
+  MOZ_DIAGNOSTIC_ASSERT(
+      aOptions.mSpecificGroupId == 0 || aOptions.mReplaceBrowsingContext,
+      "Cannot specify group ID unless replacing BC");
   MOZ_DIAGNOSTIC_ASSERT(aPendingSwitchId || !IsTop(),
                         "Should always have aPendingSwitchId for top-level "
                         "frames");
@@ -1363,7 +1762,7 @@ CanonicalBrowsingContext::ChangeRemoteness(const nsACString& aRemoteType,
     return RemotenessPromise::CreateAndReject(NS_ERROR_NOT_AVAILABLE, __func__);
   }
 
-  if (aRemoteType.IsEmpty() && (!IsTop() || !GetEmbedderElement())) {
+  if (aOptions.mRemoteType.IsEmpty() && (!IsTop() || !GetEmbedderElement())) {
     NS_WARNING("Cannot load non-remote subframes");
     return RemotenessPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
   }
@@ -1374,50 +1773,16 @@ CanonicalBrowsingContext::ChangeRemoteness(const nsACString& aRemoteType,
     MOZ_DIAGNOSTIC_ASSERT(!mPendingRemotenessChange, "Should have cleared");
   }
 
-  RefPtr<BrowserParent> embedderBrowser =
-      embedderWindowGlobal->GetBrowserParent();
-  // Switching to local. No new process, so perform switch sync.
-  if (embedderBrowser &&
-      aRemoteType == embedderBrowser->Manager()->GetRemoteType()) {
-    MOZ_DIAGNOSTIC_ASSERT(
-        aPendingSwitchId,
-        "We always have a PendingSwitchId, except for print-preview loads, "
-        "which will never perform a process-switch to being in-process with "
-        "their embedder");
-    if (GetCurrentWindowGlobal()) {
-      MOZ_DIAGNOSTIC_ASSERT(GetCurrentWindowGlobal()->IsProcessRoot());
-      RefPtr<BrowserParent> oldBrowser =
-          GetCurrentWindowGlobal()->GetBrowserParent();
-
-      uint64_t targetProcessId = OwnerProcessId();
-      SetInFlightProcessId(targetProcessId);
-      auto callback = [target = RefPtr{this}, targetProcessId](auto) {
-        target->ClearInFlightProcessId(targetProcessId);
-      };
-      oldBrowser->SendWillChangeProcess(callback, callback);
-      oldBrowser->Destroy();
-    }
-
-    // If the embedder process is remote, tell that remote process to become
-    // the owner.
-    MOZ_DIAGNOSTIC_ASSERT(!aReplaceBrowsingContext);
-    MOZ_DIAGNOSTIC_ASSERT(!aRemoteType.IsEmpty());
-    SetOwnerProcessId(embedderBrowser->Manager()->ChildID());
-    Unused << embedderWindowGlobal->SendMakeFrameLocal(this, aPendingSwitchId);
-    return RemotenessPromise::CreateAndResolve(embedderBrowser, __func__);
-  }
-
-  // Switching to remote. Wait for new process to launch before switch.
   auto promise = MakeRefPtr<RemotenessPromise::Private>(__func__);
-  RefPtr<PendingRemotenessChange> change = new PendingRemotenessChange(
-      this, promise, aPendingSwitchId, aReplaceBrowsingContext);
+  RefPtr<PendingRemotenessChange> change =
+      new PendingRemotenessChange(this, promise, aPendingSwitchId, aOptions);
   mPendingRemotenessChange = change;
 
   // If a specific BrowsingContextGroup ID was specified for this load, make
   // sure to keep it alive until the process switch is completed.
-  if (aSpecificGroupId) {
+  if (aOptions.mSpecificGroupId) {
     change->mSpecificGroup =
-        BrowsingContextGroup::GetOrCreate(aSpecificGroupId);
+        BrowsingContextGroup::GetOrCreate(aOptions.mSpecificGroupId);
     change->mSpecificGroup->AddKeepAlive();
   }
 
@@ -1439,40 +1804,78 @@ CanonicalBrowsingContext::ChangeRemoteness(const nsACString& aRemoteType,
     change->mPrepareToChangePromise = GenericPromise::FromDomPromise(blocker);
   }
 
-  if (aRemoteType.IsEmpty()) {
-    change->ProcessReady();
-  } else {
-    // Try to predict which BrowsingContextGroup will be used for the final load
-    // in this BrowsingContext. This has to be accurate if switching into an
-    // existing group, as it will control what pool of processes will be used
-    // for process selection.
-    //
-    // It's _technically_ OK to provide a group here if we're actually going to
-    // switch into a brand new group, though it's sub-optimal, as it can
-    // restrict the set of processes we're using.
-    BrowsingContextGroup* finalGroup =
-        aReplaceBrowsingContext ? change->mSpecificGroup.get() : Group();
+  // Switching a subframe to be local within it's embedding process.
+  RefPtr<BrowserParent> embedderBrowser =
+      embedderWindowGlobal->GetBrowserParent();
+  if (embedderBrowser &&
+      aOptions.mRemoteType == embedderBrowser->Manager()->GetRemoteType()) {
+    MOZ_DIAGNOSTIC_ASSERT(
+        aPendingSwitchId,
+        "We always have a PendingSwitchId, except for print-preview loads, "
+        "which will never perform a process-switch to being in-process with "
+        "their embedder");
+    MOZ_DIAGNOSTIC_ASSERT(!aOptions.mReplaceBrowsingContext);
+    MOZ_DIAGNOSTIC_ASSERT(!aOptions.mRemoteType.IsEmpty());
+    MOZ_DIAGNOSTIC_ASSERT(!change->mPrepareToChangePromise);
+    MOZ_DIAGNOSTIC_ASSERT(!change->mSpecificGroup);
 
-    change->mContentParent = ContentParent::GetNewOrUsedLaunchingBrowserProcess(
-        /* aRemoteType = */ aRemoteType,
-        /* aGroup = */ finalGroup,
-        /* aPriority = */ hal::PROCESS_PRIORITY_FOREGROUND,
-        /* aPreferUsed = */ false);
-    if (!change->mContentParent) {
-      change->Cancel(NS_ERROR_FAILURE);
-      return promise.forget();
-    }
-
-    // Add a KeepAlive used by this ContentParent, which will be cleared when
-    // the change is complete. This should prevent the process dying before
-    // we're ready to use it.
+    // Switching to local, so we don't need to create a new process, and will
+    // instead use our embedder process.
+    change->mContentParent = embedderBrowser->Manager();
     change->mContentParent->AddKeepAlive();
-    change->mContentParent->WaitForLaunchAsync()->Then(
-        GetMainThreadSerialEventTarget(), __func__,
-        [change](ContentParent*) { change->ProcessReady(); },
-        [change](LaunchError) { change->Cancel(NS_ERROR_FAILURE); });
+    change->ProcessLaunched();
+    return promise.forget();
   }
+
+  // Switching to the parent process.
+  if (aOptions.mRemoteType.IsEmpty()) {
+    change->ProcessLaunched();
+    return promise.forget();
+  }
+
+  // Try to predict which BrowsingContextGroup will be used for the final load
+  // in this BrowsingContext. This has to be accurate if switching into an
+  // existing group, as it will control what pool of processes will be used
+  // for process selection.
+  //
+  // It's _technically_ OK to provide a group here if we're actually going to
+  // switch into a brand new group, though it's sub-optimal, as it can
+  // restrict the set of processes we're using.
+  BrowsingContextGroup* finalGroup =
+      aOptions.mReplaceBrowsingContext ? change->mSpecificGroup.get() : Group();
+
+  change->mContentParent = ContentParent::GetNewOrUsedLaunchingBrowserProcess(
+      /* aRemoteType = */ aOptions.mRemoteType,
+      /* aGroup = */ finalGroup,
+      /* aPriority = */ hal::PROCESS_PRIORITY_FOREGROUND,
+      /* aPreferUsed = */ false);
+  if (!change->mContentParent) {
+    change->Cancel(NS_ERROR_FAILURE);
+    return promise.forget();
+  }
+
+  // Add a KeepAlive used by this ContentParent, which will be cleared when
+  // the change is complete. This should prevent the process dying before
+  // we're ready to use it.
+  change->mContentParent->AddKeepAlive();
+  change->mContentParent->WaitForLaunchAsync()->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [change](ContentParent*) { change->ProcessLaunched(); },
+      [change](LaunchError) { change->Cancel(NS_ERROR_FAILURE); });
   return promise.forget();
+}
+
+void CanonicalBrowsingContext::MaybeSetPermanentKey(Element* aEmbedder) {
+  MOZ_DIAGNOSTIC_ASSERT(IsTop());
+
+  if (aEmbedder) {
+    if (nsCOMPtr<nsIBrowser> browser = aEmbedder->AsBrowser()) {
+      JS::RootedValue key(RootingCx());
+      if (NS_SUCCEEDED(browser->GetPermanentKey(&key)) && key.isObject()) {
+        mPermanentKey = key;
+      }
+    }
+  }
 }
 
 MediaController* CanonicalBrowsingContext::GetMediaController() {
@@ -1504,6 +1907,12 @@ bool CanonicalBrowsingContext::SupportsLoadingInParent(
   // case. Devtools clears all prior requests when it detects a new navigation,
   // so it drops the main document load that happened here.
   if (WatchedByDevTools()) {
+    return false;
+  }
+
+  // Session-history-in-parent implementation relies currently on getting a
+  // round trip through a child process.
+  if (aLoadState->LoadIsFromSessionHistory()) {
     return false;
   }
 
@@ -1580,12 +1989,6 @@ bool CanonicalBrowsingContext::AttemptSpeculativeLoadInParent(
     return false;
   }
 
-  // Session-history-in-parent implementation relies currently on getting a
-  // round trip through a child process.
-  if (aLoadState->LoadIsFromSessionHistory()) {
-    return false;
-  }
-
   // If we successfully open the DocumentChannel, then it'll register
   // itself using aLoadIdentifier and be kept alive until it completes
   // loading.
@@ -1618,6 +2021,22 @@ void CanonicalBrowsingContext::EndDocumentLoad(bool aForProcessSwitch) {
     // has no effect when a document load has finished.
     Unused << SetCurrentLoadIdentifier(Nothing());
   }
+}
+
+already_AddRefed<nsIURI> CanonicalBrowsingContext::GetCurrentURI() const {
+  nsCOMPtr<nsIURI> currentURI;
+  if (nsIDocShell* docShell = GetDocShell()) {
+    MOZ_ALWAYS_SUCCEEDS(
+        nsDocShell::Cast(docShell)->GetCurrentURI(getter_AddRefs(currentURI)));
+  } else {
+    currentURI = mCurrentRemoteURI;
+  }
+  return currentURI.forget();
+}
+
+void CanonicalBrowsingContext::SetCurrentRemoteURI(nsIURI* aCurrentRemoteURI) {
+  MOZ_ASSERT(!GetDocShell());
+  mCurrentRemoteURI = aCurrentRemoteURI;
 }
 
 void CanonicalBrowsingContext::ResetSHEntryHasUserInteractionCache() {
@@ -1665,6 +2084,217 @@ void CanonicalBrowsingContext::ResetScalingZoom() {
   }
 }
 
+void CanonicalBrowsingContext::SetRestoreData(SessionStoreRestoreData* aData,
+                                              ErrorResult& aError) {
+  MOZ_DIAGNOSTIC_ASSERT(aData);
+
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetParentObject());
+  RefPtr<Promise> promise = Promise::Create(global, aError);
+  if (aError.Failed()) {
+    return;
+  }
+
+  if (NS_WARN_IF(NS_FAILED(SetHasRestoreData(true)))) {
+    aError.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return;
+  }
+
+  mRestoreState = new RestoreState();
+  mRestoreState->mData = aData;
+  mRestoreState->mPromise = promise;
+}
+
+already_AddRefed<Promise> CanonicalBrowsingContext::GetRestorePromise() {
+  if (mRestoreState) {
+    return do_AddRef(mRestoreState->mPromise);
+  }
+  return nullptr;
+}
+
+void CanonicalBrowsingContext::ClearRestoreState() {
+  if (!mRestoreState) {
+    MOZ_DIAGNOSTIC_ASSERT(!GetHasRestoreData());
+    return;
+  }
+  if (mRestoreState->mPromise) {
+    mRestoreState->mPromise->MaybeRejectWithUndefined();
+  }
+  mRestoreState = nullptr;
+  MOZ_ALWAYS_SUCCEEDS(SetHasRestoreData(false));
+}
+
+void CanonicalBrowsingContext::RequestRestoreTabContent(
+    WindowGlobalParent* aWindow) {
+  MOZ_DIAGNOSTIC_ASSERT(IsTop());
+
+  if (IsDiscarded() || !mRestoreState || !mRestoreState->mData) {
+    return;
+  }
+
+  CanonicalBrowsingContext* context = aWindow->GetBrowsingContext();
+  MOZ_DIAGNOSTIC_ASSERT(!context->IsDiscarded());
+
+  RefPtr<SessionStoreRestoreData> data =
+      mRestoreState->mData->FindDataForChild(context);
+
+  if (context->IsTop()) {
+    MOZ_DIAGNOSTIC_ASSERT(context == this);
+
+    // We need to wait until the appropriate load event has fired before we
+    // can "complete" the restore process, so if we're holding an empty data
+    // object, just resolve the promise immediately.
+    if (mRestoreState->mData->IsEmpty()) {
+      MOZ_DIAGNOSTIC_ASSERT(!data || data->IsEmpty());
+      mRestoreState->Resolve();
+      ClearRestoreState();
+      return;
+    }
+
+    // Since we're following load event order, we'll only arrive here for a
+    // toplevel context after we've already sent down data for all child frames,
+    // so it's safe to clear this reference now. The completion callback below
+    // relies on the mData field being null to determine if all requests have
+    // been sent out.
+    mRestoreState->ClearData();
+    MOZ_ALWAYS_SUCCEEDS(SetHasRestoreData(false));
+  }
+
+  if (data && !data->IsEmpty()) {
+    auto onTabRestoreComplete = [self = RefPtr{this},
+                                 state = RefPtr{mRestoreState}](auto) {
+      state->mResolves++;
+      if (!state->mData && state->mRequests == state->mResolves) {
+        state->Resolve();
+        if (state == self->mRestoreState) {
+          self->ClearRestoreState();
+        }
+      }
+    };
+
+    mRestoreState->mRequests++;
+
+    if (data->CanRestoreInto(aWindow->GetDocumentURI())) {
+      if (!aWindow->IsInProcess()) {
+        aWindow->SendRestoreTabContent(data, onTabRestoreComplete,
+                                       onTabRestoreComplete);
+        return;
+      }
+      data->RestoreInto(context);
+    }
+
+    // This must be called both when we're doing an in-process restore, and when
+    // we didn't do a restore at all due to a URL mismatch.
+    onTabRestoreComplete(true);
+  }
+}
+
+void CanonicalBrowsingContext::RestoreState::Resolve() {
+  MOZ_DIAGNOSTIC_ASSERT(mPromise);
+  mPromise->MaybeResolveWithUndefined();
+  mPromise = nullptr;
+}
+
+nsresult CanonicalBrowsingContext::WriteSessionStorageToSessionStore(
+    const nsTArray<SSCacheCopy>& aSesssionStorage, uint32_t aEpoch) {
+  nsCOMPtr<nsISessionStoreFunctions> funcs =
+      do_ImportModule("resource://gre/modules/SessionStoreFunctions.jsm");
+  if (!funcs) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIXPConnectWrappedJS> wrapped = do_QueryInterface(funcs);
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(wrapped->GetJSObjectGlobal())) {
+    return NS_ERROR_FAILURE;
+  }
+
+  JS::RootedValue key(jsapi.cx(), Top()->PermanentKey());
+
+  Record<nsCString, Record<nsString, nsString>> storage;
+  JS::RootedValue update(jsapi.cx());
+
+  if (!aSesssionStorage.IsEmpty()) {
+    SessionStoreUtils::ConstructSessionStorageValues(this, aSesssionStorage,
+                                                     storage);
+    if (!ToJSValue(jsapi.cx(), storage, &update)) {
+      return NS_ERROR_FAILURE;
+    }
+  } else {
+    update.setNull();
+  }
+
+  return funcs->UpdateSessionStoreForStorage(Top()->GetEmbedderElement(), this,
+                                             key, aEpoch, update);
+}
+
+void CanonicalBrowsingContext::UpdateSessionStoreSessionStorage(
+    const std::function<void()>& aDone) {
+  using DataPromise = BackgroundSessionStorageManager::DataPromise;
+  BackgroundSessionStorageManager::GetData(
+      this, StaticPrefs::browser_sessionstore_dom_storage_limit(),
+      /* aCancelSessionStoreTiemr = */ true)
+      ->Then(GetCurrentSerialEventTarget(), __func__,
+             [self = RefPtr{this}, aDone, epoch = GetSessionStoreEpoch()](
+                 const DataPromise::ResolveOrRejectValue& valueList) {
+               if (valueList.IsResolve()) {
+                 self->WriteSessionStorageToSessionStore(
+                     valueList.ResolveValue(), epoch);
+               }
+               aDone();
+             });
+}
+
+/* static */
+void CanonicalBrowsingContext::UpdateSessionStoreForStorage(
+    uint64_t aBrowsingContextId) {
+  RefPtr<CanonicalBrowsingContext> browsingContext = Get(aBrowsingContextId);
+
+  if (!browsingContext) {
+    return;
+  }
+
+  browsingContext->UpdateSessionStoreSessionStorage([]() {});
+}
+
+void CanonicalBrowsingContext::MaybeScheduleSessionStoreUpdate() {
+  if (!IsTop()) {
+    Top()->MaybeScheduleSessionStoreUpdate();
+    return;
+  }
+
+  if (IsInBFCache()) {
+    return;
+  }
+
+  if (mSessionStoreSessionStorageUpdateTimer) {
+    return;
+  }
+
+  if (!StaticPrefs::browser_sessionstore_debug_no_auto_updates()) {
+    auto result = NS_NewTimerWithFuncCallback(
+        [](nsITimer*, void* aClosure) {
+          auto* context = static_cast<CanonicalBrowsingContext*>(aClosure);
+          context->UpdateSessionStoreSessionStorage([]() {});
+        },
+        this, StaticPrefs::browser_sessionstore_interval(),
+        nsITimer::TYPE_ONE_SHOT,
+        "CanonicalBrowsingContext::MaybeScheduleSessionStoreUpdate");
+
+    if (result.isErr()) {
+      return;
+    }
+
+    mSessionStoreSessionStorageUpdateTimer = result.unwrap();
+  }
+}
+
+void CanonicalBrowsingContext::CancelSessionStoreUpdate() {
+  if (mSessionStoreSessionStorageUpdateTimer) {
+    mSessionStoreSessionStorageUpdateTimer->Cancel();
+    mSessionStoreSessionStorageUpdateTimer = nullptr;
+  }
+}
+
 void CanonicalBrowsingContext::SetContainerFeaturePolicy(
     FeaturePolicy* aContainerFeaturePolicy) {
   mContainerFeaturePolicy = aContainerFeaturePolicy;
@@ -1681,8 +2311,230 @@ void CanonicalBrowsingContext::SetCrossGroupOpenerId(uint64_t aOpenerId) {
   mCrossGroupOpenerId = aOpenerId;
 }
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(CanonicalBrowsingContext, BrowsingContext,
-                                   mSessionHistory, mContainerFeaturePolicy)
+auto CanonicalBrowsingContext::FindUnloadingHost(uint64_t aChildID)
+    -> nsTArray<UnloadingHost>::iterator {
+  return std::find_if(
+      mUnloadingHosts.begin(), mUnloadingHosts.end(),
+      [&](const auto& host) { return host.mChildID == aChildID; });
+}
+
+void CanonicalBrowsingContext::ClearUnloadingHost(uint64_t aChildID) {
+  // Notify any callbacks which were waiting for the host to finish unloading
+  // that it has.
+  auto found = FindUnloadingHost(aChildID);
+  if (found != mUnloadingHosts.end()) {
+    auto callbacks = std::move(found->mCallbacks);
+    mUnloadingHosts.RemoveElementAt(found);
+    for (const auto& callback : callbacks) {
+      callback();
+    }
+  }
+}
+
+void CanonicalBrowsingContext::StartUnloadingHost(uint64_t aChildID) {
+  MOZ_DIAGNOSTIC_ASSERT(FindUnloadingHost(aChildID) == mUnloadingHosts.end());
+  mUnloadingHosts.AppendElement(UnloadingHost{aChildID, {}});
+}
+
+void CanonicalBrowsingContext::BrowserParentDestroyed(
+    BrowserParent* aBrowserParent, bool aAbnormalShutdown) {
+  ClearUnloadingHost(aBrowserParent->Manager()->ChildID());
+
+  // Handling specific to when the current BrowserParent has been destroyed.
+  if (mCurrentBrowserParent == aBrowserParent) {
+    mCurrentBrowserParent = nullptr;
+
+    // If this BrowserParent is for a subframe, attempt to recover from a
+    // subframe crash by rendering the subframe crashed page in the embedding
+    // content.
+    if (aAbnormalShutdown) {
+      ShowSubframeCrashedUI(aBrowserParent->GetBrowserBridgeParent());
+    }
+  }
+}
+
+void CanonicalBrowsingContext::ShowSubframeCrashedUI(
+    BrowserBridgeParent* aBridge) {
+  if (!aBridge || IsDiscarded() || !aBridge->CanSend()) {
+    return;
+  }
+
+  MOZ_DIAGNOSTIC_ASSERT(!aBridge->GetBrowsingContext() ||
+                        aBridge->GetBrowsingContext() == this);
+
+  // There is no longer a current inner window within this
+  // BrowsingContext, update the `CurrentInnerWindowId` field to reflect
+  // this.
+  MOZ_ALWAYS_SUCCEEDS(SetCurrentInnerWindowId(0));
+
+  // The owning process will now be the embedder to render the subframe
+  // crashed page, switch ownership back over.
+  SetOwnerProcessId(aBridge->Manager()->Manager()->ChildID());
+  SetCurrentBrowserParent(aBridge->Manager());
+
+  Unused << aBridge->SendSubFrameCrashed();
+}
+
+static void LogBFCacheBlockingForDoc(BrowsingContext* aBrowsingContext,
+                                     uint16_t aBFCacheCombo, bool aIsSubDoc) {
+  if (aIsSubDoc) {
+    nsAutoCString uri("[no uri]");
+    nsCOMPtr<nsIURI> currentURI =
+        aBrowsingContext->Canonical()->GetCurrentURI();
+    if (currentURI) {
+      uri = currentURI->GetSpecOrDefault();
+    }
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug,
+            (" ** Blocked for document %s", uri.get()));
+  }
+  if (aBFCacheCombo & BFCacheStatus::EVENT_HANDLING_SUPPRESSED) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug,
+            (" * event handling suppression"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::SUSPENDED) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * suspended Window"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::UNLOAD_LISTENER) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug,
+            (" * beforeunload or unload listener"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::REQUEST) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * requests in the loadgroup"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::ACTIVE_GET_USER_MEDIA) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * GetUserMedia"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::ACTIVE_PEER_CONNECTION) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * PeerConnection"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::CONTAINS_EME_CONTENT) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * EME content"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::CONTAINS_MSE_CONTENT) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * MSE use"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::HAS_ACTIVE_SPEECH_SYNTHESIS) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * Speech use"));
+  }
+  if (aBFCacheCombo & BFCacheStatus::HAS_USED_VR) {
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * used VR"));
+  }
+}
+
+bool CanonicalBrowsingContext::AllowedInBFCache(
+    const Maybe<uint64_t>& aChannelId) {
+  if (MOZ_UNLIKELY(MOZ_LOG_TEST(gSHIPBFCacheLog, LogLevel::Debug))) {
+    nsAutoCString uri("[no uri]");
+    nsCOMPtr<nsIURI> currentURI = GetCurrentURI();
+    if (currentURI) {
+      uri = currentURI->GetSpecOrDefault();
+    }
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, ("Checking %s", uri.get()));
+  }
+
+  if (IsInProcess()) {
+    return false;
+  }
+
+  uint16_t bfcacheCombo = 0;
+  if (mRestoreState) {
+    bfcacheCombo |= BFCacheStatus::RESTORING;
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * during session restore"));
+  }
+
+  if (Group()->Toplevels().Length() > 1) {
+    bfcacheCombo |= BFCacheStatus::NOT_ONLY_TOPLEVEL_IN_BCG;
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug,
+            (" * auxiliary BrowsingContexts"));
+  }
+
+  // There are not a lot of about:* pages that are allowed to load in
+  // subframes, so it's OK to allow those few about:* pages enter BFCache.
+  MOZ_ASSERT(IsTop(), "Trying to put a non top level BC into BFCache");
+
+  WindowGlobalParent* wgp = GetCurrentWindowGlobal();
+  if (wgp && wgp->GetDocumentURI()) {
+    nsCOMPtr<nsIURI> currentURI = wgp->GetDocumentURI();
+    // Exempt about:* pages from bfcache, with the exception of about:blank
+    if (currentURI->SchemeIs("about") &&
+        !currentURI->GetSpecOrDefault().EqualsLiteral("about:blank")) {
+      bfcacheCombo |= BFCacheStatus::ABOUT_PAGE;
+      MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug, (" * about:* page"));
+    }
+  }
+
+  // For telemetry we're collecting all the flags for all the BCs hanging
+  // from this top-level BC.
+  PreOrderWalk([&](BrowsingContext* aBrowsingContext) {
+    WindowGlobalParent* wgp =
+        aBrowsingContext->Canonical()->GetCurrentWindowGlobal();
+    uint16_t subDocBFCacheCombo = wgp ? wgp->GetBFCacheStatus() : 0;
+    if (wgp) {
+      const Maybe<uint64_t>& singleChannelId = wgp->GetSingleChannelId();
+      if (singleChannelId.isSome()) {
+        if (singleChannelId.value() == 0 || aChannelId.isNothing() ||
+            singleChannelId.value() != aChannelId.value()) {
+          subDocBFCacheCombo |= BFCacheStatus::REQUEST;
+        }
+      }
+    }
+
+    if (MOZ_UNLIKELY(MOZ_LOG_TEST(gSHIPBFCacheLog, LogLevel::Debug))) {
+      LogBFCacheBlockingForDoc(aBrowsingContext, subDocBFCacheCombo,
+                               aBrowsingContext != this);
+    }
+
+    bfcacheCombo |= subDocBFCacheCombo;
+  });
+
+  nsDocShell::ReportBFCacheComboTelemetry(bfcacheCombo);
+  if (MOZ_UNLIKELY(MOZ_LOG_TEST(gSHIPBFCacheLog, LogLevel::Debug))) {
+    nsAutoCString uri("[no uri]");
+    nsCOMPtr<nsIURI> currentURI = GetCurrentURI();
+    if (currentURI) {
+      uri = currentURI->GetSpecOrDefault();
+    }
+    MOZ_LOG(gSHIPBFCacheLog, LogLevel::Debug,
+            (" +> %s %s be blocked from going into the BFCache", uri.get(),
+             bfcacheCombo == 0 ? "shouldn't" : "should"));
+  }
+
+  if (StaticPrefs::docshell_shistory_bfcache_allow_unload_listeners()) {
+    bfcacheCombo &= ~BFCacheStatus::UNLOAD_LISTENER;
+  }
+
+  return bfcacheCombo == 0;
+}
+
+void CanonicalBrowsingContext::SetTouchEventsOverride(
+    dom::TouchEventsOverride aOverride, ErrorResult& aRv) {
+  SetTouchEventsOverrideInternal(aOverride, aRv);
+}
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(CanonicalBrowsingContext)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(CanonicalBrowsingContext,
+                                                BrowsingContext)
+  tmp->mPermanentKey.setNull();
+  if (tmp->mSessionHistory) {
+    tmp->mSessionHistory->SetBrowsingContext(nullptr);
+  }
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mSessionHistory, mContainerFeaturePolicy,
+                                  mCurrentBrowserParent, mWebProgress,
+                                  mSessionStoreSessionStorageUpdateTimer)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(CanonicalBrowsingContext,
+                                                  BrowsingContext)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSessionHistory, mContainerFeaturePolicy,
+                                    mCurrentBrowserParent, mWebProgress,
+                                    mSessionStoreSessionStorageUpdateTimer)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(CanonicalBrowsingContext,
+                                               BrowsingContext)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mPermanentKey)
+NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_ADDREF_INHERITED(CanonicalBrowsingContext, BrowsingContext)
 NS_IMPL_RELEASE_INHERITED(CanonicalBrowsingContext, BrowsingContext)

@@ -54,16 +54,19 @@ UNIFIED_SOURCES += [
     "SocketProcessParent.cpp",
 ]
 
+PREPROCESSED_IPDL_SOURCES += [
+    "PNecko.ipdl",
+    "PSocketProcess.ipdl",
+]
+
 IPDL_SOURCES = [
     "NeckoChannelParams.ipdlh",
     "PDataChannel.ipdl",
     "PDocumentChannel.ipdl",
     "PFileChannel.ipdl",
     "PInputChannelThrottleQueue.ipdl",
-    "PNecko.ipdl",
     "PProxyConfigLookup.ipdl",
     "PSimpleChannel.ipdl",
-    "PSocketProcess.ipdl",
     "PSocketProcessBridge.ipdl",
 ]
 

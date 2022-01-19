@@ -13,12 +13,12 @@ add_task(async function init() {
   // fired.
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser);
 
-  aliasEngine = await Services.search.addEngineWithDetails("Test", {
-    alias: ALIAS,
-    template: "http://example.com/?search={searchTerms}",
+  await SearchTestUtils.installSearchExtension({
+    keyword: ALIAS,
   });
+  aliasEngine = Services.search.getEngineByName("Example");
+
   registerCleanupFunction(async function() {
-    await Services.search.removeEngine(aliasEngine);
     BrowserTestUtils.removeTab(tab);
     gURLBar.handleRevert();
   });
@@ -191,14 +191,14 @@ add_task(async function searchWithAlias() {
   await UrlbarTestUtils.promisePopupOpen(window, async () =>
     gURLBar.search(`${ALIAS} test`, {
       searchEngine: aliasEngine,
-      searchModeEntry: "handoff",
+      searchModeEntry: "topsites_urlbar",
     })
   );
   Assert.ok(gURLBar.hasAttribute("focused"), "Urlbar is focused");
 
   await UrlbarTestUtils.assertSearchMode(window, {
     engineName: aliasEngine.name,
-    entry: "handoff",
+    entry: "topsites_urlbar",
   });
   await assertUrlbarValue("test");
   assertOneOffButtonsVisible(true);

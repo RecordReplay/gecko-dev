@@ -60,9 +60,9 @@ void AudioStreamTrack::SetReadyState(MediaStreamTrackState aState) {
   if (!mCrossGraphs.IsEmpty() && !Ended() &&
       mReadyState == MediaStreamTrackState::Live &&
       aState == MediaStreamTrackState::Ended) {
-    for (auto iter = mCrossGraphs.Iter(); !iter.Done(); iter.Next()) {
-      (*iter.Data())->Destroy();
-      (*iter.Data()).reset();
+    for (const auto& data : mCrossGraphs.Values()) {
+      (*data)->Destroy();
+      data->reset();
     }
     mCrossGraphs.Clear();
   }
@@ -92,7 +92,7 @@ RefPtr<GenericPromise> AudioStreamTrack::SetAudioOutputDevice(
   }
 
   // We are setting a non-default output device.
-  UniquePtr<CrossGraphPort>& crossGraphPtr = *mCrossGraphs.LookupOrAdd(key);
+  UniquePtr<CrossGraphPort>& crossGraphPtr = *mCrossGraphs.GetOrInsertNew(key);
   if (crossGraphPtr) {
     // This key already has a non-default output device set. Destroy it.
     crossGraphPtr->Destroy();

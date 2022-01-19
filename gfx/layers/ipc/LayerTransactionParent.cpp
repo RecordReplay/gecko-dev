@@ -38,7 +38,8 @@
 #include "nsPoint.h"          // for nsPoint
 #include "nsTArray.h"         // for nsTArray, nsTArray_Impl, etc
 #include "TreeTraversal.h"    // for ForEachNode
-#include "GeckoProfiler.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/layers/TextureHost.h"
 #include "mozilla/layers/AsyncCompositionManager.h"
 
@@ -74,8 +75,7 @@ void LayerTransactionParent::SetLayerManager(
     return;
   }
   mLayerManager = aLayerManager;
-  for (auto iter = mLayerMap.Iter(); !iter.Done(); iter.Next()) {
-    auto layer = iter.Data();
+  for (const auto& layer : mLayerMap.Values()) {
     if (mAnimStorage && layer->GetCompositorAnimationsId()) {
       mAnimStorage->ClearById(layer->GetCompositorAnimationsId());
     }
@@ -103,8 +103,7 @@ void LayerTransactionParent::Destroy() {
   }
   mDestroyed = true;
   if (mAnimStorage) {
-    for (auto iter = mLayerMap.Iter(); !iter.Done(); iter.Next()) {
-      auto layer = iter.Data();
+    for (const auto& layer : mLayerMap.Values()) {
       if (layer->GetCompositorAnimationsId()) {
         mAnimStorage->ClearById(layer->GetCompositorAnimationsId());
       }
@@ -890,11 +889,11 @@ void LayerTransactionParent::SetPendingTransactionId(
       aTxnEndTime, aFwdTime, aURL, aContainsSVG});
 }
 
-TransactionId LayerTransactionParent::FlushTransactionId(
-    const VsyncId& aCompositeId, TimeStamp& aCompositeEnd) {
-  TransactionId id;
+void LayerTransactionParent::FlushPendingTransactions(
+    const VsyncId& aCompositeId, TimeStamp& aCompositeEnd,
+    nsTArray<TransactionId>& aOutTransactions) {
   for (auto& transaction : mPendingTransactions) {
-    id = transaction.mId;
+    aOutTransactions.AppendElement(transaction.mId);
     if (mId.IsValid() && transaction.mId.IsValid() && !mVsyncRate.IsZero()) {
       RecordContentFrameTime(
           transaction.mTxnVsyncId, transaction.mVsyncStartTime,
@@ -926,7 +925,6 @@ TransactionId LayerTransactionParent::FlushTransactionId(
   }
 
   mPendingTransactions.Clear();
-  return id;
 }
 
 void LayerTransactionParent::SendAsyncMessage(
@@ -952,12 +950,13 @@ bool LayerTransactionParent::BindLayerToHandle(RefPtr<Layer> aLayer,
   if (!aHandle || !aLayer) {
     return false;
   }
-  auto entry = mLayerMap.LookupForAdd(aHandle.Value());
-  if (entry) {
-    return false;
-  }
-  entry.OrInsert([&aLayer]() { return aLayer; });
-  return true;
+  return mLayerMap.WithEntryHandle(aHandle.Value(), [&](auto&& entry) {
+    if (entry) {
+      return false;
+    }
+    entry.Insert(std::move(aLayer));
+    return true;
+  });
 }
 
 Layer* LayerTransactionParent::AsLayer(const LayerHandle& aHandle) {

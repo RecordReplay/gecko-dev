@@ -886,7 +886,7 @@ class CCacheStats(object):
 
     DIRECTORY_DESCRIPTION = "cache directory"
     PRIMARY_CONFIG_DESCRIPTION = "primary config"
-    SECONDARY_CONFIG_DESCRIPTION = "secondary config      (readonly)"
+    SECONDARY_CONFIG_DESCRIPTION = "secondary config"
     ABSOLUTE_KEYS = {"cache_files", "cache_size", "cache_max_size"}
     FORMAT_KEYS = {"cache_size", "cache_max_size"}
 
@@ -919,7 +919,8 @@ class CCacheStats(object):
             )
         elif line.startswith(self.SECONDARY_CONFIG_DESCRIPTION):
             self.secondary_config = self._strip_prefix(
-                line, self.SECONDARY_CONFIG_DESCRIPTION
+                self._strip_prefix(line, self.SECONDARY_CONFIG_DESCRIPTION),
+                "(readonly)",
             )
         else:
             for stat_key, stat_description in self.STATS_KEYS:
@@ -1499,7 +1500,6 @@ class BuildDriver(MozbuildObject):
         line_handler = line_handler or on_line
 
         append_env = dict(append_env or {})
-        append_env["MAKE"] = self._make_path()
 
         # Back when client.mk was used, `mk_add_options "export ..."` lines
         # from the mozconfig would spill into the configure environment, so

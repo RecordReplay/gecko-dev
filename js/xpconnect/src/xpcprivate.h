@@ -137,7 +137,6 @@
 #include "nsHashKeys.h"
 #include "nsWrapperCache.h"
 #include "nsStringBuffer.h"
-#include "nsDataHashtable.h"
 #include "nsDeque.h"
 
 #include "nsIScriptSecurityManager.h"
@@ -162,6 +161,7 @@
 
 namespace mozilla {
 namespace dom {
+class AutoEntryScript;
 class Exception;
 }  // namespace dom
 }  // namespace mozilla
@@ -366,8 +366,6 @@ class XPCJSContext final : public mozilla::CycleCollectedJSContext,
     IDX_CONSTRUCTOR = 0,
     IDX_TO_STRING,
     IDX_TO_SOURCE,
-    IDX_LAST_RESULT,
-    IDX_RETURN_CODE,
     IDX_VALUE,
     IDX_QUERY_INTERFACE,
     IDX_COMPONENTS,
@@ -376,16 +374,10 @@ class XPCJSContext final : public mozilla::CycleCollectedJSContext,
     IDX_CR,
     IDX_CU,
     IDX_WRAPPED_JSOBJECT,
-    IDX_OBJECT,
-    IDX_FUNCTION,
     IDX_PROTOTYPE,
-    IDX_CREATE_INSTANCE,
-    IDX_ITEM,
-    IDX_PROTO,
     IDX_EVAL,
     IDX_CONTROLLERS,
     IDX_CONTROLLERS_CLASS,
-    IDX_REALFRAMEELEMENT,
     IDX_LENGTH,
     IDX_NAME,
     IDX_UNDEFINED,
@@ -395,6 +387,7 @@ class XPCJSContext final : public mozilla::CycleCollectedJSContext,
     IDX_COLUMNNUMBER,
     IDX_STACK,
     IDX_MESSAGE,
+    IDX_CAUSE,
     IDX_ERRORS,
     IDX_LASTINDEX,
     IDX_THEN,
@@ -2260,10 +2253,8 @@ struct GlobalProperties {
   bool indexedDB : 1;
   bool isSecureContext : 1;
   bool rtcIdentityProvider : 1;
-#ifdef MOZ_GLEAN
   bool glean : 1;
   bool gleanPings : 1;
-#endif
 
  private:
   bool Define(JSContext* cx, JS::HandleObject obj);

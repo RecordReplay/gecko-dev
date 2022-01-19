@@ -44,6 +44,7 @@ macro_rules! try_opt {
 }
 
 mod android;
+mod browser;
 mod build;
 mod capabilities;
 mod command;
@@ -79,10 +80,7 @@ impl FatalError {
     }
 
     fn help_included(&self) -> bool {
-        match *self {
-            FatalError::Parsing(_) => true,
-            _ => false,
-        }
+        matches!(*self, FatalError::Parsing(_))
     }
 }
 
@@ -130,6 +128,7 @@ enum Operation {
         log_level: Option<Level>,
         address: SocketAddr,
         settings: MarionetteSettings,
+        deprecated_storage_arg: bool,
     },
 }
 
@@ -159,7 +158,8 @@ fn parse_args(app: &mut App) -> ProgramResult<Operation> {
         Err(e) => usage!("{}: {}:{}", e, host, port),
     };
 
-    let android_storage = value_t!(matches, "android_storage", AndroidStorageInput)?;
+    let android_storage = value_t!(matches, "android_storage", AndroidStorageInput)
+        .unwrap_or(AndroidStorageInput::Auto);
 
     let binary = matches.value_of("binary").map(PathBuf::from);
 
@@ -189,6 +189,7 @@ fn parse_args(app: &mut App) -> ProgramResult<Operation> {
             log_level,
             address,
             settings,
+            deprecated_storage_arg: matches.is_present("android_storage"),
         }
     };
 
@@ -204,12 +205,17 @@ fn inner_main(app: &mut App) -> ProgramResult<()> {
             log_level,
             address,
             settings,
+            deprecated_storage_arg,
         } => {
             if let Some(ref level) = log_level {
                 logging::init_with_level(*level).unwrap();
             } else {
                 logging::init().unwrap();
             }
+
+            if deprecated_storage_arg {
+                warn!("--android-storage argument is deprecated and will be removed soon.");
+            };
 
             let handler = MarionetteHandler::new(settings);
             let listening = webdriver::server::start(address, handler, extension_routes())?;
@@ -325,9 +331,8 @@ fn make_app<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("android_storage")
                 .long("android-storage")
                 .possible_values(&["auto", "app", "internal", "sdcard"])
-                .default_value("auto")
                 .value_name("ANDROID_STORAGE")
-                .help("Selects storage location to be used for test data."),
+                .help("Selects storage location to be used for test data (deprecated)."),
         )
 }
 

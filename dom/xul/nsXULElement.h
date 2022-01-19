@@ -364,7 +364,7 @@ class nsXULElement : public nsStyledElement {
   virtual void DestroyContent() override;
   virtual void DoneAddingChildren(bool aHaveNotified) override;
 
-#ifdef DEBUG
+#ifdef MOZ_DOM_LIST
   virtual void List(FILE* out, int32_t aIndent) const override;
   virtual void DumpContent(FILE* out, int32_t aIndent,
                            bool aDumpAll) const override {}
@@ -491,10 +491,6 @@ class nsXULElement : public nsStyledElement {
   void SetSrc(const nsAString& aValue, mozilla::ErrorResult& rv) {
     SetXULAttr(nsGkAtoms::src, aValue, rv);
   }
-  bool AllowEvents() const { return BoolAttrIsTrue(nsGkAtoms::allowevents); }
-  void SetAllowEvents(bool aAllowEvents) {
-    SetXULBoolAttr(nsGkAtoms::allowevents, aAllowEvents);
-  }
   nsIControllers* GetControllers(mozilla::ErrorResult& rv);
   void Click(mozilla::dom::CallerType aCallerType);
   MOZ_CAN_RUN_SCRIPT_BOUNDARY void DoCommand();
@@ -507,8 +503,6 @@ class nsXULElement : public nsStyledElement {
   }
 
   bool IsInteractiveHTMLContent() const override;
-
-  void MaybeUpdatePrivateLifetime();
 
  protected:
   ~nsXULElement();
@@ -562,7 +556,8 @@ class nsXULElement : public nsStyledElement {
     return slots ? slots->mControllers.get() : nullptr;
   }
 
-  void UnregisterAccessKey(const nsAString& aOldValue);
+  bool SupportsAccessKey() const;
+  void RegUnRegAccessKey(bool aDoReg) override;
   bool BoolAttrIsTrue(nsAtom* aName) const;
 
   friend nsXULElement* NS_NewBasicXULElement(

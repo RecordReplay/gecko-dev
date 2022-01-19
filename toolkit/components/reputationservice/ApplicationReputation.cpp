@@ -148,6 +148,7 @@ mozilla::LazyLogModule ApplicationReputationService::prlog(
 const char* const ApplicationReputationService::kNonBinaryExecutables[] = {
     ".ad",
     ".air",
+    ".inetloc",
 };
 
 // Items that should be submitted for application reputation checks that users
@@ -264,6 +265,7 @@ const char* const ApplicationReputationService::kBinaryFileExtensions[] = {
     ".img",      // Mac disk image
     ".imgpart",  // Mac disk image
     //".inf", exec // Windows installer
+    //".inetloc", exec  // Apple finder internet location data file
     ".ini",  // Generic config file
     //".ins", exec // IIS config
     ".internetconnect",  // Configuration file for Apple system
@@ -272,7 +274,6 @@ const char* const ApplicationReputationService::kBinaryFileExtensions[] = {
     //".isp", exec // IIS config
     //".isu", // InstallShield
     //".jar", exec // Java
-    //".jnlp", exec // Java
     //".job", // Windows
     //".jpg",
     //".jpeg",
@@ -876,7 +877,7 @@ PendingDBLookup::HandleEvent(const nsACString& tables) {
 }
 
 NS_IMPL_ISUPPORTS(PendingLookup, nsIStreamListener, nsIRequestObserver,
-                  nsIObserver, nsISupportsWeakReference)
+                  nsIObserver, nsISupportsWeakReference, nsITimerCallback)
 
 PendingLookup::PendingLookup(nsIApplicationReputationQuery* aQuery,
                              nsIApplicationReputationCallback* aCallback)
@@ -1331,8 +1332,9 @@ nsresult PendingLookup::GetStrippedSpec(nsIURI* aUri, nsACString& escaped) {
          "[this = %p]",
          PromiseFlatCString(escaped).get(), this));
     return NS_OK;
+  }
 
-  } else if (escaped.EqualsLiteral("data")) {
+  if (escaped.EqualsLiteral("data")) {
     // Replace URI with "data:<everything before comma>,SHA256(<whole URI>)"
     aUri->GetSpec(escaped);
     int32_t comma = escaped.FindChar(',');
@@ -1630,38 +1632,6 @@ nsresult PendingLookup::SendRemoteQueryInternal(Reason& aReason) {
          this));
   }
 
-  // Look for truncated hashes (see bug 1190020)
-  const auto originalHashLength = sha256Hash.Length();
-  if (originalHashLength == 0) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            OriginalHashEmpty);
-  } else if (originalHashLength < 32) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            OriginalHashTooShort);
-  } else if (originalHashLength > 32) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            OriginalHashTooLong);
-  } else if (!mRequest.has_digests()) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            MissingDigest);
-  } else if (!mRequest.digests().has_sha256()) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            MissingSha256);
-  } else if (mRequest.digests().sha256().size() != originalHashLength) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            InvalidSha256);
-  } else {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_APPLICATION_REPUTATION_HASH_LENGTH::
-            ValidHash);
-  }
-
   // Serialize the protocol buffer to a string. This can only fail if we are
   // out of memory, or if the protocol buffer req is missing required fields
   // (only the URL for now).
@@ -1735,7 +1705,7 @@ PendingLookup::Notify(nsITimer* aTimer) {
   MOZ_ASSERT(aTimer == mTimeoutTimer);
   Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_REMOTE_LOOKUP_TIMEOUT,
              true);
-  mChannel->Cancel(NS_ERROR_NET_TIMEOUT);
+  mChannel->Cancel(NS_ERROR_NET_TIMEOUT_EXTERNAL);
   mTimeoutTimer->Cancel();
   return NS_OK;
 }
@@ -1783,7 +1753,7 @@ NS_IMETHODIMP
 PendingLookup::OnStopRequest(nsIRequest* aRequest, nsresult aResult) {
   NS_ENSURE_STATE(mCallback);
 
-  if (aResult != NS_ERROR_NET_TIMEOUT) {
+  if (aResult != NS_ERROR_NET_TIMEOUT_EXTERNAL) {
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_REMOTE_LOOKUP_TIMEOUT,
                false);
 
@@ -1976,7 +1946,6 @@ nsresult ApplicationReputationService::QueryReputationInternal(
 
   // Create a new pending lookup and start the call chain.
   RefPtr<PendingLookup> lookup(new PendingLookup(aQuery, aCallback));
-  NS_ENSURE_STATE(lookup);
 
   // Add an observer for shutdown
   nsCOMPtr<nsIObserverService> observerService =

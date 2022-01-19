@@ -17,7 +17,7 @@ add_task(async function testCleanFlow() {
   is(Preferences.get(prefs.BREADCRUMB_PREF), true, "Breadcrumb saved.");
   is(
     Preferences.get(prefs.TRR_SELECT_URI_PREF),
-    "https://dummytrr.com/query",
+    "https://example.com/dns-query",
     "TRR selection complete."
   );
   await checkTRRSelectionTelemetry();
@@ -62,7 +62,8 @@ add_task(async function testCleanFlow() {
   // Restart the controller for good measure.
   await restartDoHController();
   ensureNoTRRSelectionTelemetry();
-  await ensureNoTRRModeChange(0);
+  // The mode technically changes from undefined/empty to 0 here.
+  await ensureTRRMode(0);
   await checkHeuristicsTelemetry("disable_doh", "startup");
 
   // Set a passing environment and simulate a network change.

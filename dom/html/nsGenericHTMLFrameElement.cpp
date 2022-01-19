@@ -13,9 +13,9 @@
 #include "mozilla/dom/WindowProxyHolder.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/ErrorResult.h"
-#include "GeckoProfiler.h"
 #include "nsAttrValueInlines.h"
 #include "nsContentUtils.h"
 #include "nsIDocShell.h"
@@ -244,8 +244,8 @@ nsresult nsGenericHTMLFrameElement::AfterSetAttr(
     if (aName == nsGkAtoms::scrolling) {
       if (mFrameLoader) {
         ScrollbarPreference pref = MapScrollingAttribute(aValue);
-        if (nsIDocShell* docshell = mFrameLoader->GetExistingDocShell()) {
-          nsDocShell::Cast(docshell)->SetScrollbarPreference(pref);
+        if (nsDocShell* docshell = mFrameLoader->GetExistingDocShell()) {
+          docshell->SetScrollbarPreference(pref);
         } else if (auto* child = mFrameLoader->GetBrowserBridgeChild()) {
           // NOTE(emilio): We intentionally don't deal with the
           // GetBrowserParent() case, and only deal with the fission iframe

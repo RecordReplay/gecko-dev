@@ -20,11 +20,11 @@ namespace js {
 
 /* static */ inline ArrayObject* ArrayObject::createArrayInternal(
     JSContext* cx, gc::AllocKind kind, gc::InitialHeap heap, HandleShape shape,
-    HandleObjectGroup group, AutoSetNewObjectMetadata&) {
-  const JSClass* clasp = group->clasp();
-  MOZ_ASSERT(shape && group);
-  MOZ_ASSERT(clasp == shape->getObjectClass());
+    AutoSetNewObjectMetadata&, gc::AllocSite* site) {
+  const JSClass* clasp = shape->getObjectClass();
+  MOZ_ASSERT(shape);
   MOZ_ASSERT(clasp == &ArrayObject::class_);
+  MOZ_ASSERT(clasp->isNativeObject());
   MOZ_ASSERT_IF(clasp->hasFinalize(), heap == gc::TenuredHeap);
 
   // Arrays can use their fixed slots to store elements, so can't have shapes
@@ -32,13 +32,13 @@ namespace js {
   MOZ_ASSERT(shape->numFixedSlots() == 0);
 
   size_t nDynamicSlots = calculateDynamicSlots(0, shape->slotSpan(), clasp);
-  JSObject* obj = js::AllocateObject(cx, kind, nDynamicSlots, heap, clasp);
+  JSObject* obj =
+      js::AllocateObject(cx, kind, nDynamicSlots, heap, clasp, site);
   if (!obj) {
     return nullptr;
   }
 
   ArrayObject* aobj = static_cast<ArrayObject*>(obj);
-  aobj->initGroup(group);
   aobj->initShape(shape);
   // NOTE: Dynamic slots are created internally by Allocate<JSObject>.
   if (!nDynamicSlots) {
@@ -65,10 +65,8 @@ namespace js {
 
 /* static */ inline ArrayObject* ArrayObject::createArray(
     JSContext* cx, gc::AllocKind kind, gc::InitialHeap heap, HandleShape shape,
-    HandleObjectGroup group, uint32_t length,
-    AutoSetNewObjectMetadata& metadata) {
-  ArrayObject* obj =
-      createArrayInternal(cx, kind, heap, shape, group, metadata);
+    uint32_t length, AutoSetNewObjectMetadata& metadata, gc::AllocSite* site) {
+  ArrayObject* obj = createArrayInternal(cx, kind, heap, shape, metadata, site);
   if (!obj) {
     return nullptr;
   }

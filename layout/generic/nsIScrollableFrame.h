@@ -379,7 +379,13 @@ class nsIScrollableFrame : public nsIScrollbarMediator {
    * This basically means that we should allocate resources in the
    * expectation that scrolling is going to happen.
    */
-  virtual bool IsScrollingActive(nsDisplayListBuilder* aBuilder) = 0;
+  virtual bool IsScrollingActive() = 0;
+
+  /**
+   * The same as IsScrollingActive but minimal display ports are not considered
+   * active.
+   */
+  virtual bool IsScrollingActiveNotMinimalDisplayPort() = 0;
 
   /**
    * Returns true if this scroll frame might be scrolled
@@ -387,11 +393,6 @@ class nsIScrollableFrame : public nsIScrollbarMediator {
    */
   virtual bool IsMaybeAsynchronouslyScrolled() = 0;
 
-  /**
-   * Same as the above except doesn't take into account will-change budget,
-   * which means that it can be called during display list building.
-   */
-  virtual bool IsMaybeScrollingActive() const = 0;
   /**
    * Call this when the layer(s) induced by active scrolling are being
    * completely redrawn.
@@ -495,6 +496,11 @@ class nsIScrollableFrame : public nsIScrollbarMediator {
    * Mark the scrollbar frames for reflow.
    */
   virtual void MarkScrollbarsDirtyForReflow() const = 0;
+
+  /**
+   * Invalidate the scrollbar after the marks have been changed.
+   */
+  virtual void InvalidateVerticalScrollbar() const = 0;
 
   virtual void UpdateScrollbarPosition() = 0;
 

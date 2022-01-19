@@ -18,8 +18,8 @@ const MAX_SUGGESTIONS = 15;
  * Converts any input field into a document search box.
  *
  * @param {InspectorPanel} inspector
- *        The InspectorPanel whose `walker` attribute should be used for
- *        document traversal.
+ *        The InspectorPanel to access the inspector commands for
+ *        search and document traversal.
  * @param {DOMNode} input
  *        The input element to which the panel will be attached and from where
  *        search input will be taken.
@@ -55,10 +55,6 @@ function InspectorSearch(inspector, input, clearBtn) {
 exports.InspectorSearch = InspectorSearch;
 
 InspectorSearch.prototype = {
-  get walker() {
-    return this.inspector.walker;
-  },
-
   destroy: function() {
     this.searchBox.removeEventListener("keydown", this._onKeyDown, true);
     this.searchBox.removeEventListener("input", this._onInput, true);
@@ -86,7 +82,12 @@ InspectorSearch.prototype = {
       return;
     }
 
-    const res = await this.walker.search(query, { reverse });
+    const res = await this.inspector.commands.inspectorCommand.findNextNode(
+      query,
+      {
+        reverse,
+      }
+    );
 
     // Value has changed since we started this request, we're done.
     if (query !== this.searchBox.value) {
@@ -98,7 +99,6 @@ InspectorSearch.prototype = {
         reason: "inspectorsearch",
       });
       searchContainer.classList.remove("devtools-searchbox-no-match");
-
       res.query = query;
       this.emit("search-result", res);
     } else {
@@ -146,8 +146,8 @@ InspectorSearch.prototype = {
  *
  * @constructor
  * @param InspectorPanel inspector
- *        The InspectorPanel whose `walker` attribute should be used for
- *        document traversal.
+ *        The InspectorPanel to access the inspector commands for
+ *        search and document traversal.
  * @param nsiInputElement inputNode
  *        The input element to which the panel will be attached and from where
  *        search input will be taken.
@@ -513,33 +513,10 @@ SelectorAutocompleter.prototype = {
       query += "*";
     }
 
-    this._lastQuery = this.inspector
-      // Get all inspectors where we want suggestions from.
-      .getAllInspectorFronts()
-      .then(inspectors => {
-        // Get all of the suggestions.
-        return Promise.all(
-          inspectors.map(async ({ walker }) => {
-            return walker.getSuggestionsForQuery(query, firstPart, state);
-          })
-        );
-      })
+    this._lastQuery = this.inspector.commands.inspectorCommand
+      .getSuggestionsForQuery(query, firstPart, state)
       .then(suggestions => {
-        // Merge all the results
-        const result = { query: "", suggestions: [] };
-        for (const r of suggestions) {
-          result.query = r.query;
-          result.suggestions = result.suggestions.concat(r.suggestions);
-        }
-        return result;
-      })
-      .then(result => {
         this.emit("processing-done");
-        if (result.query !== query) {
-          // This means that this response is for a previous request and the user
-          // as since typed something extra leading to a new request.
-          return promise.resolve(null);
-        }
 
         if (state === this.States.CLASS) {
           firstPart = "." + firstPart;
@@ -549,16 +526,13 @@ SelectorAutocompleter.prototype = {
 
         // If there is a single tag match and it's what the user typed, then
         // don't need to show a popup.
-        if (
-          result.suggestions.length === 1 &&
-          result.suggestions[0][0] === firstPart
-        ) {
-          result.suggestions = [];
+        if (suggestions.length === 1 && suggestions[0][0] === firstPart) {
+          suggestions = [];
         }
 
         // Wait for the autocomplete-popup to fire its popup-opened event, to make sure
         // the autoSelect item has been selected.
-        return this._showPopup(result.suggestions, state);
+        return this._showPopup(suggestions, state);
       });
   },
 };

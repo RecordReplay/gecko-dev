@@ -30,12 +30,12 @@ let whitelist = [
     platforms: ["windows"],
   },
   {
-    sourceName: /\b(contenteditable|EditorOverride|svg|forms|html|mathml|ua|pluginproblem)\.css$/i,
+    sourceName: /\b(contenteditable|EditorOverride|svg|forms|html|mathml|ua)\.css$/i,
     errorMessage: /Unknown pseudo-class.*-moz-/i,
     isFromDevTools: false,
   },
   {
-    sourceName: /\b(minimal-xul|html|mathml|ua|forms|svg)\.css$/i,
+    sourceName: /\b(minimal-xul|html|mathml|ua|forms|svg|manageDialog|autocomplete-item-shared|formautofill)\.css$/i,
     errorMessage: /Unknown property.*-moz-/i,
     isFromDevTools: false,
   },
@@ -87,6 +87,14 @@ if (!Services.prefs.getBoolPref("layout.css.scroll-anchoring.enabled")) {
   });
 }
 
+if (!Services.prefs.getBoolPref("layout.css.forced-colors.enabled")) {
+  whitelist.push({
+    sourceName: /pdf\.js\/web\/viewer\.css$/,
+    errorMessage: /Expected media feature name but found ‘forced-colors’*/i,
+    isFromDevTools: false,
+  });
+}
+
 let propNameWhitelist = [
   // These custom properties are retrieved directly from CSSOM
   // in videocontrols.xml to get pre-defined style instead of computed
@@ -106,6 +114,13 @@ let propNameWhitelist = [
   // when expanding the shorthands. See https://github.com/w3c/csswg-drafts/issues/2515
   { propName: "--bezier-diagonal-color", isFromDevTools: true },
   { propName: "--bezier-grid-color", isFromDevTools: true },
+  { propName: "--page-border", isFromDevTools: false },
+
+  // This variable is used from CSS embedded in JS in adjustableTitle.js
+  { propName: "--icon-url", isFromDevTools: false },
+
+  // This variable is used from CSS embedded in JS in pdf.js
+  { propName: "--zoom-factor", isFromDevTools: false },
 ];
 
 // Add suffix to stylesheets' URI so that we always load them here and

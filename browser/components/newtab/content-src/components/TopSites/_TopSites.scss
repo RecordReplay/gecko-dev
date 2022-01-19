@@ -1,3 +1,5 @@
+@use 'sass:math';
+
 $top-sites-size: $grid-unit;
 $top-sites-size-nte: $grid-unit-small;
 $top-sites-border-radius: 4px;
@@ -10,7 +12,7 @@ $nt-experience-default-icon-wrapper-size: 32px;
 $search-icon-wrapper-size: 42px;
 $default-icon-size: 32px;
 $default-icon-offset: 6px;
-$half-base-gutter: $base-gutter / 2;
+$half-base-gutter: math.div($base-gutter, 2);
 $hover-transition-duration: 150ms;
 $letter-fallback-color: $white;
 
@@ -181,7 +183,7 @@ $letter-fallback-color: $white;
   }
 
   .search-topsite {
-    background-image: url('#{$image-path}glyph-search-16.svg');
+    background-image: url('chrome://global/skin/icons/search-glass.svg');
     background-size: 26px;
     background-color: $blue-60;
     border-radius: $default-icon-wrapper-size;
@@ -684,7 +686,7 @@ $letter-fallback-color: $white;
 
       .tile {
         border-radius: $nt-experience-top-sites-border-radius;
-        box-shadow: $inner-box-shadow-nte, $tile-shadow-second;
+        box-shadow: $newtab-card-firstshadow;
         background-color: var(--newtab-topsites-background-color);
         justify-content: center;
         margin: 0 auto;
@@ -695,15 +697,11 @@ $letter-fallback-color: $white;
       .title {
         color: var(--newtab-background-primary-text-color);
         padding-top: 8px;
-        font-size: 12px;
+        font: caption;
 
         .icon {
           margin-inline-end: 2px;
           fill: var(--newtab-background-primary-text-color);
-        }
-
-        .sponsored-label {
-          font-size: 12px;
         }
       }
 
@@ -800,4 +798,13 @@ $letter-fallback-color: $white;
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+// used for TopSites impression wrapper
+.topsite-impression-observer {
+  position: absolute;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }

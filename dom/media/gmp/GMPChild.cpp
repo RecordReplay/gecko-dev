@@ -41,6 +41,10 @@
 #  include <unistd.h>  // for _exit()
 #endif
 
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+#  include "nsThreadManager.h"
+#endif
+
 using namespace mozilla::ipc;
 
 namespace mozilla {
@@ -155,11 +159,18 @@ static bool GetPluginPaths(const nsAString& aPluginPath,
 #endif    // XP_MACOSX
 
 bool GMPChild::Init(const nsAString& aPluginPath, base::ProcessId aParentPid,
-                    MessageLoop* aIOLoop, UniquePtr<IPC::Channel> aChannel) {
+                    mozilla::ipc::ScopedPort aPort) {
   GMP_CHILD_LOG_DEBUG("%s pluginPath=%s", __FUNCTION__,
                       NS_ConvertUTF16toUTF8(aPluginPath).get());
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+  // GMPChild does not use nsThreadManager outside of tests, so only init it
+  // here for the sandbox tests.
+  if (NS_WARN_IF(NS_FAILED(nsThreadManager::get().Init()))) {
+    return false;
+  }
+#endif
 
-  if (NS_WARN_IF(!Open(std::move(aChannel), aParentPid, aIOLoop))) {
+  if (NS_WARN_IF(!Open(std::move(aPort), aParentPid))) {
     return false;
   }
 
@@ -221,8 +232,14 @@ mozilla::ipc::IPCResult GMPChild::RecvPreloadLibs(const nsCString& aLibs) {
   }
 #elif defined(XP_LINUX)
   constexpr static const char* whitelist[] = {
+      // NSS libraries used by clearkey.
       "libfreeblpriv3.so",
       "libsoftokn3.so",
+      // glibc libraries merged into libc.so.6; see bug 1725828 and
+      // the corresponding code in GMPParent.cpp.
+      "libdl.so.2",
+      "libpthread.so.0",
+      "librt.so.1",
   };
 
   nsTArray<nsCString> libs;
@@ -234,7 +251,18 @@ mozilla::ipc::IPCResult GMPChild::RecvPreloadLibs(const nsCString& aLibs) {
         if (libHandle) {
           mLibHandles.AppendElement(libHandle);
         } else {
-          MOZ_CRASH("Couldn't load lib needed by NSS");
+          // TODO(bug 1698718): remove the logging once we've identified
+          // the cause of the load failure.
+          const char* error = dlerror();
+          if (error) {
+            // We should always have an error, but gracefully handle just in
+            // case.
+            nsAutoCString nsError{error};
+            CrashReporter::AppendAppNotesToCrashReport(nsError);
+          }
+          // End bug 1698718 logging.
+
+          MOZ_CRASH("Couldn't load lib needed by media plugin");
         }
       }
     }

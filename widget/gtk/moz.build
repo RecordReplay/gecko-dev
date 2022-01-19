@@ -19,8 +19,7 @@ with Files("*IMContextWrapper*"):
 with Files("*nsGtkKeyUtils*"):
     BUG_COMPONENT = ("Core", "DOM: UI Events & Focus Handling")
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
-    DIRS += ["mozgtk"]
+DIRS += ["mozgtk"]
 
 if CONFIG["MOZ_WAYLAND"]:
     DIRS += ["wayland", "mozwayland"]
@@ -28,48 +27,90 @@ if CONFIG["MOZ_WAYLAND"]:
 EXPORTS += [
     "MozContainer.h",
     "nsGTKToolkit.h",
-    "nsIImageToPixbuf.h",
+    "nsImageToPixbuf.h",
 ]
 
 EXPORTS.mozilla += ["WidgetUtilsGtk.h"]
 
+EXPORTS.mozilla.widget += [
+    "WindowSurface.h",
+    "WindowSurfaceProvider.h",
+]
+
 UNIFIED_SOURCES += [
+    "GfxInfo.cpp",
+    "gtk3drawing.cpp",
+    "GtkCompositorWidget.cpp",
     "IMContextWrapper.cpp",
     "MozContainer.cpp",
     "MPRISServiceHandler.cpp",
     "NativeKeyBindings.cpp",
+    "nsApplicationChooser.cpp",
     "nsAppShell.cpp",
     "nsBidiKeyboard.cpp",
+    "nsClipboard.cpp",
     "nsColorPicker.cpp",
+    "nsDragService.cpp",
     "nsFilePicker.cpp",
     "nsGtkKeyUtils.cpp",
     "nsImageToPixbuf.cpp",
     "nsLookAndFeel.cpp",
     "nsNativeBasicThemeGTK.cpp",
-    "nsNativeThemeGTK.cpp",
     "nsSound.cpp",
     "nsToolkit.cpp",
     "nsWidgetFactory.cpp",
     "ScreenHelperGTK.cpp",
     "TaskbarProgress.cpp",
     "WakeLockListener.cpp",
+    "WidgetStyleCache.cpp",
     "WidgetTraceEvent.cpp",
     "WidgetUtilsGtk.cpp",
+    "WindowSurfaceProvider.cpp",
 ]
 
 SOURCES += [
     "MediaKeysEventSourceFactory.cpp",
+    "nsNativeThemeGTK.cpp",  # conflicts with X11 headers
     "nsWindow.cpp",  # conflicts with X11 headers
     "WaylandVsyncSource.cpp",  # conflicts with X11 headers
 ]
+
+if CONFIG["ACCESSIBILITY"]:
+    UNIFIED_SOURCES += [
+        "maiRedundantObjectFactory.c",
+    ]
+
+if CONFIG["MOZ_WAYLAND"]:
+    UNIFIED_SOURCES += [
+        "DMABufLibWrapper.cpp",
+        "DMABufSurface.cpp",
+        "MozContainerWayland.cpp",
+        "nsClipboardWayland.cpp",
+        "nsWaylandDisplay.cpp",
+        "WaylandShmBuffer.cpp",
+        "WindowSurfaceWayland.cpp",
+        "WindowSurfaceWaylandMultiBuffer.cpp",
+    ]
+    EXPORTS.mozilla.widget += [
+        "DMABufLibWrapper.h",
+        "DMABufSurface.h",
+        "MozContainerWayland.h",
+        "nsWaylandDisplay.h",
+        "WaylandShmBuffer.h",
+    ]
 
 if CONFIG["MOZ_X11"]:
     UNIFIED_SOURCES += [
         "CompositorWidgetChild.cpp",
         "CompositorWidgetParent.cpp",
-        "GtkCompositorWidget.cpp",
         "InProcessGtkCompositorWidget.cpp",
+        "nsClipboardX11.cpp",
+        "nsShmImage.cpp",
         "nsUserIdleServiceGTK.cpp",
+        "WindowSurfaceX11.cpp",
+        "WindowSurfaceX11Image.cpp",
+        "WindowSurfaceX11SHM.cpp",
+        "WindowSurfaceXRender.cpp",
     ]
     EXPORTS.mozilla.widget += [
         "CompositorWidgetChild.h",
@@ -85,47 +126,6 @@ if CONFIG["NS_PRINTING"]:
         "nsPrintSettingsGTK.cpp",
         "nsPrintSettingsServiceGTK.cpp",
     ]
-
-if CONFIG["MOZ_X11"]:
-    UNIFIED_SOURCES += [
-        "nsClipboard.cpp",
-        "nsClipboardX11.cpp",
-        "nsDragService.cpp",
-        "WindowSurfaceProvider.cpp",
-        "WindowSurfaceX11.cpp",
-        "WindowSurfaceX11Image.cpp",
-        "WindowSurfaceXRender.cpp",
-    ]
-    EXPORTS.mozilla.widget += [
-        "WindowSurfaceProvider.h",
-    ]
-
-if CONFIG["MOZ_WAYLAND"]:
-    UNIFIED_SOURCES += [
-        "DMABufLibWrapper.cpp",
-        "DMABufSurface.cpp",
-        "MozContainerWayland.cpp",
-        "nsClipboardWayland.cpp",
-        "nsWaylandDisplay.cpp",
-        "WindowSurfaceWayland.cpp",
-    ]
-    EXPORTS.mozilla.widget += [
-        "DMABufLibWrapper.h",
-        "DMABufSurface.h",
-        "MozContainerWayland.h",
-        "nsWaylandDisplay.h",
-    ]
-
-if CONFIG["ACCESSIBILITY"]:
-    UNIFIED_SOURCES += [
-        "maiRedundantObjectFactory.c",
-    ]
-
-UNIFIED_SOURCES += [
-    "gtk3drawing.cpp",
-    "nsApplicationChooser.cpp",
-    "WidgetStyleCache.cpp",
-]
 
 XPCOM_MANIFESTS += [
     "components.conf",
@@ -176,3 +176,4 @@ if CONFIG["MOZ_ENABLE_DBUS"]:
     CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
 
 CXXFLAGS += ["-Wno-error=shadow"]
+CXXFLAGS += ["-Werror=switch"]

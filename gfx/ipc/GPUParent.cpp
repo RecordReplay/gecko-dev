@@ -12,8 +12,8 @@
 #include "GPUParent.h"
 #include "GPUProcessHost.h"
 #include "GPUProcessManager.h"
+#include "gfxGradientCache.h"
 #include "GfxInfoBase.h"
-#include "ProcessUtils.h"
 #include "VRGPUChild.h"
 #include "VRManager.h"
 #include "VRManagerParent.h"
@@ -23,9 +23,11 @@
 #include "gfxCrashReporterUtils.h"
 #include "gfxPlatform.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Components.h"
 #include "mozilla/HangDetails.h"
 #include "mozilla/PerfStats.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProcessPriorityManager.h"
 #include "mozilla/RemoteDecoderManagerChild.h"
 #include "mozilla/RemoteDecoderManagerParent.h"
 #include "mozilla/ScopeExit.h"
@@ -38,6 +40,7 @@
 #include "mozilla/image/ImageMemoryReporter.h"
 #include "mozilla/ipc/CrashReporterClient.h"
 #include "mozilla/ipc/ProcessChild.h"
+#include "mozilla/ipc/ProcessUtils.h"
 #include "mozilla/layers/APZInputBridgeParent.h"
 #include "mozilla/layers/APZPublicUtils.h"  // for apz::InitializeGlobalState
 #include "mozilla/layers/APZThreadUtils.h"
@@ -46,7 +49,6 @@
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/ImageBridgeParent.h"
 #include "mozilla/layers/LayerTreeOwnerTracker.h"
-#include "mozilla/layers/MemoryReportingMLGPU.h"
 #include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/layers/VideoBridgeParent.h"
 #include "mozilla/webrender/RenderThread.h"
@@ -60,6 +62,7 @@
 #if defined(XP_WIN)
 #  include <dwrite.h>
 #  include <process.h>
+#  include <windows.h>
 
 #  include "gfxWindowsPlatform.h"
 #  include "mozilla/WindowsVersion.h"
@@ -73,9 +76,7 @@
 
 #  include "skia/include/ports/SkTypeface_cairo.h"
 #endif
-#ifdef MOZ_GECKO_PROFILER
-#  include "ChildProfilerController.h"
-#endif
+#include "ChildProfilerController.h"
 #include "nsAppRunner.h"
 
 #if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
@@ -104,8 +105,45 @@ GPUParent* GPUParent::GetSingleton() {
   return sGPUParent;
 }
 
+/* static */ bool GPUParent::MaybeFlushMemory() {
+#if defined(XP_WIN) && !defined(HAVE_64BIT_BUILD)
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  if (!XRE_IsGPUProcess()) {
+    return false;
+  }
+
+  MEMORYSTATUSEX stat;
+  stat.dwLength = sizeof(stat);
+  if (!GlobalMemoryStatusEx(&stat)) {
+    return false;
+  }
+
+  // We only care about virtual process memory space in the GPU process because
+  // the UI process is already watching total memory usage.
+  static const size_t kLowVirtualMemoryThreshold = 384 * 1024 * 1024;
+  bool lowMemory = stat.ullAvailVirtual < kLowVirtualMemoryThreshold;
+
+  // We suppress more than one low memory notification until we exit the
+  // condition. The UI process goes through more effort, reporting on-going
+  // memory pressure, but rather than try to manage a shared state, we just
+  // send one notification here to try to resolve it.
+  static bool sLowMemory = false;
+  if (lowMemory && !sLowMemory) {
+    NS_DispatchToMainThread(
+        NS_NewRunnableFunction("gfx::GPUParent::FlushMemory", []() -> void {
+          Unused << GPUParent::GetSingleton()->SendFlushMemory(
+              u"low-memory"_ns);
+        }));
+  }
+  sLowMemory = lowMemory;
+  return lowMemory;
+#else
+  return false;
+#endif
+}
+
 bool GPUParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
-                     MessageLoop* aIOLoop, UniquePtr<IPC::Channel> aChannel) {
+                     mozilla::ipc::ScopedPort aPort) {
   // Initialize the thread manager before starting IPC. Otherwise, messages
   // may be posted to the main thread and we won't be able to process them.
   if (NS_WARN_IF(NS_FAILED(nsThreadManager::get().Init()))) {
@@ -113,7 +151,7 @@ bool GPUParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
   }
 
   // Now it's safe to start IPC.
-  if (NS_WARN_IF(!Open(std::move(aChannel), aParentPid, aIOLoop))) {
+  if (NS_WARN_IF(!Open(std::move(aPort), aParentPid))) {
     return false;
   }
 
@@ -133,6 +171,9 @@ bool GPUParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
     return false;
   }
 
+  // Ensure the observer service exists.
+  ProcessPriorityManager::Init();
+
   // Init crash reporter support.
   CrashReporterClient::InitSingleton(this);
 
@@ -141,7 +182,6 @@ bool GPUParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
   gfxPlatform::InitNullMetadata();
   // Ensure our Factory is initialised, mainly for gfx logging to work.
   gfxPlatform::InitMoz2DLogging();
-  mlg::InitializeMemoryReporters();
 #if defined(XP_WIN)
   gfxWindowsPlatform::InitMemoryReportersForGPUProcess();
   DeviceManagerDx::Init();
@@ -152,6 +192,7 @@ bool GPUParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
   apz::InitializeGlobalState();
   LayerTreeOwnerTracker::Initialize();
   CompositorBridgeParent::InitializeStatics();
+  gfxGradientCache::Init();
   mozilla::ipc::SetThisProcessName("GPU Process");
 
   return true;
@@ -199,7 +240,6 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
   gfxConfig::Inherit(Feature::D3D11_COMPOSITING,
                      devicePrefs.d3d11Compositing());
   gfxConfig::Inherit(Feature::OPENGL_COMPOSITING, devicePrefs.oglCompositing());
-  gfxConfig::Inherit(Feature::ADVANCED_LAYERS, devicePrefs.advancedLayers());
   gfxConfig::Inherit(Feature::DIRECT2D, devicePrefs.useD2D1());
   gfxConfig::Inherit(Feature::WEBGPU, devicePrefs.webGPU());
   gfxConfig::Inherit(Feature::D3D11_HW_ANGLE, devicePrefs.d3d11HwAngle());
@@ -237,7 +277,7 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
   if (gfxVars::UseWebRender()) {
     DeviceManagerDx::Get()->CreateDirectCompositionDevice();
     // Ensure to initialize GfxInfo
-    nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+    nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
     Unused << gfxInfo;
 
     Factory::EnsureDWriteFactory();
@@ -247,11 +287,11 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
 #if defined(MOZ_WIDGET_GTK)
   char* display_name = PR_GetEnv("MOZ_GDK_DISPLAY");
   if (!display_name) {
-    bool waylandDisabled = true;
+    bool waylandEnabled = false;
 #  ifdef MOZ_WAYLAND
-    waylandDisabled = IsWaylandDisabled();
+    waylandEnabled = IsWaylandEnabled();
 #  endif
-    if (waylandDisabled) {
+    if (!waylandEnabled) {
       display_name = PR_GetEnv("DISPLAY");
     }
   }
@@ -279,7 +319,7 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
   }
 
   // Ensure that GfxInfo::Init is called on the main thread.
-  nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+  nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
   Unused << gfxInfo;
 #endif
 
@@ -378,9 +418,7 @@ mozilla::ipc::IPCResult GPUParent::RecvInitUiCompositorController(
 
 mozilla::ipc::IPCResult GPUParent::RecvInitProfiler(
     Endpoint<PProfilerChild>&& aEndpoint) {
-#ifdef MOZ_GECKO_PROFILER
   mProfilerController = ChildProfilerController::Create(std::move(aEndpoint));
-#endif
   return IPC_OK();
 }
 
@@ -431,7 +469,6 @@ static void CopyFeatureChange(Feature aFeature, Maybe<FeatureFailure>* aOut) {
 mozilla::ipc::IPCResult GPUParent::RecvGetDeviceStatus(GPUDeviceData* aOut) {
   CopyFeatureChange(Feature::D3D11_COMPOSITING, &aOut->d3d11Compositing());
   CopyFeatureChange(Feature::OPENGL_COMPOSITING, &aOut->oglCompositing());
-  CopyFeatureChange(Feature::ADVANCED_LAYERS, &aOut->advancedLayers());
 
 #if defined(XP_WIN)
   if (DeviceManagerDx* dm = DeviceManagerDx::Get()) {
@@ -585,12 +622,10 @@ void GPUParent::ActorDestroy(ActorDestroyReason aWhy) {
         wmf::MFShutdown();
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
         if (mProfilerController) {
           mProfilerController->Shutdown();
           mProfilerController = nullptr;
         }
-#endif
 
         if (mVsyncBridge) {
           mVsyncBridge->Shutdown();

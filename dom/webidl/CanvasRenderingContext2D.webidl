@@ -113,7 +113,7 @@ interface CanvasRenderingContext2D {
    * This API cannot currently be used by Web content. It is chrome
    * and Web Extensions (with a permission) only.
    */
-  [Throws, Func="CanvasUtils::HasDrawWindowPrivilege"]
+  [Throws, NeedsSubjectPrincipal, Func="CanvasUtils::HasDrawWindowPrivilege"]
   void drawWindow(Window window, double x, double y, double w, double h,
                   UTF8String bgColor, optional unsigned long flags = 0);
 
@@ -192,7 +192,7 @@ interface mixin CanvasFillStrokeStyles {
   [Pref="canvas.createConicGradient.enabled", NewObject]
   CanvasGradient createConicGradient(double angle, double cx, double cy);
   [NewObject, Throws]
-  CanvasPattern? createPattern(CanvasImageSource image, [TreatNullAs=EmptyString] DOMString repetition);
+  CanvasPattern? createPattern(CanvasImageSource image, [LegacyNullToEmptyString] DOMString repetition);
 };
 
 interface mixin CanvasShadowStyles {

@@ -14,6 +14,13 @@ add_task(async function init() {
   }
 
   registerCleanupFunction(PlacesUtils.history.clear);
+
+  CustomizableUI.addWidgetToArea("home-button", "nav-bar", 0);
+  CustomizableUI.addWidgetToArea("sidebar-button", "nav-bar");
+  registerCleanupFunction(() => {
+    CustomizableUI.removeWidgetFromArea("home-button");
+    CustomizableUI.removeWidgetFromArea("sidebar-button");
+  });
 });
 
 add_task(async function tabWithSearchString() {
@@ -178,18 +185,16 @@ add_task(async function tabSearchModePreview() {
 
 add_task(async function tabTabToSearch() {
   info("Tab past a tab-to-search result after focusing with the keyboard.");
-  let engineDomain = "example.com";
-  let testEngine = await Services.search.addEngineWithDetails("Test", {
-    template: `http://${engineDomain}/?search={searchTerms}`,
-  });
+  await SearchTestUtils.installSearchExtension();
+
   for (let i = 0; i < 3; i++) {
-    await PlacesTestUtils.addVisits([`https://${engineDomain}/`]);
+    await PlacesTestUtils.addVisits(["https://example.com/"]);
   }
 
   // Search for a tab-to-search result.
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     window,
-    value: engineDomain.slice(0, 4),
+    value: "exam",
   });
   await UrlbarTestUtils.promisePopupClose(window);
   await UrlbarTestUtils.promisePopupOpen(window, () => {
@@ -212,7 +217,6 @@ add_task(async function tabTabToSearch() {
     await UrlbarTestUtils.assertSearchMode(window, null);
   });
   await PlacesUtils.history.clear();
-  await Services.search.removeEngine(testEngine);
 });
 
 add_task(async function tabNoSearchStringSearchMode() {
@@ -244,6 +248,34 @@ add_task(async function tabNoSearchStringSearchMode() {
   });
   await UrlbarTestUtils.exitSearchMode(window);
   await UrlbarTestUtils.promisePopupClose(window);
+});
+
+add_task(async function tabOnTopSites() {
+  info("Tab through the toolbar when focusing the Address Bar on top sites.");
+  for (let val of [true, false]) {
+    info(`Test with keyboard_navigation set to "${val}"`);
+    await SpecialPowers.pushPrefEnv({
+      set: [["browser.toolbars.keyboard_navigation", val]],
+    });
+    await UrlbarTestUtils.promiseAutocompleteResultPopup({
+      window,
+      value: "",
+      fireInputEvent: true,
+    });
+    Assert.ok(
+      UrlbarTestUtils.getResultCount(window) > 0,
+      "There should be some results"
+    );
+    Assert.deepEqual(
+      UrlbarTestUtils.getSelectedElement(window),
+      null,
+      "There should be no selection"
+    );
+
+    await expectTabThroughToolbar();
+    await UrlbarTestUtils.promisePopupClose(window);
+    await SpecialPowers.popPrefEnv();
+  }
 });
 
 async function expectTabThroughResults(options = { reverse: false }) {
@@ -296,20 +328,31 @@ async function expectTabThroughToolbar(options = { reverse: false }) {
 }
 
 async function waitForFocusOnNextFocusableElement(reverse = false) {
+  if (
+    !Services.prefs.getBoolPref("browser.toolbars.keyboard_navigation", true)
+  ) {
+    return BrowserTestUtils.waitForCondition(
+      () => document.activeElement == gBrowser.selectedBrowser
+    );
+  }
   let urlbar = document.getElementById("urlbar-container");
   let nextFocusableElement = reverse
     ? urlbar.previousElementSibling
     : urlbar.nextElementSibling;
-  info(nextFocusableElement);
   while (
     nextFocusableElement &&
     (!nextFocusableElement.classList.contains("toolbarbutton-1") ||
-      nextFocusableElement.hasAttribute("hidden"))
+      nextFocusableElement.hasAttribute("hidden") ||
+      nextFocusableElement.hasAttribute("disabled") ||
+      BrowserTestUtils.is_hidden(nextFocusableElement))
   ) {
     nextFocusableElement = reverse
       ? nextFocusableElement.previousElementSibling
       : nextFocusableElement.nextElementSibling;
   }
+  info(
+    `Next focusable element: ${nextFocusableElement.localName}.#${nextFocusableElement.id}`
+  );
 
   Assert.ok(
     nextFocusableElement.classList.contains("toolbarbutton-1"),

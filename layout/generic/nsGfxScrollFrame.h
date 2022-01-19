@@ -377,13 +377,14 @@ class ScrollFrameHelper : public nsIReflowCallback {
 
  public:
   bool IsScrollbarOnRight() const;
-  bool IsScrollingActive(nsDisplayListBuilder* aBuilder) const;
+  bool IsScrollingActive() const;
+  bool IsScrollingActiveNotMinimalDisplayPort() const;
   bool IsMaybeAsynchronouslyScrolled() const {
     // If this is true, then we'll build an ASR, and that's what we want
     // to know I think.
     return mWillBuildScrollableLayer;
   }
-  bool IsMaybeScrollingActive() const;
+
   void ResetScrollPositionForLayerPixelAlignment() {
     mScrollPosForLayerPixelAlignment = GetScrollPosition();
   }
@@ -404,11 +405,12 @@ class ScrollFrameHelper : public nsIReflowCallback {
       nsIFrame* aFrame, nsPresContext* aPresContext, nsRect& aRect,
       bool aHasResizer, mozilla::layers::ScrollDirection aDirection);
   // returns true if a resizer should be visible
-  bool HasResizer() { return mResizerBox && !mCollapsedResizer; }
+  bool HasResizer() { return mResizerBox; }
   void LayoutScrollbars(nsBoxLayoutState& aState, const nsRect& aContentArea,
                         const nsRect& aOldScrollArea);
 
   void MarkScrollbarsDirtyForReflow() const;
+  void InvalidateVerticalScrollbar() const;
 
   bool IsAlwaysActive() const;
   void MarkEverScrolled();
@@ -441,6 +443,7 @@ class ScrollFrameHelper : public nsIReflowCallback {
   ScrollSnapInfo GetScrollSnapInfo(
       const mozilla::Maybe<nsPoint>& aDestination) const;
 
+  static bool ShouldActivateAllScrollFrames();
   nsRect RestrictToRootDisplayPort(const nsRect& aDisplayportBase);
   bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                              nsRect* aVisibleRect, nsRect* aDirtyRect,
@@ -492,14 +495,14 @@ class ScrollFrameHelper : public nsIReflowCallback {
   void ScrollByLine(nsScrollbarFrame* aScrollbar, int32_t aDirection,
                     nsIScrollbarMediator::ScrollSnapMode aSnap =
                         nsIScrollbarMediator::DISABLE_SNAP);
+  void ScrollByUnit(nsScrollbarFrame* aScrollbar, ScrollMode aMode,
+                    int32_t aDirection, ScrollUnit aUnit,
+                    nsIScrollbarMediator::ScrollSnapMode aSnap =
+                        nsIScrollbarMediator::DISABLE_SNAP);
   void RepeatButtonScroll(nsScrollbarFrame* aScrollbar);
   void ThumbMoved(nsScrollbarFrame* aScrollbar, nscoord aOldPos,
                   nscoord aNewPos);
   void ScrollbarReleased(nsScrollbarFrame* aScrollbar);
-  void ScrollByUnit(nsScrollbarFrame* aScrollbar, ScrollMode aMode,
-                    int32_t aDirection, mozilla::ScrollUnit aUnit,
-                    nsIScrollbarMediator::ScrollSnapMode aSnap =
-                        nsIScrollbarMediator::DISABLE_SNAP);
   bool ShouldSuppressScrollbarRepaints() const {
     return mSuppressScrollbarRepaints;
   }
@@ -665,17 +668,20 @@ class ScrollFrameHelper : public nsIReflowCallback {
   // If true, we should be prepared to scroll using this scrollframe
   // by placing descendant content into its own layer(s)
   bool mHasBeenScrolledRecently : 1;
-  // If true, the resizer is collapsed and not displayed
-  bool mCollapsedResizer : 1;
 
   // If true, the scroll frame should always be active because we always build
   // a scrollable layer. Used for asynchronous scrolling.
   bool mWillBuildScrollableLayer : 1;
 
-  // If true, the scroll frame is an ancestor of other scrolling frames, so
-  // we shouldn't expire the displayport on this scrollframe unless those
-  // descendant scrollframes also have their displayports removed.
-  bool mIsScrollParent : 1;
+  // If true, the scroll frame is an ancestor of other "active" scrolling
+  // frames, where "active" means has a non-minimal display port if
+  // ShouldActivateAllScrollFrames is true, or has a display port if
+  // ShouldActivateAllScrollFrames is false. And this means that we shouldn't
+  // expire the display port (if ShouldActivateAllScrollFrames is true then
+  // expiring a display port means making it minimal, otherwise it means
+  // removing the display port). If those descendant scrollframes have their
+  // display ports removed or made minimal, then we expire our display port.
+  bool mIsParentToActiveScrollFrames : 1;
 
   // If true, add clipping in ScrollFrameHelper::ClipLayerToDisplayPort.
   // XXX this flag needs some auditing and better documentation, bug 1646686.
@@ -769,7 +775,6 @@ class ScrollFrameHelper : public nsIReflowCallback {
   void CompleteAsyncScroll(const nsRect& aRange,
                            ScrollOrigin aOrigin = ScrollOrigin::NotSpecified);
 
-  bool HasPluginFrames();
   bool HasPerspective() const { return mOuter->ChildrenHavePerspective(); }
   bool HasBgAttachmentLocal() const;
   mozilla::StyleDirection GetScrolledFrameDir() const;
@@ -1040,11 +1045,9 @@ class nsHTMLScrollFrame : public nsContainerFrame,
     mHelper.PostScrolledAreaEvent();
     return NS_OK;
   }
-  bool IsScrollingActive(nsDisplayListBuilder* aBuilder) final {
-    return mHelper.IsScrollingActive(aBuilder);
-  }
-  bool IsMaybeScrollingActive() const final {
-    return mHelper.IsMaybeScrollingActive();
+  bool IsScrollingActive() final { return mHelper.IsScrollingActive(); }
+  bool IsScrollingActiveNotMinimalDisplayPort() final {
+    return mHelper.IsScrollingActiveNotMinimalDisplayPort();
   }
   bool IsMaybeAsynchronouslyScrolled() final {
     return mHelper.IsMaybeAsynchronouslyScrolled();
@@ -1095,6 +1098,10 @@ class nsHTMLScrollFrame : public nsContainerFrame,
   void MarkScrollbarsDirtyForReflow() const final {
     mHelper.MarkScrollbarsDirtyForReflow();
   }
+  void InvalidateVerticalScrollbar() const final {
+    mHelper.InvalidateVerticalScrollbar();
+  }
+
   void UpdateScrollbarPosition() final { mHelper.UpdateScrollbarPosition(); }
   bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                              nsRect* aVisibleRect, nsRect* aDirtyRect,
@@ -1140,6 +1147,11 @@ class nsHTMLScrollFrame : public nsContainerFrame,
                     nsIScrollbarMediator::ScrollSnapMode aSnap =
                         nsIScrollbarMediator::DISABLE_SNAP) final {
     mHelper.ScrollByLine(aScrollbar, aDirection, aSnap);
+  }
+  void ScrollByUnit(nsScrollbarFrame* aScrollbar, ScrollMode aMode,
+                    int32_t aDirection, mozilla::ScrollUnit aUnit,
+                    ScrollSnapMode aSnap = DISABLE_SNAP) final {
+    mHelper.ScrollByUnit(aScrollbar, aMode, aDirection, aUnit, aSnap);
   }
   void RepeatButtonScroll(nsScrollbarFrame* aScrollbar) final {
     mHelper.RepeatButtonScroll(aScrollbar);
@@ -1519,11 +1531,9 @@ class nsXULScrollFrame final : public nsBoxFrame,
     mHelper.PostScrolledAreaEvent();
     return NS_OK;
   }
-  bool IsScrollingActive(nsDisplayListBuilder* aBuilder) final {
-    return mHelper.IsScrollingActive(aBuilder);
-  }
-  bool IsMaybeScrollingActive() const final {
-    return mHelper.IsMaybeScrollingActive();
+  bool IsScrollingActive() final { return mHelper.IsScrollingActive(); }
+  bool IsScrollingActiveNotMinimalDisplayPort() final {
+    return mHelper.IsScrollingActiveNotMinimalDisplayPort();
   }
   bool IsMaybeAsynchronouslyScrolled() final {
     return mHelper.IsMaybeAsynchronouslyScrolled();
@@ -1574,6 +1584,9 @@ class nsXULScrollFrame final : public nsBoxFrame,
   void MarkScrollbarsDirtyForReflow() const final {
     mHelper.MarkScrollbarsDirtyForReflow();
   }
+  void InvalidateVerticalScrollbar() const final {
+    mHelper.InvalidateVerticalScrollbar();
+  }
   void UpdateScrollbarPosition() final { mHelper.UpdateScrollbarPosition(); }
 
   // nsIStatefulFrame
@@ -1607,6 +1620,11 @@ class nsXULScrollFrame final : public nsBoxFrame,
                     nsIScrollbarMediator::ScrollSnapMode aSnap =
                         nsIScrollbarMediator::DISABLE_SNAP) final {
     mHelper.ScrollByLine(aScrollbar, aDirection, aSnap);
+  }
+  void ScrollByUnit(nsScrollbarFrame* aScrollbar, ScrollMode aMode,
+                    int32_t aDirection, mozilla::ScrollUnit aUnit,
+                    ScrollSnapMode aSnap = DISABLE_SNAP) final {
+    mHelper.ScrollByUnit(aScrollbar, aMode, aDirection, aUnit, aSnap);
   }
   void RepeatButtonScroll(nsScrollbarFrame* aScrollbar) final {
     mHelper.RepeatButtonScroll(aScrollbar);

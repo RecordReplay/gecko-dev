@@ -3,18 +3,14 @@
 
 "use strict";
 
-function getSheetCount(el) {
-  return el.ownerDocument.l10n.getAttributes(el).args.sheetCount;
-}
-
 add_task(async function testSheetCount() {
   await PrintHelper.withTestPage(async helper => {
     await helper.startPrint();
 
-    let sheetCount = helper.get("sheet-count");
-    let { id } = helper.doc.l10n.getAttributes(sheetCount);
+    let sheetCountElement = helper.get("sheet-count");
+    let { id } = helper.doc.l10n.getAttributes(sheetCountElement);
     is(id, "printui-sheets-count", "The l10n id is correct");
-    let initialSheetCount = getSheetCount(sheetCount);
+    let initialSheetCount = helper.sheetCount;
     ok(initialSheetCount >= 1, "There is an initial sheet count");
 
     await helper.openMoreSettings();
@@ -25,7 +21,7 @@ add_task(async function testSheetCount() {
     let percentScale = helper.get("percent-scale");
     await helper.waitForPreview(() => helper.text(percentScale, "200"));
 
-    let zoomedSheetCount = getSheetCount(sheetCount);
+    let zoomedSheetCount = helper.sheetCount;
     ok(zoomedSheetCount > initialSheetCount, "The sheet count increased");
 
     // Since we're using the Save to PDF printer, the numCopies element should
@@ -36,7 +32,7 @@ add_task(async function testSheetCount() {
       numCopies: 4,
     });
     is(
-      getSheetCount(sheetCount),
+      helper.sheetCount,
       zoomedSheetCount,
       "numCopies is ignored for Save to PDF printer"
     );
@@ -83,7 +79,7 @@ add_task(async function testSheetCount() {
     ok(BrowserTestUtils.is_visible(numCopies), "numCopies element is visible");
     is(numCopies.value, "4", "numCopies displays the correct value");
     is(
-      getSheetCount(sheetCount),
+      helper.sheetCount,
       zoomedSheetCount * 4,
       "numCopies is used when using a non-PDF printer"
     );
@@ -102,12 +98,11 @@ add_task(async function testSheetCountPageRange() {
       })
     );
 
-    let sheetCount = helper.get("sheet-count");
     await BrowserTestUtils.waitForCondition(
-      () => getSheetCount(sheetCount) != 1,
+      () => helper.sheetCount != 1,
       "Wait for sheet count to update"
     );
-    let sheets = getSheetCount(sheetCount);
+    let sheets = helper.sheetCount;
     ok(sheets >= 3, "There are at least 3 pages");
 
     // Set page range to 2-3, sheet count should be 2.
@@ -117,10 +112,154 @@ add_task(async function testSheetCountPageRange() {
       })
     );
 
-    sheets = getSheetCount(sheetCount);
+    sheets = helper.sheetCount;
     is(sheets, 2, "There are now only 2 pages shown");
   });
 });
+
+// Test that enabling duplex printing updates the sheet count accordingly.
+add_task(async function testSheetCountDuplex() {
+  await PrintHelper.withTestPage(async helper => {
+    const mockPrinterName = "DuplexCapablePrinter";
+    const printer = helper.addMockPrinter(mockPrinterName);
+    printer.supportsDuplex = Promise.resolve(true);
+
+    await helper.startPrint();
+    await helper.dispatchSettingsChange({ printerName: mockPrinterName });
+
+    // Set scale and shinkToFit to make the document
+    // bigger so that it spans multiple pages.
+    await helper.waitForPreview(() =>
+      helper.dispatchSettingsChange({
+        shrinkToFit: false,
+        scaling: 4,
+        duplex: Ci.nsIPrintSettings.kDuplexNone,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount != 1,
+      "Wait for sheet count to update"
+    );
+    let singleSidedSheets = helper.sheetCount;
+    ok(singleSidedSheets >= 2, "There are at least 2 pages");
+
+    // Turn on long-edge duplex printing and ensure the sheet count is halved.
+    await helper.waitForSettingsEvent(() =>
+      helper.dispatchSettingsChange({
+        duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount != singleSidedSheets,
+      "Wait for sheet count to update"
+    );
+    let duplexLongEdgeSheets = helper.sheetCount;
+    is(
+      duplexLongEdgeSheets,
+      Math.ceil(singleSidedSheets / 2),
+      "Long-edge duplex printing halved the sheet count"
+    );
+
+    // Turn off duplex printing
+    await helper.waitForSettingsEvent(() =>
+      helper.dispatchSettingsChange({
+        duplex: Ci.nsIPrintSettings.kDuplexNone,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount == singleSidedSheets,
+      "Wait for sheet count to update"
+    );
+
+    // Turn on short-edge duplex printing and ensure the
+    // sheet count matches the long-edge duplex sheet count.
+    await helper.waitForSettingsEvent(() =>
+      helper.dispatchSettingsChange({
+        duplex: Ci.nsIPrintSettings.kDuplexFlipOnShortEdge,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount != singleSidedSheets,
+      "Wait for sheet count to update"
+    );
+    let duplexShortEdgeSheets = helper.sheetCount;
+    is(
+      duplexShortEdgeSheets,
+      duplexLongEdgeSheets,
+      "Short-edge duplex printing halved the sheet count"
+    );
+  });
+});
+
+// Test that enabling duplex printing with multiple copies updates the
+// sheet count accordingly.
+add_task(async function testSheetCountDuplexWithCopies() {
+  // Use different scale values to exercise printing of different page counts
+  for (let scale of [2, 3, 4, 5]) {
+    await TestDuplexNumCopiesAtScale(scale);
+  }
+});
+
+// Enable duplex and numCopies=2 with the provided scale value and check
+// that the sheet count is correct.
+async function TestDuplexNumCopiesAtScale(scale) {
+  await PrintHelper.withTestPage(async helper => {
+    const mockPrinterName = "DuplexCapablePrinter";
+    const printer = helper.addMockPrinter(mockPrinterName);
+    printer.supportsDuplex = Promise.resolve(true);
+
+    await helper.startPrint();
+    await helper.dispatchSettingsChange({ printerName: mockPrinterName });
+
+    // Set scale and shinkToFit to make the document
+    // bigger so that it spans multiple pages.
+    await helper.waitForPreview(() =>
+      helper.dispatchSettingsChange({
+        shrinkToFit: false,
+        scaling: scale,
+        duplex: Ci.nsIPrintSettings.kDuplexNone,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount != 1,
+      "Wait for sheet count to update"
+    );
+    let singleSidedSheets = helper.sheetCount;
+
+    // Chnage to two copies
+    await helper.waitForSettingsEvent(() =>
+      helper.dispatchSettingsChange({
+        numCopies: 2,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount != singleSidedSheets,
+      "Wait for sheet count to update"
+    );
+    let twoCopiesSheetCount = helper.sheetCount;
+
+    // Turn on duplex printing.
+    await helper.waitForSettingsEvent(() =>
+      helper.dispatchSettingsChange({
+        duplex: Ci.nsIPrintSettings.kDuplexFlipOnLongEdge,
+      })
+    );
+    await BrowserTestUtils.waitForCondition(
+      () => helper.sheetCount != twoCopiesSheetCount,
+      "Wait for sheet count to update"
+    );
+    let duplexTwoCopiesSheetCount = helper.sheetCount;
+
+    // Check sheet count accounts for duplex and numCopies.
+    is(
+      duplexTwoCopiesSheetCount,
+      Math.ceil(singleSidedSheets / 2) * 2,
+      "Duplex with 2 copies sheet count is correct"
+    );
+
+    await helper.closeDialog();
+  });
+}
 
 add_task(async function testPagesPerSheetCount() {
   await PrintHelper.withTestPage(async helper => {
@@ -143,12 +282,11 @@ add_task(async function testPagesPerSheetCount() {
       })
     );
 
-    let sheetCount = helper.get("sheet-count");
     await BrowserTestUtils.waitForCondition(
-      () => getSheetCount(sheetCount) != 1,
+      () => helper.sheetCount != 1,
       "Wait for sheet count to update"
     );
-    let sheets = getSheetCount(sheetCount);
+    let sheets = helper.sheetCount;
 
     ok(sheets > 1, "There are multiple pages");
 
@@ -165,14 +303,14 @@ add_task(async function testPagesPerSheetCount() {
     }
     await helper.waitForPreview(() => EventUtils.sendKey("return", helper.win));
 
-    sheets = getSheetCount(sheetCount);
+    sheets = helper.sheetCount;
     is(sheets, 1, "There's only one sheet now");
 
     await helper.waitForSettingsEvent(() =>
       helper.dispatchSettingsChange({ numCopies: 5 })
     );
 
-    sheets = getSheetCount(sheetCount);
+    sheets = helper.sheetCount;
     is(sheets, 5, "Copies are handled with pages per sheet correctly");
 
     await helper.closeDialog();

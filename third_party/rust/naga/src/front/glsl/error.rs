@@ -1,7 +1,8 @@
 use super::parser::Token;
 use super::token::TokenMetadata;
-use std::{fmt, io};
+use std::{borrow::Cow, fmt, io};
 
+//TODO: use `thiserror`
 #[derive(Debug)]
 pub enum ErrorKind {
     EndOfFile,
@@ -17,44 +18,44 @@ pub enum ErrorKind {
     UnknownField(TokenMetadata, String),
     #[cfg(feature = "glsl-validate")]
     VariableAlreadyDeclared(String),
-    #[cfg(feature = "glsl-validate")]
-    VariableNotAvailable(String),
     ExpectedConstant,
-    SemanticError(&'static str),
+    SemanticError(Cow<'static, str>),
     PreprocessorError(String),
+    WrongNumberArgs(String, usize, usize),
 }
 
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        match *self {
             ErrorKind::EndOfFile => write!(f, "Unexpected end of file"),
             ErrorKind::InvalidInput => write!(f, "InvalidInput"),
-            ErrorKind::InvalidProfile(meta, val) => {
+            ErrorKind::InvalidProfile(ref meta, ref val) => {
                 write!(f, "Invalid profile {} at {:?}", val, meta)
             }
-            ErrorKind::InvalidToken(token) => write!(f, "Invalid Token {:?}", token),
-            ErrorKind::InvalidVersion(meta, val) => {
+            ErrorKind::InvalidToken(ref token) => write!(f, "Invalid Token {:?}", token),
+            ErrorKind::InvalidVersion(ref meta, ref val) => {
                 write!(f, "Invalid version {} at {:?}", val, meta)
             }
-            ErrorKind::IoError(error) => write!(f, "IO Error {}", error),
+            ErrorKind::IoError(ref error) => write!(f, "IO Error {}", error),
             ErrorKind::ParserFail => write!(f, "Parser failed"),
             ErrorKind::ParserStackOverflow => write!(f, "Parser stack overflow"),
-            ErrorKind::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
-            ErrorKind::UnknownVariable(meta, val) => {
+            ErrorKind::NotImplemented(ref msg) => write!(f, "Not implemented: {}", msg),
+            ErrorKind::UnknownVariable(ref meta, ref val) => {
                 write!(f, "Unknown variable {} at {:?}", val, meta)
             }
-            ErrorKind::UnknownField(meta, val) => write!(f, "Unknown field {} at {:?}", val, meta),
-            #[cfg(feature = "glsl-validate")]
-            ErrorKind::VariableAlreadyDeclared(val) => {
-                write!(f, "Variable {} already decalred in current scope", val)
+            ErrorKind::UnknownField(ref meta, ref val) => {
+                write!(f, "Unknown field {} at {:?}", val, meta)
             }
             #[cfg(feature = "glsl-validate")]
-            ErrorKind::VariableNotAvailable(val) => {
-                write!(f, "Variable {} not available in this stage", val)
+            ErrorKind::VariableAlreadyDeclared(ref val) => {
+                write!(f, "Variable {} already declared in current scope", val)
             }
             ErrorKind::ExpectedConstant => write!(f, "Expected constant"),
-            ErrorKind::SemanticError(msg) => write!(f, "Semantic error: {}", msg),
-            ErrorKind::PreprocessorError(val) => write!(f, "Preprocessor error: {}", val),
+            ErrorKind::SemanticError(ref msg) => write!(f, "Semantic error: {}", msg),
+            ErrorKind::PreprocessorError(ref val) => write!(f, "Preprocessor error: {}", val),
+            ErrorKind::WrongNumberArgs(ref fun, expected, actual) => {
+                write!(f, "{} requires {} args, got {}", fun, expected, actual)
+            }
         }
     }
 }

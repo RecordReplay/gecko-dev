@@ -10,12 +10,59 @@
 
 var EXPORTED_SYMBOLS = ["FormValidationParent"];
 
+ChromeUtils.defineModuleGetter(
+  this,
+  "BrowserWindowTracker",
+  "resource:///modules/BrowserWindowTracker.jsm"
+);
+
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
+class PopupShownObserver {
+  _weakContext = null;
+
+  constructor(browsingContext) {
+    this._weakContext = Cu.getWeakReference(browsingContext);
+  }
+
+  observe(subject, topic, data) {
+    let ctxt = this._weakContext.get();
+    let actor = ctxt.currentWindowGlobal?.getExistingActor("FormValidation");
+    if (!actor) {
+      Services.obs.removeObserver(this, "popup-shown");
+      return;
+    }
+    // If any panel besides ourselves shows, hide ourselves again.
+    if (topic == "popup-shown" && subject != actor._panel) {
+      actor._hidePopup();
+    }
+  }
+
+  QueryInterface = ChromeUtils.generateQI([
+    Ci.nsIObserver,
+    Ci.nsISupportsWeakReference,
+  ]);
+}
+
 class FormValidationParent extends JSWindowActorParent {
   constructor() {
     super();
 
     this._panel = null;
-    this._anchor = null;
+    this._obs = null;
+  }
+
+  static hasOpenPopups() {
+    for (let win of BrowserWindowTracker.orderedWindows) {
+      let popups = win.document.querySelectorAll("panel,menupopup");
+      for (let popup of popups) {
+        let { state } = popup;
+        if (state == "open" || state == "showing") {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /*
@@ -24,7 +71,7 @@ class FormValidationParent extends JSWindowActorParent {
 
   uninit() {
     this._panel = null;
-    this._anchor = null;
+    this._obs = null;
   }
 
   hidePopup() {
@@ -49,16 +96,16 @@ class FormValidationParent extends JSWindowActorParent {
           return;
         }
 
+        if (FormValidationParent.hasOpenPopups()) {
+          return;
+        }
+
         this._showPopup(data);
         break;
       case "FormValidation:HidePopup":
         this._hidePopup();
         break;
     }
-  }
-
-  observe(aSubject, aTopic, aData) {
-    this._hidePopup();
   }
 
   handleEvent(aEvent) {
@@ -80,14 +127,14 @@ class FormValidationParent extends JSWindowActorParent {
 
   _onPopupHiding(aEvent) {
     aEvent.originalTarget.removeEventListener("popuphiding", this, true);
+    Services.obs.removeObserver(this._obs, "popup-shown");
     let tabBrowser = aEvent.originalTarget.ownerGlobal.gBrowser;
     tabBrowser.selectedBrowser.removeEventListener("scroll", this, true);
     tabBrowser.selectedBrowser.removeEventListener("FullZoomChange", this);
     tabBrowser.selectedBrowser.removeEventListener("TextZoomChange", this);
 
+    this._obs = null;
     this._panel = null;
-    this._anchor.hidden = true;
-    this._anchor = null;
   }
 
   /*
@@ -109,13 +156,14 @@ class FormValidationParent extends JSWindowActorParent {
     let window = browser.ownerGlobal;
 
     let tabBrowser = window.gBrowser;
-    this._anchor = tabBrowser.selectedBrowser.popupAnchor;
-    this._anchor.hidden = false;
 
     // Display the panel if it isn't already visible.
     if (!previouslyShown) {
       // Cleanup after the popup is hidden
       this._panel.addEventListener("popuphiding", this, true);
+      // Hide ourselves if other popups shown
+      this._obs = new PopupShownObserver(this.browsingContext);
+      Services.obs.addObserver(this._obs, "popup-shown", true);
 
       // Hide if the user scrolls the page
       tabBrowser.selectedBrowser.addEventListener("scroll", this, true);
@@ -141,9 +189,7 @@ class FormValidationParent extends JSWindowActorParent {
    * above if visible.
    */
   _hidePopup() {
-    if (this._panel) {
-      this._panel.hidePopup();
-    }
+    this._panel?.hidePopup();
   }
 
   _getAndMaybeCreatePanel() {

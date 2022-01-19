@@ -25,6 +25,7 @@
 #include "mozilla/webrender/RendererOGL.h"
 #include "mozilla/webrender/RenderTextureHost.h"
 #include "mozilla/widget/CompositorWidget.h"
+#include "OGLShaderProgram.h"
 
 #ifdef XP_WIN
 #  include "GLContextEGL.h"
@@ -41,7 +42,7 @@
 #endif
 
 #ifdef MOZ_WIDGET_GTK
-#  include <gdk/gdkx.h>
+#  include "mozilla/WidgetUtilsGtk.h"
 #endif
 
 #ifdef MOZ_WAYLAND
@@ -54,8 +55,7 @@ static already_AddRefed<gl::GLContext> CreateGLContext(nsACString& aError);
 
 MOZ_DEFINE_MALLOC_SIZE_OF(WebRenderRendererMallocSizeOf)
 
-namespace mozilla {
-namespace wr {
+namespace mozilla::wr {
 
 static StaticRefPtr<RenderThread> sRenderThread;
 
@@ -63,6 +63,7 @@ RenderThread::RenderThread(base::Thread* aThread)
     : mThread(aThread),
       mThreadPool(false),
       mThreadPoolLP(true),
+      mSingletonGLIsForHardwareWebRender(true),
       mWindowInfos("RenderThread.mWindowInfos"),
       mRenderTextureMapLock("RenderThread.mRenderTextureMapLock"),
       mHasShutdown(false),
@@ -120,6 +121,8 @@ void RenderThread::ShutDown() {
   sRenderThread->Loop()->PostTask(runnable.forget());
   task.Wait();
 
+  layers::SharedSurfacesParent::Shutdown();
+
   sRenderThread = nullptr;
 #ifdef XP_WIN
   if (widget::WinCompositorWindowThread::Get()) {
@@ -140,10 +143,10 @@ void RenderThread::ShutDownTask(layers::SynchronousTask* aTask) {
 
   // Releasing on the render thread will allow us to avoid dispatching to remove
   // remaining textures from the texture map.
-  layers::SharedSurfacesParent::Shutdown();
+  layers::SharedSurfacesParent::ShutdownRenderThread();
 
   ClearAllBlobImageResources();
-  ClearSharedGL();
+  ClearSingletonGL();
   ClearSharedSurfacePool();
 }
 
@@ -234,8 +237,9 @@ void RenderThread::RemoveRenderer(wr::WindowId aWindowId) {
 
   mRenderers.erase(aWindowId);
 
-  if (mRenderers.size() == 0 && mHandlingDeviceReset) {
+  if (mRenderers.empty()) {
     mHandlingDeviceReset = false;
+    mHandlingWebRenderError = false;
   }
 
   auto windows = mWindowInfos.Lock();
@@ -379,7 +383,7 @@ void RenderThread::SetClearColor(wr::WindowId aWindowId, wr::ColorF aColor) {
   }
 }
 
-void RenderThread::SetProfilerUI(wr::WindowId aWindowId, nsCString aUI) {
+void RenderThread::SetProfilerUI(wr::WindowId aWindowId, const nsCString& aUI) {
   if (mHasShutdown) {
     return;
   }
@@ -412,7 +416,7 @@ void RenderThread::RunEvent(wr::WindowId aWindowId,
 }
 
 static void NotifyDidRender(layers::CompositorBridgeParent* aBridge,
-                            RefPtr<const WebRenderPipelineInfo> aInfo,
+                            const RefPtr<const WebRenderPipelineInfo>& aInfo,
                             VsyncId aCompositeStartId,
                             TimeStamp aCompositeStart, TimeStamp aRenderStart,
                             TimeStamp aEnd, bool aRender,
@@ -453,6 +457,7 @@ void RenderThread::UpdateAndRender(
     const Maybe<wr::ImageFormat>& aReadbackFormat,
     const Maybe<Range<uint8_t>>& aReadbackBuffer, bool* aNeedsYFlip) {
   AUTO_PROFILER_TRACING_MARKER("Paint", "Composite", GRAPHICS);
+  AUTO_PROFILER_LABEL("RenderThread::UpdateAndRender", GRAPHICS);
   MOZ_ASSERT(IsInRenderThread());
   MOZ_ASSERT(aRender || aReadbackBuffer.isNothing());
 
@@ -762,7 +767,7 @@ RenderTextureHost* RenderThread::GetRenderTexture(
 
 void RenderThread::InitDeviceTask() {
   MOZ_ASSERT(IsInRenderThread());
-  MOZ_ASSERT(!mSharedGL);
+  MOZ_ASSERT(!mSingletonGL);
 
   if (gfx::gfxVars::UseSoftwareWebRender()) {
     // Ensure we don't instantiate any shared GL context when SW-WR is used.
@@ -770,13 +775,13 @@ void RenderThread::InitDeviceTask() {
   }
 
   nsAutoCString err;
-  mSharedGL = CreateGLContext(err);
+  CreateSingletonGL(err);
   if (gfx::gfxVars::UseWebRenderProgramBinaryDisk()) {
     mProgramCache = MakeUnique<WebRenderProgramCache>(ThreadPool().Raw());
   }
   // Query the shared GL context to force the
   // lazy initialization to happen now.
-  SharedGL();
+  SingletonGL();
 }
 
 #ifndef XP_WIN
@@ -800,9 +805,7 @@ static DeviceResetReason GLenumToResetReason(GLenum aReason) {
 }
 #endif
 
-void RenderThread::HandleDeviceReset(const char* aWhere,
-                                     layers::CompositorBridgeParent* aBridge,
-                                     GLenum aReason) {
+void RenderThread::HandleDeviceReset(const char* aWhere, GLenum aReason) {
   MOZ_ASSERT(IsInRenderThread());
 
   if (mHandlingDeviceReset) {
@@ -859,7 +862,7 @@ void RenderThread::SimulateDeviceReset() {
     // When this function is called GPUProcessManager::SimulateDeviceReset()
     // already triggers destroying all CompositorSessions before re-creating
     // them.
-    HandleDeviceReset("SimulateDeviceReset", nullptr, LOCAL_GL_NO_ERROR);
+    HandleDeviceReset("SimulateDeviceReset", LOCAL_GL_NO_ERROR);
   }
 }
 
@@ -898,39 +901,71 @@ bool RenderThread::IsHandlingWebRenderError() {
   return mHandlingWebRenderError;
 }
 
-gl::GLContext* RenderThread::SharedGL() {
+gl::GLContext* RenderThread::SingletonGL() {
   nsAutoCString err;
-  auto gl = SharedGL(err);
+  auto* gl = SingletonGL(err);
   if (!err.IsEmpty()) {
     gfxCriticalNote << err.get();
   }
   return gl;
 }
 
-gl::GLContext* RenderThread::SharedGL(nsACString& aError) {
-  MOZ_ASSERT(IsInRenderThread());
-  if (!mSharedGL) {
-    mSharedGL = CreateGLContext(aError);
-    mShaders = nullptr;
-  }
-  if (mSharedGL && !mShaders) {
-    mShaders = MakeUnique<WebRenderShaders>(mSharedGL, mProgramCache.get());
-  }
-
-  return mSharedGL.get();
+void RenderThread::CreateSingletonGL(nsACString& aError) {
+  mSingletonGL = CreateGLContext(aError);
+  mSingletonGLIsForHardwareWebRender = !gfx::gfxVars::UseSoftwareWebRender();
 }
 
-void RenderThread::ClearSharedGL() {
+gl::GLContext* RenderThread::SingletonGL(nsACString& aError) {
+  MOZ_ASSERT(IsInRenderThread());
+  if (!mSingletonGL) {
+    CreateSingletonGL(aError);
+    mShaders = nullptr;
+  }
+  if (mSingletonGL && !mShaders) {
+    mShaders = MakeUnique<WebRenderShaders>(mSingletonGL, mProgramCache.get());
+  }
+
+  return mSingletonGL.get();
+}
+
+gl::GLContext* RenderThread::SingletonGLForCompositorOGL() {
+  MOZ_RELEASE_ASSERT(gfx::gfxVars::UseSoftwareWebRender());
+
+  if (mSingletonGLIsForHardwareWebRender) {
+    // Clear singleton GL, since GLContext is for hardware WebRender.
+    ClearSingletonGL();
+  }
+  return SingletonGL();
+}
+
+void RenderThread::ClearSingletonGL() {
   MOZ_ASSERT(IsInRenderThread());
   if (mSurfacePool) {
-    mSurfacePool->DestroyGLResourcesForContext(mSharedGL);
+    mSurfacePool->DestroyGLResourcesForContext(mSingletonGL);
+  }
+  if (mProgramsForCompositorOGL) {
+    mProgramsForCompositorOGL->Clear();
+    mProgramsForCompositorOGL = nullptr;
   }
   mShaders = nullptr;
-  mSharedGL = nullptr;
+  mSingletonGL = nullptr;
+}
+
+RefPtr<layers::ShaderProgramOGLsHolder>
+RenderThread::GetProgramsForCompositorOGL() {
+  if (!mSingletonGL) {
+    return nullptr;
+  }
+
+  if (!mProgramsForCompositorOGL) {
+    mProgramsForCompositorOGL =
+        MakeAndAddRef<layers::ShaderProgramOGLsHolder>(mSingletonGL);
+  }
+  return mProgramsForCompositorOGL;
 }
 
 RefPtr<layers::SurfacePool> RenderThread::SharedSurfacePool() {
-#ifdef XP_MACOSX
+#if defined(XP_MACOSX) || defined(MOZ_WAYLAND)
   if (!mSurfacePool) {
     size_t poolSizeLimit =
         StaticPrefs::gfx_webrender_compositor_surface_pool_size_AtStartup();
@@ -1028,8 +1063,7 @@ WebRenderProgramCache::~WebRenderProgramCache() {
   wr_program_cache_delete(mProgramCache);
 }
 
-}  // namespace wr
-}  // namespace mozilla
+}  // namespace mozilla::wr
 
 #ifdef XP_WIN
 static already_AddRefed<gl::GLContext> CreateGLContextANGLE(
@@ -1056,8 +1090,11 @@ static already_AddRefed<gl::GLContext> CreateGLContextANGLE(
     return nullptr;
   }
 
-  gl::CreateContextFlags flags = gl::CreateContextFlags::PREFER_ES3 |
-                                 gl::CreateContextFlags::PREFER_ROBUSTNESS;
+  gl::CreateContextFlags flags = gl::CreateContextFlags::PREFER_ES3;
+
+  if (StaticPrefs::gfx_webrender_prefer_robustness_AtStartup()) {
+    flags |= gl::CreateContextFlags::PREFER_ROBUSTNESS;
+  }
 
   if (egl->IsExtensionSupported(
           gl::EGLExtension::MOZ_create_context_provoking_vertex_dont_care)) {
@@ -1087,15 +1124,20 @@ static already_AddRefed<gl::GLContext> CreateGLContextANGLE(
 }
 #endif
 
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WAYLAND)
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WAYLAND) || defined(MOZ_X11)
 static already_AddRefed<gl::GLContext> CreateGLContextEGL() {
   // Create GLContext with dummy EGLSurface.
+  bool forHardwareWebRender = true;
+  // SW-WR uses CompositorOGL in native compositor.
+  if (gfx::gfxVars::UseSoftwareWebRender()) {
+    forHardwareWebRender = false;
+  }
   RefPtr<gl::GLContext> gl =
       gl::GLContextProviderEGL::CreateForCompositorWidget(
-          nullptr, /* aWebRender */ true, /* aForceAccelerated */ true);
+          nullptr, forHardwareWebRender, /* aForceAccelerated */ true);
   if (!gl || !gl->MakeCurrent()) {
-    gfxCriticalNote << "Failed GL context creation for WebRender: "
-                    << gfx::hexa(gl.get());
+    gfxCriticalNote << "Failed GL context creation for hardware WebRender: "
+                    << forHardwareWebRender;
     return nullptr;
   }
   return gl.forget();
@@ -1121,9 +1163,8 @@ static already_AddRefed<gl::GLContext> CreateGLContext(nsACString& aError) {
   }
 #elif defined(MOZ_WIDGET_ANDROID)
   gl = CreateGLContextEGL();
-#elif defined(MOZ_WAYLAND)
-  if (gdk_display_get_default() &&
-      !GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+#elif defined(MOZ_WAYLAND) || defined(MOZ_X11)
+  if (gfx::gfxVars::UseEGL()) {
     gl = CreateGLContextEGL();
   }
 #elif XP_MACOSX
@@ -1166,29 +1207,35 @@ void wr_notifier_external_event(mozilla::wr::WrWindowId aWindowId,
                                              std::move(evt));
 }
 
-void wr_schedule_render(mozilla::wr::WrWindowId aWindowId) {
+static void NotifyScheduleRender(mozilla::wr::WrWindowId aWindowId) {
   RefPtr<mozilla::layers::CompositorBridgeParent> cbp = mozilla::layers::
       CompositorBridgeParent::GetCompositorBridgeParentFromWindowId(aWindowId);
   if (cbp) {
-    cbp->ScheduleRenderOnCompositorThread();
+    cbp->ScheduleComposition();
   }
 }
 
-static void NotifyDidSceneBuild(RefPtr<layers::CompositorBridgeParent> aBridge,
-                                RefPtr<const wr::WebRenderPipelineInfo> aInfo) {
-  aBridge->NotifyDidSceneBuild(aInfo);
+void wr_schedule_render(mozilla::wr::WrWindowId aWindowId) {
+  layers::CompositorThread()->Dispatch(NewRunnableFunction(
+      "NotifyScheduleRender", &NotifyScheduleRender, aWindowId));
+}
+
+static void NotifyDidSceneBuild(
+    mozilla::wr::WrWindowId aWindowId,
+    const RefPtr<const wr::WebRenderPipelineInfo>& aInfo) {
+  RefPtr<mozilla::layers::CompositorBridgeParent> cbp = mozilla::layers::
+      CompositorBridgeParent::GetCompositorBridgeParentFromWindowId(aWindowId);
+  if (cbp) {
+    cbp->NotifyDidSceneBuild(aInfo);
+  }
 }
 
 void wr_finished_scene_build(mozilla::wr::WrWindowId aWindowId,
-                             mozilla::wr::WrPipelineInfo* aInfo) {
-  RefPtr<mozilla::layers::CompositorBridgeParent> cbp = mozilla::layers::
-      CompositorBridgeParent::GetCompositorBridgeParentFromWindowId(aWindowId);
+                             mozilla::wr::WrPipelineInfo* aPipelineInfo) {
   RefPtr<wr::WebRenderPipelineInfo> info = new wr::WebRenderPipelineInfo();
-  info->Raw() = std::move(*aInfo);
-  if (cbp) {
-    layers::CompositorThread()->Dispatch(NewRunnableFunction(
-        "NotifyDidSceneBuild", &NotifyDidSceneBuild, cbp, info));
-  }
+  info->Raw() = std::move(*aPipelineInfo);
+  layers::CompositorThread()->Dispatch(NewRunnableFunction(
+      "NotifyDidSceneBuild", &NotifyDidSceneBuild, aWindowId, info));
 }
 
 }  // extern C

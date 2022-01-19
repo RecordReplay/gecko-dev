@@ -17,6 +17,7 @@
 #include "mozilla/layers/SynchronousTask.h"
 #include "TextDrawTarget.h"
 #include "malloc_decls.h"
+#include "GLContext.h"
 
 // clang-format off
 #define WRDL_LOG(...)
@@ -99,6 +100,8 @@ class NewRenderer : public RendererEvent {
       return;
     }
 
+    compositor->MakeCurrent();
+
     *mBackend = compositor->BackendType();
     *mCompositor = compositor->CompositorType();
     *mUseANGLE = compositor->UseANGLE();
@@ -134,27 +137,41 @@ class NewRenderer : public RendererEvent {
                         ? aRenderThread.GetShaders()->RawShaders()
                         : nullptr;
 
+    // Check That if we are not using SWGL, we have at least a GL or GLES 3.0
+    // context.
+    if (gl && !swgl) {
+      bool versionCheck =
+          gl->IsAtLeast(gl::ContextProfile::OpenGLCore, 300) ||
+          gl->IsAtLeast(gl::ContextProfile::OpenGLCompatibility, 300) ||
+          gl->IsAtLeast(gl::ContextProfile::OpenGLES, 300);
+
+      if (!versionCheck) {
+        gfxCriticalNote << "GL context version (" << gl->Version()
+                        << ") insufficent for hardware WebRender";
+
+        mError->AssignASCII("GL context version insufficient");
+        return;
+      }
+    }
+
     if (!wr_window_new(
             aWindowId, mSize.width, mSize.height,
             mWindowKind == WindowKind::MAIN, supportLowPriorityTransactions,
             supportLowPriorityThreadpool, gfx::gfxVars::UseGLSwizzle(),
-            gfx::gfxVars::UseWebRenderScissoredCacheClears(),
-#ifdef NIGHTLY_BUILD
-            StaticPrefs::gfx_webrender_start_debug_server(),
-#else
-            false,
-#endif
-            swgl, gl, compositor->SurfaceOriginIsTopLeft(), progCache, shaders,
+            gfx::gfxVars::UseWebRenderScissoredCacheClears(), swgl, gl,
+            compositor->SurfaceOriginIsTopLeft(), progCache, shaders,
             aRenderThread.ThreadPool().Raw(),
             aRenderThread.ThreadPoolLP().Raw(), &WebRenderMallocSizeOf,
             &WebRenderMallocEnclosingSizeOf, 0, compositor.get(),
             compositor->ShouldUseNativeCompositor(),
-            compositor->GetMaxUpdateRects(), compositor->UsePartialPresent(),
+            compositor->UsePartialPresent(),
             compositor->GetMaxPartialPresentRects(),
             compositor->ShouldDrawPreviousPartialPresentRegions(), mDocHandle,
             &wrRenderer, mMaxTextureSize, &errorMessage,
             StaticPrefs::gfx_webrender_enable_gpu_markers_AtStartup(),
-            panic_on_gl_error, picTileWidth, picTileHeight)) {
+            panic_on_gl_error, picTileWidth, picTileHeight,
+            gfx::gfxVars::WebRenderRequiresHardwareDriver(),
+            StaticPrefs::gfx_webrender_low_quality_pinch_zoom_AtStartup())) {
       // wr_window_new puts a message into gfxCriticalNote if it returns false
       MOZ_ASSERT(errorMessage);
       mError->AssignASCII(errorMessage);
@@ -217,8 +234,10 @@ class RemoveRenderer : public RendererEvent {
   layers::SynchronousTask* mTask;
 };
 
-TransactionBuilder::TransactionBuilder(bool aUseSceneBuilderThread)
-    : mUseSceneBuilderThread(aUseSceneBuilderThread) {
+TransactionBuilder::TransactionBuilder(WebRenderAPI* aApi,
+                                       bool aUseSceneBuilderThread)
+    : mUseSceneBuilderThread(aUseSceneBuilderThread),
+      mApiBackend(aApi->GetBackendType()) {
   mTxn = wr_transaction_new(mUseSceneBuilderThread);
 }
 
@@ -290,10 +309,10 @@ bool TransactionBuilder::IsRenderedFrameInvalidated() const {
 void TransactionBuilder::SetDocumentView(
     const LayoutDeviceIntRect& aDocumentRect) {
   wr::DeviceIntRect wrDocRect;
-  wrDocRect.origin.x = aDocumentRect.x;
-  wrDocRect.origin.y = aDocumentRect.y;
-  wrDocRect.size.width = aDocumentRect.width;
-  wrDocRect.size.height = aDocumentRect.height;
+  wrDocRect.min.x = aDocumentRect.x;
+  wrDocRect.min.y = aDocumentRect.y;
+  wrDocRect.max.x = aDocumentRect.x + aDocumentRect.width;
+  wrDocRect.max.y = aDocumentRect.y + aDocumentRect.height;
   wr_transaction_set_document_view(mTxn, &wrDocRect);
 }
 
@@ -331,10 +350,6 @@ void TransactionWrapper::UpdateScrollPosition(
     const layers::ScrollableLayerGuid::ViewID& aScrollId,
     const wr::LayoutPoint& aScrollPosition) {
   wr_transaction_scroll_layer(mTxn, aPipelineId, aScrollId, aScrollPosition);
-}
-
-void TransactionWrapper::UpdatePinchZoom(float aZoom) {
-  wr_transaction_pinch_zoom(mTxn, aZoom);
 }
 
 void TransactionWrapper::UpdateIsTransformAsyncZooming(uint64_t aAnimationId,
@@ -423,7 +438,8 @@ WebRenderAPI::WebRenderAPI(wr::DocumentHandle* aHandle, wr::WindowId aId,
       mUseTripleBuffering(aUseTripleBuffering),
       mSupportsExternalBufferTextures(aSupportsExternalBufferTextures),
       mCaptureSequence(false),
-      mSyncHandle(aSyncHandle) {}
+      mSyncHandle(aSyncHandle),
+      mRendererDestroyed(false) {}
 
 WebRenderAPI::~WebRenderAPI() {
   if (!mRootDocumentApi) {
@@ -431,17 +447,26 @@ WebRenderAPI::~WebRenderAPI() {
   }
 
   if (!mRootApi) {
-    RenderThread::Get()->SetDestroyed(GetId());
-
-    layers::SynchronousTask task("Destroy WebRenderAPI");
-    auto event = MakeUnique<RemoveRenderer>(&task);
-    RunOnRenderThread(std::move(event));
-    task.Wait();
-
+    MOZ_RELEASE_ASSERT(mRendererDestroyed);
     wr_api_shut_down(mDocHandle);
   }
 
   wr_api_delete(mDocHandle);
+}
+
+void WebRenderAPI::DestroyRenderer() {
+  MOZ_RELEASE_ASSERT(!mRootApi);
+
+  RenderThread::Get()->SetDestroyed(GetId());
+  // Call wr_api_stop_render_backend() before RemoveRenderer.
+  wr_api_stop_render_backend(mDocHandle);
+
+  layers::SynchronousTask task("Destroy WebRenderAPI");
+  auto event = MakeUnique<RemoveRenderer>(&task);
+  RunOnRenderThread(std::move(event));
+  task.Wait();
+
+  mRendererDestroyed = true;
 }
 
 void WebRenderAPI::UpdateDebugFlags(uint32_t aFlags) {
@@ -673,15 +698,24 @@ void WebRenderAPI::Capture() {
   wr_api_capture(mDocHandle, path, bits);
 }
 
-void WebRenderAPI::ToggleCaptureSequence() {
-  mCaptureSequence = !mCaptureSequence;
+void WebRenderAPI::StartCaptureSequence(const nsCString& aPath,
+                                        uint32_t aFlags) {
   if (mCaptureSequence) {
-    uint8_t bits = 9;                          // TODO: get from JavaScript
-    const char* path = "wr-capture-sequence";  // TODO: get from JavaScript
-    wr_api_start_capture_sequence(mDocHandle, path, bits);
-  } else {
     wr_api_stop_capture_sequence(mDocHandle);
   }
+
+  wr_api_start_capture_sequence(mDocHandle, PromiseFlatCString(aPath).get(),
+                                aFlags);
+
+  mCaptureSequence = true;
+}
+
+void WebRenderAPI::StopCaptureSequence() {
+  if (mCaptureSequence) {
+    wr_api_stop_capture_sequence(mDocHandle);
+  }
+
+  mCaptureSequence = false;
 }
 
 void WebRenderAPI::BeginRecording(const TimeStamp& aRecordingStart,
@@ -924,11 +958,14 @@ void WebRenderAPI::RunOnRenderThread(UniquePtr<RendererEvent> aEvent) {
   wr_api_send_external_event(mDocHandle, event);
 }
 
-DisplayListBuilder::DisplayListBuilder(PipelineId aId, size_t aCapacity,
+DisplayListBuilder::DisplayListBuilder(PipelineId aId,
+                                       WebRenderBackend aBackend,
+                                       size_t aCapacity,
                                        layers::DisplayItemCache* aCache)
     : mCurrentSpaceAndClipChain(wr::RootScrollNodeWithChain()),
       mActiveFixedPosTracker(nullptr),
       mPipelineId(aId),
+      mBackend(aBackend),
       mDisplayItemCache(aCache) {
   MOZ_COUNT_CTOR(DisplayListBuilder);
   mWrState = wr_state_new(aId, aCapacity);
@@ -1022,56 +1059,44 @@ wr::WrClipChainId DisplayListBuilder::DefineClipChain(
   return wr::WrClipChainId{clipchainId};
 }
 
-wr::WrClipId DisplayListBuilder::DefineClip(
-    const Maybe<wr::WrSpaceAndClip>& aParent, const wr::LayoutRect& aClipRect,
-    const nsTArray<wr::ComplexClipRegion>* aComplex) {
-  CancelGroup();
-
-  WrClipId clipId;
-  if (aParent) {
-    clipId = wr_dp_define_clip_with_parent_clip(
-        mWrState, aParent.ptr(), aClipRect,
-        aComplex ? aComplex->Elements() : nullptr,
-        aComplex ? aComplex->Length() : 0);
-  } else {
-    clipId = wr_dp_define_clip_with_parent_clip_chain(
-        mWrState, &mCurrentSpaceAndClipChain, aClipRect,
-        aComplex ? aComplex->Elements() : nullptr,
-        aComplex ? aComplex->Length() : 0);
-  }
-
-  WRDL_LOG("DefineClip id=%zu p=%s r=%s complex=%zu\n", mWrState, clipId.id,
-           aParent ? ToString(aParent->clip.id).c_str() : "(nil)",
-           ToString(aClipRect).c_str(), aComplex ? aComplex->Length() : 0);
-
-  return clipId;
-}
-
 wr::WrClipId DisplayListBuilder::DefineImageMaskClip(
-    const wr::ImageMask& aMask) {
+    const wr::ImageMask& aMask, const nsTArray<wr::LayoutPoint>& aPoints,
+    wr::FillRule aFillRule) {
   CancelGroup();
 
   WrClipId clipId = wr_dp_define_image_mask_clip_with_parent_clip_chain(
-      mWrState, &mCurrentSpaceAndClipChain, aMask);
+      mWrState, &mCurrentSpaceAndClipChain, aMask, aPoints.Elements(),
+      aPoints.Length(), aFillRule);
 
   return clipId;
 }
 
 wr::WrClipId DisplayListBuilder::DefineRoundedRectClip(
-    const wr::ComplexClipRegion& aComplex) {
+    Maybe<wr::WrSpatialId> aSpace, const wr::ComplexClipRegion& aComplex) {
   CancelGroup();
 
-  WrClipId clipId = wr_dp_define_rounded_rect_clip_with_parent_clip_chain(
-      mWrState, &mCurrentSpaceAndClipChain, aComplex);
+  WrClipId clipId;
+  if (aSpace) {
+    clipId = wr_dp_define_rounded_rect_clip(mWrState, *aSpace, aComplex);
+  } else {
+    clipId = wr_dp_define_rounded_rect_clip_with_parent_clip_chain(
+        mWrState, &mCurrentSpaceAndClipChain, aComplex);
+  }
 
   return clipId;
 }
 
-wr::WrClipId DisplayListBuilder::DefineRectClip(wr::LayoutRect aClipRect) {
+wr::WrClipId DisplayListBuilder::DefineRectClip(Maybe<wr::WrSpatialId> aSpace,
+                                                wr::LayoutRect aClipRect) {
   CancelGroup();
 
-  WrClipId clipId = wr_dp_define_rect_clip_with_parent_clip_chain(
-      mWrState, &mCurrentSpaceAndClipChain, aClipRect);
+  WrClipId clipId;
+  if (aSpace) {
+    clipId = wr_dp_define_rect_clip(mWrState, *aSpace, aClipRect);
+  } else {
+    clipId = wr_dp_define_rect_clip_with_parent_clip_chain(
+        mWrState, &mCurrentSpaceAndClipChain, aClipRect);
+  }
 
   return clipId;
 }
@@ -1171,8 +1196,8 @@ void DisplayListBuilder::PushRoundedRect(const wr::LayoutRect& aBounds,
   // Made the borders thicker than one half the width/height, to avoid
   // little white dots at the center at some magnifications.
   wr::BorderSide side = {aColor, wr::BorderStyle::Solid};
-  float h = aBounds.size.width * 0.6f;
-  float v = aBounds.size.height * 0.6f;
+  float h = aBounds.width() * 0.6f;
+  float v = aBounds.height() * 0.6f;
   wr::LayoutSideOffsets widths = {v, h, v, h};
   wr::BorderRadius radii = {{h, v}, {h, v}, {h, v}, {h, v}};
 
@@ -1223,28 +1248,6 @@ void DisplayListBuilder::PushClearRect(const wr::LayoutRect& aBounds) {
   wr_dp_push_clear_rect(mWrState, aBounds, clip, &mCurrentSpaceAndClipChain);
 }
 
-void DisplayListBuilder::PushClearRectWithComplexRegion(
-    const wr::LayoutRect& aBounds, const wr::ComplexClipRegion& aRegion) {
-  wr::LayoutRect clip = MergeClipLeaf(aBounds);
-  WRDL_LOG("PushClearRectWithComplexRegion b=%s c=%s\n", mWrState,
-           ToString(aBounds).c_str(), ToString(clip).c_str());
-
-  // TODO(gw): This doesn't pass the complex region through to WR, as clear
-  //           rects with complex clips are currently broken. This is the
-  //           only place they are used, and they are used only for a single
-  //           case (close buttons on Win7 machines). We might be able to
-  //           get away with not supporting this at all in WR, using the
-  //           non-clipped clear rect is an improvement for now, at least.
-  //           See https://bugzilla.mozilla.org/show_bug.cgi?id=1636683 for
-  //           more information.
-  AutoTArray<wr::ComplexClipRegion, 1> clips;
-  auto clipId = DefineClip(Nothing(), aBounds, &clips);
-  auto spaceAndClip = WrSpaceAndClip{mCurrentSpaceAndClipChain.space, clipId};
-
-  wr_dp_push_clear_rect_with_parent_clip(mWrState, aBounds, clip,
-                                         &spaceAndClip);
-}
-
 void DisplayListBuilder::PushBackdropFilter(
     const wr::LayoutRect& aBounds, const wr::ComplexClipRegion& aRegion,
     const nsTArray<wr::FilterOp>& aFilters,
@@ -1253,9 +1256,7 @@ void DisplayListBuilder::PushBackdropFilter(
   WRDL_LOG("PushBackdropFilter b=%s c=%s\n", mWrState,
            ToString(aBounds).c_str(), ToString(clip).c_str());
 
-  AutoTArray<wr::ComplexClipRegion, 1> clips;
-  clips.AppendElement(aRegion);
-  auto clipId = DefineClip(Nothing(), aBounds, &clips);
+  auto clipId = DefineRoundedRectClip(Nothing(), aRegion);
   auto spaceAndClip = WrSpaceAndClip{mCurrentSpaceAndClipChain.space, clipId};
 
   wr_dp_push_backdrop_filter_with_parent_clip(
@@ -1492,7 +1493,7 @@ void DisplayListBuilder::SuspendClipLeafMerging() {
     mSuspendedClipChainLeaf = mClipChainLeaf;
     mSuspendedSpaceAndClipChain = Some(mCurrentSpaceAndClipChain);
 
-    auto clipId = DefineRectClip(*mClipChainLeaf);
+    auto clipId = DefineRectClip(Nothing(), *mClipChainLeaf);
     auto clipChainId = DefineClipChain({clipId}, true);
 
     mCurrentSpaceAndClipChain.clip_chain = clipChainId.id;

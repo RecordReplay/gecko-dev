@@ -90,20 +90,11 @@
         ]
       },
       {
-        "name": "removeCertOverride",
+        "name": "removeAllCertOverrides",
         "type": "function",
         "async": true,
-        "description": "Revokes SSL certificate overrides for the given host+port.",
-        "parameters": [
-          {
-            "type": "string",
-            "name": "host"
-          },
-          {
-            "type": "number",
-            "name": "port"
-          }
-        ]
+        "description": "Revokes SSL certificate overrides.",
+        "parameters": []
       },
       {
         "name": "setScalar",
@@ -154,6 +145,32 @@
           {
             "type": "number",
             "name": "tabId"
+          }
+        ]
+      },
+      {
+        "name":  "getAllBrowserPids",
+        "type": "function",
+        "async": true,
+        "description": "Gets the list of pids of the running browser processes",
+        "parameters": []
+      },
+      {
+        "name":  "getProfilePath",
+        "type": "function",
+        "async": true,
+        "description": "Gets the path of the current profile",
+        "parameters": []
+      },
+      {
+        "name": "killContentProcess",
+        "type": "function",
+        "async": true,
+        "description": "Crash all content processes",
+        "parameters": [
+          {
+            "type": "number",
+            "name": "pid"
           }
         ]
       },

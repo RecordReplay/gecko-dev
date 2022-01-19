@@ -6,6 +6,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  clearTimeout: "resource://gre/modules/Timer.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
   Region: "resource://gre/modules/Region.jsm",
@@ -259,67 +260,6 @@ function useHttpServer(dir = "data") {
   return httpServer;
 }
 
-/**
- * Adds test engines and returns a promise resolved when they are installed.
- *
- * The engines are added in the given order.
- *
- * @param {Array<object>} aItems
- *   Array of objects with the following properties:
- *   {
- *     name: Engine name, used to wait for it to be loaded.
- *     xmlFileName: Name of the XML file in the "data" folder.
- *     details: Object containing the parameters of addEngineWithDetails,
- *              except for the engine name.  Alternative to xmlFileName.
- *   }
- */
-var addTestEngines = async function(aItems) {
-  if (!gDataUrl) {
-    do_throw("useHttpServer must be called before addTestEngines.");
-  }
-
-  let engines = [];
-
-  for (let item of aItems) {
-    info("Adding engine: " + item.name);
-    await new Promise((resolve, reject) => {
-      Services.obs.addObserver(function obs(subject, topic, data) {
-        try {
-          let engine = subject.QueryInterface(Ci.nsISearchEngine);
-          info("Observed " + data + " for " + engine.name);
-          if (data != "engine-added" || engine.name != item.name) {
-            return;
-          }
-
-          Services.obs.removeObserver(obs, "browser-search-engine-modified");
-          engines.push(engine);
-          resolve();
-        } catch (ex) {
-          reject(ex);
-        }
-      }, "browser-search-engine-modified");
-
-      if (item.xmlFileName) {
-        Services.search.addOpenSearchEngine(gDataUrl + item.xmlFileName, null);
-      } else {
-        Services.search.addEngineWithDetails(item.name, item.details);
-      }
-    });
-  }
-
-  return engines;
-};
-
-/**
- * Installs a test engine into the test profile.
- *
- * @returns {Array<SearchEngine>}
- */
-function installTestEngine() {
-  useHttpServer();
-  return addTestEngines([{ name: kTestEngineName, xmlFileName: "engine.xml" }]);
-}
-
 // This "enum" from nsSearchService.js
 const TELEMETRY_RESULT_ENUM = {
   SUCCESS: 0,
@@ -390,6 +330,67 @@ function useCustomGeoServer(region, waitToRespond = Promise.resolve()) {
     "browser.region.network.url",
     `http://localhost:${srv.identity.primaryPort}/fetch_region`
   );
+}
+
+/**
+ * A simple observer to ensure we get only the expected notifications.
+ */
+class SearchObserver {
+  constructor(expectedNotifications, returnEngineForNotification = false) {
+    this.observer = this.observer.bind(this);
+    this.deferred = PromiseUtils.defer();
+    this.expectedNotifications = expectedNotifications;
+    this.returnEngineForNotification = returnEngineForNotification;
+
+    Services.obs.addObserver(this.observer, SearchUtils.TOPIC_ENGINE_MODIFIED);
+
+    this.timeout = setTimeout(this.handleTimeout.bind(this), 1000);
+  }
+
+  get promise() {
+    return this.deferred.promise;
+  }
+
+  handleTimeout() {
+    this.deferred.reject(
+      new Error(
+        "Waiting for Notifications timed out, only received: " +
+          this.expectedNotifications.join(",")
+      )
+    );
+  }
+
+  observer(subject, topic, data) {
+    Assert.greater(
+      this.expectedNotifications.length,
+      0,
+      "Should be expecting a notification"
+    );
+    Assert.equal(
+      data,
+      this.expectedNotifications[0],
+      "Should have received the next expected notification"
+    );
+
+    if (
+      this.returnEngineForNotification &&
+      data == this.returnEngineForNotification
+    ) {
+      this.engineToReturn = subject.QueryInterface(Ci.nsISearchEngine);
+    }
+
+    this.expectedNotifications.shift();
+
+    if (!this.expectedNotifications.length) {
+      clearTimeout(this.timeout);
+      delete this.timeout;
+      this.deferred.resolve(this.engineToReturn);
+      Services.obs.removeObserver(
+        this.observer,
+        SearchUtils.TOPIC_ENGINE_MODIFIED
+      );
+    }
+  }
 }
 
 /**

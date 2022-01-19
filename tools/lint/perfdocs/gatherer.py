@@ -5,7 +5,6 @@ from __future__ import absolute_import
 
 import os
 import pathlib
-import re
 
 from perfdocs.logger import PerfDocLogger
 from perfdocs.utils import read_yaml
@@ -13,6 +12,7 @@ from perfdocs.framework_gatherers import (
     RaptorGatherer,
     MozperftestGatherer,
     TalosGatherer,
+    AWSYGatherer,
 )
 
 logger = PerfDocLogger()
@@ -21,7 +21,8 @@ logger = PerfDocLogger()
 frameworks = {
     "raptor": RaptorGatherer,
     "mozperftest": MozperftestGatherer,
-    "Talos": TalosGatherer,
+    "talos": TalosGatherer,
+    "awsy": AWSYGatherer,
 }
 
 
@@ -31,13 +32,14 @@ class Gatherer(object):
     and can obtain manifest-based test lists. Used by the Verifier.
     """
 
-    def __init__(self, workspace_dir):
+    def __init__(self, workspace_dir, taskgraph=None):
         """
         Initialzie the Gatherer.
 
         :param str workspace_dir: Path to the gecko checkout.
         """
         self.workspace_dir = workspace_dir
+        self.taskgraph = taskgraph
         self._perfdocs_tree = []
         self._test_list = []
         self.framework_gatherers = {}
@@ -73,10 +75,14 @@ class Gatherer(object):
         This method doesn't return anything. The result can be found in
         the perfdocs_tree attribute.
         """
-        exclude_dir = ["tools/lint", ".hg", "testing/perfdocs"]
+        exclude_dir = [
+            ".hg",
+            os.path.join("tools", "lint"),
+            os.path.join("testing", "perfdocs"),
+        ]
 
         for path in pathlib.Path(self.workspace_dir).rglob("perfdocs"):
-            if any(re.search(d, str(path)) for d in exclude_dir):
+            if any(d in str(path.resolve()) for d in exclude_dir):
                 continue
             files = [f for f in os.listdir(path)]
             matched = {"path": str(path), "yml": "", "rst": "", "static": []}
@@ -96,7 +102,8 @@ class Gatherer(object):
 
         logger.log(
             "Found {} perfdocs directories in {}".format(
-                len(self._perfdocs_tree), [d["path"] for d in self._perfdocs_tree]
+                len(self._perfdocs_tree),
+                [d["path"] for d in self._perfdocs_tree],
             )
         )
 
@@ -130,7 +137,7 @@ class Gatherer(object):
 
         # Get and then store the frameworks tests
         self.framework_gatherers[framework["name"]] = frameworks[framework["name"]](
-            framework["yml_path"], self.workspace_dir
+            framework["yml_path"], self.workspace_dir, self.taskgraph
         )
 
         if not yaml_content["static-only"]:

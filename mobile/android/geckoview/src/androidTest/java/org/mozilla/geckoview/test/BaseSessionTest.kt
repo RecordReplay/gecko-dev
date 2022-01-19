@@ -41,8 +41,11 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
         const val FORMS2_HTML_PATH = "/assets/www/forms2.html"
         const val FORMS3_HTML_PATH = "/assets/www/forms3.html"
         const val FORMS4_HTML_PATH = "/assets/www/forms4.html"
+        const val FORMS5_HTML_PATH = "/assets/www/forms5.html"
+        const val ADDRESS_FORM_HTML_PATH = "/assets/www/address_form.html"
         const val FORMS_AUTOCOMPLETE_HTML_PATH = "/assets/www/forms_autocomplete.html"
         const val FORMS_ID_VALUE_HTML_PATH = "/assets/www/forms_id_value.html"
+        const val CC_FORM_HTML_PATH = "/assets/www/cc_form.html"
         const val HELLO_HTML_PATH = "/assets/www/hello.html"
         const val HELLO2_HTML_PATH = "/assets/www/hello2.html"
         const val HELLO_IFRAME_HTML_PATH = "/assets/www/iframe_hello.html"
@@ -92,6 +95,12 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
         const val IFRAME_98VH_SCROLLABLE_HTML_PATH = "/assets/www/iframe_98vh_scrollable.html"
         const val IFRAME_98VH_NO_SCROLLABLE_HTML_PATH = "/assets/www/iframe_98vh_no_scrollable.html"
         const val TOUCHSTART_HTML_PATH = "/assets/www/touchstart.html"
+        const val TOUCH_ACTION_HTML_PATH = "/assets/www/touch-action.html"
+        const val OVERSCROLL_BEHAVIOR_AUTO_HTML_PATH = "/assets/www/overscroll-behavior-auto.html"
+        const val OVERSCROLL_BEHAVIOR_AUTO_NONE_HTML_PATH = "/assets/www/overscroll-behavior-auto-none.html"
+        const val OVERSCROLL_BEHAVIOR_NONE_AUTO_HTML_PATH = "/assets/www/overscroll-behavior-none-auto.html"
+        const val OVERSCROLL_BEHAVIOR_NONE_NON_ROOT_HTML_PATH = "/assets/www/overscroll-behavior-none-on-non-root.html"
+        const val SCROLL_HANDOFF_HTML_PATH = "/assets/www/scroll-handoff.html"
 
         const val TEST_ENDPOINT = GeckoSessionTestRule.TEST_ENDPOINT
     }

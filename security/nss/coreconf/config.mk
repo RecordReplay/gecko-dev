@@ -195,10 +195,6 @@ ifdef NSS_PKIX_NO_LDAP
 DEFINES += -DNSS_PKIX_NO_LDAP
 endif
 
-ifdef NSS_ENABLE_DRAFT_HPKE
-DEFINES += -DNSS_ENABLE_DRAFT_HPKE
-endif
-
 # FIPS support requires startup tests to be executed at load time of shared modules.
 # For performance reasons, these tests are disabled by default.
 # When compiling binaries that must support FIPS mode,
@@ -231,8 +227,13 @@ DEFINES += -DNSS_DISABLE_ARM32_NEON
 endif
 
 # Avoid building with PowerPC's Altivec acceleration
-ifdef NSS_DISABLE_ALTIVEC
+ifeq ($(NSS_DISABLE_ALTIVEC),1)
 DEFINES += -DNSS_DISABLE_ALTIVEC
+endif
+
+# Avoid building with PowerPC's Crypto and VSX instructions
+ifeq ($(NSS_DISABLE_CRYPTO_VSX),1)
+DEFINES += -DNSS_DISABLE_CRYPTO_VSX
 endif
 
 # This allows all library and tools code to use the util function

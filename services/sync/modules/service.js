@@ -92,13 +92,13 @@ function getEngineModules() {
   };
   if (Svc.Prefs.get("engine.addresses.available", false)) {
     result.Addresses = {
-      module: "resource://formautofill/FormAutofillSync.jsm",
+      module: "resource://autofill/FormAutofillSync.jsm",
       symbol: "AddressesEngine",
     };
   }
   if (Svc.Prefs.get("engine.creditcards.available", false)) {
     result.CreditCards = {
-      module: "resource://formautofill/FormAutofillSync.jsm",
+      module: "resource://autofill/FormAutofillSync.jsm",
       symbol: "CreditCardsEngine",
     };
   }
@@ -1566,8 +1566,8 @@ Sync11Service.prototype = {
    * Wipe all remote user data by wiping the server then telling each remote
    * client to wipe itself.
    *
-   * @param engines [optional]
-   *        Array of engine names to wipe. If not given, all engines are used.
+   * @param engines
+   *        Array of engine names to wipe.
    */
   async wipeRemote(engines) {
     try {
@@ -1579,13 +1579,8 @@ Sync11Service.prototype = {
 
       // Only wipe the engines provided.
       let extra = { reason: "wipe-remote" };
-      if (engines) {
-        for (const e of engines) {
-          await this.clientsEngine.sendCommand("wipeEngine", [e], null, extra);
-        }
-      } else {
-        // Tell the remote machines to wipe themselves.
-        await this.clientsEngine.sendCommand("wipeAll", [], null, extra);
+      for (const e of engines) {
+        await this.clientsEngine.sendCommand("wipeEngine", [e], null, extra);
       }
 
       // Make sure the changed clients get updated.

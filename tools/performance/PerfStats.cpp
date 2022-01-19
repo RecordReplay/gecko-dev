@@ -20,13 +20,19 @@ using namespace mozilla::gfx;
 
 namespace mozilla {
 
-static const char* const sMetricNames[] = {"DisplayList Building",
+static const char* const sMetricNames[] = {"DisplayListBuilding",
                                            "Rasterizing",
                                            "LayerBuilding",
-                                           "Layer Transactions",
+                                           "LayerTransactions",
                                            "Compositing",
                                            "Reflowing",
-                                           "Styling"};
+                                           "Styling",
+                                           "HttpChannelCompletion",
+                                           "HttpChannelCompletion_Network",
+                                           "HttpChannelCompletion_Cache"};
+
+static_assert(sizeof(sMetricNames) / sizeof(sMetricNames[0]) ==
+              static_cast<uint64_t>(PerfStats::Metric::Max));
 
 PerfStats::MetricMask PerfStats::sCollectionMask = 0;
 StaticMutex PerfStats::sMutex;
@@ -90,6 +96,16 @@ void PerfStats::RecordMeasurementEndInternal(Metric aMetric) {
           .ToMilliseconds();
 }
 
+void PerfStats::RecordMeasurementInternal(Metric aMetric,
+                                          TimeDuration aDuration) {
+  StaticMutexAutoLock lock(sMutex);
+
+  MOZ_ASSERT(sSingleton);
+
+  sSingleton->mRecordedTimes[static_cast<size_t>(aMetric)] +=
+      aDuration.ToMilliseconds();
+}
+
 struct StringWriteFunc : public JSONWriteFunc {
   nsCString& mString;
 
@@ -120,9 +136,8 @@ struct PerfStatsCollector {
         aParent->ManagedPBrowserParent();
 
     writer.StartArrayProperty("urls");
-    for (auto iter = browsers.ConstIter(); !iter.Done(); iter.Next()) {
-      RefPtr<BrowserParent> parent =
-          BrowserParent::GetFrom(iter.Get()->GetKey());
+    for (const auto& key : browsers) {
+      RefPtr<BrowserParent> parent = BrowserParent::GetFrom(key);
 
       CanonicalBrowsingContext* ctx = parent->GetBrowsingContext();
       if (!ctx) {

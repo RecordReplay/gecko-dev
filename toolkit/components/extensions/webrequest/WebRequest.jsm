@@ -33,6 +33,15 @@ XPCOMUtils.defineLazyGetter(this, "getCookieStoreIdForOriginAttributes", () => {
   return ExtensionParent.apiManager.global.getCookieStoreIdForOriginAttributes;
 });
 
+// Classes of requests that should be sent immediately instead of batched.
+// Covers basically anything that can delay first paint or DOMContentLoaded:
+// top frame HTML, <head> blocking CSS, fonts preflight, sync JS and XHR.
+const URGENT_CLASSES =
+  Ci.nsIClassOfService.Leader |
+  Ci.nsIClassOfService.Unblocked |
+  Ci.nsIClassOfService.UrgentStart |
+  Ci.nsIClassOfService.TailForbidden;
+
 function runLater(job) {
   Services.tm.dispatchToMainThread(job);
 }
@@ -263,6 +272,7 @@ function serializeRequestData(eventName) {
     incognito: this.incognito,
     thirdParty: this.thirdParty,
     cookieStoreId: this.cookieStoreId,
+    urgentSend: this.urgentSend,
   };
 
   if (MAYBE_CACHED_EVENTS.has(eventName)) {
@@ -727,6 +737,8 @@ HttpObserverManager = {
 
   getRequestData(channel, extraData) {
     let originAttributes = channel.loadInfo?.originAttributes;
+    let cos = channel.channel.QueryInterface(Ci.nsIClassOfService);
+
     let data = {
       requestId: String(channel.id),
       url: channel.finalURL,
@@ -753,6 +765,9 @@ HttpObserverManager = {
       requestSize: channel.requestSize,
       responseSize: channel.responseSize,
       urlClassification: channel.urlClassification,
+
+      // Figure out if this is an urgent request that shouldn't be batched.
+      urgentSend: (cos.classFlags & URGENT_CLASSES) > 0,
     };
 
     if (originAttributes) {
@@ -837,6 +852,17 @@ HttpObserverManager = {
           return;
         }
 
+        let extension = opts.policy?.extension;
+        // TODO: Move this logic to ChannelWrapper::matches, see bug 1699481
+        if (
+          extension?.userContextIsolation &&
+          !extension.canAccessContainer(
+            channel.loadInfo?.originAttributes.userContextId
+          )
+        ) {
+          return;
+        }
+
         if (!commonData) {
           commonData = this.getRequestData(channel, extraData);
           if (this.STATUS_TYPES.has(kind)) {
@@ -845,6 +871,7 @@ HttpObserverManager = {
           }
         }
         let data = Object.create(commonData);
+        data.urgentSend = data.urgentSend && opts.blocking;
 
         if (registerFilter && opts.blocking && opts.policy) {
           data.registerTraceableChannel = (policy, remoteTab) => {
@@ -970,12 +997,11 @@ HttpObserverManager = {
             Cr.NS_ERROR_ABORT,
             Ci.nsILoadInfo.BLOCKING_REASON_EXTENSION_WEBREQUEST
           );
-          let { policy } = opts;
-          if (policy) {
+          if (opts.policy) {
             let properties = channel.channel.QueryInterface(
               Ci.nsIWritablePropertyBag
             );
-            properties.setProperty("cancelledByExtension", policy.id);
+            properties.setProperty("cancelledByExtension", opts.policy.id);
           }
           return;
         }
@@ -991,6 +1017,12 @@ HttpObserverManager = {
             }
             channel.resume(text);
             channel.redirectTo(Services.io.newURI(result.redirectUrl));
+            if (opts.policy) {
+              let properties = channel.channel.QueryInterface(
+                Ci.nsIWritablePropertyBag
+              );
+              properties.setProperty("redirectedByExtension", opts.policy.id);
+            }
 
             // Web Extensions using the WebRequest API are allowed
             // to redirect a channel to a data: URI, hence we mark

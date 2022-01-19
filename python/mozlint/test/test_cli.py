@@ -94,5 +94,34 @@ def test_cli_run_with_setup(run, capfd):
     assert ret == 1
 
 
+def test_cli_for_exclude_list(run, monkeypatch, capfd):
+    ret = run(["-l", "excludes", "--check-exclude-list"])
+    out, err = capfd.readouterr()
+
+    assert "**/foobar.js" in out
+    assert (
+        "The following list of paths are now green and can be removed from the exclude list:"
+        in out
+    )
+
+    ret = run(["-l", "excludes_empty", "--check-exclude-list"])
+    out, err = capfd.readouterr()
+
+    assert "No path in the exclude list is green." in out
+    assert ret == 1
+
+
+def test_cli_run_with_wrong_linters(run, capfd):
+
+    run(["-l", "external", "-l", "foobar"])
+    out, err = capfd.readouterr()
+
+    # Check if it identifes foobar as invalid linter
+    assert "A failure occurred in the foobar linter." in out
+
+    # Check for exception message
+    assert "Invalid linters given, run again using valid linters or no linters" in out
+
+
 if __name__ == "__main__":
     mozunit.main()

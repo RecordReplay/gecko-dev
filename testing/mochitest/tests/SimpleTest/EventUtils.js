@@ -10,9 +10,7 @@
  *  sendWheelAndPaintNoFlush
  *  synthesizeMouse
  *  synthesizeMouseAtCenter
- *  synthesizeNativeMouseMove
- *  synthesizeNativeMouseClick
- *  synthesizeNativeMouseClickAtCenter
+ *  synthesizeNativeMouseEvent
  *  synthesizeWheel
  *  synthesizeWheelAtPoint
  *  synthesizeKey
@@ -157,36 +155,58 @@ function _EU_getPlatform() {
   return "unknown";
 }
 
-function _EU_nativeMouseDownEventMsg() {
-  switch (_EU_getPlatform()) {
-    case "windows":
-      return 2; // MOUSEEVENTF_LEFTDOWN
-    case "mac":
-      return 1; // NSEventTypeLeftMouseDown
-    case "linux":
-      return 4; // GDK_BUTTON_PRESS
-    case "android":
-      return 5; // ACTION_POINTER_DOWN
+/**
+ * promiseElementReadyForUserInput() dispatches mousemove events to aElement
+ * and waits one of them for a while.  Then, returns "resolved" state when it's
+ * successfully received.  Otherwise, if it couldn't receive mousemove event on
+ * it, this throws an exception.  So, aElement must be an element which is
+ * assumed non-collapsed visible element in the window.
+ *
+ * This is useful if you need to synthesize mouse events via the main process
+ * but your test cannot check whether the element is now in APZ to deliver
+ * a user input event.
+ */
+async function promiseElementReadyForUserInput(
+  aElement,
+  aWindow = window,
+  aLogFunc = null
+) {
+  if (typeof aElement == "string") {
+    aElement = aWindow.document.getElementById(aElement);
   }
-  throw new Error(
-    "Native mouse-down events not supported on platform " + _EU_getPlatform()
-  );
-}
 
-function _EU_nativeMouseUpEventMsg() {
-  switch (_EU_getPlatform()) {
-    case "windows":
-      return 4; // MOUSEEVENTF_LEFTUP
-    case "mac":
-      return 2; // NSEventTypeLeftMouseUp
-    case "linux":
-      return 7; // GDK_BUTTON_RELEASE
-    case "android":
-      return 6; // ACTION_POINTER_UP
+  function waitForMouseMoveForHittest() {
+    return new Promise(resolve => {
+      let timeout;
+      const onHit = () => {
+        if (aLogFunc) {
+          aLogFunc("mousemove received");
+        }
+        aWindow.clearInterval(timeout);
+        resolve(true);
+      };
+      aElement.addEventListener("mousemove", onHit, {
+        capture: true,
+        once: true,
+      });
+      synthesizeMouseAtCenter(aElement, { type: "mousemove" }, aWindow);
+      timeout = aWindow.setInterval(() => {
+        if (aLogFunc) {
+          aLogFunc("mousemove not received in this 300ms");
+        }
+        aElement.removeEventListener("mousemove", onHit, {
+          capture: true,
+        });
+        resolve(false);
+      }, 300);
+    });
   }
-  throw new Error(
-    "Native mouse-up events not supported on platform " + _EU_getPlatform()
-  );
+  for (let i = 0; i < 20; i++) {
+    if (await waitForMouseMoveForHittest()) {
+      return Promise.resolve();
+    }
+  }
+  throw new Error("The element or the window did not become interactive");
 }
 
 /**
@@ -211,7 +231,23 @@ function computeButton(aEvent) {
   return aEvent.type == "contextmenu" ? 2 : 0;
 }
 
-async function sendMouseEvent(aEvent, aTarget, aWindow) {
+function computeButtons(aEvent, utils) {
+  if (typeof aEvent.buttons != "undefined") {
+    return aEvent.buttons;
+  }
+
+  if (typeof aEvent.button != "undefined") {
+    return utils.MOUSE_BUTTONS_NOT_SPECIFIED;
+  }
+
+  if (typeof aEvent.type != "undefined" && aEvent.type != "mousedown") {
+    return utils.MOUSE_BUTTONS_NO_BUTTON;
+  }
+
+  return utils.MOUSE_BUTTONS_NOT_SPECIFIED;
+}
+
+function sendMouseEvent(aEvent, aTarget, aWindow) {
   if (
     ![
       "click",
@@ -237,7 +273,7 @@ async function sendMouseEvent(aEvent, aTarget, aWindow) {
   }
 
   if (aEvent.type === "click" && this.AccessibilityUtils) {
-    await this.AccessibilityUtils.assertCanBeClicked(aTarget);
+    this.AccessibilityUtils.assertCanBeClicked(aTarget);
   }
 
   var event = aWindow.document.createEvent("MouseEvent");
@@ -588,8 +624,6 @@ function synthesizeMouseAtPoint(left, top, aEvent, aWindow = window) {
       "isWidgetEventSynthesized" in aEvent
         ? aEvent.isWidgetEventSynthesized
         : false;
-    var buttons =
-      "buttons" in aEvent ? aEvent.buttons : utils.MOUSE_BUTTONS_NOT_SPECIFIED;
     if ("type" in aEvent && aEvent.type) {
       defaultPrevented = utils.sendMouseEvent(
         aEvent.type,
@@ -603,7 +637,7 @@ function synthesizeMouseAtPoint(left, top, aEvent, aWindow = window) {
         inputSource,
         isDOMEventSynthesized,
         isWidgetEventSynthesized,
-        buttons,
+        computeButtons(aEvent, utils),
         id
       );
     } else {
@@ -619,7 +653,7 @@ function synthesizeMouseAtPoint(left, top, aEvent, aWindow = window) {
         inputSource,
         isDOMEventSynthesized,
         isWidgetEventSynthesized,
-        buttons,
+        computeButtons(Object.assign({ type: "mousedown" }, aEvent), utils),
         id
       );
       utils.sendMouseEvent(
@@ -634,7 +668,7 @@ function synthesizeMouseAtPoint(left, top, aEvent, aWindow = window) {
         inputSource,
         isDOMEventSynthesized,
         isWidgetEventSynthesized,
-        buttons,
+        computeButtons(Object.assign({ type: "mouseup" }, aEvent), utils),
         id
       );
     }
@@ -652,7 +686,7 @@ function synthesizeTouchAtPoint(left, top, aEvent, aWindow = window) {
     var rx = aEvent.rx || 1;
     var ry = aEvent.ry || 1;
     var angle = aEvent.angle || 0;
-    var force = aEvent.force || 1;
+    var force = aEvent.force || (aEvent.type === "touchend" ? 0 : 1);
     var modifiers = _parseModifiers(aEvent, aWindow);
 
     if ("type" in aEvent && aEvent.type) {
@@ -1013,93 +1047,200 @@ function synthesizeNativeTap(
   utils.sendNativeTouchTap(x, y, aLongTap, observer);
 }
 
-function synthesizeNativeMouseMove(
-  aTarget,
-  aOffsetX,
-  aOffsetY,
-  aCallback,
-  aWindow = window
-) {
-  var utils = _getDOMWindowUtils(aWindow);
-  if (!utils) {
-    return;
-  }
-
-  var rect = aTarget.getBoundingClientRect();
-  var x = aOffsetX + window.mozInnerScreenX + rect.left;
-  var y = aOffsetY + window.mozInnerScreenY + rect.top;
-  var scale = utils.screenPixelsPerCSSPixel;
-
-  var observer = {
-    observe: (subject, topic, data) => {
-      if (aCallback && topic == "mouseevent") {
-        aCallback(data);
-      }
-    },
-  };
-  utils.sendNativeMouseMove(x * scale, y * scale, null, observer);
-}
-
-function synthesizeNativeMouseClick(
-  aTarget,
-  aOffsetX,
-  aOffsetY,
-  aCallback,
-  aWindow = window
-) {
-  var utils = _getDOMWindowUtils(aWindow);
-  if (!utils) {
-    return;
-  }
-
-  var rect = aTarget.getBoundingClientRect();
-  var x = aOffsetX + window.mozInnerScreenX + rect.left;
-  var y = aOffsetY + window.mozInnerScreenY + rect.top;
-  var scale = utils.screenPixelsPerCSSPixel;
-
-  var observer = {
-    observe: (subject, topic, data) => {
-      if (aCallback && topic == "mouseevent") {
-        aCallback(data);
-      }
-    },
-  };
-  utils.sendNativeMouseEvent(
-    x * scale,
-    y * scale,
-    _EU_nativeMouseDownEventMsg(),
-    0,
-    null,
-    function() {
-      utils.sendNativeMouseEvent(
-        x * scale,
-        y * scale,
-        _EU_nativeMouseUpEventMsg(),
-        0,
-        null,
-        observer
+function synthesizeNativeMouseEvent(aParams, aCallback = null) {
+  const {
+    type, // "click", "mousedown", "mouseup" or "mousemove"
+    target, // Origin of offsetX and offsetY, must be an element
+    offsetX, // X offset in `target` (in CSS pixels if `scale` is "screenPixelsPerCSSPixel*")
+    offsetY, // Y offset in `target` (in CSS pixels if `scale` is "screenPixelsPerCSSPixel*")
+    atCenter, // Instead of offsetX/Y, synthesize the event at center of `target`
+    screenX, // X offset in screen (in CSS pixels if `scale` is "screenPixelsPerCSSPixel*"), offsetX/Y nor atCenter must not be set if this is set
+    screenY, // Y offset in screen (in CSS pixels if `scale` is "screenPixelsPerCSSPixel*"), offsetX/Y nor atCenter must not be set if this is set
+    // If scale is "screenPixelsPerCSSPixel", it'll be used.
+    // If scale is "screenPixelsPerCSSPixelNoOverride", it'll be used.
+    // If scale is "inScreenPixels", clientX/Y nor scaleX/Y are not adjusted with screenPixelsPerCSSPixel*.
+    scale = "screenPixelsPerCSSPixel",
+    button = 0, // if "click", "mousedown", "mouseup", set same value as DOM MouseEvent.button
+    modifiers = {}, // Active modifiers, see `_parseNativeModifiers`
+    win = window, // The window to use its utils
+    // If element under the point is in another widget from target's widget,
+    //  e.g., when it's in a XUL <panel>, specify this.
+    elementOnWidget = target,
+  } = aParams;
+  if (atCenter) {
+    if (offsetX != undefined || offsetY != undefined) {
+      throw Error(
+        `atCenter is specified, but offsetX (${offsetX}) and/or offsetY (${offsetY}) are also specified`
       );
     }
+    if (screenX != undefined || screenY != undefined) {
+      throw Error(
+        `atCenter is specified, but screenX (${screenX}) and/or screenY (${screenY}) are also specified`
+      );
+    }
+    if (!target) {
+      throw Error("atCenter is specified, but target is not specified");
+    }
+  } else if (offsetX != undefined && offsetY != undefined) {
+    if (screenX != undefined || screenY != undefined) {
+      throw Error(
+        `offsetX/Y are specified, but screenX (${screenX}) and/or screenY (${screenY}) are also specified`
+      );
+    }
+    if (!target) {
+      throw Error(
+        "offsetX and offsetY are specified, but target is not specified"
+      );
+    }
+  } else if (screenX != undefined && screenY != undefined) {
+    if (offsetX != undefined || offsetY != undefined) {
+      throw Error(
+        `screenX/Y are specified, but offsetX (${offsetX}) and/or offsetY (${offsetY}) are also specified`
+      );
+    }
+  }
+  const utils = _getDOMWindowUtils(win);
+  if (!utils) {
+    return;
+  }
+
+  const rect = target?.getBoundingClientRect();
+  let resolution = 1.0;
+  try {
+    resolution = _getDOMWindowUtils(win.top).getResolution();
+  } catch (e) {
+    // XXX How to get mobile viewport scale on Fission+xorigin since
+    //     window.top access isn't allowed due to cross-origin?
+  }
+  const scaleValue = (() => {
+    if (scale === "inScreenPixels") {
+      return 1.0;
+    }
+    if (scale === "screenPixelsPerCSSPixel") {
+      return utils.screenPixelsPerCSSPixel;
+    }
+    if (scale === "screenPixelsPerCSSPixelNoOverride") {
+      return utils.screenPixelsPerCSSPixelNoOverride;
+    }
+    throw Error(`invalid scale value (${scale}) is specified`);
+  })();
+  // XXX mozInnerScreen might be invalid value on mobile viewport (Bug 1701546),
+  //     so use window.top's mozInnerScreen. But this won't work fission+xorigin
+  //     with mobile viewport until mozInnerScreen returns valid value with
+  //     scale.
+  const x = (() => {
+    if (screenX != undefined) {
+      return screenX * scaleValue;
+    }
+    let winInnerOffsetX = win.mozInnerScreenX;
+    try {
+      winInnerOffsetX =
+        win.top.mozInnerScreenX +
+        (win.mozInnerScreenX - win.top.mozInnerScreenX) * resolution;
+    } catch (e) {
+      // XXX fission+xorigin test throws permission denied since win.top is
+      //     cross-origin.
+    }
+    return (
+      (((atCenter ? rect.width / 2 : offsetX) + rect.left) * resolution +
+        winInnerOffsetX) *
+      scaleValue
+    );
+  })();
+  const y = (() => {
+    if (screenY != undefined) {
+      return screenY * scaleValue;
+    }
+    let winInnerOffsetY = win.mozInnerScreenY;
+    try {
+      winInnerOffsetY =
+        win.top.mozInnerScreenY +
+        (win.mozInnerScreenY - win.top.mozInnerScreenY) * resolution;
+    } catch (e) {
+      // XXX fission+xorigin test throws permission denied since win.top is
+      //     cross-origin.
+    }
+    return (
+      (((atCenter ? rect.height / 2 : offsetY) + rect.top) * resolution +
+        winInnerOffsetY) *
+      scaleValue
+    );
+  })();
+  const modifierFlags = _parseNativeModifiers(modifiers);
+
+  const observer = {
+    observe: (subject, topic, data) => {
+      if (aCallback && topic == "mouseevent") {
+        aCallback(data);
+      }
+    },
+  };
+  if (type === "click") {
+    utils.sendNativeMouseEvent(
+      x,
+      y,
+      utils.NATIVE_MOUSE_MESSAGE_BUTTON_DOWN,
+      button,
+      modifierFlags,
+      elementOnWidget,
+      function() {
+        utils.sendNativeMouseEvent(
+          x,
+          y,
+          utils.NATIVE_MOUSE_MESSAGE_BUTTON_UP,
+          button,
+          modifierFlags,
+          elementOnWidget,
+          observer
+        );
+      }
+    );
+    return;
+  }
+  utils.sendNativeMouseEvent(
+    x,
+    y,
+    (() => {
+      switch (type) {
+        case "mousedown":
+          return utils.NATIVE_MOUSE_MESSAGE_BUTTON_DOWN;
+        case "mouseup":
+          return utils.NATIVE_MOUSE_MESSAGE_BUTTON_UP;
+        case "mousemove":
+          return utils.NATIVE_MOUSE_MESSAGE_MOVE;
+        default:
+          throw Error(`Invalid type is specified: ${type}`);
+      }
+    })(),
+    button,
+    modifierFlags,
+    elementOnWidget,
+    observer
   );
 }
 
-function synthesizeNativeMouseClickAtCenter(
-  aTarget,
-  aCallback,
-  aWindow = window
-) {
-  let rect = aTarget.getBoundingClientRect();
-  return synthesizeNativeMouseClick(
-    aTarget,
-    rect.width / 2,
-    rect.height / 2,
-    aCallback,
-    aWindow
+function promiseNativeMouseEvent(aParams) {
+  return new Promise(resolve => synthesizeNativeMouseEvent(aParams, resolve));
+}
+
+function synthesizeNativeMouseEventAndWaitForEvent(aParams, aCallback) {
+  const listener = aParams.eventTargetToListen || aParams.target;
+  const eventType = aParams.eventTypeToWait || aParams.type;
+  listener.addEventListener(eventType, aCallback, {
+    capture: true,
+    once: true,
+  });
+  synthesizeNativeMouseEvent(aParams);
+}
+
+function promiseNativeMouseEventAndWaitForEvent(aParams) {
+  return new Promise(resolve =>
+    synthesizeNativeMouseEventAndWaitForEvent(aParams, resolve)
   );
 }
 
 /**
- * This is a wrapper around synthesizeNativeMouseMove that waits for the mouse
+ * This is a wrapper around synthesizeNativeMouseEvent that waits for the mouse
  * event to be dispatched to the target content.
  *
  * This API is supposed to be used in those test cases that synthesize some
@@ -1143,7 +1284,13 @@ function synthesizeAndWaitNativeMouseMove(
     }
   );
   eventRegisteredPromise.then(() => {
-    synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, null, aWindow);
+    synthesizeNativeMouseEvent({
+      type: "mousemove",
+      target: aTarget,
+      offsetX: aOffsetX,
+      offsetY: aOffsetY,
+      win: aWindow,
+    });
   });
   return eventReceivedPromise;
 }
@@ -1283,55 +1430,66 @@ function synthesizeAndWaitKey(
 }
 
 function _parseNativeModifiers(aModifiers, aWindow = window) {
-  var modifiers;
+  let modifiers = 0;
   if (aModifiers.capsLockKey) {
-    modifiers |= 0x00000001;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_CAPS_LOCK;
   }
   if (aModifiers.numLockKey) {
-    modifiers |= 0x00000002;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_NUM_LOCK;
   }
   if (aModifiers.shiftKey) {
-    modifiers |= 0x00000100;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_SHIFT_LEFT;
   }
   if (aModifiers.shiftRightKey) {
-    modifiers |= 0x00000200;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_SHIFT_RIGHT;
   }
   if (aModifiers.ctrlKey) {
-    modifiers |= 0x00000400;
+    modifiers |=
+      SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_CONTROL_LEFT;
   }
   if (aModifiers.ctrlRightKey) {
-    modifiers |= 0x00000800;
+    modifiers |=
+      SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_CONTROL_RIGHT;
   }
   if (aModifiers.altKey) {
-    modifiers |= 0x00001000;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_ALT_LEFT;
   }
   if (aModifiers.altRightKey) {
-    modifiers |= 0x00002000;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_ALT_RIGHT;
   }
   if (aModifiers.metaKey) {
-    modifiers |= 0x00004000;
+    modifiers |=
+      SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_COMMAND_LEFT;
   }
   if (aModifiers.metaRightKey) {
-    modifiers |= 0x00008000;
+    modifiers |=
+      SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_COMMAND_RIGHT;
   }
   if (aModifiers.helpKey) {
-    modifiers |= 0x00010000;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_HELP;
   }
   if (aModifiers.fnKey) {
-    modifiers |= 0x00100000;
+    modifiers |= SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_FUNCTION;
   }
   if (aModifiers.numericKeyPadKey) {
-    modifiers |= 0x01000000;
+    modifiers |=
+      SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_NUMERIC_KEY_PAD;
   }
 
   if (aModifiers.accelKey) {
-    modifiers |= _EU_isMac(aWindow) ? 0x00004000 : 0x00000400;
+    modifiers |= _EU_isMac(aWindow)
+      ? SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_COMMAND_LEFT
+      : SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_CONTROL_LEFT;
   }
   if (aModifiers.accelRightKey) {
-    modifiers |= _EU_isMac(aWindow) ? 0x00008000 : 0x00000800;
+    modifiers |= _EU_isMac(aWindow)
+      ? SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_COMMAND_RIGHT
+      : SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_CONTROL_RIGHT;
   }
   if (aModifiers.altGrKey) {
-    modifiers |= _EU_isWin(aWindow) ? 0x00020000 : 0x00001000;
+    modifiers |= _EU_isMac(aWindow)
+      ? SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_ALT_LEFT
+      : SpecialPowers.Ci.nsIDOMWindowUtils.NATIVE_MODIFIER_ALT_GRAPH;
   }
   return modifiers;
 }

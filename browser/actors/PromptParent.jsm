@@ -36,6 +36,10 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
+XPCOMUtils.defineLazyGetter(this, "gTabBrowserLocalization", () => {
+  return new Localization(["browser/tabbrowser.ftl"], true);
+});
+
 /**
  * @typedef {Object} Prompt
  * @property {Function} resolver
@@ -118,6 +122,21 @@ class PromptParent extends JSWindowActorParent {
     }
   }
 
+  isAboutAddonsOptionsPage(browsingContext) {
+    const { embedderWindowGlobal, name } = browsingContext;
+    if (!embedderWindowGlobal) {
+      // Return earlier if there is no embedder global, this is definitely
+      // not an about:addons extensions options page.
+      return false;
+    }
+
+    return (
+      embedderWindowGlobal.documentPrincipal.isSystemPrincipal &&
+      embedderWindowGlobal.documentURI.spec === "about:addons" &&
+      name === "addon-inline-options"
+    );
+  }
+
   receiveMessage(message) {
     let args = message.data;
     let id = args._remoteId;
@@ -128,7 +147,8 @@ class PromptParent extends JSWindowActorParent {
           (args.modalType === Ci.nsIPrompt.MODAL_TYPE_CONTENT &&
             !contentPromptSubDialog) ||
           (args.modalType === Ci.nsIPrompt.MODAL_TYPE_TAB &&
-            !tabChromePromptSubDialog)
+            !tabChromePromptSubDialog) ||
+          this.isAboutAddonsOptionsPage(this.browsingContext)
         ) {
           return this.openContentPrompt(args, id);
         }
@@ -250,6 +270,15 @@ class PromptParent extends JSWindowActorParent {
     let browsingContext = this.browsingContext.top;
 
     let browser = browsingContext.embedderElement;
+    let promptRequiresBrowser =
+      args.modalType === Services.prompt.MODAL_TYPE_TAB ||
+      args.modalType === Services.prompt.MODAL_TYPE_CONTENT;
+    if (promptRequiresBrowser && !browser) {
+      let modal_type =
+        args.modalType === Services.prompt.MODAL_TYPE_TAB ? "tab" : "content";
+      throw new Error(`Cannot ${modal_type}-prompt without a browser!`);
+    }
+
     let win;
 
     // If we are a chrome actor we can use the associated chrome win.
@@ -264,7 +293,7 @@ class PromptParent extends JSWindowActorParent {
     // passed window is the hidden window).
     // See bug 875157 comment 30 for more..
     if (win?.winUtils && !win.winUtils.isParentWindowMainWidgetVisible) {
-      throw new Error("Cannot call openModalWindow on a hidden window");
+      throw new Error("Cannot open a prompt in a hidden window");
     }
 
     try {
@@ -281,31 +310,33 @@ class PromptParent extends JSWindowActorParent {
       args.promptAborted = false;
       args.openedWithTabDialog = true;
 
-      let bag = PromptUtils.objectToPropBag(args);
+      // Convert args object to a prop bag for the dialog to consume.
+      let bag;
 
-      if (
-        args.modalType === Services.prompt.MODAL_TYPE_TAB ||
-        args.modalType === Services.prompt.MODAL_TYPE_CONTENT
-      ) {
-        if (!browser) {
-          let modal_type =
-            args.modalType === Services.prompt.MODAL_TYPE_TAB
-              ? "tab"
-              : "content";
-          throw new Error(`Cannot ${modal_type}-prompt without a browser!`);
-        }
+      if (promptRequiresBrowser && win?.gBrowser?.getTabDialogBox) {
         // Tab or content level prompt
         let dialogBox = win.gBrowser.getTabDialogBox(browser);
+
+        if (dialogBox._allowTabFocusByPromptPrincipal) {
+          this.addTabSwitchCheckboxToArgs(dialogBox, args);
+        }
+
+        bag = PromptUtils.objectToPropBag(args);
         await dialogBox.open(
           uri,
           {
             features: "resizable=no",
             modalType: args.modalType,
+            allowFocusCheckbox: args.allowFocusCheckbox,
           },
           bag
-        );
+        ).closedPromise;
       } else {
+        // Ensure we set the correct modal type at this point.
+        // If we use window prompts as a fallback it may not be set.
+        args.modalType = Services.prompt.MODAL_TYPE_WINDOW;
         // Window prompt
+        bag = PromptUtils.objectToPropBag(args);
         Services.ww.openWindow(
           win,
           uri,
@@ -353,5 +384,44 @@ class PromptParent extends JSWindowActorParent {
         : null;
 
     return details;
+  }
+
+  /**
+   * Set properties on `args` needed by the dialog to allow tab switching for the
+   * page that opened the prompt.
+   *
+   * @param {TabDialogBox}  dialogBox
+   *        The dialog to show the tab-switch checkbox for.
+   * @param {Object}  args
+   *        The `args` object to set tab switching permission info on.
+   */
+  addTabSwitchCheckboxToArgs(dialogBox, args) {
+    let allowTabFocusByPromptPrincipal =
+      dialogBox._allowTabFocusByPromptPrincipal;
+
+    if (
+      allowTabFocusByPromptPrincipal &&
+      args.modalType === Services.prompt.MODAL_TYPE_CONTENT
+    ) {
+      let domain = allowTabFocusByPromptPrincipal.addonPolicy?.name;
+      try {
+        domain ||= allowTabFocusByPromptPrincipal.URI.displayHostPort;
+      } catch (ex) {
+        /* Ignore exceptions from fetching the display host/port. */
+      }
+      // If it's still empty, use `prePath` so we have *something* to show:
+      domain ||= allowTabFocusByPromptPrincipal.URI.prePath;
+      let [allowFocusMsg] = gTabBrowserLocalization.formatMessagesSync([
+        {
+          id: "tabbrowser-allow-dialogs-to-get-focus",
+          args: { domain },
+        },
+      ]);
+      let labelAttr = allowFocusMsg.attributes.find(a => a.name == "label");
+      if (labelAttr) {
+        args.allowFocusCheckbox = true;
+        args.checkLabel = labelAttr.value;
+      }
+    }
   }
 }

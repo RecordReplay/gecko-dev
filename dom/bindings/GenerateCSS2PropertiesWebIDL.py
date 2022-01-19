@@ -13,7 +13,7 @@ import runpy
 
 
 def generateLine(propName, extendedAttrs):
-    return "  [%s] attribute [TreatNullAs=EmptyString] UTF8String %s;\n" % (
+    return "  [%s] attribute [LegacyNullToEmptyString] UTF8String %s;\n" % (
         ", ".join(extendedAttrs),
         propName,
     )
@@ -25,6 +25,11 @@ def generate(output, idlFilename, dataFile):
     for p in propList:
         if "Internal" in p.flags:
             continue
+
+        # Skip properties which aren't valid in style rules.
+        if "Style" not in p.rules:
+            continue
+
         # Unfortunately, even some of the getters here are fallible
         # (e.g. on nsComputedDOMStyle).
         extendedAttrs = [

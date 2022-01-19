@@ -406,10 +406,15 @@ class MacroAssemblerX86Shared : public Assembler {
   // SIMD methods, defined in MacroAssembler-x86-shared-SIMD.cpp.
 
   void unsignedConvertInt32x4ToFloat32x4(FloatRegister src, FloatRegister dest);
+  void unsignedConvertInt32x4ToFloat64x2(FloatRegister src, FloatRegister dest);
   void bitwiseTestSimd128(const SimdConstant& rhs, FloatRegister lhs);
 
   void truncSatFloat32x4ToInt32x4(FloatRegister src, FloatRegister dest);
   void unsignedTruncSatFloat32x4ToInt32x4(FloatRegister src, FloatRegister temp,
+                                          FloatRegister dest);
+  void truncSatFloat64x2ToInt32x4(FloatRegister src, FloatRegister temp,
+                                  FloatRegister dest);
+  void unsignedTruncSatFloat64x2ToInt32x4(FloatRegister src, FloatRegister temp,
                                           FloatRegister dest);
 
   void splatX16(Register input, FloatRegister output);
@@ -444,23 +449,20 @@ class MacroAssemblerX86Shared : public Assembler {
                       FloatRegister output);
   void compareInt8x16(Assembler::Condition cond, const SimdConstant& rhs,
                       FloatRegister lhsDest);
-  void unsignedCompareInt8x16(FloatRegister lhs, Operand rhs,
-                              Assembler::Condition cond, FloatRegister output,
-                              FloatRegister tmp1, FloatRegister tmp2);
   void compareInt16x8(FloatRegister lhs, Operand rhs, Assembler::Condition cond,
                       FloatRegister output);
   void compareInt16x8(Assembler::Condition cond, const SimdConstant& rhs,
                       FloatRegister lhsDest);
-  void unsignedCompareInt16x8(FloatRegister lhs, Operand rhs,
-                              Assembler::Condition cond, FloatRegister output,
-                              FloatRegister tmp1, FloatRegister tmp2);
   void compareInt32x4(FloatRegister lhs, Operand rhs, Assembler::Condition cond,
                       FloatRegister output);
   void compareInt32x4(Assembler::Condition cond, const SimdConstant& rhs,
                       FloatRegister lhsDest);
-  void unsignedCompareInt32x4(FloatRegister lhs, Operand rhs,
-                              Assembler::Condition cond, FloatRegister output,
-                              FloatRegister tmp1, FloatRegister tmp2);
+  void compareForEqualityInt64x2(FloatRegister lhs, Operand rhs,
+                                 Assembler::Condition cond,
+                                 FloatRegister output);
+  void compareForOrderingInt64x2(FloatRegister lhs, Operand rhs,
+                                 Assembler::Condition cond, FloatRegister temp1,
+                                 FloatRegister temp2, FloatRegister output);
   void compareFloat32x4(FloatRegister lhs, Operand rhs,
                         Assembler::Condition cond, FloatRegister output);
   void compareFloat32x4(Assembler::Condition cond, const SimdConstant& rhs,
@@ -502,7 +504,7 @@ class MacroAssemblerX86Shared : public Assembler {
                                        Register temp, FloatRegister xtmp,
                                        FloatRegister dest);
   void packedRightShiftByScalarInt8x16(Imm32 count, FloatRegister src,
-                                       FloatRegister temp, FloatRegister dest);
+                                       FloatRegister dest);
   void packedUnsignedRightShiftByScalarInt8x16(FloatRegister in, Register count,
                                                Register temp,
                                                FloatRegister xtmp,
@@ -537,6 +539,8 @@ class MacroAssemblerX86Shared : public Assembler {
                                                FloatRegister dest);
   void selectSimd128(FloatRegister mask, FloatRegister onTrue,
                      FloatRegister onFalse, FloatRegister temp,
+                     FloatRegister output);
+  void popcntInt8x16(FloatRegister src, FloatRegister temp,
                      FloatRegister output);
 
   // SIMD inline methods private to the implementation, that appear to be used.
@@ -795,14 +799,7 @@ class MacroAssemblerX86Shared : public Assembler {
     vshufps(mask, src, dest, dest);
   }
   void selectX4(FloatRegister mask, FloatRegister onTrue, FloatRegister onFalse,
-                FloatRegister temp, FloatRegister output) {
-    if (AssemblerX86Shared::HasAVX()) {
-      vblendvps(mask, onTrue, onFalse, output);
-    } else {
-      selectSimd128(mask, onTrue, onFalse, temp, output);
-    }
-  }
-
+                FloatRegister temp, FloatRegister output);
   // End unused SIMD.
 
   void moveFloatAsDouble(Register src, FloatRegister dest) {
@@ -984,6 +981,21 @@ class MacroAssemblerX86Shared : public Assembler {
       bind(&ifFalse);
       mov(ImmWord(0), dest);
 
+      bind(&end);
+    }
+  }
+
+  void emitSetRegisterIfZero(Register dest) {
+    if (AllocatableGeneralRegisterSet(Registers::SingleByteRegs).has(dest)) {
+      // If the register we're defining is a single byte register,
+      // take advantage of the setCC instruction
+      setCC(AssemblerX86Shared::Zero, dest);
+      movzbl(dest, dest);
+    } else {
+      Label end;
+      movl(Imm32(1), dest);
+      j(AssemblerX86Shared::Zero, &end);
+      mov(ImmWord(0), dest);
       bind(&end);
     }
   }

@@ -7,6 +7,8 @@
 #ifndef mozilla_net_TRRQuery_h
 #define mozilla_net_TRRQuery_h
 
+#include "nsHostResolver.h"
+
 namespace mozilla {
 namespace net {
 
@@ -19,22 +21,22 @@ class TRRQuery : public AHostResolver {
         mRecord(aHostRecord),
         mTrrLock("TRRQuery.mTrrLock") {}
 
-  nsresult DispatchLookup(TRR* pushedTRR = nullptr);
+  nsresult DispatchLookup(TRR* pushedTRR = nullptr, bool aUseODoHProxy = false);
 
-  void Cancel();
+  void Cancel(nsresult aStatus);
 
   enum TRRState { INIT, STARTED, OK, FAILED };
   TRRState mTrrAUsed = INIT;
   TRRState mTrrAAAAUsed = INIT;
 
-  AddrHostRecord::TRRSkippedReason mTRRAFailReason = AddrHostRecord::TRR_UNSET;
-  AddrHostRecord::TRRSkippedReason mTRRAAAAFailReason =
-      AddrHostRecord::TRR_UNSET;
+  TRRSkippedReason mTRRAFailReason = TRRSkippedReason::TRR_UNSET;
+  TRRSkippedReason mTRRAAAAFailReason = TRRSkippedReason::TRR_UNSET;
 
-  virtual LookupStatus CompleteLookup(
-      nsHostRecord*, nsresult, mozilla::net::AddrInfo*, bool pb,
-      const nsACString& aOriginsuffix,
-      nsHostRecord::TRRSkippedReason aReason) override;
+  virtual LookupStatus CompleteLookup(nsHostRecord*, nsresult,
+                                      mozilla::net::AddrInfo*, bool pb,
+                                      const nsACString& aOriginsuffix,
+                                      nsHostRecord::TRRSkippedReason aReason,
+                                      TRR* aTRRRequest) override;
   virtual LookupStatus CompleteLookupByType(
       nsHostRecord*, nsresult, mozilla::net::TypeRecordResultType& aResult,
       uint32_t aTtl, bool pb) override;
@@ -74,6 +76,12 @@ class TRRQuery : public AHostResolver {
   RefPtr<mozilla::net::TRR> mTrrA;
   RefPtr<mozilla::net::TRR> mTrrAAAA;
   RefPtr<mozilla::net::TRR> mTrrByType;
+  // |mTRRRequestCounter| indicates the number of TRR requests that were
+  // dispatched sucessfully. Generally, this counter is increased to 2 after
+  // mTrrA and mTrrAAAA are dispatched, and is decreased by 1 when
+  // CompleteLookup is called. Note that nsHostResolver::CompleteLookup is only
+  // called when this counter equals to 0.
+  Atomic<uint32_t> mTRRRequestCounter{0};
 
   uint8_t mTRRSuccess = 0;  // number of successful TRR responses
 

@@ -11,7 +11,6 @@
 #include "nsHttp.h"
 #include "nsHttpHandler.h"
 #include "nsHttpRequestHead.h"
-#include "TCPFastOpen.h"
 #include "nsISocketProvider.h"
 #include "nsSocketProviderService.h"
 #include "nsISSLSocketControl.h"
@@ -884,7 +883,7 @@ class SocketOutWrapper : public nsIAsyncOutputStream,
   NS_IMETHOD Write(const char* aBuf, uint32_t aCount,
                    uint32_t* _retval) override;
   virtual nsresult OnReadSegment(const char* segment, uint32_t count,
-                                 uint32_t* countRead) override;
+                                 uint32_t* countWritten) override;
 
  private:
   virtual ~SocketOutWrapper() = default;
@@ -1183,8 +1182,9 @@ bool SpdyConnectTransaction::MapStreamToHttpConnection(
   TimeDuration rtt = TimeStamp::Now() - mTimestampSyn;
   DebugOnly<nsresult> rv = mTunneledConn->Init(
       aConnInfo, gHttpHandler->ConnMgr()->MaxRequestDelay(), mTunnelTransport,
-      mTunnelStreamIn, mTunnelStreamOut, true, callbacks,
-      PR_MillisecondsToInterval(static_cast<uint32_t>(rtt.ToMilliseconds())));
+      mTunnelStreamIn, mTunnelStreamOut, true, NS_OK, callbacks,
+      PR_MillisecondsToInterval(static_cast<uint32_t>(rtt.ToMilliseconds())),
+      false);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
   if (mForcePlainText) {
     mTunneledConn->ForcePlainText();
@@ -2037,14 +2037,6 @@ SocketTransportShim::Bind(NetAddr* aLocalAddr) {
 }
 
 NS_IMETHODIMP
-SocketTransportShim::GetFirstRetryError(nsresult* aFirstRetryError) {
-  if (mIsWebsocket) {
-    LOG3(("WARNING: SocketTransportShim::GetFirstRetryError %p", this));
-  }
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
 SocketTransportShim::GetEchConfigUsed(bool* aEchConfigUsed) {
   if (mIsWebsocket) {
     LOG3(("WARNING: SocketTransportShim::GetEchConfigUsed %p", this));
@@ -2157,8 +2149,13 @@ SocketTransportShim::SetQoSBits(uint8_t aQoSBits) {
 }
 
 NS_IMETHODIMP
-SocketTransportShim::SetFastOpenCallback(TCPFastOpen* aFastOpen) {
-  return mWrapped->SetFastOpenCallback(aFastOpen);
+SocketTransportShim::GetRetryDnsIfPossible(bool* aRetry) {
+  return mWrapped->GetRetryDnsIfPossible(aRetry);
+}
+
+NS_IMETHODIMP
+SocketTransportShim::GetStatus(nsresult* aStatus) {
+  return mWrapped->GetStatus(aStatus);
 }
 
 NS_IMPL_ISUPPORTS(TLSFilterTransaction, nsITimerCallback, nsINamed)

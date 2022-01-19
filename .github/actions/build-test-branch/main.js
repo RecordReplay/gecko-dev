@@ -2,7 +2,6 @@
 const {
   getLatestReplayRevision,
   sendBuildTestRequest,
-  spawnChecked,
   newTask,
 } = require("../utils");
 

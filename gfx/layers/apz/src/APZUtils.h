@@ -45,11 +45,11 @@ inline CancelAnimationFlags operator|(CancelAnimationFlags a,
 
 // clang-format off
 enum class ScrollSource {
-  // scrollTo() or something similar.
-  DOM,
+  // Touch-screen.
+  Touchscreen,
 
-  // Touch-screen or trackpad with gesture support.
-  Touch,
+  // Touchpad with gesture support.
+  Touchpad,
 
   // Mouse wheel.
   Wheel,
@@ -58,6 +58,15 @@ enum class ScrollSource {
   Keyboard,
 };
 // clang-format on
+
+inline bool ScrollSourceRespectsDisregardedDirections(ScrollSource aSource) {
+  return aSource == ScrollSource::Wheel || aSource == ScrollSource::Touchpad;
+}
+
+inline bool ScrollSourceAllowsOverscroll(ScrollSource aSource) {
+  return aSource == ScrollSource::Touchpad ||
+         aSource == ScrollSource::Touchscreen;
+}
 
 // Epsilon to be used when comparing 'float' coordinate values
 // with FuzzyEqualsAdditive. The rationale is that 'float' has 7 decimal
@@ -198,6 +207,18 @@ ScreenPoint ComputeFixedMarginsOffset(
  */
 bool AboutToCheckerboard(const FrameMetrics& aPaintedMetrics,
                          const FrameMetrics& aCompositorMetrics);
+
+/**
+ * Wrapper around StaticPrefs::layers_progressive_paint that takes into account
+ * whether the platform is supported or sandboxed. We should prefer this over
+ * using the StaticPrefs getter directly.
+ */
+bool ShouldUseProgressivePaint();
+
+/**
+ * Returns SideBits where the given |aOverscrollAmount| overscrolls.
+ */
+SideBits GetOverscrollSideBits(const ParentLayerPoint& aOverscrollAmount);
 
 }  // namespace apz
 

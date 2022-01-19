@@ -4,35 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-using mozilla::LookAndFeel::IntID from "mozilla/widget/WidgetMessageUtils.h";
-using mozilla::LookAndFeel::ColorID from "mozilla/widget/WidgetMessageUtils.h";
 using nscolor from "nsColor.h";
 
 namespace mozilla {
 namespace widget {
 
-struct LookAndFeelInt {
-    IntID id;
-    int32_t value;
-};
-
-comparable struct LookAndFeelFont {
+[Comparable] struct LookAndFeelFont {
     bool haveFont;
     nsString name;
     float size;
     float weight;
     bool italic;
-};
-
-struct LookAndFeelColor {
-    ColorID id;
-    nscolor color;
-};
-
-struct LookAndFeelCache {
-    LookAndFeelInt[] mInts;
-    LookAndFeelFont[] mFonts;
-    LookAndFeelColor[] mColors;
 };
 
 /**
@@ -48,21 +30,19 @@ struct LookAndFeelCache {
  * to indexes into the value arrays.  The map arrays are of fixed
  * length, determined by the maximum ID value.  If a value for a
  * particular ID is not present, the entry in the map is set to -1.
- *
- * (Note that fontMap is different from the others since it maps from a
- * LookAndFeel::FontID value minus 1, as 1 is the minimum value of that
- * enum.)
  */
 struct LookAndFeelTables {
     int32_t[] ints;
     float[] floats;
-    nscolor[] colors;
     LookAndFeelFont[] fonts;
+    nscolor[] lightColors;
+    nscolor[] darkColors;
 
     uint8_t[] intMap;
     uint8_t[] floatMap;
-    uint8_t[] colorMap;
     uint8_t[] fontMap;
+    uint8_t[] lightColorMap;
+    uint8_t[] darkColorMap;
 
     uint16_t passwordChar;
     bool passwordEcho;
@@ -83,11 +63,6 @@ struct FullLookAndFeel {
 #ifdef MOZ_WIDGET_GTK
     LookAndFeelTheme theme;
 #endif
-};
-
-union LookAndFeelData {
-    LookAndFeelCache;
-    FullLookAndFeel;
 };
 
 } // namespace widget

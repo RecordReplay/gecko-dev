@@ -30,6 +30,7 @@ XPCOM_MANIFESTS += [
 EXPORTS += [
     "MainThreadUtils.h",
     "nsICancelableRunnable.h",
+    "nsIDelayedRunnableObserver.h",
     "nsIDiscardableRunnable.h",
     "nsIIdleRunnable.h",
     "nsMemoryPressure.h",
@@ -48,6 +49,7 @@ EXPORTS.mozilla += [
     "CPUUsageWatcher.h",
     "DataMutex.h",
     "DeadlockDetector.h",
+    "DelayedRunnable.h",
     "EventQueue.h",
     "IdlePeriodState.h",
     "IdleTaskRunner.h",
@@ -77,6 +79,7 @@ EXPORTS.mozilla += [
     "ThreadBound.h",
     "ThreadEventQueue.h",
     "ThrottledEventQueue.h",
+    "VsyncTaskManager.h",
 ]
 
 SOURCES += [
@@ -88,6 +91,7 @@ UNIFIED_SOURCES += [
     "AbstractThread.cpp",
     "BlockingResourceBase.cpp",
     "CPUUsageWatcher.cpp",
+    "DelayedRunnable.cpp",
     "EventQueue.cpp",
     "IdlePeriodState.cpp",
     "InputEventStatistics.cpp",
@@ -116,6 +120,7 @@ UNIFIED_SOURCES += [
     "ThreadLocalVariables.cpp",
     "ThrottledEventQueue.cpp",
     "TimerThread.cpp",
+    "VsyncTaskManager.cpp",
 ]
 
 LOCAL_INCLUDES += [

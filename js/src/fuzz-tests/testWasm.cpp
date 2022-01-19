@@ -100,7 +100,7 @@ static bool assignImportKind(const Import& import, HandleObject obj,
 static int testWasmFuzz(const uint8_t* buf, size_t size) {
   auto gcGuard = mozilla::MakeScopeExit([&] {
     JS::PrepareForFullGC(gCx);
-    JS::NonIncrementalGC(gCx, GC_NORMAL, JS::GCReason::API);
+    JS::NonIncrementalGC(gCx, JS::GCOptions::Normal, JS::GCReason::API);
   });
 
   const size_t MINIMUM_MODULE_SIZE = 8;
@@ -145,6 +145,7 @@ static int testWasmFuzz(const uint8_t* buf, size_t size) {
       bool enableWasmBaseline = ((optByte & 0xF0) == (1 << 7));
       bool enableWasmOptimizing = false;
 #ifdef ENABLE_WASM_CRANELIFT
+      // Cranelift->Ion transition
       enableWasmOptimizing =
           CraneliftPlatformSupport() && ((optByte & 0xF0) == (1 << 5));
 #else
@@ -183,7 +184,9 @@ static int testWasmFuzz(const uint8_t* buf, size_t size) {
           .setWasmBaseline(enableWasmBaseline)
 #ifdef ENABLE_WASM_CRANELIFT
           .setWasmCranelift(enableWasmOptimizing)
+          .setWasmIon(false)
 #else
+          .setWasmCranelift(false)
           .setWasmIon(enableWasmOptimizing)
 #endif
           .setTestWasmAwaitTier2(enableWasmAwaitTier2);
@@ -210,8 +213,9 @@ static int testWasmFuzz(const uint8_t* buf, size_t size) {
     currentIndex += moduleLen;
 
     ScriptedCaller scriptedCaller;
+    FeatureOptions options;
     SharedCompileArgs compileArgs =
-        CompileArgs::build(gCx, std::move(scriptedCaller));
+        CompileArgs::build(gCx, std::move(scriptedCaller), options);
     if (!compileArgs) {
       return 0;
     }
@@ -420,7 +424,7 @@ static int testWasmFuzz(const uint8_t* buf, size_t size) {
         if (propObj->is<WasmMemoryObject>()) {
           Rooted<WasmMemoryObject*> memory(gCx,
                                            &propObj->as<WasmMemoryObject>());
-          size_t byteLen = memory->volatileMemoryLength32();
+          size_t byteLen = memory->volatileMemoryLength();
           if (byteLen) {
             // Read the bounds of the buffer to ensure it is valid.
             // AddressSanitizer would detect any out-of-bounds here.

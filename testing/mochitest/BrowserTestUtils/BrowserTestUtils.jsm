@@ -188,6 +188,7 @@ var BrowserTestUtils = {
    * @resolves The new tab.
    */
   openNewForegroundTab(tabbrowser, ...args) {
+    let startTime = Cu.now();
     let options;
     if (
       tabbrowser.ownerGlobal &&
@@ -271,7 +272,15 @@ var BrowserTestUtils = {
         );
       }
     }
-    return Promise.all(promises).then(() => tab);
+    return Promise.all(promises).then(() => {
+      let { innerWindowId } = tabbrowser.ownerGlobal.windowGlobalChild;
+      ChromeUtils.addProfilerMarker(
+        "BrowserTestUtils",
+        { startTime, category: "Test", innerWindowId },
+        "openNewForegroundTab"
+      );
+      return tab;
+    });
   },
 
   /**
@@ -355,11 +364,21 @@ var BrowserTestUtils = {
    * @resolves The tab switched to.
    */
   switchTab(tabbrowser, tab) {
+    let startTime = Cu.now();
+    let { innerWindowId } = tabbrowser.ownerGlobal.windowGlobalChild;
+
     let promise = new Promise(resolve => {
       tabbrowser.addEventListener(
         "TabSwitchDone",
         function() {
-          TestUtils.executeSoon(() => resolve(tabbrowser.selectedTab));
+          TestUtils.executeSoon(() => {
+            ChromeUtils.addProfilerMarker(
+              "BrowserTestUtils",
+              { category: "Test", startTime, innerWindowId },
+              "switchTab"
+            );
+            resolve(tabbrowser.selectedTab);
+          });
         },
         { once: true }
       );
@@ -408,6 +427,9 @@ var BrowserTestUtils = {
     wantLoad = null,
     maybeErrorPage = false
   ) {
+    let startTime = Cu.now();
+    let { innerWindowId } = browser.ownerGlobal.windowGlobalChild;
+
     // Passing a url as second argument is a common mistake we should prevent.
     if (includeSubFrames && typeof includeSubFrames != "boolean") {
       throw new Error(
@@ -464,6 +486,11 @@ var BrowserTestUtils = {
               return;
             }
 
+            ChromeUtils.addProfilerMarker(
+              "BrowserTestUtils",
+              { startTime, category: "Test", innerWindowId },
+              "browserLoaded: " + internalURL
+            );
             resolve(internalURL);
             break;
           }
@@ -943,13 +970,23 @@ var BrowserTestUtils = {
    *        resolve when the first "domwindowopened" notification is seen.
    *        The promise will be resolved once the new window's document has been
    *        loaded.
+   *
+   * @param {function} checkFn (optional)
+   *        Called with the nsIDOMWindow object as argument, should return true
+   *        if the event is the expected one, or false if it should be ignored
+   *        and observing should continue. If not specified, the first window
+   *        resolves the returned promise.
+   *
    * @return {Promise}
    *         A Promise which resolves when a "domwindowopened" notification
    *         has been fired by the window watcher.
    */
-  domWindowOpenedAndLoaded(win) {
-    return this.domWindowOpened(win, async win => {
-      await this.waitForEvent(win, "load");
+  domWindowOpenedAndLoaded(win, checkFn) {
+    return this.domWindowOpened(win, async observedWin => {
+      await this.waitForEvent(observedWin, "load");
+      if (checkFn && !(await checkFn(observedWin))) {
+        return false;
+      }
       return true;
     });
   },
@@ -1006,6 +1043,8 @@ var BrowserTestUtils = {
    *         Resolves with the new window once it is loaded.
    */
   async openNewBrowserWindow(options = {}) {
+    let startTime = Cu.now();
+
     let currentWin = BrowserWindowTracker.getTopWindow({ private: false });
     if (!currentWin) {
       throw new Error(
@@ -1039,6 +1078,11 @@ var BrowserTestUtils = {
     );
 
     await Promise.all(promises);
+    ChromeUtils.addProfilerMarker(
+      "BrowserTestUtils",
+      { startTime, category: "Test" },
+      "openNewBrowserWindow"
+    );
 
     return win;
   },
@@ -1075,6 +1119,7 @@ var BrowserTestUtils = {
     let domWinClosedPromise = BrowserTestUtils.domWindowClosed(win);
     let promises = [domWinClosedPromise];
     let winType = win.document.documentElement.getAttribute("windowtype");
+    let flushTopic = "sessionstore-browser-shutdown-flush";
 
     if (winType == "navigator:browser") {
       let finalMsgsPromise = new Promise(resolve => {
@@ -1084,24 +1129,21 @@ var BrowserTestUtils = {
         browserSet.forEach(browser => {
           win.gBrowser._insertBrowser(win.gBrowser.getTabForBrowser(browser));
         });
-        let mm = win.getGroupMessageManager("browsers");
 
-        mm.addMessageListener(
-          "SessionStore:update",
-          function onMessage(msg) {
-            if (browserSet.has(msg.target) && msg.data.isFinal) {
-              browserSet.delete(msg.target);
-              if (!browserSet.size) {
-                mm.removeMessageListener("SessionStore:update", onMessage);
-                // Give the TabStateFlusher a chance to react to this final
-                // update and for the TabStateFlusher.flushWindow promise
-                // to resolve before we resolve.
-                TestUtils.executeSoon(resolve);
-              }
-            }
-          },
-          true
-        );
+        let observer = (subject, topic, data) => {
+          if (browserSet.has(subject)) {
+            browserSet.delete(subject);
+          }
+          if (!browserSet.size) {
+            Services.obs.removeObserver(observer, flushTopic);
+            // Give the TabStateFlusher a chance to react to this final
+            // update and for the TabStateFlusher.flushWindow promise
+            // to resolve before we resolve.
+            TestUtils.executeSoon(resolve);
+          }
+        };
+
+        Services.obs.addObserver(observer, flushTopic);
       });
 
       promises.push(finalMsgsPromise);
@@ -1121,19 +1163,17 @@ var BrowserTestUtils = {
    */
   waitForSessionStoreUpdate(tab) {
     return new Promise(resolve => {
-      let { messageManager: mm, frameLoader } = tab.linkedBrowser;
-      mm.addMessageListener(
-        "SessionStore:update",
-        function onMessage(msg) {
-          if (msg.targetFrameLoader == frameLoader && msg.data.isFinal) {
-            mm.removeMessageListener("SessionStore:update", onMessage);
-            // Wait for the next event tick to make sure other listeners are
-            // called.
-            TestUtils.executeSoon(() => resolve());
-          }
-        },
-        true
-      );
+      let browser = tab.linkedBrowser;
+      let flushTopic = "sessionstore-browser-shutdown-flush";
+      let observer = (subject, topic, data) => {
+        if (subject === browser) {
+          Services.obs.removeObserver(observer, flushTopic);
+          // Wait for the next event tick to make sure other listeners are
+          // called.
+          TestUtils.executeSoon(() => resolve());
+        }
+      };
+      Services.obs.addObserver(observer, flushTopic);
     });
   },
 
@@ -1189,28 +1229,63 @@ var BrowserTestUtils = {
    * @resolves The Event object.
    */
   waitForEvent(subject, eventName, capture, checkFn, wantsUntrusted) {
+    let startTime = Cu.now();
+    let innerWindowId = subject.ownerGlobal?.windowGlobalChild.innerWindowId;
+
     return new Promise((resolve, reject) => {
-      subject.addEventListener(
-        eventName,
-        function listener(event) {
-          try {
-            if (checkFn && !checkFn(event)) {
-              return;
-            }
-            subject.removeEventListener(eventName, listener, capture);
-            TestUtils.executeSoon(() => resolve(event));
-          } catch (ex) {
-            try {
-              subject.removeEventListener(eventName, listener, capture);
-            } catch (ex2) {
-              // Maybe the provided object does not support removeEventListener.
-            }
-            TestUtils.executeSoon(() => reject(ex));
+      let removed = false;
+      function listener(event) {
+        function cleanup() {
+          removed = true;
+          // Avoid keeping references to objects after the promise resolves.
+          subject = null;
+          checkFn = null;
+        }
+        try {
+          if (checkFn && !checkFn(event)) {
+            return;
           }
-        },
-        capture,
-        wantsUntrusted
-      );
+          subject.removeEventListener(eventName, listener, capture);
+          cleanup();
+          TestUtils.executeSoon(() => {
+            ChromeUtils.addProfilerMarker(
+              "BrowserTestUtils",
+              { startTime, category: "Test", innerWindowId },
+              "waitForEvent: " + eventName
+            );
+            resolve(event);
+          });
+        } catch (ex) {
+          try {
+            subject.removeEventListener(eventName, listener, capture);
+          } catch (ex2) {
+            // Maybe the provided object does not support removeEventListener.
+          }
+          cleanup();
+          TestUtils.executeSoon(() => reject(ex));
+        }
+      }
+
+      subject.addEventListener(eventName, listener, capture, wantsUntrusted);
+
+      TestUtils.promiseTestFinished?.then(() => {
+        if (removed) {
+          return;
+        }
+
+        subject.removeEventListener(eventName, listener, capture);
+        let text = eventName + " listener";
+        if (subject.id) {
+          text += ` on #${subject.id}`;
+        }
+        text += " not removed before the end of test";
+        reject(text);
+        ChromeUtils.addProfilerMarker(
+          "BrowserTestUtils",
+          { startTime, category: "Test", innerWindowId },
+          "waitForEvent: " + text
+        );
+      });
     });
   },
 
@@ -1391,6 +1466,32 @@ var BrowserTestUtils = {
         this._cleanupContentEventListeners();
         break;
     }
+  },
+
+  /**
+   * Wait until DOM mutations cause the condition expressed in checkFn
+   * to pass.
+   *
+   * Intended as an easy-to-use alternative to waitForCondition.
+   *
+   * @param {Element} target    The target in which to observe mutations.
+   * @param {Object}  options   The options to pass to MutationObserver.observe();
+   * @param {function} checkFn  Function that returns true when it wants the promise to be
+   * resolved.
+   */
+  waitForMutationCondition(target, options, checkFn) {
+    if (checkFn()) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      let obs = new target.ownerGlobal.MutationObserver(function() {
+        if (checkFn()) {
+          obs.disconnect();
+          resolve();
+        }
+      });
+      obs.observe(target, options);
+    });
   },
 
   /**
@@ -1750,6 +1851,8 @@ var BrowserTestUtils = {
           return;
         }
 
+        Services.obs.removeObserver(observer, "ipc:content-shutdown");
+
         let dumpID;
         if (AppConstants.MOZ_CRASHREPORTER) {
           dumpID = subject.getPropertyAsAString("dumpID");
@@ -1793,7 +1896,6 @@ var BrowserTestUtils = {
         }
 
         removalPromise.then(() => {
-          Services.obs.removeObserver(observer, "ipc:content-shutdown");
           dump("\nCrash cleaned up\n");
           // There might be other ipc:content-shutdown handlers that need to
           // run before we want to continue, so we'll resolve on the next tick
@@ -2234,24 +2336,31 @@ var BrowserTestUtils = {
   async promiseAlertDialogOpen(
     buttonAction,
     uri = "chrome://global/content/commonDialog.xhtml",
-    func
+    options = { callback: null, isSubDialog: false }
   ) {
-    let win = await this.domWindowOpened(null, async win => {
+    let win;
+    if (uri == "chrome://global/content/commonDialog.xhtml") {
+      [win] = await TestUtils.topicObserved("common-dialog-loaded");
+    } else if (options.isSubDialog) {
+      [win] = await TestUtils.topicObserved("subdialog-loaded");
+    } else {
       // The test listens for the "load" event which guarantees that the alert
       // class has already been added (it is added when "DOMContentLoaded" is
       // fired).
-      await this.waitForEvent(win, "load");
+      win = await this.domWindowOpenedAndLoaded(null, win => {
+        return win.document.documentURI === uri;
+      });
+    }
 
-      return win.document.documentURI === uri;
-    });
-
-    if (func) {
-      await func(win);
+    if (options.callback) {
+      await options.callback(win);
       return win;
     }
 
-    let dialog = win.document.querySelector("dialog");
-    dialog.getButton(buttonAction).click();
+    if (buttonAction) {
+      let dialog = win.document.querySelector("dialog");
+      dialog.getButton(buttonAction).click();
+    }
 
     return win;
   },
@@ -2272,10 +2381,20 @@ var BrowserTestUtils = {
   async promiseAlertDialog(
     buttonAction,
     uri = "chrome://global/content/commonDialog.xhtml",
-    func
+    options = { callback: null, isSubDialog: false }
   ) {
-    let win = await this.promiseAlertDialogOpen(buttonAction, uri, func);
-    return this.windowClosed(win);
+    let win = await this.promiseAlertDialogOpen(buttonAction, uri, options);
+    if (!win.docShell.browsingContext.embedderElement) {
+      return this.windowClosed(win);
+    }
+    let container = win.top.document.getElementById("window-modal-dialog");
+    return this.waitForEvent(container, "close").then(() => {
+      return this.waitForMutationCondition(
+        container,
+        { childList: true, attributes: true },
+        () => !container.hasChildNodes() && !container.open
+      );
+    });
   },
 
   /**
@@ -2427,6 +2546,7 @@ var BrowserTestUtils = {
    *        Extra information to pass to the actor.
    */
   async sendQuery(aBrowsingContext, aMessageName, aMessageData) {
+    let startTime = Cu.now();
     if (!aBrowsingContext.currentWindowGlobal) {
       await this.waitForCondition(() => aBrowsingContext.currentWindowGlobal);
     }
@@ -2434,7 +2554,14 @@ var BrowserTestUtils = {
     let actor = aBrowsingContext.currentWindowGlobal.getActor(
       "BrowserTestUtils"
     );
-    return actor.sendQuery(aMessageName, aMessageData);
+    return actor.sendQuery(aMessageName, aMessageData).then(val => {
+      ChromeUtils.addProfilerMarker(
+        "BrowserTestUtils",
+        { startTime, category: "Test" },
+        aMessageName
+      );
+      return val;
+    });
   },
 };
 

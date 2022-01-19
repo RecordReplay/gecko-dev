@@ -33,7 +33,6 @@ class ArchlinuxBootstrapper(LinuxBootstrapper, BaseBootstrapper):
     BROWSER_PACKAGES = [
         "alsa-lib",
         "dbus-glib",
-        "gtk2",
         "gtk3",
         "libevent",
         "libvpx",
@@ -44,7 +43,6 @@ class ArchlinuxBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         "gst-plugins-base-libs",
         "libpulse",
         "xorg-server-xvfb",
-        "yasm",
         "gst-libav",
         "gst-plugins-good",
     ]

@@ -69,8 +69,7 @@ nsPrinterListCUPS::InitPrintSettingsFromPrinter(
 static int CupsDestCallback(void* user_data, unsigned aFlags,
                             cups_dest_t* aDest) {
   MOZ_ASSERT(user_data);
-  nsTArray<PrinterInfo>* printerInfoList =
-      reinterpret_cast<nsTArray<PrinterInfo>*>(user_data);
+  auto* printerInfoList = static_cast<nsTArray<PrinterInfo>*>(user_data);
 
   cups_dest_t* ownedDest = nullptr;
   mozilla::DebugOnly<const int> numCopied =
@@ -180,7 +179,7 @@ nsresult nsPrinterListCUPS::SystemDefaultPrinterName(nsAString& aName) const {
   aName.Truncate();
 
   if (!CupsShim().InitOkay()) {
-    return NS_ERROR_FAILURE;
+    return NS_OK;
   }
 
   // Passing in nullptr for the name will return the default, if any.

@@ -10,6 +10,7 @@
 #include "nsIScriptError.h"
 #include "DOMLocalization.h"
 #include "mozilla/intl/LocaleService.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/L10nOverlays.h"
 
@@ -96,16 +97,14 @@ void DOMLocalization::ConnectRoot(nsINode& aNode, ErrorResult& aRv) {
              "Cannot add a root that overlaps with existing root.");
 
 #ifdef DEBUG
-  for (auto iter = mRoots.ConstIter(); !iter.Done(); iter.Next()) {
-    nsINode* root = iter.Get()->GetKey();
-
+  for (nsINode* root : mRoots) {
     MOZ_ASSERT(
         root != &aNode && !root->Contains(&aNode) && !aNode.Contains(root),
         "Cannot add a root that overlaps with existing root.");
   }
 #endif
 
-  mRoots.PutEntry(&aNode);
+  mRoots.Insert(&aNode);
 
   aNode.AddMutationObserverUnlessExists(mMutations);
 }
@@ -113,7 +112,7 @@ void DOMLocalization::ConnectRoot(nsINode& aNode, ErrorResult& aRv) {
 void DOMLocalization::DisconnectRoot(nsINode& aNode, ErrorResult& aRv) {
   if (mRoots.Contains(&aNode)) {
     aNode.RemoveMutationObserver(mMutations);
-    mRoots.RemoveEntry(&aNode);
+    mRoots.Remove(&aNode);
   }
 }
 
@@ -394,9 +393,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(L10nRootTranslationHandler)
 already_AddRefed<Promise> DOMLocalization::TranslateRoots(ErrorResult& aRv) {
   nsTArray<RefPtr<Promise>> promises;
 
-  for (auto iter = mRoots.ConstIter(); !iter.Done(); iter.Next()) {
-    nsINode* root = iter.Get()->GetKey();
-
+  for (nsINode* root : mRoots) {
     RefPtr<Promise> promise = TranslateFragment(*root, aRv);
 
     // If the root is an element, we'll add a native handler
@@ -482,7 +479,7 @@ bool DOMLocalization::ApplyTranslations(
 
   nsTArray<L10nOverlaysError> errors;
   for (size_t i = 0; i < aTranslations.Length(); ++i) {
-    Element* elem = aElements[i];
+    nsCOMPtr elem = aElements[i];
     if (aTranslations[i].IsNull()) {
       hasMissingTranslation = true;
       continue;
@@ -493,6 +490,13 @@ bool DOMLocalization::ApplyTranslations(
     // This is an error in fluent use, but shouldn't be crashing. There's
     // also no point translating the element - skip it:
     if (aProto && !elem->IsInComposedDoc()) {
+      continue;
+    }
+
+    // It is possible that someone removed the `data-l10n-id` from the element
+    // before the async translation completed. In that case, skip applying
+    // the translation.
+    if (!elem->HasAttr(kNameSpaceID_None, nsGkAtoms::datal10nid)) {
       continue;
     }
     L10nOverlays::TranslateElement(*elem, aTranslations[i].Value(), errors,
@@ -538,9 +542,7 @@ void DOMLocalization::DisconnectMutations() {
 }
 
 void DOMLocalization::DisconnectRoots() {
-  for (auto iter = mRoots.ConstIter(); !iter.Done(); iter.Next()) {
-    nsINode* node = iter.Get()->GetKey();
-
+  for (nsINode* node : mRoots) {
     node->RemoveMutationObserver(mMutations);
   }
   mRoots.Clear();

@@ -30,10 +30,9 @@ thunderbird_excludes = os.path.join("comm", "tools", "lint", "GlobalExclude.txt"
 if os.path.exists(thunderbird_excludes):
     EXCLUSION_FILES_OPTIONAL.append(thunderbird_excludes)
 
-GLOBAL_EXCLUDES = [
-    "node_modules",
-    "tools/lint/test/files",
-]
+GLOBAL_EXCLUDES = ["node_modules", "tools/lint/test/files", ".hg", ".git"]
+
+VALID_FORMATTERS = {"black", "clang-format", "rustfmt"}
 
 
 def setup_argument_parser():
@@ -70,7 +69,7 @@ class MachCommands(MachCommandBase):
         description="Run linters.",
         parser=setup_argument_parser,
     )
-    def lint(self, *runargs, **lintargs):
+    def lint(self, command_context, *runargs, **lintargs):
         """Run linters."""
         self.activate_virtualenv()
         from mozlint import cli, parser
@@ -125,7 +124,7 @@ class MachCommands(MachCommandBase):
         nargs=argparse.REMAINDER,
         help="Extra args that will be forwarded to eslint.",
     )
-    def eslint(self, paths, extra_args=[], **kwargs):
+    def eslint(self, command_context, paths, extra_args=[], **kwargs):
         self._mach_context.commands.dispatch(
             "lint",
             self._mach_context,
@@ -133,4 +132,32 @@ class MachCommands(MachCommandBase):
             paths=paths,
             argv=extra_args,
             **kwargs
+        )
+
+    @Command(
+        "format",
+        category="devenv",
+        description="Format files, alternative to 'lint --fix' ",
+        parser=setup_argument_parser,
+    )
+    def format(self, command_context, paths, extra_args=[], **kwargs):
+        linters = kwargs["linters"]
+
+        if not linters:
+            linters = VALID_FORMATTERS
+        else:
+            invalid_linters = set(linters) - VALID_FORMATTERS
+            if invalid_linters:
+                print(
+                    "error: One or more linters passed are not valid formatters. "
+                    "Note that only the following linters are valid formatters:"
+                )
+                print("\n".join(sorted(VALID_FORMATTERS)))
+                return 1
+
+        kwargs["linters"] = list(linters)
+
+        kwargs["fix"] = True
+        self._mach_context.commands.dispatch(
+            "lint", self._mach_context, paths=paths, argv=extra_args, **kwargs
         )

@@ -143,7 +143,7 @@ partial interface Navigator {
 
 // http://www.w3.org/TR/pointerevents/#extensions-to-the-navigator-interface
 partial interface Navigator {
-    [Pref="dom.w3c_pointer_events.enabled", NeedsCallerType]
+    [NeedsCallerType]
     readonly attribute long maxTouchPoints;
 };
 
@@ -200,7 +200,7 @@ partial interface Navigator {
 
 // https://dvcs.w3.org/hg/gamepad/raw-file/default/gamepad.html#navigator-interface-extension
 partial interface Navigator {
-  [Throws, Pref="dom.gamepad.enabled"]
+  [Throws, Pref="dom.gamepad.enabled", SecureContext]
   sequence<Gamepad?> getGamepads();
 };
 partial interface Navigator {
@@ -256,25 +256,6 @@ partial interface Navigator {
                        NavigatorUserMediaErrorCallback errorCallback);
 };
 
-// nsINavigatorUserMedia
-callback MozGetUserMediaDevicesSuccessCallback = void (nsIVariant? devices);
-partial interface Navigator {
-  [Throws, ChromeOnly]
-  void mozGetUserMediaDevices(MediaStreamConstraints constraints,
-                              MozGetUserMediaDevicesSuccessCallback onsuccess,
-                              NavigatorUserMediaErrorCallback onerror,
-                              // The originating innerWindowID is needed to
-                              // avoid calling the callbacks if the window has
-                              // navigated away. It is optional only as legacy.
-                              optional unsigned long long innerWindowID = 0,
-                              // The callID is needed in case of multiple
-                              // concurrent requests to find the right one.
-                              // It is optional only as legacy.
-                              // TODO: Rewrite to not need this method anymore,
-                              // now that devices are enumerated earlier.
-                              optional DOMString callID = "");
-};
-
 // Service Workers/Navigation Controllers
 partial interface Navigator {
   [Func="ServiceWorkerContainer::IsEnabled", SameObject]
@@ -285,11 +266,6 @@ partial interface Navigator {
   [Throws, Pref="beacon.enabled"]
   boolean sendBeacon(DOMString url,
                      optional BodyInit? data = null);
-};
-
-partial interface Navigator {
-  [Throws, Pref="dom.presentation.enabled", SameObject]
-  readonly attribute Presentation? presentation;
 };
 
 partial interface Navigator {
@@ -316,7 +292,7 @@ partial interface Navigator {
 
 // https://w3c.github.io/webdriver/webdriver-spec.html#interface
 interface mixin NavigatorAutomationInformation {
-  [Pref="dom.webdriver.enabled"]
+  [Constant, Cached]
   readonly attribute boolean webdriver;
 };
 

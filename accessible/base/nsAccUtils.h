@@ -6,7 +6,7 @@
 #ifndef nsAccUtils_h_
 #define nsAccUtils_h_
 
-#include "mozilla/a11y/Accessible.h"
+#include "mozilla/a11y/LocalAccessible.h"
 #include "mozilla/a11y/DocManager.h"
 
 #include "AccessibleOrProxy.h"
@@ -33,45 +33,21 @@ class Attribute;
 class nsAccUtils {
  public:
   /**
-   * Returns value of attribute from the given attributes container.
-   *
-   * @param aAttributes - attributes container
-   * @param aAttrName - the name of requested attribute
-   * @param aAttrValue - value of attribute
-   */
-  static void GetAccAttr(nsIPersistentProperties* aAttributes,
-                         nsAtom* aAttrName, nsAString& aAttrValue);
-
-  /**
-   * Set value of attribute for the given attributes container.
-   *
-   * @param aAttributes - attributes container
-   * @param aAttrName - the name of requested attribute
-   * @param aAttrValue - new value of attribute
-   */
-  static void SetAccAttr(nsIPersistentProperties* aAttributes,
-                         nsAtom* aAttrName, const nsAString& aAttrValue);
-
-  static void SetAccAttr(nsIPersistentProperties* aAttributes,
-                         nsAtom* aAttrName, nsAtom* aAttrValue);
-
-  /**
    * Set group attributes ('level', 'setsize', 'posinset').
    */
-  static void SetAccGroupAttrs(nsIPersistentProperties* aAttributes,
-                               int32_t aLevel, int32_t aSetSize,
-                               int32_t aPosInSet);
+  static void SetAccGroupAttrs(AccAttributes* aAttributes, int32_t aLevel,
+                               int32_t aSetSize, int32_t aPosInSet);
 
   /**
    * Get default value of the level for the given accessible.
    */
-  static int32_t GetDefaultLevel(const Accessible* aAcc);
+  static int32_t GetDefaultLevel(const LocalAccessible* aAcc);
 
   /**
    * Return ARIA level value or the default one if ARIA is missed for the
    * given accessible.
    */
-  static int32_t GetARIAOrDefaultLevel(const Accessible* aAccessible);
+  static int32_t GetARIAOrDefaultLevel(const LocalAccessible* aAccessible);
 
   /**
    * Compute group level for nsIDOMXULContainerItemElement node.
@@ -84,7 +60,7 @@ class nsAccUtils {
    * @param aAttributes    where to store the attributes
    * @param aStartContent  node to start from
    */
-  static void SetLiveContainerAttributes(nsIPersistentProperties* aAttributes,
+  static void SetLiveContainerAttributes(AccAttributes* aAttributes,
                                          nsIContent* aStartContent);
 
   /**
@@ -132,27 +108,27 @@ class nsAccUtils {
    * @param  aAccessible  [in] the item accessible
    * @param  aState       [in] the state of the item accessible
    */
-  static Accessible* GetSelectableContainer(Accessible* aAccessible,
-                                            uint64_t aState);
+  static LocalAccessible* GetSelectableContainer(LocalAccessible* aAccessible,
+                                                 uint64_t aState);
 
   /**
    * Return a text container accessible for the given node.
    */
   static HyperTextAccessible* GetTextContainer(nsINode* aNode);
 
-  static Accessible* TableFor(Accessible* aRow);
+  static LocalAccessible* TableFor(LocalAccessible* aRow);
 
   /**
    * Return true if the DOM node of a given accessible has a given attribute
    * with a value of "true".
    */
-  static bool IsDOMAttrTrue(const Accessible* aAccessible, nsAtom* aAttr);
+  static bool IsDOMAttrTrue(const LocalAccessible* aAccessible, nsAtom* aAttr);
 
   /**
    * Return true if the DOM node of given accessible has aria-selected="true"
    * attribute.
    */
-  static inline bool IsARIASelected(const Accessible* aAccessible) {
+  static inline bool IsARIASelected(const LocalAccessible* aAccessible) {
     return IsDOMAttrTrue(aAccessible, nsGkAtoms::aria_selected);
   }
 
@@ -160,7 +136,7 @@ class nsAccUtils {
    * Return true if the DOM node of given accessible has
    * aria-multiselectable="true" attribute.
    */
-  static inline bool IsARIAMultiSelectable(const Accessible* aAccessible) {
+  static inline bool IsARIAMultiSelectable(const LocalAccessible* aAccessible) {
     return IsDOMAttrTrue(aAccessible, nsGkAtoms::aria_multiselectable);
   }
 
@@ -177,7 +153,7 @@ class nsAccUtils {
    */
   static nsIntPoint ConvertToScreenCoords(int32_t aX, int32_t aY,
                                           uint32_t aCoordinateType,
-                                          Accessible* aAccessible);
+                                          LocalAccessible* aAccessible);
 
   /**
    * Converts the given coordinates relative screen to another coordinate
@@ -192,14 +168,14 @@ class nsAccUtils {
    */
   static void ConvertScreenCoordsTo(int32_t* aX, int32_t* aY,
                                     uint32_t aCoordinateType,
-                                    Accessible* aAccessible);
+                                    LocalAccessible* aAccessible);
 
   /**
    * Returns coordinates relative screen for the parent of the given accessible.
    *
    * @param [in] aAccessible  the accessible
    */
-  static nsIntPoint GetScreenCoordsForParent(Accessible* aAccessible);
+  static nsIntPoint GetScreenCoordsForParent(LocalAccessible* aAccessible);
 
   /**
    * Get the 'live' or 'container-live' object attribute value from the given
@@ -217,13 +193,13 @@ class nsAccUtils {
    * Detect whether the given accessible object implements nsIAccessibleText,
    * when it is text or has text child node.
    */
-  static bool IsTextInterfaceSupportCorrect(Accessible* aAccessible);
+  static bool IsTextInterfaceSupportCorrect(LocalAccessible* aAccessible);
 #endif
 
   /**
    * Return text length of the given accessible, return 0 on failure.
    */
-  static uint32_t TextLength(Accessible* aAccessible);
+  static uint32_t TextLength(LocalAccessible* aAccessible);
 
   /**
    * Transform nsIAccessibleStates constants to internal state constant.
@@ -254,14 +230,11 @@ class nsAccUtils {
    */
   static bool MustPrune(AccessibleOrProxy aAccessible);
 
-  static bool PersistentPropertiesToArray(nsIPersistentProperties* aProps,
-                                          nsTArray<Attribute>* aAttributes);
-
   /**
    * Return true if the given accessible is within an ARIA live region; i.e.
    * the container-live attribute would be something other than "off" or empty.
    */
-  static bool IsARIALive(const Accessible* aAccessible);
+  static bool IsARIALive(const LocalAccessible* aAccessible);
 };
 
 }  // namespace a11y

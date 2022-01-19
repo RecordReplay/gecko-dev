@@ -205,7 +205,7 @@ ProcessedModuleLoadEvent::ProcessedModuleLoadEvent()
 
 ProcessedModuleLoadEvent::ProcessedModuleLoadEvent(
     glue::EnhancedModuleLoadInfo&& aModLoadInfo,
-    RefPtr<ModuleRecord>&& aModuleRecord, bool aIsDependent)
+    RefPtr<ModuleRecord>&& aModuleRecord)
     : mProcessUptimeMS(QPCTimeStampToProcessUptimeMilliseconds(
           aModLoadInfo.mNtLoadInfo.mBeginTimestamp)),
       mLoadDurationMS(QPCLoadDurationToMilliseconds(aModLoadInfo.mNtLoadInfo)),
@@ -214,7 +214,7 @@ ProcessedModuleLoadEvent::ProcessedModuleLoadEvent(
       mBaseAddress(
           reinterpret_cast<uintptr_t>(aModLoadInfo.mNtLoadInfo.mBaseAddr)),
       mModule(std::move(aModuleRecord)),
-      mIsDependent(aIsDependent),
+      mIsDependent(aModLoadInfo.mNtLoadInfo.mIsDependent),
       mLoadStatus(static_cast<uint32_t>(aModLoadInfo.mNtLoadInfo.mStatus)) {
   if (!mModule || !(*mModule)) {
     return;
@@ -312,36 +312,16 @@ void UntrustedModulesData::AddNewLoads(
     Vector<Telemetry::ProcessedStack>&& aStacks) {
   MOZ_ASSERT(aEvents.length() == aStacks.length());
 
-  for (auto iter = aModules.ConstIter(); !iter.Done(); iter.Next()) {
-    if (iter.Data()->IsTrusted()) {
+  for (const auto& entry : aModules) {
+    if (entry.GetData()->IsTrusted()) {
       // Filter out trusted module records
       continue;
     }
 
-    auto addPtr = mModules.LookupForAdd(iter.Key());
-    if (addPtr) {
-      // |mModules| already contains this record
-      continue;
-    }
-
-    RefPtr<ModuleRecord> rec(iter.Data());
-    addPtr.OrInsert([rec = std::move(rec)]() { return rec; });
+    Unused << mModules.LookupOrInsert(entry.GetKey(), entry.GetData());
   }
 
-  // This constant matches the maximum in Telemetry::CombinedStacks
-  const size_t kMaxEvents = 50;
   MOZ_ASSERT(mEvents.length() <= kMaxEvents);
-
-  if (mEvents.length() + aEvents.length() > kMaxEvents) {
-    // Ensure that we will never retain more tha kMaxEvents events
-    size_t newLength = kMaxEvents - mEvents.length();
-    if (!newLength) {
-      return;
-    }
-
-    aEvents.shrinkTo(newLength);
-    aStacks.shrinkTo(newLength);
-  }
 
   if (mEvents.empty()) {
     mEvents = std::move(aEvents);
@@ -373,15 +353,18 @@ void UntrustedModulesData::Merge(UntrustedModulesData&& aNewData) {
 
   Unused << mEvents.reserve(mEvents.length() + newData.mEvents.length());
   for (auto&& event : newData.mEvents) {
-    auto addPtr = mModules.LookupForAdd(event.mModule->mResolvedNtName);
-    if (addPtr) {
-      // Even though the path of a ModuleRecord matches, the object of
-      // ModuleRecord can be different.
-      // Make sure the event's mModule points to an object in mModules.
-      event.mModule = addPtr.Data();
-    } else {
-      addPtr.OrInsert([modRef = event.mModule]() { return modRef; });
-    }
+    mModules.WithEntryHandle(event.mModule->mResolvedNtName,
+                             [&](auto&& addPtr) {
+                               if (addPtr) {
+                                 // Even though the path of a ModuleRecord
+                                 // matches, the object of ModuleRecord can be
+                                 // different. Make sure the event's mModule
+                                 // points to an object in mModules.
+                                 event.mModule = addPtr.Data();
+                               } else {
+                                 addPtr.Insert(event.mModule);
+                               }
+                             });
 
     Unused << mEvents.emplaceBack(std::move(event));
   }

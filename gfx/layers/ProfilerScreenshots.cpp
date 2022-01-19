@@ -23,18 +23,13 @@ ProfilerScreenshots::~ProfilerScreenshots() = default;
 
 /* static */
 bool ProfilerScreenshots::IsEnabled() {
-#ifdef MOZ_GECKO_PROFILER
   return profiler_feature_active(ProfilerFeature::Screenshots);
-#else
-  return false;
-#endif
 }
 
 void ProfilerScreenshots::SubmitScreenshot(
     uintptr_t aWindowIdentifier, const gfx::IntSize& aOriginalSize,
     const IntSize& aScaledSize, const TimeStamp& aTimeStamp,
     const std::function<bool(DataSourceSurface*)>& aPopulateSurface) {
-#ifdef MOZ_GECKO_PROFILER
   RefPtr<DataSourceSurface> backingSurface = TakeNextSurface();
   if (!backingSurface) {
     return;
@@ -113,7 +108,6 @@ void ProfilerScreenshots::SubmitScreenshot(
         // Return backingSurface back to the surface pool.
         self->ReturnSurface(backingSurface);
       }));
-#endif
 }
 
 already_AddRefed<DataSourceSurface> ProfilerScreenshots::TakeNextSurface() {

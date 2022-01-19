@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include shared,ellipse
+#include shared,rect,ellipse
 
 #define DONT_MIX 0
 #define MIX_AA 1
@@ -17,8 +17,15 @@ flat varying vec4 vColor1;
 // transition occurs. Used for corners only.
 flat varying vec4 vColorLine;
 
+#if defined(PLATFORM_ANDROID) && !defined(SWGL)
+// Work around Adreno 3xx driver bug. See the v_perspective comment in
+// brush_image or bug 1630356 for details.
+flat varying ivec2 vMixColorsVec;
+#define vMixColors vMixColorsVec.x
+#else
 // A boolean indicating that we should be mixing between edge colors.
 flat varying int vMixColors;
+#endif
 
 // xy = Local space position of the clip center.
 // zw = Scale the rect origin by this to get the outer
@@ -85,7 +92,8 @@ void main(void) {
     bool do_aa = ((aFlags >> 24) & 0xf0) != 0;
 
     vec2 outer_scale = get_outer_corner_scale(segment);
-    vec2 outer = outer_scale * aRect.zw;
+    vec2 size = aRect.zw - aRect.xy;
+    vec2 outer = outer_scale * size;
     vec2 clip_sign = 1.0 - 2.0 * outer_scale;
 
     int mix_colors;
@@ -103,7 +111,7 @@ void main(void) {
     }
 
     vMixColors = mix_colors;
-    vPos = aRect.zw * aPosition.xy;
+    vPos = size * aPosition.xy;
 
     vColor0 = aColor0;
     vColor1 = aColor1;

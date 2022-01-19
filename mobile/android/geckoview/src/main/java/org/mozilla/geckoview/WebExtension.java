@@ -19,7 +19,6 @@ import org.mozilla.gecko.util.GeckoBundle;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -73,11 +72,11 @@ public class WebExtension {
         DownloadDelegate getDownloadDelegate();
     }
 
-    private DelegateController mDelegateController = null;
-
-    /* package */ void setDelegateController(final DelegateController delegate) {
-        mDelegateController = delegate;
+    /* package */ interface DelegateControllerProvider {
+        @NonNull DelegateController controllerFor(final WebExtension extension);
     }
+
+    private final DelegateController mDelegateController;
 
     @Override
     public String toString() {
@@ -111,7 +110,8 @@ public class WebExtension {
             value = { Flags.NONE, Flags.ALLOW_CONTENT_MESSAGING })
     /* package */ @interface WebExtensionFlags {}
 
-    /* package */ WebExtension(final GeckoBundle bundle) {
+    /* package */ WebExtension(final DelegateControllerProvider provider,
+                               final GeckoBundle bundle) {
         location = bundle.getString("locationURI");
         id = bundle.getString("webExtensionId");
         flags = bundle.getInt("webExtensionFlags", 0);
@@ -121,6 +121,7 @@ public class WebExtension {
         } else {
             metaData = null;
         }
+        mDelegateController = provider.controllerFor(this);
     }
 
     /**
@@ -174,9 +175,7 @@ public class WebExtension {
     @UiThread
     public void setMessageDelegate(final @Nullable MessageDelegate messageDelegate,
                                    final @NonNull String nativeApp) {
-        if (mDelegateController != null) {
-            mDelegateController.onMessageDelegate(nativeApp, messageDelegate);
-        }
+        mDelegateController.onMessageDelegate(nativeApp, messageDelegate);
     }
 
     @Retention(RetentionPolicy.SOURCE)
@@ -476,7 +475,7 @@ public class WebExtension {
             final Object content;
             try {
                 content = bundle.toJSONObject().get("data");
-            } catch (JSONException ex) {
+            } catch (final JSONException ex) {
                 callback.sendError(ex);
                 return;
             }
@@ -490,10 +489,10 @@ public class WebExtension {
          * @param message {@link JSONObject} that will be sent to the WebExtension.
          */
         public void postMessage(final @NonNull JSONObject message) {
-            GeckoBundle args = new GeckoBundle(1);
+            final GeckoBundle args = new GeckoBundle(1);
             try {
                 args.putBundle("message", GeckoBundle.fromJSONObject(message));
-            } catch (JSONException ex) {
+            } catch (final JSONException ex) {
                 throw new RuntimeException(ex);
             }
 
@@ -508,7 +507,7 @@ public class WebExtension {
                 return;
             }
 
-            GeckoBundle args = new GeckoBundle(1);
+            final GeckoBundle args = new GeckoBundle(1);
             args.putLong("portId", id);
 
             mEventDispatcher.dispatch("GeckoView:WebExtension:PortDisconnect", args);
@@ -580,9 +579,9 @@ public class WebExtension {
          */
         @UiThread
         @NonNull
-        default GeckoResult<AllowOrDeny> onCloseTab(@Nullable WebExtension source,
-                                                    @NonNull GeckoSession session)  {
-            return GeckoResult.DENY;
+        default GeckoResult<AllowOrDeny> onCloseTab(@Nullable final WebExtension source,
+                                                    @NonNull final GeckoSession session)  {
+            return GeckoResult.deny();
         }
 
         /**
@@ -605,7 +604,7 @@ public class WebExtension {
         default GeckoResult<AllowOrDeny> onUpdateTab(final @NonNull WebExtension extension,
                                                      final @NonNull GeckoSession session,
                                                      final @NonNull UpdateTabDetails details) {
-            return GeckoResult.DENY;
+            return GeckoResult.deny();
         }
     }
 
@@ -775,8 +774,8 @@ public class WebExtension {
          */
         @UiThread
         @Nullable
-        default GeckoResult<GeckoSession> onNewTab(@NonNull WebExtension source,
-                                                   @NonNull CreateTabDetails createDetails) {
+        default GeckoResult<GeckoSession> onNewTab(@NonNull final WebExtension source,
+                                                   @NonNull final CreateTabDetails createDetails) {
             return null;
         }
 
@@ -790,7 +789,7 @@ public class WebExtension {
          * @param source An instance of {@link WebExtension}.
          */
         @UiThread
-        default void onOpenOptionsPage(@NonNull WebExtension source) {}
+        default void onOpenOptionsPage(@NonNull final WebExtension source) {}
     }
 
     /**
@@ -818,9 +817,7 @@ public class WebExtension {
      */
     @UiThread
     public void setTabDelegate(final @Nullable TabDelegate delegate) {
-        if (mDelegateController != null) {
-            mDelegateController.onTabDelegate(delegate);
-        }
+        mDelegateController.onTabDelegate(delegate);
     }
 
     @UiThread
@@ -831,9 +828,7 @@ public class WebExtension {
 
     @UiThread
     public void setBrowsingDataDelegate(final @Nullable BrowsingDataDelegate delegate) {
-        if (mDelegateController != null) {
-            mDelegateController.onBrowsingDataDelegate(delegate);
-        }
+        mDelegateController.onBrowsingDataDelegate(delegate);
     }
 
     private static class Sender {
@@ -851,7 +846,7 @@ public class WebExtension {
                 return false;
             }
 
-            Sender o = (Sender) other;
+            final Sender o = (Sender) other;
             return webExtensionId.equals(o.webExtensionId) &&
                     nativeApp.equals(o.nativeApp);
         }
@@ -1217,11 +1212,12 @@ public class WebExtension {
         }
     }
 
-    /* package */ static WebExtension fromBundle(final GeckoBundle bundle) {
+    /* package */ static WebExtension fromBundle(final DelegateControllerProvider provider,
+                                                 final GeckoBundle bundle) {
         if (bundle == null) {
             return null;
         }
-        return new WebExtension(bundle.getBundle("extension"));
+        return new WebExtension(provider, bundle.getBundle("extension"));
     }
 
     /**
@@ -1271,17 +1267,6 @@ public class WebExtension {
          *     browserAction/setIcon</a>
          */
         final public @Nullable Image icon;
-        /**
-         * URI of the Popup to display when the user taps on the icon for this
-         * Action.
-         *
-         * See also:
-         * <a target=_blank href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/pageAction/getPopup">
-         *     pageAction/getPopup</a>,
-         * <a target=_blank href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/browserAction/getPopup">
-         *     browserAction/getPopup</a>
-         */
-        final private @Nullable String mPopupUri;
         /**
          * Whether this action is enabled and should be visible.
          *
@@ -1342,7 +1327,6 @@ public class WebExtension {
         /* package */ Action(final @ActionType int type,
                              final GeckoBundle bundle, final WebExtension extension) {
             mExtension = extension;
-            mPopupUri = bundle.getString("popup");
 
             this.type = type;
 
@@ -1382,7 +1366,6 @@ public class WebExtension {
             return "Action {\n"
                     + "\ttitle: " + this.title + ",\n"
                     + "\ticon: " + this.icon + ",\n"
-                    + "\tpopupUri: " + this.mPopupUri + ",\n"
                     + "\tenabled: " + this.enabled + ",\n"
                     + "\tbadgeText: " + this.badgeText + ",\n"
                     + "\tbadgeTextColor: " + this.badgeTextColor + ",\n"
@@ -1394,7 +1377,6 @@ public class WebExtension {
         protected Action() {
             type = TYPE_BROWSER_ACTION;
             mExtension = null;
-            mPopupUri = null;
             title = null;
             icon = null;
             enabled = null;
@@ -1434,7 +1416,6 @@ public class WebExtension {
 
             title = source.title != null ? source.title : defaultValue.title;
             icon = source.icon != null ? source.icon : defaultValue.icon;
-            mPopupUri = source.mPopupUri != null ? source.mPopupUri : defaultValue.mPopupUri;
             enabled = source.enabled != null  ? source.enabled : defaultValue.enabled;
             badgeText = source.badgeText != null ? source.badgeText : defaultValue.badgeText;
             badgeTextColor = source.badgeTextColor != null
@@ -1448,34 +1429,39 @@ public class WebExtension {
          */
         @UiThread
         public void click() {
-            if (mPopupUri != null && !mPopupUri.isEmpty()) {
+            final GeckoBundle bundle = new GeckoBundle(1);
+            bundle.putString("extensionId", mExtension.id);
+
+            // The click event will return the popup uri if we should open a popup in
+            // response to clicking on the action button.
+            final GeckoResult<String> popupUri;
+            if (type == TYPE_BROWSER_ACTION) {
+                popupUri = EventDispatcher.getInstance()
+                        .queryString("GeckoView:BrowserAction:Click", bundle);
+            } else if (type == TYPE_PAGE_ACTION) {
+                popupUri = EventDispatcher.getInstance()
+                        .queryString("GeckoView:PageAction:Click", bundle);
+            } else {
+                throw new IllegalStateException("Unknown Action type");
+            }
+
+            popupUri.accept(uri -> {
+                if (uri == null || uri.isEmpty()) {
+                    return;
+                }
+
                 final ActionDelegate delegate = mExtension.mDelegateController.getActionDelegate();
                 if (delegate == null) {
                     return;
                 }
 
-                GeckoResult<GeckoSession> popup = delegate.onTogglePopup(mExtension, this);
-                openPopup(popup);
-
-                // When popupUri is specified, the extension doesn't get a callback
-                return;
-            }
-
-            final GeckoBundle bundle = new GeckoBundle(1);
-            bundle.putString("extensionId", mExtension.id);
-
-            if (type == TYPE_BROWSER_ACTION) {
-                EventDispatcher.getInstance().dispatch(
-                        "GeckoView:BrowserAction:Click", bundle);
-            } else if (type == TYPE_PAGE_ACTION) {
-                EventDispatcher.getInstance().dispatch(
-                        "GeckoView:PageAction:Click", bundle);
-            } else {
-                throw new IllegalStateException("Unknown Action type");
-            }
+                final GeckoResult<GeckoSession> popup = delegate.onTogglePopup(mExtension, this);
+                openPopup(popup, uri);
+            });
         }
 
-        /* package */ void openPopup(final GeckoResult<GeckoSession> popup) {
+        /* package */ void openPopup(final GeckoResult<GeckoSession> popup,
+                                     final String popupUri) {
             if (popup == null) {
                 return;
             }
@@ -1486,7 +1472,7 @@ public class WebExtension {
                 }
 
                 session.getSettings().setIsPopup(true);
-                session.loadUri(mPopupUri);
+                session.loadUri(popupUri);
             });
         }
     }
@@ -1684,9 +1670,7 @@ public class WebExtension {
      */
     @AnyThread
     public void setActionDelegate(final @Nullable ActionDelegate delegate) {
-        if (mDelegateController != null) {
-            mDelegateController.onActionDelegate(delegate);
-        }
+        mDelegateController.onActionDelegate(delegate);
 
         final GeckoBundle bundle = new GeckoBundle(1);
         bundle.putString("extensionId", id);
@@ -1957,7 +1941,7 @@ public class WebExtension {
             baseUrl = bundle.getString("baseURL");
             allowedInPrivateBrowsing = bundle.getBoolean("privateBrowsingAllowed", false);
 
-            int signedState = bundle.getInt("signedState", SignedStateFlags.UNKNOWN);
+            final int signedState = bundle.getInt("signedState", SignedStateFlags.UNKNOWN);
             if (signedState <= SignedStateFlags.LAST) {
                 this.signedState = signedState;
             } else {
@@ -2070,10 +2054,10 @@ public class WebExtension {
         /* package */ Menu(final @NonNull WebExtension extension, final GeckoBundle bundle) {
             this.extension = extension;
             title = bundle.getString("title", "");
-            GeckoBundle[] items = bundle.getBundleArray("items");
+            final GeckoBundle[] items = bundle.getBundleArray("items");
             this.items = new ArrayList<>();
             if (items != null) {
-                for (GeckoBundle item : items) {
+                for (final GeckoBundle item : items) {
                     this.items.add(new MenuItem(this.extension, item));
                 }
             }
@@ -2251,11 +2235,11 @@ public class WebExtension {
          *
          * @param source - Web Extension that requested the download
          * @param request - contains the {@link WebRequest} and additional parameters for the request
-         * @return {@link Download} instance
+         * @return {@link DownloadInitData} instance
          */
         @AnyThread
         @Nullable
-        default GeckoResult<WebExtension.Download> onDownload(@NonNull WebExtension source, @NonNull DownloadRequest request) {
+        default GeckoResult<WebExtension.DownloadInitData> onDownload(@NonNull final WebExtension source, @NonNull final DownloadRequest request) {
             return null;
         }
     }
@@ -2271,9 +2255,7 @@ public class WebExtension {
      */
     @UiThread
     public void setDownloadDelegate(final @Nullable DownloadDelegate delegate) {
-        if (mDelegateController != null) {
-            mDelegateController.onDownloadDelegate(delegate);
-        }
+        mDelegateController.onDownloadDelegate(delegate);
     }
 
     /**
@@ -2299,7 +2281,7 @@ public class WebExtension {
          * Represents a unique identifier for the downloaded item
          * that is persistent across browser sessions
          */
-        public final @NonNull int id;
+        public final int id;
 
         /**
          * For testing.
@@ -2311,122 +2293,326 @@ public class WebExtension {
 
         /* package */ void setDelegate(final Delegate delegate) { }
 
-        /* package */ GeckoResult<Void> update(final DownloadInfo data) {
-            return null;
+        /**
+         * Updates the download state.
+         * This will trigger a call to <a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/downloads/onChanged">downloads.onChanged</a> event
+         * to the corresponding `DownloadItem` on the extension side.
+         *
+         * @param data - current metadata associated with the download. {@link Download.Info} implementation instance
+         * @return GeckoResult with nothing or error inside
+         */
+        @Nullable
+        @UiThread
+        public GeckoResult<Void> update(final @NonNull Download.Info data) {
+            final GeckoBundle bundle = new GeckoBundle(12);
+
+            bundle.putInt("downloadItemId", this.id);
+
+            bundle.putString("filename", data.filename());
+            bundle.putString("mime", data.mime());
+            bundle.putString("startTime", String.valueOf(data.startTime()));
+            bundle.putString("endTime", data.endTime() == null ? null : String.valueOf(data.endTime()));
+            bundle.putInt("state", data.state());
+            bundle.putBoolean("canResume", data.canResume());
+            bundle.putBoolean("paused", data.paused());
+            final Integer error = data.error();
+            if (error != null) {
+                bundle.putInt("error",  error);
+            }
+            bundle.putLong("totalBytes", data.totalBytes());
+            bundle.putLong("fileSize", data.fileSize());
+            bundle.putBoolean("exists", data.fileExists());
+
+            return EventDispatcher.getInstance().queryVoid(
+                    "GeckoView:WebExtension:DownloadChanged", bundle
+            ).map(null, e -> {
+                if (e instanceof EventDispatcher.QueryException) {
+                    final EventDispatcher.QueryException queryException = (EventDispatcher.QueryException) e;
+                    if (queryException.data instanceof String) {
+                        return new IllegalArgumentException((String) queryException.data);
+                    }
+                }
+                return e;
+            });
         }
 
         /* package */ interface Delegate {
 
-            default GeckoResult<Void> onPause(WebExtension source, WebExtension.Download download) {
+            default GeckoResult<Void> onPause(final WebExtension source, final WebExtension.Download download) {
                 return null;
             }
 
-            default GeckoResult<Void> onResume(WebExtension source, WebExtension.Download download) {
+            default GeckoResult<Void> onResume(final WebExtension source, final WebExtension.Download download) {
                 return null;
             }
 
-            default GeckoResult<Void> onCancel(WebExtension source, WebExtension.Download download) {
+            default GeckoResult<Void> onCancel(final WebExtension source, final WebExtension.Download download) {
                 return null;
             }
 
-            default GeckoResult<Void> onErase(WebExtension source, WebExtension.Download download) {
+            default GeckoResult<Void> onErase(final WebExtension source, final WebExtension.Download download) {
                 return null;
             }
 
-            default GeckoResult<Void> onOpen(WebExtension source, WebExtension.Download download) {
+            default GeckoResult<Void> onOpen(final WebExtension source, final WebExtension.Download download) {
                 return null;
             }
 
-            default GeckoResult<Void> onRemoveFile(WebExtension source, WebExtension.Download download) {
+            default GeckoResult<Void> onRemoveFile(final WebExtension source, final WebExtension.Download download) {
                 return null;
             }
         }
 
-        /* package */ interface DownloadInfo {
-            @IntDef(flag = true, value = { IN_PROGRESS, INTERRUPTED, COMPLETE })
-            /* package */ @interface DownloadStatusFlags {};
+        /**
+         * Represents a download in progress where the app is currently receiving data from the server. See also {@link Info#state()}.
+         */
+        @IntDef({STATE_IN_PROGRESS, STATE_INTERRUPTED, STATE_COMPLETE})
+        public @interface DownloadState {}
+
+        /**
+         * Download is in progress. Default state
+         */
+        public static final int STATE_IN_PROGRESS = 0;
+
+        /**
+         * An error broke the connection with the server.
+         */
+        public static final int STATE_INTERRUPTED = 1;
+
+        /**
+         * The download completed successfully.
+         */
+        public static final int STATE_COMPLETE = 2;
+
+        /**
+         * Represents a possible reason why a download was interrupted. See also {@link Info#error()}.
+         */
+        @IntDef({
+                INTERRUPT_REASON_NO_INTERRUPT,
+                INTERRUPT_REASON_FILE_FAILED,
+                INTERRUPT_REASON_FILE_ACCESS_DENIED,
+                INTERRUPT_REASON_FILE_NO_SPACE,
+                INTERRUPT_REASON_FILE_NAME_TOO_LONG,
+                INTERRUPT_REASON_FILE_TOO_LARGE,
+                INTERRUPT_REASON_FILE_VIRUS_INFECTED,
+                INTERRUPT_REASON_FILE_TRANSIENT_ERROR,
+                INTERRUPT_REASON_FILE_BLOCKED,
+                INTERRUPT_REASON_FILE_SECURITY_CHECK_FAILED,
+                INTERRUPT_REASON_FILE_TOO_SHORT,
+                INTERRUPT_REASON_NETWORK_FAILED,
+                INTERRUPT_REASON_NETWORK_TIMEOUT,
+                INTERRUPT_REASON_NETWORK_DISCONNECTED,
+                INTERRUPT_REASON_NETWORK_SERVER_DOWN,
+                INTERRUPT_REASON_NETWORK_INVALID_REQUEST,
+                INTERRUPT_REASON_SERVER_FAILED,
+                INTERRUPT_REASON_SERVER_NO_RANGE,
+                INTERRUPT_REASON_SERVER_BAD_CONTENT,
+                INTERRUPT_REASON_SERVER_UNAUTHORIZED,
+                INTERRUPT_REASON_SERVER_CERT_PROBLEM,
+                INTERRUPT_REASON_SERVER_FORBIDDEN,
+                INTERRUPT_REASON_USER_CANCELED,
+                INTERRUPT_REASON_USER_SHUTDOWN,
+                INTERRUPT_REASON_CRASH
+        })
+        public @interface DownloadInterruptReason {}
+
+        // File-related errors
+        public static final int INTERRUPT_REASON_NO_INTERRUPT = 0;
+        public static final int INTERRUPT_REASON_FILE_FAILED = 1;
+        public static final int INTERRUPT_REASON_FILE_ACCESS_DENIED = 2;
+        public static final int INTERRUPT_REASON_FILE_NO_SPACE = 3;
+        public static final int INTERRUPT_REASON_FILE_NAME_TOO_LONG = 4;
+        public static final int INTERRUPT_REASON_FILE_TOO_LARGE = 5;
+        public static final int INTERRUPT_REASON_FILE_VIRUS_INFECTED = 6;
+        public static final int INTERRUPT_REASON_FILE_TRANSIENT_ERROR = 7;
+        public static final int INTERRUPT_REASON_FILE_BLOCKED = 8;
+        public static final int INTERRUPT_REASON_FILE_SECURITY_CHECK_FAILED = 9;
+        public static final int INTERRUPT_REASON_FILE_TOO_SHORT = 10;
+        // Network-related errors
+        public static final int INTERRUPT_REASON_NETWORK_FAILED = 11;
+        public static final int INTERRUPT_REASON_NETWORK_TIMEOUT = 12;
+        public static final int INTERRUPT_REASON_NETWORK_DISCONNECTED = 13;
+        public static final int INTERRUPT_REASON_NETWORK_SERVER_DOWN = 14;
+        public static final int INTERRUPT_REASON_NETWORK_INVALID_REQUEST = 15;
+        // Server-related errors
+        public static final int INTERRUPT_REASON_SERVER_FAILED = 16;
+        public static final int INTERRUPT_REASON_SERVER_NO_RANGE = 17;
+        public static final int INTERRUPT_REASON_SERVER_BAD_CONTENT = 18;
+        public static final int INTERRUPT_REASON_SERVER_UNAUTHORIZED = 19;
+        public static final int INTERRUPT_REASON_SERVER_CERT_PROBLEM = 20;
+        public static final int INTERRUPT_REASON_SERVER_FORBIDDEN = 21;
+        // User-related errors
+        public static final int INTERRUPT_REASON_USER_CANCELED = 22;
+        public static final int INTERRUPT_REASON_USER_SHUTDOWN = 23;
+        // Miscellaneous
+        public static final int INTERRUPT_REASON_CRASH = 24;
+
+        /**
+         * Interface for communicating the state of downloads to Web Extensions.
+         * See also <a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/downloads/DownloadItem">WebExtensions/API/downloads/DownloadItem</a>
+         */
+        public interface Info {
 
             /**
-             * The app is currently receiving download data from the server.
+             * @return A number representing the number of bytes received so far from the host during the download
+             *         This does not take file compression into consideration
              */
-            /* package */ static final int IN_PROGRESS = 0;
-
-            /**
-             * An error broke the connection with the server.
-             */
-            /* package */ static final int INTERRUPTED = 1;
-
-            /**
-             * The download completed successfully.
-             */
-            /* package */ static final int COMPLETE = 1 << 1;
-
-            /**
-             * @return boolean indicating whether the download is paused
-             * i.e. if the download has stopped reading data from the host
-             * but has kept the connection open
-             */
-            default boolean paused() {
-                return false;
-            }
-
-            /**
-             * @return Date (in ISO 8601 format) representing
-             * the estimated number of milliseconds between the UNIX epoch
-             * and when this download is estimated to be completed
-             */
-            default Date estimatedEndTime() {
-                return null;
-            }
-
-            /**
-             * @return boolean indicating whether a currently-interrupted
-             * (e.g. paused) download can be resumed from the point where it was interrupted
-             */
-            default boolean canResume() {
-                return false;
-            }
-
-            /**
-             * @return number of bytes received so far from the host during the download;
-             * this does not take file compression into consideration
-             */
+            @UiThread
             default long bytesReceived() {
                 return 0;
             }
 
             /**
-             * @return total number of bytes in the file being downloaded.
-             * This does not take file compression into consideration.
-             * A value of -1 here means that the total number of bytes is unknown
+             * @return boolean indicating whether a currently-interrupted
+             *         (e.g. paused) download can be resumed from the point where it was interrupted
              */
-            default long totalBytes() {
-                return 0;
+            @UiThread
+            default boolean canResume() {
+                return false;
             }
 
             /**
-             * @return Date representing the number of milliseconds between
-             * the UNIX epoch and when this download ended.
-             * This is null if the download has not yet finished
+             * @return A number representing the time when this download ended.
+             *         This is null if the download has not yet finished.
              */
-            default Date endTime() {
+            @Nullable
+            @UiThread
+            default Long endTime() {
+                return null;
+            }
+
+            /**
+             * @return One of <a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/downloads/InterruptReason">Interrupt Reason</a> constants denoting the error reason.
+             */
+            @Nullable
+            @UiThread
+            default @DownloadInterruptReason Integer error() {
+                return null;
+            }
+
+            /**
+             * @return the estimated number of milliseconds between the UNIX epoch and when this download is estimated to be completed.
+             *         This is null if it is not known.
+             */
+            @Nullable
+            @UiThread
+            default Long estimatedEndTime() {
                 return null;
             }
 
             /**
              * @return boolean indicating whether a downloaded file still exists
              */
+            @UiThread
             default boolean fileExists() {
                 return false;
             }
 
             /**
-             * @return one of {@link DownloadStatusFlags} to indicate
-             * whether the download is in progress, interrupted or complete
+             * @return the filename.
              */
-            default @DownloadStatusFlags int status() {
-                return 0;
+            @NonNull
+            @UiThread
+            default String filename() {
+                return "";
             }
+
+            /**
+             * @return the total number of bytes in the whole file, after decompression.
+             *         A value of -1 means that the total file size is unknown.
+             */
+            @UiThread
+            default long fileSize() {
+                return -1;
+            }
+
+            /**
+             * @return the downloaded file's MIME type
+             */
+            @NonNull
+            @UiThread
+            default String mime() {
+                return "";
+            }
+
+            /**
+             * @return boolean indicating whether the download is paused
+             *         i.e. if the download has stopped reading data from the host
+             *         but has kept the connection open
+             */
+            @UiThread
+            default boolean paused() {
+                return false;
+            }
+
+            /**
+             * @return String representing the downloaded file's referrer
+             */
+            @NonNull
+            @UiThread
+            default String referrer() {
+                return "";
+            }
+
+            /**
+             * @return the number of milliseconds between the UNIX epoch and when this download began
+             */
+            @UiThread
+            default long startTime() {
+                return -1;
+            }
+
+            /**
+             * @return a new state; one of the state constants to indicate
+             *         whether the download is in progress, interrupted or complete
+             */
+            @UiThread
+            default @DownloadState int state() {
+                return STATE_IN_PROGRESS;
+            }
+
+            /**
+             * @return total number of bytes in the file being downloaded.
+             *         This does not take file compression into consideration.
+             *         A value of -1 here means that the total number of bytes is unknown
+             */
+            @UiThread
+            default long totalBytes() {
+                return -1;
+            }
+        }
+
+        @NonNull
+        @UiThread
+        /* package */ static GeckoBundle downloadInfoToBundle(final @NonNull Info data) {
+            final GeckoBundle dataBundle = new GeckoBundle();
+
+            dataBundle.putLong("bytesReceived", data.bytesReceived());
+            dataBundle.putBoolean("canResume", data.canResume());
+            dataBundle.putBoolean("exists", data.fileExists());
+            dataBundle.putString("filename", data.filename());
+            dataBundle.putLong("fileSize", data.fileSize());
+            dataBundle.putString("mime", data.mime());
+            dataBundle.putBoolean("paused", data.paused());
+            dataBundle.putString("referrer", data.referrer());
+            dataBundle.putString("startTime", String.valueOf(data.startTime()));
+            dataBundle.putInt("state", data.state());
+            dataBundle.putLong("totalBytes", data.totalBytes());
+
+            final Long endTime = data.endTime();
+            if (endTime != null) {
+                dataBundle.putString("endTime", endTime.toString());
+            }
+            final Integer error = data.error();
+            if (error != null) {
+                dataBundle.putInt("error", error);
+            }
+            final Long estimatedEndTime = data.estimatedEndTime();
+            if (estimatedEndTime != null) {
+                dataBundle.putString("estimatedEndTime", estimatedEndTime.toString());
+            }
+
+            return dataBundle;
         }
     }
 
@@ -2506,21 +2692,21 @@ public class WebExtension {
         /* package */ static DownloadRequest fromBundle(final GeckoBundle optionsBundle) {
             final String uri = optionsBundle.getString("url");
 
-            WebRequest.Builder mainRequestBuilder = new WebRequest.Builder(uri);
+            final WebRequest.Builder mainRequestBuilder = new WebRequest.Builder(uri);
 
-            String method = optionsBundle.getString("method");
+            final String method = optionsBundle.getString("method");
             if (method != null) {
                 mainRequestBuilder.method(method);
 
                 if (method.equals("POST")) {
-                    String body = optionsBundle.getString("body");
+                    final String body = optionsBundle.getString("body");
                     mainRequestBuilder.body(body);
                 }
             }
 
-            GeckoBundle[] headers = optionsBundle.getBundleArray("headers");
+            final GeckoBundle[] headers = optionsBundle.getBundleArray("headers");
             if (headers != null) {
-                for (GeckoBundle header : headers) {
+                for (final GeckoBundle header : headers) {
                     String value = header.getString("value");
                     if (value == null) {
                         value = header.getString("binaryValue");
@@ -2529,18 +2715,18 @@ public class WebExtension {
                 }
             }
 
-            WebRequest mainRequest = mainRequestBuilder.build();
+            final WebRequest mainRequest = mainRequestBuilder.build();
 
             int downloadFlags = GeckoWebExecutor.FETCH_FLAGS_NONE;
-            boolean incognito = optionsBundle.getBoolean("incognito");
+            final boolean incognito = optionsBundle.getBoolean("incognito");
             if (incognito) {
                 downloadFlags |= GeckoWebExecutor.FETCH_FLAGS_PRIVATE;
             }
 
-            boolean allowHttpErrors = optionsBundle.getBoolean("allowHttpErrors");
+            final boolean allowHttpErrors = optionsBundle.getBoolean("allowHttpErrors");
 
             int conflictActionFlags = CONFLICT_ACTION_UNIQUIFY;
-            String conflictActionString = optionsBundle.getString("conflictAction");
+            final String conflictActionString = optionsBundle.getString("conflictAction");
             if (conflictActionString != null) {
                 switch (conflictActionString.toLowerCase(Locale.ROOT)) {
                     case "overwrite":
@@ -2552,9 +2738,9 @@ public class WebExtension {
                 }
             }
 
-            boolean saveAs = optionsBundle.getBoolean("saveAs");
+            final boolean saveAs = optionsBundle.getBoolean("saveAs");
 
-            WebExtension.DownloadRequest request = new WebExtension.DownloadRequest.Builder(mainRequest)
+            final WebExtension.DownloadRequest request = new WebExtension.DownloadRequest.Builder(mainRequest)
                     .filename(optionsBundle.getString("filename"))
                     .downloadFlags(downloadFlags)
                     .conflictAction(conflictActionFlags)
@@ -2605,6 +2791,19 @@ public class WebExtension {
             /* package */ DownloadRequest build() {
                 return new DownloadRequest(this);
             }
+        }
+    }
+
+    /**
+     * Represents initial information on a download provided to Web Extension
+     */
+    public static class DownloadInitData {
+        @NonNull public final WebExtension.Download download;
+        @NonNull public final Download.Info initData;
+
+        public DownloadInitData(final Download download, final Download.Info initData) {
+            this.download = download;
+            this.initData = initData;
         }
     }
 }

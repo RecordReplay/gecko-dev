@@ -16,6 +16,8 @@
 
 namespace mozilla {
 
+struct ErrorPropagationTag;
+
 // Allow nsresult errors to automatically convert to nsresult values, so MOZ_TRY
 // can be used in XPCOM methods with Result<T, nserror> results.
 template <>
@@ -29,6 +31,9 @@ class MOZ_MUST_USE_TYPE GenericErrorResult<nsresult> {
   explicit GenericErrorResult(nsresult aErrorValue) : mErrorValue(aErrorValue) {
     MOZ_ASSERT(NS_FAILED(aErrorValue));
   }
+
+  GenericErrorResult(nsresult aErrorValue, const ErrorPropagationTag&)
+      : GenericErrorResult(aErrorValue) {}
 
   operator nsresult() const { return mErrorValue; }
 };
@@ -100,11 +105,12 @@ struct outparam_as_reference<T*> {
 
 template <typename R, template <typename> typename RArg, typename Func,
           typename... Args>
-using to_result_retval_t = decltype(
-    std::declval<Func&>()(std::declval<Args&&>()...,
-                          std::declval<typename RArg<decltype(
-                              ResultRefAsParam(std::declval<R&>()))>::type>()),
-    Result<R, nsresult>(Err(NS_ERROR_FAILURE)));
+using to_result_retval_t =
+    decltype(std::declval<Func&>()(
+                 std::declval<Args&&>()...,
+                 std::declval<typename RArg<decltype(ResultRefAsParam(
+                     std::declval<R&>()))>::type>()),
+             Result<R, nsresult>(Err(NS_ERROR_FAILURE)));
 
 // There are two ToResultInvokeSelector overloads, which cover the cases of a) a
 // pointer-typed output parameter, and b) a reference-typed output parameter,

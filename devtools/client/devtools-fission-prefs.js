@@ -27,17 +27,18 @@ const PREFERENCES = [
       "processes at the same time as resources from the parent process",
   ],
   [
-    "devtools.target-switching.enabled",
-    "If you navigate between two distinct process, the toolbox won’t close " +
-      "and will instead switch to the new target. This impacts the regular " +
-      "web toolbox, when switching from eg. about:sessionrestore to any http " +
-      "url (parent process to content process). Or when navigating between " +
-      "two distinct domains if `fission.autostart` is set to true",
+    "devtools.target-switching.server.enabled",
+    "Enable experimental server side target switching",
   ],
   [
     "devtools.testing.enableServerWatcherSupport",
     "Enable experimental server-side resources (see watcher actor to get the " +
       "list of impacted resources",
+  ],
+  [
+    "fission.bfcacheInParent",
+    "Enable bfcache navigation in parent process (requires Fission and involve " +
+      "more top level target switching",
   ],
 ];
 

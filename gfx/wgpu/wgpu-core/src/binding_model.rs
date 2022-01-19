@@ -5,11 +5,12 @@
 use crate::{
     device::{
         descriptor::{DescriptorSet, DescriptorTotalCount},
-        DeviceError, SHADER_STAGE_COUNT,
+        DeviceError, MissingFeatures, SHADER_STAGE_COUNT,
     },
     hub::Resource,
     id::{BindGroupLayoutId, BufferId, DeviceId, SamplerId, TextureViewId, Valid},
-    track::{TrackerSet, DUMMY_SELECTOR},
+    memory_init_tracker::MemoryInitTrackerAction,
+    track::{TrackerSet, UsageConflict, DUMMY_SELECTOR},
     validation::{MissingBufferUsageError, MissingTextureUsageError},
     FastHashMap, Label, LifeGuard, MultiRefCount, Stored, MAX_BIND_GROUPS,
 };
@@ -29,18 +30,30 @@ use std::{
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
+pub enum BindGroupLayoutEntryError {
+    #[error("arrays of bindings unsupported for this type of binding")]
+    ArrayUnsupported,
+    #[error(transparent)]
+    MissingFeatures(#[from] MissingFeatures),
+}
+
+#[derive(Clone, Debug, Error)]
 pub enum CreateBindGroupLayoutError {
     #[error(transparent)]
     Device(#[from] DeviceError),
-    #[error("arrays of bindings unsupported for this type of binding")]
-    ArrayUnsupported,
     #[error("conflicting binding at index {0}")]
     ConflictBinding(u32),
-    #[error("required device feature is missing: {0:?}")]
-    MissingFeature(wgt::Features),
+    #[error("binding {binding} entry is invalid")]
+    Entry {
+        binding: u32,
+        #[source]
+        error: BindGroupLayoutEntryError,
+    },
     #[error(transparent)]
     TooManyBindings(BindingTypeMaxCountError),
 }
+
+//TODO: refactor this to move out `enum BindingError`.
 
 #[derive(Clone, Debug, Error)]
 pub enum CreateBindGroupError {
@@ -58,11 +71,18 @@ pub enum CreateBindGroupError {
     BindingArrayLengthMismatch { actual: usize, expected: usize },
     #[error("bound buffer range {range:?} does not fit in buffer of size {size}")]
     BindingRangeTooLarge {
+        buffer: BufferId,
         range: Range<wgt::BufferAddress>,
         size: u64,
     },
     #[error("buffer binding size {actual} is less than minimum {min}")]
-    BindingSizeTooSmall { actual: u64, min: u64 },
+    BindingSizeTooSmall {
+        buffer: BufferId,
+        actual: u64,
+        min: u64,
+    },
+    #[error("buffer binding size is zero")]
+    BindingZeroSize(BufferId),
     #[error("number of bindings in bind group descriptor ({actual}) does not match the number of bindings defined in the bind group layout ({expected})")]
     BindingsNumMismatch { actual: usize, expected: usize },
     #[error("binding {0} is used at least twice in the descriptor")]
@@ -73,16 +93,20 @@ pub enum CreateBindGroupError {
     MissingBufferUsage(#[from] MissingBufferUsageError),
     #[error(transparent)]
     MissingTextureUsage(#[from] MissingTextureUsageError),
-    #[error("required device features not enabled: {0:?}")]
-    MissingFeatures(wgt::Features),
     #[error("binding declared as a single item, but bind group is using it as an array")]
     SingleBindingExpected,
     #[error("unable to create a bind group with a swap chain image")]
     SwapChainImage,
     #[error("buffer offset {0} does not respect `BIND_BUFFER_ALIGNMENT`")]
     UnalignedBufferOffset(wgt::BufferAddress),
-    #[error("uniform buffer binding range exceeds `max_uniform_buffer_binding_size` limit")]
-    UniformBufferRangeTooLarge,
+    #[error(
+        "buffer binding {binding} range {given} exceeds `max_*_buffer_binding_size` limit {limit}"
+    )]
+    BufferRangeTooLarge {
+        binding: u32,
+        given: u32,
+        limit: u32,
+    },
     #[error("binding {binding} has a different type ({actual:?}) than the one in the layout ({expected:?})")]
     WrongBindingType {
         // Index of the binding
@@ -92,10 +116,48 @@ pub enum CreateBindGroupError {
         // Human-readable description of expected types
         expected: &'static str,
     },
-    #[error("the given sampler is/is not a comparison sampler, while the layout type indicates otherwise")]
-    WrongSamplerComparison,
+    #[error("texture binding {binding} expects multisampled = {layout_multisampled}, but given a view with samples = {view_samples}")]
+    InvalidTextureMultisample {
+        binding: u32,
+        layout_multisampled: bool,
+        view_samples: u32,
+    },
+    #[error("texture binding {binding} expects sample type = {layout_sample_type:?}, but given a view with format = {view_format:?}")]
+    InvalidTextureSampleType {
+        binding: u32,
+        layout_sample_type: wgt::TextureSampleType,
+        view_format: wgt::TextureFormat,
+    },
+    #[error("texture binding {binding} expects dimension = {layout_dimension:?}, but given a view with dimension = {view_dimension:?}")]
+    InvalidTextureDimension {
+        binding: u32,
+        layout_dimension: wgt::TextureViewDimension,
+        view_dimension: wgt::TextureViewDimension,
+    },
+    #[error("storage texture binding {binding} expects format = {layout_format:?}, but given a view with format = {view_format:?}")]
+    InvalidStorageTextureFormat {
+        binding: u32,
+        layout_format: wgt::TextureFormat,
+        view_format: wgt::TextureFormat,
+    },
+    #[error("sampler binding {binding} expects comparison = {layout_cmp}, but given a sampler with comparison = {sampler_cmp}")]
+    WrongSamplerComparison {
+        binding: u32,
+        layout_cmp: bool,
+        sampler_cmp: bool,
+    },
+    #[error("sampler binding {binding} expects filtering = {layout_flt}, but given a sampler with filtering = {sampler_flt}")]
+    WrongSamplerFiltering {
+        binding: u32,
+        layout_flt: bool,
+        sampler_flt: bool,
+    },
     #[error("bound texture views can not have both depth and stencil aspects enabled")]
     DepthStencilAspect,
+    #[error("the adapter does not support simultaneous read + write storage texture access for the format {0:?}")]
+    StorageReadWriteNotSupported(wgt::TextureFormat),
+    #[error(transparent)]
+    ResourceUsageConflict(#[from] UsageConflict),
 }
 
 #[derive(Clone, Debug, Error)]
@@ -107,10 +169,11 @@ pub enum BindingZone {
 }
 
 #[derive(Clone, Debug, Error)]
-#[error("too many bindings of type {kind:?} in {zone}, limit is {count}")]
+#[error("too many bindings of type {kind:?} in {zone}, limit is {limit}, count was {count}")]
 pub struct BindingTypeMaxCountError {
     pub kind: BindingTypeMaxCountErrorKind,
     pub zone: BindingZone,
+    pub limit: u32,
     pub count: u32,
 }
 
@@ -173,7 +236,12 @@ impl PerStageBindingTypeCounter {
     ) -> Result<(), BindingTypeMaxCountError> {
         let (zone, count) = self.max();
         if limit < count {
-            Err(BindingTypeMaxCountError { kind, zone, count })
+            Err(BindingTypeMaxCountError {
+                kind,
+                zone,
+                limit,
+                count,
+            })
         } else {
             Ok(())
         }
@@ -242,6 +310,7 @@ impl BindingTypeMaxCountValidator {
             return Err(BindingTypeMaxCountError {
                 kind: BindingTypeMaxCountErrorKind::DynamicUniformBuffers,
                 zone: BindingZone::Pipeline,
+                limit: limits.max_dynamic_uniform_buffers_per_pipeline_layout,
                 count: self.dynamic_uniform_buffers,
             });
         }
@@ -249,6 +318,7 @@ impl BindingTypeMaxCountValidator {
             return Err(BindingTypeMaxCountError {
                 kind: BindingTypeMaxCountErrorKind::DynamicStorageBuffers,
                 zone: BindingZone::Pipeline,
+                limit: limits.max_dynamic_storage_buffers_per_pipeline_layout,
                 count: self.dynamic_storage_buffers,
             });
         }
@@ -357,8 +427,8 @@ pub enum CreatePipelineLayoutError {
         wgt::PUSH_CONSTANT_ALIGNMENT
     )]
     MisalignedPushConstantRange { index: usize, bound: u32 },
-    #[error("device does not have required feature: {0:?}")]
-    MissingFeature(wgt::Features),
+    #[error(transparent)]
+    MissingFeatures(#[from] MissingFeatures),
     #[error("push constant range (index {index}) provides for stage(s) {provided:?} but there exists another range that provides stage(s) {intersected:?}. Each stage may only be provided by one range")]
     MoreThanOnePushConstantRangePerStage {
         index: usize,
@@ -423,7 +493,7 @@ pub struct PipelineLayoutDescriptor<'a> {
     /// must define the range in push constant memory that corresponds to its single `layout(push_constant)`
     /// uniform block.
     ///
-    /// If this array is non-empty, the [`Features::PUSH_CONSTANTS`] must be enabled.
+    /// If this array is non-empty, the [`Features::PUSH_CONSTANTS`](wgt::Features::PUSH_CONSTANTS) must be enabled.
     pub push_constant_ranges: Cow<'a, [wgt::PushConstantRange]>,
 }
 
@@ -541,6 +611,7 @@ pub struct BufferBinding {
 #[cfg_attr(feature = "replay", derive(serde::Deserialize))]
 pub enum BindingResource<'a> {
     Buffer(BufferBinding),
+    BufferArray(Cow<'a, [BufferBinding]>),
     Sampler(SamplerId),
     TextureView(TextureViewId),
     TextureViewArray(Cow<'a, [TextureViewId]>),
@@ -571,6 +642,7 @@ pub struct BindGroup<B: hal::Backend> {
     pub(crate) layout_id: Valid<BindGroupLayoutId>,
     pub(crate) life_guard: LifeGuard,
     pub(crate) used: TrackerSet,
+    pub(crate) used_buffer_ranges: Vec<MemoryInitTrackerAction<BufferId>>,
     pub(crate) dynamic_binding_info: Vec<BindGroupDynamicBindingData>,
 }
 

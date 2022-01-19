@@ -10,17 +10,6 @@ with Files("**"):
 with Files("Event*"):
     BUG_COMPONENT = ("Core", "DOM: Events")
 
-if CONFIG["OS_ARCH"] == "WINNT":
-    DIRS += ["win"]
-elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
-    DIRS += ["mac"]
-elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
-    DIRS += ["android"]
-elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
-    DIRS += ["unix"]
-else:
-    DIRS += ["emacs"]
-
 BROWSER_CHROME_MANIFESTS += [
     "test/browser.ini",
 ]
@@ -30,7 +19,12 @@ MOCHITEST_MANIFESTS += [
     "test/pointerevents/mochitest.ini",
 ]
 
-MOCHITEST_CHROME_MANIFESTS += ["test/chrome.ini"]
+MOCHITEST_CHROME_MANIFESTS += [
+    "test/chrome.ini",
+    "test/pointerevents/chrome.ini",
+]
+
+TEST_DIRS += ["test/gtest"]
 
 XPIDL_SOURCES += [
     "nsIEventListenerService.idl",
@@ -68,6 +62,7 @@ EXPORTS.mozilla.dom += [
     "BeforeUnloadEvent.h",
     "Clipboard.h",
     "ClipboardEvent.h",
+    "ClipboardItem.h",
     "CommandEvent.h",
     "CompositionEvent.h",
     "ConstructibleEventTarget.h",
@@ -113,6 +108,7 @@ UNIFIED_SOURCES += [
     "BeforeUnloadEvent.cpp",
     "Clipboard.cpp",
     "ClipboardEvent.cpp",
+    "ClipboardItem.cpp",
     "CommandEvent.cpp",
     "CompositionEvent.cpp",
     "ConstructibleEventTarget.cpp",
@@ -148,6 +144,7 @@ UNIFIED_SOURCES += [
     "PointerEventHandler.cpp",
     "RemoteDragStartData.cpp",
     "ScrollAreaEvent.cpp",
+    "ShortcutKeyDefinitions.cpp",
     "ShortcutKeys.cpp",
     "SimpleGestureEvent.cpp",
     "StorageEvent.cpp",

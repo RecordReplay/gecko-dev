@@ -22,6 +22,7 @@
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
 #include "nsIInterfaceRequestor.h"
+#include "nsISupportsPriority.h"
 #include "nsITimer.h"
 
 class nsISocketTransport;
@@ -73,12 +74,18 @@ class nsHttpConnection final : public HttpConnectionBase,
 
   nsHttpConnection();
 
-  void SetFastOpen(bool aFastOpen);
-  // Close this connection and return the transaction. The transaction is
-  // restarted as well. This will only happened before connection is
-  // connected.
-  nsAHttpTransaction* CloseConnectionFastOpenTakesTooLongOrError(
-      bool aCloseocketTransport);
+  // Initialize the connection:
+  //  info        - specifies the connection parameters.
+  //  maxHangTime - limits the amount of time this connection can spend on a
+  //                single transaction before it should no longer be kept
+  //                alive.  a value of 0xffff indicates no limit.
+  [[nodiscard]] virtual nsresult Init(nsHttpConnectionInfo* info,
+                                      uint16_t maxHangTime, nsISocketTransport*,
+                                      nsIAsyncInputStream*,
+                                      nsIAsyncOutputStream*,
+                                      bool connectedTransport, nsresult status,
+                                      nsIInterfaceRequestor*, PRIntervalTime,
+                                      bool forWebSocket);
 
   //-------------------------------------------------------------------------
   // XXX document when these are ok to call
@@ -165,12 +172,8 @@ class nsHttpConnection final : public HttpConnectionBase,
   // connection since CheckForTraffic() was called.
   bool NoTraffic() {
     return mTrafficStamp &&
-           (mTrafficCount == (mTotalBytesWritten + mTotalBytesRead)) &&
-           !mFastOpen;
+           (mTrafficCount == (mTotalBytesWritten + mTotalBytesRead));
   }
-
-  void SetFastOpenStatus(uint8_t tfoStatus);
-  uint8_t GetFastOpenStatus() { return mFastOpenStatus; }
 
   // Return true when the socket this connection is using has not been
   // authenticated using a client certificate.  Before SSL negotiation
@@ -178,6 +181,17 @@ class nsHttpConnection final : public HttpConnectionBase,
   bool NoClientCertAuth() const override;
 
   bool CanAcceptWebsocket() override;
+
+  int64_t BytesWritten() override { return mTotalBytesWritten; }
+
+  nsISocketTransport* Transport() override { return mSocketTransport; }
+
+  nsresult GetSelfAddr(NetAddr* addr) override;
+  nsresult GetPeerAddr(NetAddr* addr) override;
+  bool ResolvedByTRR() override;
+  bool GetEchConfigUsed() override;
+
+  bool IsForWebSocket() { return mForWebSocket; }
 
  private:
   // Value (set in mTCPKeepaliveConfig) indicates which set of prefs to use.
@@ -209,10 +223,10 @@ class nsHttpConnection final : public HttpConnectionBase,
   void SetupSSL();
 
   // Start the Spdy transaction handler when NPN indicates spdy/*
-  void StartSpdy(nsISSLSocketControl* ssl, SpdyVersion versionLevel);
+  void StartSpdy(nsISSLSocketControl* ssl, SpdyVersion spdyVersion);
   // Like the above, but do the bare minimum to do 0RTT data, so we can back
   // it out, if necessary
-  void Start0RTTSpdy(SpdyVersion versionLevel);
+  void Start0RTTSpdy(SpdyVersion spdyVersion);
 
   // Helpers for Start*Spdy
   nsresult TryTakeSubTransactions(nsTArray<RefPtr<nsAHttpTransaction> >& list);
@@ -228,6 +242,8 @@ class nsHttpConnection final : public HttpConnectionBase,
   [[nodiscard]] nsresult StartLongLivedTCPKeepalives();
   [[nodiscard]] nsresult DisableTCPKeepalives();
 
+  bool CheckCanWrite0RTTData();
+
  private:
   // mTransaction only points to the HTTP Transaction callbacks if the
   // transaction is open, otherwise it is null.
@@ -236,8 +252,8 @@ class nsHttpConnection final : public HttpConnectionBase,
   nsCOMPtr<nsIAsyncInputStream> mSocketIn;
   nsCOMPtr<nsIAsyncOutputStream> mSocketOut;
 
-  nsresult mSocketInCondition;
-  nsresult mSocketOutCondition;
+  nsresult mSocketInCondition{NS_ERROR_NOT_INITIALIZED};
+  nsresult mSocketOutCondition{NS_ERROR_NOT_INITIALIZED};
 
   nsCOMPtr<nsIInputStream> mProxyConnectStream;
   nsCOMPtr<nsIInputStream> mRequestStream;
@@ -247,108 +263,105 @@ class nsHttpConnection final : public HttpConnectionBase,
 
   RefPtr<nsHttpHandler> mHttpHandler;  // keep gHttpHandler alive
 
-  PRIntervalTime mLastReadTime;
-  PRIntervalTime mLastWriteTime;
-  PRIntervalTime
-      mMaxHangTime;  // max download time before dropping keep-alive status
+  PRIntervalTime mLastReadTime{0};
+  PRIntervalTime mLastWriteTime{0};
+  // max download time before dropping keep-alive status
+  PRIntervalTime mMaxHangTime{0};
   PRIntervalTime mIdleTimeout;  // value of keep-alive: timeout=
-  PRIntervalTime mConsiderReusedAfterInterval;
-  PRIntervalTime mConsiderReusedAfterEpoch;
-  int64_t mCurrentBytesRead;     // data read per activation
-  int64_t mMaxBytesRead;         // max read in 1 activation
-  int64_t mTotalBytesRead;       // total data read
-  int64_t mContentBytesWritten;  // does not include CONNECT tunnel or TLS
+  PRIntervalTime mConsiderReusedAfterInterval{0};
+  PRIntervalTime mConsiderReusedAfterEpoch{0};
+  int64_t mCurrentBytesRead{0};     // data read per activation
+  int64_t mMaxBytesRead{0};         // max read in 1 activation
+  int64_t mTotalBytesRead{0};       // total data read
+  int64_t mContentBytesWritten{0};  // does not include CONNECT tunnel or TLS
 
   RefPtr<nsIAsyncInputStream> mInputOverflow;
 
   // Whether the first non-null transaction dispatched on this connection was
   // urgent-start or not
-  bool mUrgentStartPreferred;
+  bool mUrgentStartPreferred{false};
   // A flag to prevent reset of mUrgentStartPreferred by subsequent transactions
-  bool mUrgentStartPreferredKnown;
-  bool mConnectedTransport;
-  bool mKeepAlive;
-  bool mKeepAliveMask;
-  bool mDontReuse;
-  bool mIsReused;
-  bool mCompletedProxyConnect;
-  bool mLastTransactionExpectedNoContent;
-  bool mIdleMonitoring;
-  bool mProxyConnectInProgress;
-  bool mInSpdyTunnel;
-  bool mForcePlainText;
+  bool mUrgentStartPreferredKnown{false};
+  bool mConnectedTransport{false};
+  // assume to keep-alive by default
+  bool mKeepAlive{true};
+  bool mKeepAliveMask{true};
+  bool mDontReuse{false};
+  bool mIsReused{false};
+  bool mCompletedProxyConnect{false};
+  bool mLastTransactionExpectedNoContent{false};
+  bool mIdleMonitoring{false};
+  bool mProxyConnectInProgress{false};
+  bool mInSpdyTunnel{false};
+  bool mForcePlainText{false};
 
   // A snapshot of current number of transfered bytes
-  int64_t mTrafficCount;
-  bool mTrafficStamp;  // true then the above is set
+  int64_t mTrafficCount{0};
+  bool mTrafficStamp{false};  // true then the above is set
 
   // The number of <= HTTP/1.1 transactions performed on this connection. This
   // excludes spdy transactions.
-  uint32_t mHttp1xTransactionCount;
+  uint32_t mHttp1xTransactionCount{0};
 
   // Keep-Alive: max="mRemainingConnectionUses" provides the number of future
   // transactions (including the current one) that the server expects to allow
   // on this persistent connection.
-  uint32_t mRemainingConnectionUses;
+  uint32_t mRemainingConnectionUses{0xffffffff};
 
   // SPDY related
-  bool mNPNComplete;
-  bool mSetupSSLCalled;
+  bool mNPNComplete{false};
+  bool mSetupSSLCalled{false};
 
   // version level in use, 0 if unused
-  SpdyVersion mUsingSpdyVersion;
+  SpdyVersion mUsingSpdyVersion{SpdyVersion::NONE};
 
   RefPtr<ASpdySession> mSpdySession;
-  int32_t mPriority;
-  bool mReportedSpdy;
+  int32_t mPriority{nsISupportsPriority::PRIORITY_NORMAL};
+  bool mReportedSpdy{false};
 
   // mUsingSpdyVersion is cleared when mSpdySession is freed, this is permanent
-  bool mEverUsedSpdy;
+  bool mEverUsedSpdy{false};
 
   // mLastHttpResponseVersion stores the last response's http version seen.
-  HttpVersion mLastHttpResponseVersion;
+  HttpVersion mLastHttpResponseVersion{HttpVersion::v1_1};
 
   // If a large keepalive has been requested for any trans,
   // scale the default by this factor
-  uint32_t mDefaultTimeoutFactor;
+  uint32_t mDefaultTimeoutFactor{1};
 
-  bool mResponseTimeoutEnabled;
+  bool mResponseTimeoutEnabled{false};
 
   // Flag to indicate connection is in inital keepalive period (fast detect).
-  uint32_t mTCPKeepaliveConfig;
+  uint32_t mTCPKeepaliveConfig{kTCPKeepaliveDisabled};
   nsCOMPtr<nsITimer> mTCPKeepaliveTransitionTimer;
 
  private:
   // For ForceSend()
   static void ForceSendIO(nsITimer* aTimer, void* aClosure);
   [[nodiscard]] nsresult MaybeForceSendIO();
-  bool mForceSendPending;
+  bool mForceSendPending{false};
   nsCOMPtr<nsITimer> mForceSendTimer;
 
   // Helper variable for 0RTT handshake;
-  bool m0RTTChecked;             // Possible 0RTT has been
-                                 // checked.
-  bool mWaitingFor0RTTResponse;  // We have are
-                                 // sending 0RTT
-                                 // data and we
-                                 // are waiting
-                                 // for the end of
-                                 // the handsake.
-  int64_t mContentBytesWritten0RTT;
-  bool mEarlyDataNegotiated;  // Only used for telemetry
+  // Possible 0RTT has been checked.
+  bool m0RTTChecked{false};
+  // We have are sending 0RTT data and we are waiting
+  // for the end of the handsake.
+  bool mWaitingFor0RTTResponse{false};
+  int64_t mContentBytesWritten0RTT{0};
+  bool mEarlyDataNegotiated{false};  // Only used for telemetry
   nsCString mEarlyNegotiatedALPN;
-  bool mDid0RTTSpdy;
+  bool mDid0RTTSpdy{false};
 
-  bool mFastOpen;
-  uint8_t mFastOpenStatus;
+  nsresult mErrorBeforeConnect = NS_OK;
 
-  bool mForceSendDuringFastOpenPending;
-  bool mReceivedSocketWouldBlockDuringFastOpen;
-  bool mCheckNetworkStallsWithTFO;
-  PRIntervalTime mLastRequestBytesSentTime;
+  nsCOMPtr<nsISocketTransport> mSocketTransport;
+
+  bool mForWebSocket{false};
 
  private:
   bool mThroughCaptivePortal;
+  int64_t mTotalBytesWritten = 0;  // does not include CONNECT tunnel
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpConnection, NS_HTTPCONNECTION_IID)

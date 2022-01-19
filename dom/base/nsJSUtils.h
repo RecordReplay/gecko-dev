@@ -63,7 +63,10 @@ class nsJSUtils {
                                   const nsAString& aBody,
                                   JSObject** aFunctionObject);
 
-  static bool BinASTEncodingEnabled() { return false; }
+  static nsresult UpdateFunctionDebugMetadata(
+      mozilla::dom::AutoJSAPI& jsapi, JS::Handle<JSObject*> aFun,
+      JS::CompileOptions& aOptions, JS::Handle<JSString*> aElementAttributeName,
+      JS::Handle<JS::Value> aPrivateValue);
 
   static nsresult CompileModule(JSContext* aCx,
                                 JS::SourceText<char16_t>& aSrcBuf,

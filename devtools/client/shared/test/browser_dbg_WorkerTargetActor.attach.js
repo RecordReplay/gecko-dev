@@ -25,8 +25,7 @@ add_task(async function() {
   SpecialPowers.setIntPref(MAX_TOTAL_VIEWERS, 10);
 
   const tab = await addTab(TAB1_URL);
-  const target = await TargetFactory.forTab(tab);
-  await target.attach();
+  const target = await createAndAttachTargetForTab(tab);
   await listWorkers(target);
 
   // If a page still has pending network requests, it will not be moved into
@@ -39,7 +38,7 @@ add_task(async function() {
   let workerDescriptorFront1 = findWorker(workers, WORKER1_URL);
   await workerDescriptorFront1.attach();
   ok(
-    workerDescriptorFront1.actorID,
+    !workerDescriptorFront1.isDestroyed(),
     "front for worker in tab 1 has been attached"
   );
 
@@ -48,7 +47,7 @@ add_task(async function() {
   });
   await waitForWorkerClose(workerDescriptorFront1);
   ok(
-    !!workerDescriptorFront1.actorID,
+    workerDescriptorFront1.isDestroyed(),
     "front for worker in tab 1 has been closed"
   );
 
@@ -57,7 +56,7 @@ add_task(async function() {
   const workerDescriptorFront2 = findWorker(workers, WORKER2_URL);
   await workerDescriptorFront2.attach();
   ok(
-    workerDescriptorFront2.actorID,
+    !workerDescriptorFront2.isDestroyed(),
     "front for worker in tab 2 has been attached"
   );
 
@@ -66,7 +65,7 @@ add_task(async function() {
   });
   await waitForWorkerClose(workerDescriptorFront2);
   ok(
-    !!workerDescriptorFront2.actorID,
+    workerDescriptorFront2.isDestroyed(),
     "front for worker in tab 2 has been closed"
   );
 
@@ -74,7 +73,7 @@ add_task(async function() {
   workerDescriptorFront1 = findWorker(workers, WORKER1_URL);
   await workerDescriptorFront1.attach();
   ok(
-    workerDescriptorFront1.actorID,
+    !workerDescriptorFront1.isDestroyed(),
     "front for worker in tab 1 has been attached"
   );
 

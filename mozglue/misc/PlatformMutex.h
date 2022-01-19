@@ -10,8 +10,9 @@
 #include <utility>
 
 #include "mozilla/Attributes.h"
+#include "mozilla/Types.h"
 
-#if !defined(XP_WIN)
+#if !defined(XP_WIN) && !defined(__wasi__)
 #  include <pthread.h>
 #endif
 
@@ -53,7 +54,7 @@ class MutexImpl {
 
   PlatformData* platformData();
 
-#if !defined(XP_WIN)
+#if !defined(XP_WIN) && !defined(__wasi__)
   void* platformData_[sizeof(pthread_mutex_t) / sizeof(void*)];
   static_assert(sizeof(pthread_mutex_t) / sizeof(void*) != 0 &&
                     sizeof(pthread_mutex_t) % sizeof(void*) == 0,

@@ -121,19 +121,20 @@ void PerformanceObserver::Notify() {
 
 void PerformanceObserver::QueueEntry(PerformanceEntry* aEntry) {
   MOZ_ASSERT(aEntry);
+  MOZ_ASSERT(ObservesTypeOfEntry(aEntry));
 
-  if (!ObservesTypeOfEntry(aEntry)) {
-    return;
-  }
   mQueuedEntries.AppendElement(aEntry);
 }
+
+static constexpr nsLiteralString kValidEventTimingNames[2] = {
+    u"event"_ns, u"first-input"_ns};
 
 /*
  * Keep this list in alphabetical order.
  * https://w3c.github.io/performance-timeline/#supportedentrytypes-attribute
  */
-static const char16_t* const sValidTypeNames[5] = {
-    u"mark", u"measure", u"navigation", u"paint", u"resource",
+static constexpr nsLiteralString kValidTypeNames[5] = {
+    u"mark"_ns, u"measure"_ns, u"navigation"_ns, u"paint"_ns, u"resource"_ns,
 };
 
 void PerformanceObserver::ReportUnsupportedTypesErrorToConsole(
@@ -165,14 +166,14 @@ void PerformanceObserver::Observe(const PerformanceObserverInit& aOptions,
 
   if (!maybeEntryTypes.WasPassed() && !maybeType.WasPassed()) {
     /* Per spec (3.3.1.2), this should be a syntax error. */
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    aRv.ThrowTypeError("Can't call observe without `type` or `entryTypes`");
     return;
   }
 
   if (maybeEntryTypes.WasPassed() &&
       (maybeType.WasPassed() || maybeBuffered.WasPassed())) {
     /* Per spec (3.3.1.3), this, too, should be a syntax error. */
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    aRv.ThrowTypeError("Can't call observe with both `type` and `entryTypes`");
     return;
   }
 
@@ -207,11 +208,17 @@ void PerformanceObserver::Observe(const PerformanceObserverInit& aOptions,
 
     /* 3.3.1.5.2 */
     nsTArray<nsString> validEntryTypes;
-    for (const char16_t* name : sValidTypeNames) {
-      nsDependentString validTypeName(name);
-      if (entryTypes.Contains<nsString>(validTypeName) &&
-          !validEntryTypes.Contains<nsString>(validTypeName)) {
-        validEntryTypes.AppendElement(validTypeName);
+
+    if (StaticPrefs::dom_enable_event_timing()) {
+      for (const nsLiteralString& name : kValidEventTimingNames) {
+        if (entryTypes.Contains(name) && !validEntryTypes.Contains(name)) {
+          validEntryTypes.AppendElement(name);
+        }
+      }
+    }
+    for (const nsLiteralString& name : kValidTypeNames) {
+      if (entryTypes.Contains(name) && !validEntryTypes.Contains(name)) {
+        validEntryTypes.AppendElement(name);
       }
     }
 
@@ -254,9 +261,16 @@ void PerformanceObserver::Observe(const PerformanceObserverInit& aOptions,
     nsString type = maybeType.Value();
 
     /* 3.3.1.6.2 */
-    for (const char16_t* name : sValidTypeNames) {
-      nsDependentString validTypeName(name);
-      if (type == validTypeName) {
+    if (StaticPrefs::dom_enable_event_timing()) {
+      for (const nsLiteralString& name : kValidEventTimingNames) {
+        if (type == name) {
+          typeValid = true;
+          break;
+        }
+      }
+    }
+    for (const nsLiteralString& name : kValidTypeNames) {
+      if (type == name) {
         typeValid = true;
         break;
       }
@@ -287,7 +301,7 @@ void PerformanceObserver::Observe(const PerformanceObserverInit& aOptions,
     /* 3.3.1.6.5 */
     if (maybeBuffered.WasPassed() && maybeBuffered.Value()) {
       nsTArray<RefPtr<PerformanceEntry>> existingEntries;
-      mPerformance->GetEntriesByType(type, existingEntries);
+      mPerformance->GetEntriesByTypeForObserver(type, existingEntries);
       if (!existingEntries.IsEmpty()) {
         mQueuedEntries.AppendElements(existingEntries);
         needQueueNotificationObserverTask = true;
@@ -310,9 +324,13 @@ void PerformanceObserver::GetSupportedEntryTypes(
   nsTArray<nsString> validTypes;
   JS::Rooted<JS::Value> val(aGlobal.Context());
 
-  for (const char16_t* name : sValidTypeNames) {
-    nsString validTypeName(name);
-    validTypes.AppendElement(validTypeName);
+  if (StaticPrefs::dom_enable_event_timing()) {
+    for (const nsLiteralString& name : kValidEventTimingNames) {
+      validTypes.AppendElement(name);
+    }
+  }
+  for (const nsLiteralString& name : kValidTypeNames) {
+    validTypes.AppendElement(name);
   }
 
   if (!ToJSValue(aGlobal.Context(), validTypes, &val)) {
@@ -327,15 +345,8 @@ void PerformanceObserver::GetSupportedEntryTypes(
 
 bool PerformanceObserver::ObservesTypeOfEntry(PerformanceEntry* aEntry) {
   for (auto& option : mOptions) {
-    if (option.mType.WasPassed()) {
-      if (aEntry->GetEntryType()->Equals(option.mType.Value())) {
-        return true;
-      }
-    } else {
-      if (option.mEntryTypes.Value().Contains(
-              nsDependentAtomString(aEntry->GetEntryType()))) {
-        return true;
-      }
+    if (aEntry->ShouldAddEntryToObserverBuffer(option)) {
+      return true;
     }
   }
   return false;
@@ -345,6 +356,7 @@ void PerformanceObserver::Disconnect() {
   if (mConnected) {
     MOZ_ASSERT(mPerformance);
     mPerformance->RemoveObserver(this);
+    mOptions.Clear();
     mConnected = false;
   }
 }

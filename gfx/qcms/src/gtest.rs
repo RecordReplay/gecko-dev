@@ -177,13 +177,7 @@ mod gtest {
         unsafe { qcms_profile_precache_output_transform(&mut *other) };
 
         let transform = unsafe {
-            qcms_transform_create(
-                &mut *sRGB_profile,
-                RGB8,
-                &mut *other,
-                RGB8,
-                Perceptual,
-            )
+            qcms_transform_create(&mut *sRGB_profile, RGB8, &mut *other, RGB8, Perceptual)
         };
         let mut data: [u8; 120] = [0; 120];
 
@@ -210,13 +204,7 @@ mod gtest {
         unsafe { qcms_profile_precache_output_transform(&mut *other) };
 
         let transform = unsafe {
-            qcms_transform_create(
-                &mut *other,
-                GrayA8,
-                &mut *sRGB_profile,
-                RGBA8,
-                Perceptual,
-            )
+            qcms_transform_create(&mut *other, GrayA8, &mut *sRGB_profile, RGBA8, Perceptual)
         };
         assert!(!transform.is_null());
 
@@ -294,9 +282,8 @@ mod gtest {
         unsafe { qcms_profile_precache_output_transform(&mut *srgb_profile) };
 
         let intent = unsafe { qcms_profile_get_rendering_intent(&*profile) };
-        let transform = unsafe {
-            qcms_transform_create(&*profile, RGB8, &*srgb_profile, RGB8, intent)
-        };
+        let transform =
+            unsafe { qcms_transform_create(&*profile, RGB8, &*srgb_profile, RGB8, intent) };
 
         assert_ne!(transform, std::ptr::null_mut());
 
@@ -670,14 +657,14 @@ mod gtest {
             #[cfg(target_arch = "arm")]
             {
                 if is_arm_feature_detected!("neon") {
-                    assert!(self.ProduceVerifyOutput(qcms_transform_data_rgb_out_lut_neon))
+                    assert!(self.ProduceVerifyOutput(Some(qcms_transform_data_rgb_out_lut_neon)))
                 }
             }
 
             #[cfg(target_arch = "aarch64")]
             {
                 if is_aarch64_feature_detected!("neon") {
-                    assert!(self.ProduceVerifyOutput(qcms_transform_data_rgb_out_lut_neon))
+                    assert!(self.ProduceVerifyOutput(Some(qcms_transform_data_rgb_out_lut_neon)))
                 }
             }
 
@@ -820,15 +807,7 @@ mod gtest {
         // manually edited using iccToXML/iccFromXML
         let output = profile_from_path("B2A0-ident.icc");
 
-        let transform = unsafe {
-            qcms_transform_create(
-                &*input,
-                RGB8,
-                &*output,
-                RGB8,
-                Perceptual,
-            )
-        };
+        let transform = unsafe { qcms_transform_create(&*input, RGB8, &*output, RGB8, Perceptual) };
         let src = [0u8, 60, 195];
         let mut dst = [0u8, 0, 0];
         unsafe {
@@ -863,23 +842,114 @@ mod gtest {
                 src.len() / GrayA8.bytes_per_pixel(),
             );
         }
+    }
 
+    #[test]
+    fn data_create_rgb_with_gamma() {
+        let Rec709Primaries = qcms_CIE_xyYTRIPLE {
+            red: {
+                qcms_CIE_xyY {
+                    x: 0.6400,
+                    y: 0.3300,
+                    Y: 1.0,
+                }
+            },
+            green: {
+                qcms_CIE_xyY {
+                    x: 0.3000,
+                    y: 0.6000,
+                    Y: 1.0,
+                }
+            },
+            blue: {
+                qcms_CIE_xyY {
+                    x: 0.1500,
+                    y: 0.0600,
+                    Y: 1.0,
+                }
+            },
+        };
+        let D65 = qcms_white_point_sRGB();
+        let mut mem = std::ptr::null_mut();
+        let mut size = 0;
+        unsafe {
+            qcms_data_create_rgb_with_gamma(D65, Rec709Primaries, 2.2, &mut mem, &mut size);
+        }
+        assert_ne!(size, 0);
+        unsafe { libc::free(mem) };
     }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::{Profile, Transform};
     #[test]
     fn identity() {
-        let p1 = crate::Profile::new_sRGB();
-        let p2 = crate::Profile::new_sRGB();
-        let xfm = crate::Transform::new(
-            &p1,
-            &p2,
+        let p1 = Profile::new_sRGB();
+        let p2 = Profile::new_sRGB();
+        let xfm =
+            Transform::new(&p1, &p2, crate::DataType::RGB8, crate::Intent::default()).unwrap();
+        let mut data = [4, 30, 80];
+        xfm.apply(&mut data);
+        assert_eq!(data, [4, 30, 80]);
+    }
+    #[test]
+    fn D50() {
+        let p1 = Profile::new_sRGB();
+        let p2 = Profile::new_XYZD50();
+        let xfm =
+            Transform::new(&p1, &p2, crate::DataType::RGB8, crate::Intent::default()).unwrap();
+        let mut data = [4, 30, 80];
+        xfm.apply(&mut data);
+        assert_eq!(data, [4, 4, 15]);
+    }
+
+    fn profile_from_path(file: &str) -> Box<Profile> {
+        use std::io::Read;
+        let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("profiles");
+        path.push(file);
+        let mut file = std::fs::File::open(path).unwrap();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        Profile::new_from_slice(&data).unwrap()
+    }
+
+    #[test]
+    fn parametric_threshold() {
+        let src = profile_from_path("parametric-thresh.icc");
+        let dst = crate::Profile::new_sRGB();
+        let xfm =
+            Transform::new(&src, &dst, crate::DataType::RGB8, crate::Intent::default()).unwrap();
+        let mut data = [4, 30, 80];
+        xfm.apply(&mut data);
+        assert_eq!(data, [188, 188, 189]);
+    }
+
+    #[test]
+    fn cmyk() {
+        let input = profile_from_path("ps_cmyk_min.icc");
+        let output = Profile::new_sRGB();
+        let xfm = crate::Transform::new_to(
+            &input,
+            &output,
+            crate::DataType::CMYK,
             crate::DataType::RGB8,
             crate::Intent::default(),
         )
         .unwrap();
+        let src = [4, 30, 80, 10];
+        let mut dst = [0, 0, 0];
+        xfm.convert(&src, &mut dst);
+        assert_eq!(dst, [252, 237, 211]);
+    }
+
+    #[test]
+    fn sRGB_parametric() {
+        let src = Profile::new_sRGB();
+        let dst = Profile::new_sRGB_parametric();
+        let xfm =
+            Transform::new(&src, &dst, crate::DataType::RGB8, crate::Intent::default()).unwrap();
         let mut data = [4, 30, 80];
         xfm.apply(&mut data);
         assert_eq!(data, [4, 30, 80]);

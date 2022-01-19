@@ -52,6 +52,8 @@ fn string_to_color(color: &str) -> Option<ColorF> {
         "white" => Some(ColorF::new(1.0, 1.0, 1.0, 1.0)),
         "black" => Some(ColorF::new(0.0, 0.0, 0.0, 1.0)),
         "yellow" => Some(ColorF::new(1.0, 1.0, 0.0, 1.0)),
+        "cyan" => Some(ColorF::new(0.0, 1.0, 1.0, 1.0)),
+        "magenta" => Some(ColorF::new(1.0, 0.0, 1.0, 1.0)),
         "transparent" => Some(ColorF::new(1.0, 1.0, 1.0, 0.0)),
         s => {
             let items: Vec<f32> = s.split_whitespace()
@@ -282,7 +284,7 @@ impl YamlHelper for Yaml {
 
         if let Some(nums) = self.as_vec_f32() {
             if nums.len() == 4 {
-                return Some(LayoutRect::new(
+                return Some(LayoutRect::from_origin_and_size(
                     LayoutPoint::new(nums[0], nums[1]),
                     LayoutSize::new(nums[2], nums[3]),
                 ));

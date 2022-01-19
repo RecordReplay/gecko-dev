@@ -66,8 +66,6 @@ class MediaEngineWebRTCMicrophoneSource : public MediaEngineSource {
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  void Shutdown() override;
-
  protected:
   ~MediaEngineWebRTCMicrophoneSource() = default;
 
@@ -143,13 +141,9 @@ class AudioInputProcessing : public AudioDataListener {
             GraphTime aTrackEnd, AudioSegment* aSegment,
             bool aLastPullThisIteration, bool* aEnded);
 
-  void NotifyOutputData(MediaTrackGraphImpl* aGraph, AudioDataValue* aBuffer,
-                        size_t aFrames, TrackRate aRate,
-                        uint32_t aChannels) override;
+  void NotifyOutputData(MediaTrackGraphImpl* aGraph, BufferInfo aInfo) override;
   void NotifyInputStopped(MediaTrackGraphImpl* aGraph) override;
-  void NotifyInputData(MediaTrackGraphImpl* aGraph,
-                       const AudioDataValue* aBuffer, size_t aFrames,
-                       TrackRate aRate, uint32_t aChannels,
+  void NotifyInputData(MediaTrackGraphImpl* aGraph, const BufferInfo aInfo,
                        uint32_t aAlreadyBuffered) override;
   bool IsVoiceInput(MediaTrackGraphImpl* aGraph) const override {
     // If we're passing data directly without AEC or any other process, this
@@ -169,9 +163,8 @@ class AudioInputProcessing : public AudioDataListener {
 
   void Disconnect(MediaTrackGraphImpl* aGraph) override;
 
-  template <typename T>
-  void InsertInGraph(MediaTrackGraphImpl* aGraph, const T* aBuffer,
-                     size_t aFrames, uint32_t aChannels);
+  // aSegment stores the unprocessed non-interleaved audio input data from mic
+  void ProcessInput(MediaTrackGraphImpl* aGraph, const AudioSegment* aSegment);
 
   void PacketizeAndProcess(MediaTrackGraphImpl* aGraph,
                            const AudioDataValue* aBuffer, size_t aFrames,
@@ -196,6 +189,8 @@ class AudioInputProcessing : public AudioDataListener {
   void UpdateAPMExtraOptions(bool aExtendedFilter, bool aDelayAgnostic);
 
   void End();
+
+  TrackTime NumBufferedFrames(MediaTrackGraphImpl* aGraph) const;
 
  private:
   ~AudioInputProcessing() = default;
@@ -247,6 +242,8 @@ class AudioInputProcessing : public AudioDataListener {
   bool mEnabled;
   // Whether or not we've ended and removed the AudioInputTrack.
   bool mEnded;
+  // Store the unprocessed interleaved audio input data
+  Maybe<BufferInfo> mInputData;
 };
 
 // MediaTrack subclass tailored for MediaEngineWebRTCMicrophoneSource.
@@ -254,11 +251,18 @@ class AudioInputTrack : public ProcessedMediaTrack {
   // Only accessed on the graph thread.
   RefPtr<AudioInputProcessing> mInputProcessing;
 
+  // Only accessed on the main thread. Link to the track producing raw audio
+  // input data. Graph thread should use mInputs to get the source
+  RefPtr<MediaInputPort> mPort;
+
   // Only accessed on the main thread. Used for bookkeeping on main thread, such
   // that CloseAudioInput can be idempotent.
   // XXX Should really be a CubebUtils::AudioDeviceID, but they aren't
   // copyable (opaque pointers)
   RefPtr<AudioDataListener> mInputListener;
+
+  // Only accessed on the main thread.
+  Maybe<CubebUtils::AudioDeviceID> mDeviceId;
 
   explicit AudioInputTrack(TrackRate aSampleRate)
       : ProcessedMediaTrack(aSampleRate, MediaSegment::AUDIO,
@@ -273,7 +277,8 @@ class AudioInputTrack : public ProcessedMediaTrack {
   // input. Main thread only.
   nsresult OpenAudioInput(CubebUtils::AudioDeviceID aId,
                           AudioDataListener* aListener);
-  void CloseAudioInput(Maybe<CubebUtils::AudioDeviceID>& aId);
+  void CloseAudioInput();
+  Maybe<CubebUtils::AudioDeviceID> DeviceId() const;
   void Destroy() override;
   void SetInputProcessing(RefPtr<AudioInputProcessing> aInputProcessing);
   static AudioInputTrack* Create(MediaTrackGraph* aGraph);

@@ -173,7 +173,7 @@ Release Promotion
    Specify the next version for version bump tasks.
 
 ``release_type``
-   The type of release being promoted. One of "nightly", "beta", "esr78", "release-rc", or "release".
+   The type of release being promoted. One of "nightly", "beta", "esr78", "esr91", "release-rc", or "release".
 
 ``release_eta``
    The time and date when a release is scheduled to live. This value is passed to Balrog.
@@ -227,19 +227,6 @@ Repository Merge Day
 ``force-dry-run``
    Don't push any results to target repositories.
 
-
-Comm Push Information
----------------------
-
-These parameters correspond to the repository and revision of the comm-central
-repository to checkout. Their meaning is the same as the corresponding
-parameters for the gecko repository above. They are optional, but if any of
-them are specified, they must all be specified.
-
-``comm_base_repository``
-``comm_head_repository``
-``comm_head_rev``
-``comm_head_ref``
 
 Code Review
 -----------
