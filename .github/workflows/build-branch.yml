@@ -1,0 +1,27 @@
+name: Build Branch
+on:
+  workflow_dispatch:
+    inputs:
+      driver_revision:
+        description: "Driver revision to use, if not the latest"
+        required: false
+
+jobs:
+  build:
+    name: Trigger build run on current branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v1
+        with:
+          authkey: ${{ secrets.TAILSCALE_API_KEY }}
+      - uses: actions/checkout@v2
+      - uses: ./.github/actions/build-test-branch
+        env:
+          BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
+          BUILD_TEST_HOSTNAME: build-server.replay.prod
+          BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
+          BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
+          INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
+          BUILD_ONLY: 1
