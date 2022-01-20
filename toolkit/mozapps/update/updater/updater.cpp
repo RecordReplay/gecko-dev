@@ -2636,9 +2636,15 @@ int LaunchCallbackAndPostProcessApps(int argc, NS_tchar** argv,
                                      HANDLE updateLockFileHandle
 #elif XP_MACOSX
                                      ,
-                                     bool isElevated
+                                     bool isElevated,
+                                     mozilla::UniquePtr<UmaskContext>
+                                         umaskContext
 #endif
 ) {
+#ifdef XP_MACOSX
+  umaskContext.reset();
+#endif
+
   if (argc > callbackIndex) {
 #if defined(XP_WIN)
     if (gSucceeded) {
@@ -2721,7 +2727,7 @@ int NS_main(int argc, NS_tchar** argv) {
   // corrupting installs for other users on the system. Accordingly, set the
   // umask to 0 for all file creations below and reset it on exit. See Bug
   // 1337007
-  UmaskContext umaskContext(0);
+  mozilla::UniquePtr<UmaskContext> umaskContext(new UmaskContext(0));
 
   bool isElevated =
       strstr(argv[0], "/Library/PrivilegedHelperTools/org.mozilla.updater") !=
@@ -2988,7 +2994,8 @@ int NS_main(int argc, NS_tchar** argv) {
     }
     t1.Join();
 
-    LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex, false);
+    LaunchCallbackAndPostProcessApps(argc, argv, callbackIndex, false,
+                                     std::move(umaskContext));
     return gSucceeded ? 0 : 1;
   }
 #endif
@@ -3834,7 +3841,8 @@ int NS_main(int argc, NS_tchar** argv) {
                                                 updateLockFileHandle
 #elif XP_MACOSX
                                                   ,
-                                                  isElevated
+                                                  isElevated,
+                                                  std::move(umaskContext)
 #endif
   );
 

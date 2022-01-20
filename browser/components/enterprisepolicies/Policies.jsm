@@ -526,71 +526,38 @@ var Policies = {
 
   DisabledCiphers: {
     onBeforeAddons(manager, param) {
-      if ("TLS_DHE_RSA_WITH_AES_128_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.dhe_rsa_aes_128_sha",
-          !param.TLS_DHE_RSA_WITH_AES_128_CBC_SHA
-        );
-      }
-      if ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.dhe_rsa_aes_256_sha",
-          !param.TLS_DHE_RSA_WITH_AES_256_CBC_SHA
-        );
-      }
-      if ("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.ecdhe_rsa_aes_128_sha",
-          !param.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-        );
-      }
-      if ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.ecdhe_rsa_aes_256_sha",
-          !param.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
-        );
-      }
-      if ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" in param) {
-        setAndLockPref(
+      let cipherPrefs = {
+        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
           "security.ssl3.ecdhe_rsa_aes_128_gcm_sha256",
-          !param.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        );
-      }
-      if ("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" in param) {
-        setAndLockPref(
+        TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
           "security.ssl3.ecdhe_ecdsa_aes_128_gcm_sha256",
-          !param.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-        );
-      }
-      if ("TLS_RSA_WITH_AES_128_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.rsa_aes_128_sha",
-          !param.TLS_RSA_WITH_AES_128_CBC_SHA
-        );
-      }
-      if ("TLS_RSA_WITH_AES_256_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.rsa_aes_256_sha",
-          !param.TLS_RSA_WITH_AES_256_CBC_SHA
-        );
-      }
-      if ("TLS_RSA_WITH_3DES_EDE_CBC_SHA" in param) {
-        setAndLockPref(
-          "security.ssl3.rsa_des_ede3_sha",
-          !param.TLS_RSA_WITH_3DES_EDE_CBC_SHA
-        );
-      }
-      if ("TLS_RSA_WITH_AES_128_GCM_SHA256" in param) {
-        setAndLockPref(
-          "security.ssl3.rsa_aes_128_gcm_sha256",
-          !param.TLS_RSA_WITH_AES_128_GCM_SHA256
-        );
-      }
-      if ("TLS_RSA_WITH_AES_256_GCM_SHA384" in param) {
-        setAndLockPref(
-          "security.ssl3.rsa_aes_256_gcm_sha384",
-          !param.TLS_RSA_WITH_AES_256_GCM_SHA384
-        );
+        TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:
+          "security.ssl3.ecdhe_ecdsa_chacha20_poly1305_sha256",
+        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:
+          "security.ssl3.ecdhe_rsa_chacha20_poly1305_sha256",
+        TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
+          "security.ssl3.ecdhe_ecdsa_aes_256_gcm_sha384",
+        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
+          "security.ssl3.ecdhe_rsa_aes_256_gcm_sha384",
+        TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
+          "security.ssl3.ecdhe_rsa_aes_128_sha",
+        TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
+          "security.ssl3.ecdhe_ecdsa_aes_128_sha",
+        TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:
+          "security.ssl3.ecdhe_rsa_aes_256_sha",
+        TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
+          "security.ssl3.ecdhe_ecdsa_aes_256_sha",
+        TLS_DHE_RSA_WITH_AES_128_CBC_SHA: "security.ssl3.dhe_rsa_aes_128_sha",
+        TLS_DHE_RSA_WITH_AES_256_CBC_SHA: "security.ssl3.dhe_rsa_aes_256_sha",
+        TLS_RSA_WITH_AES_128_GCM_SHA256: "security.ssl3.rsa_aes_128_gcm_sha256",
+        TLS_RSA_WITH_AES_256_GCM_SHA384: "security.ssl3.rsa_aes_256_gcm_sha384",
+        TLS_RSA_WITH_AES_128_CBC_SHA: "security.ssl3.rsa_aes_128_sha",
+        TLS_RSA_WITH_AES_256_CBC_SHA: "security.ssl3.rsa_aes_256_sha",
+        TLS_RSA_WITH_3DES_EDE_CBC_SHA: "security.ssl3.rsa_des_ede3_sha",
+      };
+
+      for (let cipher in param) {
+        setAndLockPref(cipherPrefs[cipher], !param[cipher]);
       }
     },
   },
@@ -1907,11 +1874,11 @@ var Policies = {
           );
         }
         if (param.Add) {
-          // Only rerun if the list of engine names has changed.
-          let engineNameList = param.Add.map(engine => engine.Name);
+          // Rerun if any engine info has changed.
+          let engineInfoHash = md5Hash(JSON.stringify(param.Add));
           await runOncePerModification(
             "addSearchEngines",
-            JSON.stringify(engineNameList),
+            engineInfoHash,
             async function() {
               for (let newEngine of param.Add) {
                 let manifest = {
@@ -1929,14 +1896,23 @@ var Policies = {
                         newEngine.Method == "POST"
                           ? newEngine.PostData
                           : undefined,
-                      suggestUrlGetParams: newEngine.SuggestURLTemplate,
+                      suggest_url: newEngine.SuggestURLTemplate,
                     },
                   },
                 };
-                try {
-                  await Services.search.addPolicyEngine(manifest);
-                } catch (ex) {
-                  log.error("Unable to add search engine", ex);
+                let engine = Services.search.getEngineByName(newEngine.Name);
+                if (engine) {
+                  try {
+                    await Services.search.updatePolicyEngine(manifest);
+                  } catch (ex) {
+                    log.error("Unable to update the search engine", ex);
+                  }
+                } else {
+                  try {
+                    await Services.search.addPolicyEngine(manifest);
+                  } catch (ex) {
+                    log.error("Unable to add search engine", ex);
+                  }
                 }
               }
             }
@@ -2510,9 +2486,10 @@ let ChromeURLBlockPolicy = {
     ) {
       return Ci.nsIContentPolicy.ACCEPT;
     }
+    let contentLocationSpec = contentLocation.spec.toLowerCase();
     if (
       gBlockedAboutPages.some(function(aboutPage) {
-        return contentLocation.spec.startsWith(aboutPage);
+        return contentLocationSpec.startsWith(aboutPage.toLowerCase());
       })
     ) {
       return Ci.nsIContentPolicy.REJECT_POLICY;
@@ -2626,4 +2603,33 @@ function processMIMEInfo(mimeInfo, realMIMEInfo) {
     realMIMEInfo.alwaysAskBeforeHandling = mimeInfo.ask;
   }
   gHandlerService.store(realMIMEInfo);
+}
+
+// Copied from PlacesUIUtils.jsm
+
+// Keep a hasher for repeated hashings
+let gCryptoHash = null;
+
+/**
+ * Run some text through md5 and return the base64 result.
+ * @param {string} data The string to hash.
+ * @returns {string} md5 hash of the input string.
+ */
+function md5Hash(data) {
+  // Lazily create a reusable hasher
+  if (gCryptoHash === null) {
+    gCryptoHash = Cc["@mozilla.org/security/hash;1"].createInstance(
+      Ci.nsICryptoHash
+    );
+  }
+
+  gCryptoHash.init(gCryptoHash.MD5);
+
+  // Convert the data to a byte array for hashing
+  gCryptoHash.update(
+    data.split("").map(c => c.charCodeAt(0)),
+    data.length
+  );
+  // Request the has result as ASCII base64
+  return gCryptoHash.finish(true);
 }

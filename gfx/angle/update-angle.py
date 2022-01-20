@@ -154,7 +154,10 @@ is_clang = true
 is_debug = false
 angle_build_all = false
 angle_enable_abseil = false
+angle_enable_essl = true
 angle_enable_gl = false
+angle_enable_gl_desktop = false
+angle_enable_glsl = true
 angle_enable_null = false
 angle_enable_vulkan = false
 use_custom_libcxx = false
@@ -190,6 +193,7 @@ libraries = json.loads(p.stdout.decode())
 # platforms.
 # descs["//:angle_common"]["sources"] +=
 EXTRA_ANGLE_COMMON_SOURCES = [
+    "//src/common/system_utils_apple.cpp",
     "//src/common/system_utils_linux.cpp",
     "//src/common/system_utils_mac.cpp",
     "//src/common/system_utils_posix.cpp",
@@ -242,6 +246,7 @@ REGISTERED_DEFINES = {
     "ANGLE_CAPTURE_ENABLED": True,
     "ANGLE_EGL_LIBRARY_NAME": False,
     "ANGLE_ENABLE_D3D11": True,
+    "ANGLE_ENABLE_D3D11_COMPOSITOR_NATIVE_WINDOW": True,
     "ANGLE_ENABLE_D3D9": True,
     "ANGLE_ENABLE_DEBUG_ANNOTATIONS": True,
     "ANGLE_ENABLE_NULL": False,
@@ -252,6 +257,7 @@ REGISTERED_DEFINES = {
     "ANGLE_ENABLE_HLSL": True,
     "ANGLE_GENERATE_SHADER_DEBUG_INFO": True,
     "ANGLE_GLESV2_LIBRARY_NAME": True,
+    "ANGLE_HAS_VULKAN_SYSTEM_INFO": False,
     "ANGLE_IS_64_BIT_CPU": False,
     "ANGLE_IS_WIN": False,
     "ANGLE_PRELOADED_D3DCOMPILER_MODULE_NAMES": False,
@@ -410,7 +416,7 @@ def export_target(target_full_name) -> Set[str]:
             elif b.endswith("_linux"):
                 # Include these on BSDs too.
                 config = 'CONFIG["OS_ARCH"] not in ("Darwin", "WINNT")'
-            elif b.endswith("_mac"):
+            elif b.endswith("_apple") or b.endswith("_mac"):
                 config = 'CONFIG["OS_ARCH"] == "Darwin"'
             elif b.endswith("_posix"):
                 config = 'CONFIG["OS_ARCH"] != "WINNT"'

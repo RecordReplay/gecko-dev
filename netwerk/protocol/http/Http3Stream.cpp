@@ -61,7 +61,8 @@ void Http3Stream::FindRequestContentLength() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   // Look for Content-Length header to find out if we have request body and
   // how long it is.
-  int32_t contentLengthStart = mFlatHttpRequestHeaders.Find("Content-Length:");
+  int32_t contentLengthStart =
+      mFlatHttpRequestHeaders.Find("content-length:", /* aIgnoreCase = */ true);
   if (contentLengthStart == -1) {
     // There is no content-Length.
     return;
@@ -215,6 +216,7 @@ nsresult Http3Stream::OnReadSegment(const char* buf, uint32_t count,
       break;
     default:
       MOZ_ASSERT(false, "We are done sending this request!");
+      rv = NS_ERROR_UNEXPECTED;
       break;
   }
 
