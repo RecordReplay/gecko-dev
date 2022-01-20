@@ -1,4 +1,4 @@
-name: Build/Test Branch
+name: Build Branch
 on:
   workflow_dispatch:
     inputs:
@@ -11,8 +11,8 @@ on:
         required: false
 
 jobs:
-  build-test:
-    name: Trigger build/test run on current branch
+  build:
+    name: Trigger build run on current branch
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -29,3 +29,4 @@ jobs:
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
           INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
           INPUT_CLOBBER: ${{ github.event.inputs.clobber }}
+          BUILD_ONLY: 1
