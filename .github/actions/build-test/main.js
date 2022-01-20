@@ -68,7 +68,7 @@ function platformTasks(platform) {
       platform,
       [mergePlaywrightTask]
     );
-    mergePlaywrightTask.updateRevisionTasks.push(buildPlaywrightTask.id);
+    mergePlaywrightTask.task.updateRevisionTasks.push(buildPlaywrightTask.id);
 
     const testPlaywrightTask = newTask(
       `Test Gecko/Playwright ${platform}`,
@@ -80,7 +80,7 @@ function platformTasks(platform) {
       platform,
       [buildPlaywrightTask]
     );
-    mergePlaywrightTask.updateRevisionTasks.push(testPlaywrightTask.id);
+    mergePlaywrightTask.task.updateRevisionTasks.push(testPlaywrightTask.id);
 
     tasks.push(buildPlaywrightTask, testPlaywrightTask);
   }
