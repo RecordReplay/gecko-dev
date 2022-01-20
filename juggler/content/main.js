@@ -67,7 +67,7 @@ const applySetting = {
   },
 
   deviceScaleFactor: (deviceScaleFactor) => {
-    docShell.contentViewer.overrideDPPX = deviceScaleFactor || this._initialDPPX;
+    //docShell.contentViewer.overrideDPPX = deviceScaleFactor || this._initialDPPX;
     docShell.deviceSizeIsPageSize = !!deviceScaleFactor;
   },
 };
