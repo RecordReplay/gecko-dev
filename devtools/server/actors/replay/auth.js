@@ -158,43 +158,46 @@ function initializeRecordingWebChannel() {
 async function refresh() {
   const refreshToken = Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
   if (!refreshToken) {
-    pingTelemetry("browser", "auth-request-failed", {
-      error: "no-refresh-token"
-    });
     return;
   }
 
-  const resp = await fetch("https://webreplay.us.auth0.com/oauth/token", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      audience: "https://api.replay.io",
-      scope: "openid profile offline_access",
-      grant_type: "refresh_token",
-      client_id: "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo",
-      refresh_token: refreshToken,
-    })
-  });
-
-  const json = await resp.json();
-
-  if (json.error) {
-    pingTelemetry("browser", "auth-request-failed", {
-      error: json.error
+  try {
+    const resp = await fetch("https://webreplay.us.auth0.com/oauth/token", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        audience: "https://api.replay.io",
+        scope: "openid profile offline_access",
+        grant_type: "refresh_token",
+        client_id: "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo",
+        refresh_token: refreshToken,
+      })
     });
-    setReplayRefreshToken("");
-    setReplayUserToken("");
-    return;
-  }
 
-  if (json.access_token) {
-    Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
-    setReplayUserToken(json.access_token);
+    const json = await resp.json();
 
-    setTimeout(refresh, json.expires_in * 1000);
-  } else {
+    if (json.error) {
+      pingTelemetry("browser", "auth-request-failed", {
+        message: json.error
+      });
+      setReplayRefreshToken("");
+      setReplayUserToken("");
+      return;
+    }
+
+    if (json.access_token) {
+      Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
+      setReplayUserToken(json.access_token);
+
+      setTimeout(refresh, json.expires_in * 1000);
+    } else {
+      pingTelemetry("browser", "auth-request-failed", {
+        message: "no-access-token"
+      });
+    }
+  } catch (e) {
     pingTelemetry("browser", "auth-request-failed", {
-      error: "no-access-token"
+      message: String(e)
     });
   }
 }
@@ -241,13 +244,12 @@ function openSigninPage() {
       }
 
       pingTelemetry("browser", "auth-request-failed", {
-        error: "max-retries"
+        message: "max-retries"
       });
       reject(`Failed to authenticate`);
     })
   ]).catch(console.error);
 }
-
 
 // Init
 (() => {
