@@ -4344,24 +4344,12 @@ bool Document::HasFocus(ErrorResult& rv) const {
     return false;
   }
 
-<<<<<<< HEAD
   if (IsActive() && mDocumentContainer->ShouldOverrideHasFocus()) {
     return true;
   }
 
-  // Is there a focused DOMWindow?
-  nsCOMPtr<mozIDOMWindowProxy> focusedWindow;
-  fm->GetFocusedWindow(getter_AddRefs(focusedWindow));
-  if (!focusedWindow) {
-||||||| c29cb22d4ccc
-  // Is there a focused DOMWindow?
-  nsCOMPtr<mozIDOMWindowProxy> focusedWindow;
-  fm->GetFocusedWindow(getter_AddRefs(focusedWindow));
-  if (!focusedWindow) {
-=======
   BrowsingContext* bc = GetBrowsingContext();
   if (!bc) {
->>>>>>> webreplay-release
     return false;
   }
 
@@ -17150,7 +17138,7 @@ StylePrefersColorScheme Document::PrefersColorScheme(
       case nsIDocShell::COLOR_SCHEME_OVERRIDE_DARK:
         return StylePrefersColorScheme::Dark;
       case nsIDocShell::COLOR_SCHEME_OVERRIDE_NO_PREFERENCE:
-        return StylePrefersColorScheme::NoPreference;
+        return StylePrefersColorScheme::Light;
     };
   }
   if (aIgnoreRFP == IgnoreRFP::No &&

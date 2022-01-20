@@ -4937,13 +4937,7 @@ nsDocShell::GetVisibility(bool* aVisibility) {
 }
 
 void nsDocShell::ActivenessMaybeChanged() {
-<<<<<<< HEAD
-  bool isActive = mForceActiveState || mBrowsingContext->IsActive();
-||||||| c29cb22d4ccc
-  bool isActive = mBrowsingContext->IsActive();
-=======
-  const bool isActive = mBrowsingContext->IsActive();
->>>>>>> webreplay-release
+  const bool isActive = mForceActiveState || mBrowsingContext->IsActive();
   if (RefPtr<PresShell> presShell = GetPresShell()) {
     presShell->ActivenessMaybeChanged();
   }

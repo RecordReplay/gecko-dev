@@ -158,7 +158,7 @@ interface nsICertOverrideService : nsISupports {
   [binaryname(HasMatchingOverride), noscript, must_use]
   boolean hasMatchingOverrideNative(in AUTF8String aHostName,
                               in int32_t aPort,
-                              in const_OriginAttributesRef aOriginAttributes,
+                              in uint32_t aUserContextId,                                                                                                                              in const_OriginAttributesRef aOriginAttributes,
                               in nsIX509Cert aCert,
                               out uint32_t aOverrideBits,
                               out boolean aIsTemporary);

@@ -28,7 +28,7 @@ class HeadlessCompositorWidget final : public CompositorWidget,
   // CompositorWidget Overrides
 
   already_AddRefed<gfx::DrawTarget> StartRemoteDrawingInRegion(
-      LayoutDeviceIntRegion& aInvalidRegion, layers::BufferMode* aBufferMode) override;
+      const LayoutDeviceIntRegion& aInvalidRegion, layers::BufferMode* aBufferMode) override;
 
   uintptr_t GetWidgetKey() override;
 

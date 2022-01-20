@@ -622,7 +622,7 @@ nsCertOverrideService::HasMatchingOverride(
 
 NS_IMETHODIMP
 nsCertOverrideService::HasMatchingOverrideScriptable(
-    const nsACString& aHostName, int32_t aPort,
+    const nsACString& aHostName, int32_t aPort, uint32_t aUserContextId,
     JS::Handle<JS::Value> aOriginAttributes, nsIX509Cert* aCert,
     uint32_t* aOverrideBits, bool* aIsTemporary, JSContext* aCx,
     bool* aRetval) {
@@ -631,7 +631,7 @@ nsCertOverrideService::HasMatchingOverrideScriptable(
     return NS_ERROR_INVALID_ARG;
   }
 
-  return HasMatchingOverride(aHostName, aPort, attrs, aCert, aOverrideBits,
+  return HasMatchingOverride(aHostName, aPort, aUserContextId, attrs, aCert, aOverrideBits,
                              aIsTemporary, aRetval);
 }
 

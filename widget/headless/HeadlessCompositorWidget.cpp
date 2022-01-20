@@ -35,7 +35,7 @@ void HeadlessCompositorWidget::SetSnapshotListenerOnCompositorThread(
 }
 
 already_AddRefed<gfx::DrawTarget> HeadlessCompositorWidget::StartRemoteDrawingInRegion(
-    LayoutDeviceIntRegion& aInvalidRegion, layers::BufferMode* aBufferMode) {
+    const LayoutDeviceIntRegion& aInvalidRegion, layers::BufferMode* aBufferMode) {
   if (!mDrawTarget)
     return nullptr;
 
