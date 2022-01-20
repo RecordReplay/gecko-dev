@@ -5,6 +5,10 @@ on:
       driver_revision:
         description: "Driver revision to use, if not the latest"
         required: false
+      clobber:
+        description: "Whether to build the browser from scratch"
+        type: boolean
+        required: false
 
 jobs:
   build-test:
@@ -24,3 +28,4 @@ jobs:
           BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
           INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
+          INPUT_CLOBBER: ${{ github.event.inputs.clobber }}

@@ -18,6 +18,10 @@ const replayRevision = getLatestReplayRevision();
 const driverRevision = process.env.INPUT_DRIVER_REVISION;
 console.log("DriverRevision", driverRevision);
 
+const clobberInput = process.env.INPUT_CLOBBER;
+console.log("Clobber", clobberInput);
+const clobber = clobberInput == "true";
+
 const buildOnly = !!process.env.BUILD_ONLY;
 console.log("BuildOnly", buildOnly);
 
@@ -39,6 +43,7 @@ function platformTasks(platform) {
       revision: replayRevision,
       branch: branchName,
       driverRevision,
+      clobber,
     },
     platform
   );
