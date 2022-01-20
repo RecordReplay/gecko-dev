@@ -8,8 +8,8 @@
 #define mozilla_glean_GleanString_h
 
 #include "mozilla/Maybe.h"
+#include "mozilla/Result.h"
 #include "nsIGleanMetrics.h"
-#include "mozilla/glean/fog_ffi_generated.h"
 #include "nsString.h"
 
 namespace mozilla::glean {
@@ -28,7 +28,7 @@ class StringMetric {
    *
    * @param aValue The string to set the metric to.
    */
-  void Set(const nsACString& aValue) const { fog_string_set(mId, &aValue); }
+  void Set(const nsACString& aValue) const;
 
   /**
    * **Test-only API**
@@ -47,15 +47,8 @@ class StringMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<nsCString> TestGetValue(
-      const nsACString& aPingName = nsCString()) const {
-    if (!fog_string_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    nsCString ret;
-    fog_string_test_get_value(mId, &aPingName, &ret);
-    return Some(ret);
-  }
+  Result<Maybe<nsCString>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;

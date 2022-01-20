@@ -185,27 +185,27 @@ class BlobURLsReporter final : public nsIMemoryReporter {
       return NS_OK;
     }
 
-    nsDataHashtable<nsPtrHashKey<mozilla::dom::BlobImpl>, uint32_t> refCounts;
+    nsTHashMap<nsPtrHashKey<mozilla::dom::BlobImpl>, uint32_t> refCounts;
 
     // Determine number of URLs per mozilla::dom::BlobImpl, to handle the case
     // where it's > 1.
-    for (auto iter = gDataTable->Iter(); !iter.Done(); iter.Next()) {
-      if (iter.UserData()->mObjectType != mozilla::dom::DataInfo::eBlobImpl) {
+    for (const auto& entry : *gDataTable) {
+      if (entry.GetWeak()->mObjectType != mozilla::dom::DataInfo::eBlobImpl) {
         continue;
       }
 
-      mozilla::dom::BlobImpl* blobImpl = iter.UserData()->mBlobImpl;
+      mozilla::dom::BlobImpl* blobImpl = entry.GetWeak()->mBlobImpl;
       MOZ_ASSERT(blobImpl);
 
-      refCounts.Put(blobImpl, refCounts.Get(blobImpl) + 1);
+      refCounts.LookupOrInsert(blobImpl, 0) += 1;
     }
 
-    for (auto iter = gDataTable->Iter(); !iter.Done(); iter.Next()) {
-      nsCStringHashKey::KeyType key = iter.Key();
-      mozilla::dom::DataInfo* info = iter.UserData();
+    for (const auto& entry : *gDataTable) {
+      nsCStringHashKey::KeyType key = entry.GetKey();
+      mozilla::dom::DataInfo* info = entry.GetWeak();
 
-      if (iter.UserData()->mObjectType == mozilla::dom::DataInfo::eBlobImpl) {
-        mozilla::dom::BlobImpl* blobImpl = iter.UserData()->mBlobImpl;
+      if (entry.GetWeak()->mObjectType == mozilla::dom::DataInfo::eBlobImpl) {
+        mozilla::dom::BlobImpl* blobImpl = entry.GetWeak()->mBlobImpl;
         MOZ_ASSERT(blobImpl);
 
         constexpr auto desc =
@@ -304,7 +304,7 @@ class BlobURLsReporter final : public nsIMemoryReporter {
 
     nsAutoCString origin;
 
-    aInfo->mPrincipal->GetPrepath(origin);
+    aInfo->mPrincipal->GetPrePath(origin);
 
     // If we got a frame, we better have a current JSContext.  This is cheating
     // a bit; ideally we'd have our caller pass in a JSContext, or have
@@ -530,11 +530,12 @@ static void AddDataEntryInternal(const nsACString& aURI, T aObject,
     gDataTable = new nsClassHashtable<nsCStringHashKey, mozilla::dom::DataInfo>;
   }
 
-  mozilla::dom::DataInfo* info =
-      new mozilla::dom::DataInfo(aObject, aPrincipal, aAgentClusterId);
-  BlobURLsReporter::GetJSStackForBlob(info);
+  mozilla::UniquePtr<mozilla::dom::DataInfo> info =
+      mozilla::MakeUnique<mozilla::dom::DataInfo>(aObject, aPrincipal,
+                                                  aAgentClusterId);
+  BlobURLsReporter::GetJSStackForBlob(info.get());
 
-  gDataTable->Put(aURI, info);
+  gDataTable->InsertOrUpdate(aURI, std::move(info));
 }
 
 void BlobURLProtocolHandler::Init(void) {
@@ -605,8 +606,8 @@ bool BlobURLProtocolHandler::ForEachBlobURL(
     return false;
   }
 
-  for (auto iter = gDataTable->ConstIter(); !iter.Done(); iter.Next()) {
-    mozilla::dom::DataInfo* info = iter.UserData();
+  for (const auto& entry : *gDataTable) {
+    mozilla::dom::DataInfo* info = entry.GetWeak();
     MOZ_ASSERT(info);
 
     if (info->mObjectType != mozilla::dom::DataInfo::eBlobImpl) {
@@ -615,7 +616,7 @@ bool BlobURLProtocolHandler::ForEachBlobURL(
 
     MOZ_ASSERT(info->mBlobImpl);
     if (!aCb(info->mBlobImpl, info->mPrincipal, info->mAgentClusterId,
-             iter.Key(), info->mRevoked)) {
+             entry.GetKey(), info->mRevoked)) {
       return false;
     }
   }
@@ -737,7 +738,7 @@ nsresult BlobURLProtocolHandler::GenerateURIString(nsIPrincipal* aPrincipal,
 bool BlobURLProtocolHandler::GetDataEntry(
     const nsACString& aUri, mozilla::dom::BlobImpl** aBlobImpl,
     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
-    const OriginAttributes& aOriginAttributes,
+    const OriginAttributes& aOriginAttributes, uint64_t aInnerWindowId,
     const Maybe<nsID>& aAgentClusterId, bool aAlsoIfRevoked) {
   MOZ_ASSERT(NS_IsMainThread(),
              "without locking gDataTable is main-thread only");
@@ -778,6 +779,18 @@ bool BlobURLProtocolHandler::GetDataEntry(
   if (StaticPrefs::privacy_partition_bloburl_per_agent_cluster() &&
       aAgentClusterId.isSome() && info->mAgentClusterId.isSome() &&
       NS_WARN_IF(!aAgentClusterId->Equals(info->mAgentClusterId.value()))) {
+    nsAutoString localizedMsg;
+    AutoTArray<nsString, 1> param;
+    CopyUTF8toUTF16(aUri, *param.AppendElement());
+    nsresult rv = nsContentUtils::FormatLocalizedString(
+        nsContentUtils::eDOM_PROPERTIES, "BlobDifferentClusterError", param,
+        localizedMsg);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return false;
+    }
+
+    nsContentUtils::ReportToConsoleByWindowID(
+        localizedMsg, nsIScriptError::errorFlag, "DOM"_ns, aInnerWindowId);
     return false;
   }
 
@@ -863,9 +876,6 @@ NS_IMETHODIMP
 BlobURLProtocolHandler::NewChannel(nsIURI* aURI, nsILoadInfo* aLoadInfo,
                                    nsIChannel** aResult) {
   auto channel = MakeRefPtr<BlobURLChannel>(aURI, aLoadInfo);
-  if (!channel) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
   channel.forget(aResult);
   return NS_OK;
 }

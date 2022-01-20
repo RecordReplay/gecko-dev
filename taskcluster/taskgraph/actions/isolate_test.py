@@ -33,33 +33,37 @@ def get_failures(task_id):
     MOZHARNESS_TEST_PATHS.  If no appropriate test path can be
     determined, nothing is returned.
     """
-    re_bad_tests = [
-        re.compile(r"Last test finished"),
-        re.compile(r"LeakSanitizer"),
-        re.compile(r"Main app process exited normally"),
-        re.compile(r"ShutdownLeaks"),
-        re.compile(r"[(]SimpleTest/TestRunner.js[)]"),
-        re.compile(r"automation.py"),
-        re.compile(r"https?://localhost:\d+/\d+/\d+/.*[.]html"),
-        re.compile(r"jsreftest"),
-        re.compile(r"leakcheck"),
-        re.compile(r"mozrunner-startup"),
-        re.compile(r"pid: "),
-        re.compile(r"RemoteProcessMonitor"),
-        re.compile(r"unknown test url"),
-    ]
-    re_extract_tests = [
-        re.compile(r'"test": "(?:[^:]+:)?(?:https?|file):[^ ]+/reftest/tests/([^ "]+)'),
-        re.compile(r'"test": "(?:[^:]+:)?(?:https?|file):[^:]+:[0-9]+/tests/([^ "]+)'),
-        re.compile(r'xpcshell-?[^ "]*\.ini:([^ "]+)'),
-        re.compile(r'/tests/([^ "]+) - finished .*'),
-        re.compile(r'"test": "([^ "]+)"'),
-        re.compile(
-            r'"message": "Error running command run_test with arguments '
-            "[(]<wptrunner[.]wpttest[.]TestharnessTest ([^>]+)>"
-        ),
-        re.compile(r'"message": "TEST-[^ ]+ [|] ([^ "]+)[^|]*[|]'),
-    ]
+
+    def re_compile_list(*lst):
+        # Ideally we'd just use rb"" literals and avoid the encode, but
+        # this file needs to be importable in python2 for now.
+        return [re.compile(s.encode("utf-8")) for s in lst]
+
+    re_bad_tests = re_compile_list(
+        r"Last test finished",
+        r"LeakSanitizer",
+        r"Main app process exited normally",
+        r"ShutdownLeaks",
+        r"[(]SimpleTest/TestRunner.js[)]",
+        r"automation.py",
+        r"https?://localhost:\d+/\d+/\d+/.*[.]html",
+        r"jsreftest",
+        r"leakcheck",
+        r"mozrunner-startup",
+        r"pid: ",
+        r"RemoteProcessMonitor",
+        r"unknown test url",
+    )
+    re_extract_tests = re_compile_list(
+        r'"test": "(?:[^:]+:)?(?:https?|file):[^ ]+/reftest/tests/([^ "]+)',
+        r'"test": "(?:[^:]+:)?(?:https?|file):[^:]+:[0-9]+/tests/([^ "]+)',
+        r'xpcshell-?[^ "]*\.ini:([^ "]+)',
+        r'/tests/([^ "]+) - finished .*',
+        r'"test": "([^ "]+)"',
+        r'"message": "Error running command run_test with arguments '
+        r"[(]<wptrunner[.]wpttest[.]TestharnessTest ([^>]+)>",
+        r'"message": "TEST-[^ ]+ [|] ([^ "]+)[^|]*[|]',
+    )
 
     def munge_test_path(line):
         test_path = None
@@ -97,14 +101,17 @@ def get_failures(task_id):
         # and thereby the number of distinct test directories to a
         # maximum of 5 to keep the action task from timing out.
 
-        for line in stream.read().split("\n"):
+        # We handle the stream as raw bytes because it may contain invalid
+        # UTF-8 characters in portions other than those containing the error
+        # messages we're looking for.
+        for line in stream.read().split(b"\n"):
             test_path = munge_test_path(line.strip())
 
             if test_path:
-                tests.add(test_path)
+                tests.add(test_path.decode("utf-8"))
                 test_dir = os.path.dirname(test_path)
                 if test_dir:
-                    dirs.add(test_dir)
+                    dirs.add(test_dir.decode("utf-8"))
 
             if len(tests) > 4:
                 break
@@ -184,27 +191,15 @@ def create_isolate_failure_tasks(task_definition, failures, level, times):
         else:
             task_definition["payload"]["command"] = command
 
-        # saved_command is a saved version of the
-        # task_definition['payload']['command'] with the repeat
-        # arguments. We need to save it since
-        # task_definition['payload']['command'] will be modified in the failure_path loop
-        # when we are isolating web-platform-tests.
-
-        saved_command = copy.deepcopy(task_definition["payload"]["command"])
-
         for failure_path in failures[failure_group]:
             th_dict["symbol"] = symbol + failure_group_suffix
-            if is_windows and not is_wpt:
-                failure_path = "\\".join(failure_path.split("/"))
             if is_wpt:
-                include_args = ["--include={}".format(failure_path)]
-                task_definition["payload"]["command"] = add_args_to_command(
-                    saved_command, extra_args=include_args
-                )
-            else:
-                task_definition["payload"]["env"][
-                    "MOZHARNESS_TEST_PATHS"
-                ] = six.ensure_text(json.dumps({suite: [failure_path]}, sort_keys=True))
+                failure_path = "testing/web-platform/tests" + failure_path
+            if is_windows:
+                failure_path = "\\".join(failure_path.split("/"))
+            task_definition["payload"]["env"][
+                "MOZHARNESS_TEST_PATHS"
+            ] = six.ensure_text(json.dumps({suite: [failure_path]}, sort_keys=True))
 
             logger.info(
                 "Creating task for path {} with command {}".format(
@@ -253,7 +248,7 @@ def isolate_test_failures(parameters, graph_config, input, task_group_id, task_i
     }
 
     task_definition = resolve_task_references(
-        pre_task.label, pre_task.task, dependencies
+        pre_task.label, pre_task.task, task_id, decision_task_id, dependencies
     )
     task_definition.setdefault("dependencies", []).extend(six.itervalues(dependencies))
 

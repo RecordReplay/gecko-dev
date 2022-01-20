@@ -18,7 +18,7 @@ class CacheQuotaClient final : public quota::Client {
   static CacheQuotaClient* sInstance;
 
  public:
-  using GroupAndOrigin = quota::GroupAndOrigin;
+  using OriginMetadata = quota::OriginMetadata;
   using PersistenceType = quota::PersistenceType;
   using UsageInfo = quota::UsageInfo;
 
@@ -29,15 +29,15 @@ class CacheQuotaClient final : public quota::Client {
   virtual Type GetType() override;
 
   virtual Result<UsageInfo, nsresult> InitOrigin(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+      PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
       const AtomicBool& aCanceled) override;
 
   virtual nsresult InitOriginWithoutTracking(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+      PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
       const AtomicBool& aCanceled) override;
 
   virtual Result<UsageInfo, nsresult> GetUsageForOrigin(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
+      PersistenceType aPersistenceType, const OriginMetadata& aOriginMetadata,
       const AtomicBool& aCanceled) override;
 
   virtual void OnOriginClearCompleted(PersistenceType aPersistenceType,
@@ -76,42 +76,37 @@ class CacheQuotaClient final : public quota::Client {
 
     if (aIncreaseSize == aDecreaseSize && !temporaryPaddingFileExist) {
       // Early return here, since most cache actions won't modify padding size.
-      CACHE_TRY(aCommitHook());
+      QM_TRY(aCommitHook());
 
       return NS_OK;
     }
 
-    {
-      MutexAutoLock lock(mDirPaddingFileMutex);
+    // Don't delete the temporary padding file in case of an error to force the
+    // next action recalculate the padding size.
+    QM_TRY(UpdateDirectoryPaddingFile(aBaseDir, aConn, aIncreaseSize,
+                                      aDecreaseSize,
+                                      temporaryPaddingFileExist));
 
-      // Don't delete the temporary padding file in case of an error to force
-      // the next action recalculate the padding size.
-      CACHE_TRY(LockedUpdateDirectoryPaddingFile(aBaseDir, aConn, aIncreaseSize,
-                                                 aDecreaseSize,
-                                                 temporaryPaddingFileExist));
+    // Don't delete the temporary padding file in case of an error to force the
+    // next action recalculate the padding size.
+    QM_TRY(aCommitHook());
 
-      // Don't delete the temporary padding file in case of an error to force
-      // the next action recalculate the padding size.
-      CACHE_TRY(aCommitHook());
+    QM_WARNONLY_TRY(ToResult(DirectoryPaddingFinalizeWrite(aBaseDir)),
+                    ([&aBaseDir](const nsresult) {
+                      // Force restore file next time.
+                      QM_WARNONLY_TRY(DirectoryPaddingDeleteFile(
+                          aBaseDir, DirPaddingFile::FILE));
 
-      CACHE_TRY(
-          ToResult(LockedDirectoryPaddingFinalizeWrite(aBaseDir))
-              .orElse([&aBaseDir](const nsresult) -> Result<Ok, nsresult> {
-                // Force restore file next time.
-                Unused << LockedDirectoryPaddingDeleteFile(
-                    aBaseDir, DirPaddingFile::FILE);
+                      // Ensure that we are able to force the padding file to
+                      // be restored.
+                      MOZ_ASSERT(DirectoryPaddingFileExists(
+                          aBaseDir, DirPaddingFile::TMP_FILE));
 
-                // Ensure that we are able to force the padding file to be
-                // restored.
-                MOZ_ASSERT(DirectoryPaddingFileExists(
-                    aBaseDir, DirPaddingFile::TMP_FILE));
-
-                // Since both the body file and header have been stored in the
-                // file-system, just make the action be resolve and let the
-                // padding file be restored in the next action.
-                return Ok{};
-              }));
-    }
+                      // Since both the body file and header have been stored
+                      // in the file-system, just make the action be resolve
+                      // and let the padding file be restored in the next
+                      // action.
+                    }));
 
     return NS_OK;
   }
@@ -131,15 +126,7 @@ class CacheQuotaClient final : public quota::Client {
   void ForceKillActors() override;
   void FinalizeShutdown() override;
 
-  Result<UsageInfo, nsresult> GetUsageForOriginInternal(
-      PersistenceType aPersistenceType, const GroupAndOrigin& aGroupAndOrigin,
-      const AtomicBool& aCanceled, bool aInitializing);
-
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CacheQuotaClient, override)
-
-  // Mutex lock to protect directroy padding files. It should only be acquired
-  // in DOM Cache IO threads and Quota IO thread.
-  mozilla::Mutex mDirPaddingFileMutex;
 };
 
 }  // namespace cache

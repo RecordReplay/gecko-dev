@@ -67,7 +67,7 @@ void HTMLLegendElement::UnbindFromTree(bool aNullParent) {
 }
 
 void HTMLLegendElement::Focus(const FocusOptions& aOptions,
-                              const mozilla::dom::CallerType aCallerType,
+                              const CallerType aCallerType,
                               ErrorResult& aError) {
   nsIFrame* frame = GetPrimaryFrame();
   if (!frame) {
@@ -87,11 +87,10 @@ void HTMLLegendElement::Focus(const FocusOptions& aOptions,
   }
 
   RefPtr<Element> result;
-  aError = fm->MoveFocus(
-      nullptr, this, nsIFocusManager::MOVEFOCUS_FORWARD,
-      nsIFocusManager::FLAG_NOPARENTFRAME |
-          nsFocusManager::FocusOptionsToFocusManagerFlags(aOptions),
-      getter_AddRefs(result));
+  aError = fm->MoveFocus(nullptr, this, nsIFocusManager::MOVEFOCUS_FORWARD,
+                         nsIFocusManager::FLAG_NOPARENTFRAME |
+                             nsFocusManager::ProgrammaticFocusFlags(aOptions),
+                         getter_AddRefs(result));
 }
 
 bool HTMLLegendElement::PerformAccesskey(bool aKeyCausesActivation,
@@ -101,6 +100,26 @@ bool HTMLLegendElement::PerformAccesskey(bool aKeyCausesActivation,
 
   Focus(options, CallerType::System, rv);
   return NS_SUCCEEDED(rv.StealNSResult());
+}
+
+HTMLLegendElement::LegendAlignValue HTMLLegendElement::LogicalAlign(
+    mozilla::WritingMode aCBWM) const {
+  const nsAttrValue* attr = GetParsedAttr(nsGkAtoms::align);
+  if (!attr || attr->Type() != nsAttrValue::eEnum) {
+    return LegendAlignValue::InlineStart;
+  }
+
+  auto value = static_cast<LegendAlignValue>(attr->GetEnumValue());
+  switch (value) {
+    case LegendAlignValue::Left:
+      return aCBWM.IsBidiLTR() ? LegendAlignValue::InlineStart
+                               : LegendAlignValue::InlineEnd;
+    case LegendAlignValue::Right:
+      return aCBWM.IsBidiLTR() ? LegendAlignValue::InlineEnd
+                               : LegendAlignValue::InlineStart;
+    default:
+      return value;
+  }
 }
 
 already_AddRefed<HTMLFormElement> HTMLLegendElement::GetForm() {

@@ -306,6 +306,20 @@ def add_common_arguments(parser):
         dest="runFailures",
         help="Run failures matching keyword",
     )
+    parser.add_argument(
+        "--timeout-as-pass",
+        action="store_true",
+        default=False,
+        dest="timeoutAsPass",
+        help="Harness level timeouts will be treated as passing",
+    )
+    parser.add_argument(
+        "--crash-as-pass",
+        action="store_true",
+        default=False,
+        dest="crashAsPass",
+        help="Harness level crashes will be treated as passing",
+    )
 
 
 def add_remote_arguments(parser):
@@ -351,6 +365,14 @@ def add_remote_arguments(parser):
         default=True,
         help="Do not copy any files to device (to be used only if "
         "device is already setup).",
+    )
+    parser.add_argument(
+        "--no-install",
+        action="store_false",
+        dest="setup",
+        default=True,
+        help="Don't install the app or any files to the device (to be used if "
+        "the device is already set up)",
     )
 
     parser.add_argument(

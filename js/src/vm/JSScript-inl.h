@@ -96,7 +96,7 @@ inline JSFunction* JSScript::getFunction(js::GCThingIndex index) const {
   JSObject* obj = getObject(index);
   MOZ_RELEASE_ASSERT(obj->is<JSFunction>(), "Script object is not JSFunction");
   JSFunction* fun = &obj->as<JSFunction>();
-  MOZ_ASSERT_IF(fun->isNative(), IsAsmJSModuleNative(fun->native()));
+  MOZ_ASSERT_IF(fun->isNativeFun(), IsAsmJSModuleNative(fun->native()));
   return fun;
 }
 
@@ -160,13 +160,6 @@ inline js::Shape* JSScript::initialEnvironmentShape() const {
   return nullptr;
 }
 
-inline bool JSScript::ensureHasAnalyzedArgsUsage(JSContext* cx) {
-  if (needsArgsAnalysis()) {
-    return js::jit::AnalyzeArgumentsUsage(cx, this);
-  }
-  return true;
-}
-
 inline bool JSScript::isDebuggee() const {
   return realm()->debuggerObservesAllExecution() || hasDebugScript();
 }
@@ -191,7 +184,7 @@ inline bool JSScript::isIonCompilingOffThread() const {
 }
 
 inline bool JSScript::canBaselineCompile() const {
-  bool disabled = hasFlag(MutableFlags::BaselineDisabled);
+  bool disabled = baselineDisabled();
 #ifdef DEBUG
   if (hasJitScript()) {
     bool jitScriptDisabled =
@@ -203,7 +196,7 @@ inline bool JSScript::canBaselineCompile() const {
 }
 
 inline bool JSScript::canIonCompile() const {
-  bool disabled = hasFlag(MutableFlags::IonDisabled);
+  bool disabled = ionDisabled();
 #ifdef DEBUG
   if (hasJitScript()) {
     bool jitScriptDisabled =

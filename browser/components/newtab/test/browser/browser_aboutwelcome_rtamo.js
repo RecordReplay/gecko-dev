@@ -1,56 +1,70 @@
 "use strict";
 
-const ABOUT_WELCOME_OVERRIDE_CONTENT_PREF =
-  "browser.aboutwelcome.overrideContent";
+const { ASRouter } = ChromeUtils.import(
+  "resource://activity-stream/lib/ASRouter.jsm"
+);
+const { AddonRepository } = ChromeUtils.import(
+  "resource://gre/modules/addons/AddonRepository.jsm"
+);
+const { ExperimentFakes } = ChromeUtils.import(
+  "resource://testing-common/NimbusTestUtils.jsm"
+);
 
-const TEST_RTAMO_WELCOME_CONTENT = {
-  template: "return_to_amo",
-  name: "Test add on",
-  url: "https://test.xpi",
-  iconURL: "https://test.svg",
-  content: {
-    header: { string_id: "onboarding-welcome-header" },
-    subtitle: { string_id: "return-to-amo-subtitle" },
-    text: {
-      string_id: "return-to-amo-addon-title",
-    },
-    primary_button: {
-      label: { string_id: "return-to-amo-add-extension-label" },
-      action: {
-        type: "INSTALL_ADDON_FROM_URL",
-        data: { url: null, telemetrySource: "rtamo" },
-      },
-    },
-    startButton: {
-      label: {
-        string_id: "onboarding-start-browsing-button-label",
-      },
-      message_id: "RTAMO_START_BROWSING_BUTTON",
-      action: {
-        type: "OPEN_AWESOME_BAR",
-      },
-    },
-  },
-};
+add_task(function setup() {
+  let sandbox = sinon.createSandbox();
 
-const TEST_RTAMO_WELCOME_JSON = JSON.stringify(TEST_RTAMO_WELCOME_CONTENT);
+  sandbox
+    .stub(AddonRepository, "getAddonsByIDs")
+    .resolves([
+      { sourceURI: { scheme: "https", spec: "https://test.xpi" }, icons: {} },
+    ]);
 
-async function setAboutWelcomeOverride(value) {
-  return pushPrefs([ABOUT_WELCOME_OVERRIDE_CONTENT_PREF, value]);
-}
+  registerCleanupFunction(() => {
+    sandbox.restore();
+  });
+});
 
 async function openRTAMOWelcomePage() {
-  await setAboutWelcomeOverride(TEST_RTAMO_WELCOME_JSON);
+  // Can't properly stub the child/parent actors so instead
+  // we stub the modules they depend on for the RTAMO flow
+  // to ensure the right thing is rendered.
+  await ASRouter.forceAttribution({
+    source: "addons.mozilla.org",
+    medium: "referral",
+    campaign: "non-fx-button",
+    // with the sinon override, the id doesn't matter
+    content: "rta:whatever",
+    experiment: "ua-onboarding",
+    variation: "chrome",
+    ua: "Google Chrome 123",
+    dltoken: "00000000-0000-0000-0000-000000000000",
+  });
 
   let tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
     "about:welcome",
     true
   );
-  registerCleanupFunction(() => {
+
+  registerCleanupFunction(async () => {
     BrowserTestUtils.removeTab(tab);
-    pushPrefs([ABOUT_WELCOME_OVERRIDE_CONTENT_PREF, ""]);
+    // Clear cache call is only possible in a testing environment
+    let env = Cc["@mozilla.org/process/environment;1"].getService(
+      Ci.nsIEnvironment
+    );
+    env.set("XPCSHELL_TEST_PROFILE_DIR", "testing");
+    await ASRouter.forceAttribution({
+      source: "",
+      medium: "",
+      campaign: "",
+      content: "",
+      experiment: "",
+      variation: "",
+      ua: "",
+      dltoken: "",
+    });
   });
+
   return tab.linkedBrowser;
 }
 
@@ -189,5 +203,50 @@ add_task(async function test_rtamo_aboutwelcome() {
     telemetryCall.args[1].message_id,
     "RTAMO_DEFAULT_WELCOME",
     "Message Id sent in telemetry for default RTAMO"
+  );
+});
+
+add_task(async function test_rtamo_over_experiments() {
+  let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
+    featureId: "aboutwelcome",
+    value: { screens: [], enabled: true },
+  });
+
+  let browser = await openRTAMOWelcomePage();
+
+  // If addon attribution exist, we should see RTAMO even if enrolled
+  // in about:welcome experiment
+  await test_screen_content(
+    browser,
+    "Experiment RTAMO UI",
+    // Expected selectors:
+    ["h2[data-l10n-id='return-to-amo-addon-title']"],
+    // Unexpected selectors:
+    []
+  );
+
+  await doExperimentCleanup();
+
+  browser = await openRTAMOWelcomePage();
+
+  await test_screen_content(
+    browser,
+    "No Experiment RTAMO UI",
+    // Expected selectors:
+    [
+      "div.onboardingContainer",
+      "div.brand-logo",
+      "h2[data-l10n-id='return-to-amo-addon-title']",
+      "img[data-l10n-name='icon']",
+      "button.primary",
+      "button.secondary",
+    ],
+    // Unexpected selectors:
+    [
+      "main.AW_STEP1",
+      "main.AW_STEP2",
+      "main.AW_STEP3",
+      "div.tiles-container.info",
+    ]
   );
 });

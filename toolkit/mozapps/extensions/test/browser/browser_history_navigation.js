@@ -69,7 +69,6 @@ function check_state(canGoBack, canGoForward) {
 }
 
 function is_in_list(aManager, view, canGoBack, canGoForward) {
-  var doc = aManager.document;
   var categoryUtils = new CategoryUtilities(aManager);
 
   is(
@@ -78,17 +77,15 @@ function is_in_list(aManager, view, canGoBack, canGoForward) {
     "Should be on the right category"
   );
 
-  doc = aManager.getHtmlBrowser().contentDocument;
   ok(
-    doc.querySelector("addon-list"),
-    "Got a list-view in the HTML about:addons browser"
+    aManager.document.querySelector("addon-list"),
+    "Got a list-view in about:addons"
   );
 
   check_state(canGoBack, canGoForward);
 }
 
 function is_in_detail(aManager, view, canGoBack, canGoForward) {
-  var doc = aManager.document;
   var categoryUtils = new CategoryUtilities(aManager);
 
   is(
@@ -97,28 +94,26 @@ function is_in_detail(aManager, view, canGoBack, canGoForward) {
     "Should be on the right category"
   );
 
-  doc = aManager.getHtmlBrowser().contentDocument;
   is(
-    doc.querySelectorAll("addon-card").length,
+    aManager.document.querySelectorAll("addon-card").length,
     1,
-    "Got a detail-view in the HTML about:addons browser"
+    "Got a detail-view in about:addons"
   );
 
   check_state(canGoBack, canGoForward);
 }
 
 function is_in_discovery(aManager, canGoBack, canGoForward) {
-  const doc = aManager.getHtmlBrowser().contentDocument;
   ok(
-    doc.querySelector("discovery-pane"),
+    aManager.document.querySelector("discovery-pane"),
     "Got a discovery panel in the HTML about:addons browser"
   );
 
   check_state(canGoBack, canGoForward);
 }
 
-async function expand_addon_element(aManager, aId) {
-  var addon = get_addon_element(aManager, aId);
+async function expand_addon_element(aManagerWin, aId) {
+  var addon = getAddonCard(aManagerWin, aId);
   addon.click();
 }
 
@@ -190,7 +185,9 @@ add_task(async function test_navigate_between_webpage_and_aboutaddons() {
   BrowserTestUtils.loadURI(gBrowser.selectedBrowser, "about:addons");
   await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
 
-  let manager = await wait_for_manager_load(gBrowser.contentWindow);
+  let manager = await wait_for_manager_load(
+    gBrowser.selectedBrowser.contentWindow
+  );
 
   info("Part 3");
   is_in_list(manager, "addons://list/extension", true, false);
@@ -242,6 +239,17 @@ add_task(async function test_keyboard_history_navigation() {
 
   aManager = await wait_for_view_load(aManager);
   info("Part 2");
+  is_in_list(aManager, "addons://list/plugin", true, false);
+
+  // Backspace should not navigate back. We should still be on the same view.
+  is(
+    Services.prefs.getIntPref("browser.backspace_action"),
+    2,
+    "Backspace should not navigate back"
+  );
+  EventUtils.synthesizeKey("KEY_Backspace");
+  aManager = await wait_for_view_load(aManager);
+  info("Part 2b");
   is_in_list(aManager, "addons://list/plugin", true, false);
 
   go_back_key();
@@ -490,8 +498,7 @@ add_task(async function test_history_on_detailview_extension_removed() {
   info("Part 2");
   is_in_detail(aManager, "addons://list/extension", true, false);
 
-  const doc = aManager.getHtmlBrowser().contentDocument;
-  const addonCard = doc.querySelector(
+  const addonCard = aManager.document.querySelector(
     'addon-card[addon-id="test1@tests.mozilla.org"]'
   );
   const promptService = mockPromptService();
@@ -499,6 +506,10 @@ add_task(async function test_history_on_detailview_extension_removed() {
   addonCard.querySelector("[action=remove]").click();
 
   await wait_for_view_load(aManager);
+  await TestUtils.waitForCondition(
+    () => aManager.document.querySelector("addon-list"),
+    "The add-on list should render."
+  );
   is_in_list(aManager, "addons://list/extension", true, false);
 
   const addon = await AddonManager.getAddonByID("test1@tests.mozilla.org");
@@ -580,20 +591,21 @@ add_task(async function test_discopane_second_history_entry() {
 
 add_task(async function test_initialSelectedView_on_aboutaddons_reload() {
   let managerWindow = await open_manager("addons://list/extension");
-  ok(
-    managerWindow.gViewController.initialViewSelected,
-    "initialViewSelected is true as expected on first about:addons load"
+  isnot(
+    managerWindow.gViewController.currentViewId,
+    null,
+    "Got a non null currentViewId on first load"
   );
 
   managerWindow.location.reload();
   await wait_for_manager_load(managerWindow);
   await wait_for_view_load(managerWindow);
 
-  ok(
-    managerWindow.gViewController.initialViewSelected,
-    "initialViewSelected is true as expected on first about:addons load"
+  isnot(
+    managerWindow.gViewController.currentViewId,
+    null,
+    "Got a non null currentViewId on reload"
   );
-  is(managerWindow.gPendingInitializations, 0, "No pending initializations");
 
   await close_manager(managerWindow);
 });

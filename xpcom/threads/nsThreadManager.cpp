@@ -12,11 +12,13 @@
 #include "nsTArray.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/AbstractThread.h"
+#include "mozilla/AppShutdown.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventQueue.h"
 #include "mozilla/InputTaskManager.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/TaskQueue.h"
@@ -49,6 +51,9 @@ class BackgroundEventTarget final : public nsIEventTarget {
   already_AddRefed<nsISerialEventTarget> CreateBackgroundTaskQueue(
       const char* aName);
 
+  using CancelPromise = TaskQueue::CancelPromise::AllPromiseType;
+  RefPtr<CancelPromise> CancelBackgroundDelayedRunnables();
+
   void BeginShutdown(nsTArray<RefPtr<ShutdownPromise>>&);
   void FinishShutdown();
 
@@ -60,6 +65,7 @@ class BackgroundEventTarget final : public nsIEventTarget {
 
   Mutex mMutex;
   nsTArray<RefPtr<TaskQueue>> mTaskQueues;
+  bool mIsBackgroundDelayedRunnablesCanceled;
 };
 
 NS_IMPL_ISUPPORTS(BackgroundEventTarget, nsIEventTarget)
@@ -196,6 +202,19 @@ BackgroundEventTarget::CreateBackgroundTaskQueue(const char* aName) {
   return queue.forget();
 }
 
+auto BackgroundEventTarget::CancelBackgroundDelayedRunnables()
+    -> RefPtr<CancelPromise> {
+  MOZ_ASSERT(NS_IsMainThread());
+  MutexAutoLock lock(mMutex);
+  mIsBackgroundDelayedRunnablesCanceled = true;
+  nsTArray<RefPtr<TaskQueue::CancelPromise>> promises;
+  for (const auto& tq : mTaskQueues) {
+    promises.AppendElement(tq->CancelDelayedRunnables());
+  }
+  return TaskQueue::CancelPromise::All(GetMainThreadSerialEventTarget(),
+                                       promises);
+}
+
 extern "C" {
 // This uses the C language linkage because it's exposed to Rust
 // via the xpcom/rust/moz_task crate.
@@ -257,93 +276,11 @@ NS_IMPL_CLASSINFO(nsThreadManager, nullptr,
 NS_IMPL_QUERY_INTERFACE_CI(nsThreadManager, nsIThreadManager)
 NS_IMPL_CI_INTERFACE_GETTER(nsThreadManager, nsIThreadManager)
 
-namespace {
-
-// Simple observer to monitor the beginning of the shutdown.
-class ShutdownObserveHelper final : public nsIObserver,
-                                    public nsSupportsWeakReference {
- public:
-  NS_DECL_ISUPPORTS
-
-  static nsresult Create(ShutdownObserveHelper** aObserver) {
-    MOZ_ASSERT(aObserver);
-
-    RefPtr<ShutdownObserveHelper> observer = new ShutdownObserveHelper();
-
-    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
-    if (NS_WARN_IF(!obs)) {
-      return NS_ERROR_FAILURE;
-    }
-
-    nsresult rv =
-        obs->AddObserver(observer, NS_XPCOM_SHUTDOWN_OBSERVER_ID, true);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    rv = obs->AddObserver(observer, "content-child-will-shutdown", true);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    observer.forget(aObserver);
-    return NS_OK;
-  }
-
-  NS_IMETHOD
-  Observe(nsISupports* aSubject, const char* aTopic,
-          const char16_t* aData) override {
-    if (!strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) ||
-        !strcmp(aTopic, "content-child-will-shutdown")) {
-      mShuttingDown = true;
-      return NS_OK;
-    }
-
-    return NS_OK;
-  }
-
-  bool ShuttingDown() const { return mShuttingDown; }
-
- private:
-  explicit ShutdownObserveHelper() : mShuttingDown(false) {}
-
-  ~ShutdownObserveHelper() = default;
-
-  bool mShuttingDown;
-};
-
-NS_INTERFACE_MAP_BEGIN(ShutdownObserveHelper)
-  NS_INTERFACE_MAP_ENTRY(nsIObserver)
-  NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIObserver)
-NS_INTERFACE_MAP_END
-
-NS_IMPL_ADDREF(ShutdownObserveHelper)
-NS_IMPL_RELEASE(ShutdownObserveHelper)
-
-StaticRefPtr<ShutdownObserveHelper> gShutdownObserveHelper;
-
-}  // namespace
-
 //-----------------------------------------------------------------------------
 
 /*static*/ nsThreadManager& nsThreadManager::get() {
   static nsThreadManager sInstance;
   return sInstance;
-}
-
-/* static */
-void nsThreadManager::InitializeShutdownObserver() {
-  MOZ_ASSERT(!gShutdownObserveHelper);
-
-  RefPtr<ShutdownObserveHelper> observer;
-  nsresult rv = ShutdownObserveHelper::Create(getter_AddRefs(observer));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return;
-  }
-
-  gShutdownObserveHelper = observer;
-  ClearOnShutdown(&gShutdownObserveHelper);
 }
 
 nsThreadManager::nsThreadManager()
@@ -432,28 +369,17 @@ void nsThreadManager::Shutdown() {
   // Empty the main thread event queue before we begin shutting down threads.
   NS_ProcessPendingEvents(mMainThread);
 
-  typedef typename ShutdownPromise::AllPromiseType AllPromise;
-  typename AllPromise::ResolveOrRejectValue val;
-  using ResolveValueT = typename AllPromise::ResolveValueType;
-  using RejectValueT = typename AllPromise::RejectValueType;
-
   nsTArray<RefPtr<ShutdownPromise>> promises;
   mBackgroundEventTarget->BeginShutdown(promises);
 
-  RefPtr<AllPromise> complete = ShutdownPromise::All(mMainThread, promises);
-
   bool taskQueuesShutdown = false;
-
-  complete->Then(
-      mMainThread, __func__,
-      [&](const ResolveValueT& aResolveValue) {
-        mBackgroundEventTarget->FinishShutdown();
-        taskQueuesShutdown = true;
-      },
-      [&](RejectValueT aRejectValue) {
-        mBackgroundEventTarget->FinishShutdown();
-        taskQueuesShutdown = true;
-      });
+  // It's fine to capture everything by reference in the Then handler since it
+  // runs before we exit the nested event loop, thanks to the SpinEventLoopUntil
+  // below.
+  ShutdownPromise::All(mMainThread, promises)->Then(mMainThread, __func__, [&] {
+    mBackgroundEventTarget->FinishShutdown();
+    taskQueuesShutdown = true;
+  });
 
   // Wait for task queues to shutdown, so we don't shut down the underlying
   // threads of the background event target in the block below, thereby
@@ -492,6 +418,8 @@ void nsThreadManager::Shutdown() {
   // so there's no need to worry about them. We only have to wait for all
   // in-flight asynchronous thread shutdowns to complete.
   mMainThread->WaitForAllAsynchronousShutdowns();
+
+  mMainThread->mEventTarget->NotifyShutdown();
 
   // In case there are any more events somehow...
   NS_ProcessPendingEvents(mMainThread);
@@ -581,6 +509,17 @@ nsThreadManager::CreateBackgroundTaskQueue(const char* aName) {
   return mBackgroundEventTarget->CreateBackgroundTaskQueue(aName);
 }
 
+void nsThreadManager::CancelBackgroundDelayedRunnables() {
+  if (!mInitialized) {
+    return;
+  }
+
+  bool canceled = false;
+  mBackgroundEventTarget->CancelBackgroundDelayedRunnables()->Then(
+      GetMainThreadSerialEventTarget(), __func__, [&] { canceled = true; });
+  ::SpinEventLoopUntil([&]() { return canceled; });
+}
+
 nsThread* nsThreadManager::GetCurrentThread() {
   // read thread local storage
   void* data = PR_GetThreadPrivate(mCurThreadIndex);
@@ -616,12 +555,6 @@ bool nsThreadManager::IsNSThread() const {
 }
 
 NS_IMETHODIMP
-nsThreadManager::NewThread(uint32_t aCreationFlags, uint32_t aStackSize,
-                           nsIThread** aResult) {
-  return NewNamedThread(""_ns, aStackSize, aResult);
-}
-
-NS_IMETHODIMP
 nsThreadManager::NewNamedThread(const nsACString& aName, uint32_t aStackSize,
                                 nsIThread** aResult) {
   // Note: can be called from arbitrary threads
@@ -631,7 +564,7 @@ nsThreadManager::NewNamedThread(const nsACString& aName, uint32_t aStackSize,
     return NS_ERROR_NOT_INITIALIZED;
   }
 
-  TimeStamp startTime = TimeStamp::Now();
+  [[maybe_unused]] TimeStamp startTime = TimeStamp::Now();
 
   RefPtr<ThreadEventQueue> queue =
       new ThreadEventQueue(MakeUnique<EventQueue>());
@@ -702,32 +635,87 @@ nsThreadManager::GetCurrentThread(nsIThread** aResult) {
 }
 
 NS_IMETHODIMP
-nsThreadManager::SpinEventLoopUntil(nsINestedEventLoopCondition* aCondition) {
-  return SpinEventLoopUntilInternal(aCondition, false);
+nsThreadManager::SpinEventLoopUntil(const nsACString& aVeryGoodReasonToDoThis,
+                                    nsINestedEventLoopCondition* aCondition) {
+  return SpinEventLoopUntilInternal(aVeryGoodReasonToDoThis, aCondition,
+                                    ShutdownPhase::NotInShutdown);
 }
 
 NS_IMETHODIMP
-nsThreadManager::SpinEventLoopUntilOrShutdown(
+nsThreadManager::SpinEventLoopUntilOrQuit(
+    const nsACString& aVeryGoodReasonToDoThis,
     nsINestedEventLoopCondition* aCondition) {
-  return SpinEventLoopUntilInternal(aCondition, true);
+  return SpinEventLoopUntilInternal(aVeryGoodReasonToDoThis, aCondition,
+                                    ShutdownPhase::AppShutdownConfirmed);
 }
 
+struct MOZ_STACK_CLASS AutoNestedEventLoopAnnotation {
+  explicit AutoNestedEventLoopAnnotation(const nsACString& aEntry)
+      : mPrev(sCurrent) {
+    sCurrent = this;
+    if (mPrev) {
+      mStack = mPrev->mStack + "|"_ns + aEntry;
+    } else {
+      mStack = aEntry;
+    }
+    CrashReporter::AnnotateCrashReport(
+        CrashReporter::Annotation::XPCOMSpinEventLoopStack, mStack);
+  }
+
+  ~AutoNestedEventLoopAnnotation() {
+    MOZ_ASSERT(sCurrent == this);
+    sCurrent = mPrev;
+    if (mPrev) {
+      CrashReporter::AnnotateCrashReport(
+          CrashReporter::Annotation::XPCOMSpinEventLoopStack, mPrev->mStack);
+    } else {
+      CrashReporter::RemoveCrashReportAnnotation(
+          CrashReporter::Annotation::XPCOMSpinEventLoopStack);
+    }
+  }
+
+ private:
+  AutoNestedEventLoopAnnotation(const AutoNestedEventLoopAnnotation&) = delete;
+  AutoNestedEventLoopAnnotation& operator=(
+      const AutoNestedEventLoopAnnotation&) = delete;
+
+  static AutoNestedEventLoopAnnotation* sCurrent;
+
+  AutoNestedEventLoopAnnotation* mPrev;
+  nsCString mStack;
+};
+
+AutoNestedEventLoopAnnotation* AutoNestedEventLoopAnnotation::sCurrent =
+    nullptr;
+
 nsresult nsThreadManager::SpinEventLoopUntilInternal(
-    nsINestedEventLoopCondition* aCondition, bool aCheckingShutdown) {
+    const nsACString& aVeryGoodReasonToDoThis,
+    nsINestedEventLoopCondition* aCondition,
+    ShutdownPhase aCheckingShutdownPhase) {
+  AutoNestedEventLoopAnnotation annotation(aVeryGoodReasonToDoThis);
+  AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING_NONSENSITIVE(
+      "nsThreadManager::SpinEventLoop", OTHER, aVeryGoodReasonToDoThis);
+  AUTO_PROFILER_MARKER_TEXT("SpinEventLoop", OTHER, MarkerStack::Capture(),
+                            aVeryGoodReasonToDoThis);
+
+  // XXX: We would want to AssertIsOnMainThread(); but that breaks some GTest.
   nsCOMPtr<nsINestedEventLoopCondition> condition(aCondition);
   nsresult rv = NS_OK;
 
-  // Nothing to do if already shutting down. Note that gShutdownObserveHelper is
-  // nullified on shutdown.
-  if (aCheckingShutdown &&
-      (!gShutdownObserveHelper || gShutdownObserveHelper->ShuttingDown())) {
+  bool checkingShutdown =
+      (aCheckingShutdownPhase > ShutdownPhase::NotInShutdown);
+
+  // Nothing to do if already shutting down.
+  if (checkingShutdown &&
+      AppShutdown::GetCurrentShutdownPhase() >= aCheckingShutdownPhase) {
     return NS_OK;
   }
 
   if (!mozilla::SpinEventLoopUntil([&]() -> bool {
-        // Shutting down is started.
-        if (aCheckingShutdown && (!gShutdownObserveHelper ||
-                                  gShutdownObserveHelper->ShuttingDown())) {
+        // Check if shutting down reached our limits.
+        if (checkingShutdown &&
+            AppShutdown::GetCurrentShutdownPhase() >= aCheckingShutdownPhase) {
+          // This will make us return with NS_OK.
           return true;
         }
 
@@ -766,10 +754,6 @@ nsThreadManager::GetMainThreadEventTarget(nsIEventTarget** aTarget) {
   nsCOMPtr<nsIEventTarget> target = GetMainThreadSerialEventTarget();
   target.forget(aTarget);
   return NS_OK;
-}
-
-uint32_t nsThreadManager::GetHighestNumberOfThreads() {
-  return nsThread::MaxActiveThreads();
 }
 
 NS_IMETHODIMP

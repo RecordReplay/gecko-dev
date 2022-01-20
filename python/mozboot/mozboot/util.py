@@ -17,7 +17,13 @@ from mozfile import which
 here = os.path.join(os.path.dirname(__file__))
 
 
-MINIMUM_RUST_VERSION = "1.47.0"
+MINIMUM_RUST_VERSION = "1.51.0"
+
+
+def get_tools_dir(srcdir=False):
+    if os.environ.get("MOZ_AUTOMATION") and "MOZ_FETCHES_DIR" in os.environ:
+        return os.environ["MOZ_FETCHES_DIR"]
+    return get_state_dir(srcdir)
 
 
 def get_state_dir(srcdir=False):
@@ -61,14 +67,12 @@ def get_state_dir(srcdir=False):
     return state_dir
 
 
-def get_mach_virtualenv_root(state_dir=None, py2=False):
-    return os.path.join(
-        state_dir or get_state_dir(), "_virtualenvs", "mach_py2" if py2 else "mach"
-    )
+def get_mach_virtualenv_root(state_dir=None):
+    return os.path.join(state_dir or get_state_dir(), "_virtualenvs", "mach")
 
 
-def get_mach_virtualenv_binary(state_dir=None, py2=False):
-    root = get_mach_virtualenv_root(state_dir=state_dir, py2=py2)
+def get_mach_virtualenv_binary(state_dir=None):
+    root = get_mach_virtualenv_root(state_dir=state_dir)
     return VirtualenvHelper(root).python_path
 
 

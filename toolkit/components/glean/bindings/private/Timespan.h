@@ -8,8 +8,8 @@
 #define mozilla_glean_GleanTimespan_h
 
 #include "mozilla/Maybe.h"
+#include "mozilla/Result.h"
 #include "nsIGleanMetrics.h"
-#include "mozilla/glean/fog_ffi_generated.h"
 
 namespace mozilla::glean {
 
@@ -26,7 +26,7 @@ class TimespanMetric {
    * called with no corresponding [stop]): in that case the original
    * start time will be preserved.
    */
-  void Start() const { fog_timespan_start(mId); }
+  void Start() const;
 
   /**
    * Stop tracking time for the provided metric.
@@ -36,7 +36,25 @@ class TimespanMetric {
    * This will record an error if no [start] was called or there is an already
    * existing value.
    */
-  void Stop() const { fog_timespan_stop(mId); }
+  void Stop() const;
+
+  /**
+   * Abort a previous Start.
+   *
+   * No error will be recorded if no Start was called.
+   */
+  void Cancel() const;
+
+  /**
+   * Explicitly sets the timespan value
+   *
+   * This API should only be used if you cannot make use of
+   * `start`/`stop`/`cancel`.
+   *
+   * @param aDuration The duration of this timespan, in units matching the
+   *        `time_unit` of this metric's definition.
+   */
+  void SetRaw(uint32_t aDuration) const;
 
   /**
    * **Test-only API**
@@ -55,12 +73,8 @@ class TimespanMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<int64_t> TestGetValue(const nsACString& aPingName = nsCString()) const {
-    if (!fog_timespan_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    return Some(fog_timespan_test_get_value(mId, &aPingName));
-  }
+  Result<Maybe<uint64_t>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;

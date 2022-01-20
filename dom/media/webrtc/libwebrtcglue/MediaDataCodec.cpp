@@ -15,7 +15,7 @@ namespace mozilla {
 /* static */
 WebrtcVideoEncoder* MediaDataCodec::CreateEncoder(
     webrtc::VideoCodecType aCodecType) {
-#if defined(MOZ_APPLEMEDIA) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_APPLEMEDIA) || defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WMF)
   if (aCodecType == webrtc::VideoCodecType::kVideoCodecH264) {
     return new WebrtcVideoEncoderProxy(new WebrtcMediaDataEncoder());
   }
@@ -57,7 +57,7 @@ WebrtcVideoDecoder* MediaDataCodec::CreateDecoder(
       return nullptr;
   }
   RefPtr<PDMFactory> pdm = new PDMFactory();
-  if (!pdm->SupportsMimeType(codec, nullptr /* dddoctor */)) {
+  if (!pdm->SupportsMimeType(codec)) {
     return nullptr;
   }
 

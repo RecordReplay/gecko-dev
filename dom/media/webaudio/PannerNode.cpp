@@ -309,10 +309,12 @@ already_AddRefed<PannerNode> PannerNode::Create(AudioContext& aAudioContext,
 
   audioNode->SetPanningModel(aOptions.mPanningModel);
   audioNode->SetDistanceModel(aOptions.mDistanceModel);
-  audioNode->SetPosition(aOptions.mPositionX, aOptions.mPositionY,
-                         aOptions.mPositionZ);
-  audioNode->SetOrientation(aOptions.mOrientationX, aOptions.mOrientationY,
-                            aOptions.mOrientationZ);
+  audioNode->mPositionX->SetInitialValue(aOptions.mPositionX);
+  audioNode->mPositionY->SetInitialValue(aOptions.mPositionY);
+  audioNode->mPositionZ->SetInitialValue(aOptions.mPositionZ);
+  audioNode->mOrientationX->SetInitialValue(aOptions.mOrientationX);
+  audioNode->mOrientationY->SetInitialValue(aOptions.mOrientationY);
+  audioNode->mOrientationZ->SetInitialValue(aOptions.mOrientationZ);
   audioNode->SetRefDistance(aOptions.mRefDistance, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -344,6 +346,39 @@ void PannerNode::SetPanningModel(PanningModelType aPanningModel) {
     static_cast<PannerNodeEngine*>(mTrack->Engine())->CreateHRTFPanner();
   }
   SendInt32ParameterToTrack(PANNING_MODEL, int32_t(mPanningModel));
+}
+
+static bool SetParamFromDouble(AudioParam* aParam, double aValue,
+                               const char (&aParamName)[2], ErrorResult& aRv) {
+  float value = static_cast<float>(aValue);
+  if (!mozilla::IsFinite(value)) {
+    aRv.ThrowTypeError<MSG_NOT_FINITE>(aParamName);
+    return false;
+  }
+  aParam->SetValue(value, aRv);
+  return !aRv.Failed();
+}
+
+void PannerNode::SetPosition(double aX, double aY, double aZ,
+                             ErrorResult& aRv) {
+  if (!SetParamFromDouble(mPositionX, aX, "x", aRv)) {
+    return;
+  }
+  if (!SetParamFromDouble(mPositionY, aY, "y", aRv)) {
+    return;
+  }
+  SetParamFromDouble(mPositionZ, aZ, "z", aRv);
+}
+
+void PannerNode::SetOrientation(double aX, double aY, double aZ,
+                                ErrorResult& aRv) {
+  if (!SetParamFromDouble(mOrientationX, aX, "x", aRv)) {
+    return;
+  }
+  if (!SetParamFromDouble(mOrientationY, aY, "y", aRv)) {
+    return;
+  }
+  SetParamFromDouble(mOrientationZ, aZ, "z", aRv);
 }
 
 size_t PannerNode::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const {

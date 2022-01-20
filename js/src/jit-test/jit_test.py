@@ -352,6 +352,13 @@ def main(argv):
         help="Ignore timeouts of tests listed in [FILE]",
     )
     op.add_argument(
+        "--retry-remote-timeouts",
+        dest="timeout_retry",
+        type=int,
+        default=1,
+        help="Number of time to retry timeout on remote devices",
+    )
+    op.add_argument(
         "--test-reflect-stringify",
         dest="test_reflect_stringify",
         help="instead of running tests, use them to test the "
@@ -367,10 +374,13 @@ def main(argv):
         help=argparse.SUPPRESS,
     )
     op.add_argument("js_shell", metavar="JS_SHELL", help="JS shell to run tests with")
+    op.add_argument(
+        "-z", "--gc-zeal", help="GC zeal mode to use when running the shell"
+    )
 
     options, test_args = op.parse_known_args(argv)
     js_shell = which(options.js_shell)
-    test_environment = get_environment_overlay(js_shell)
+    test_environment = get_environment_overlay(js_shell, options.gc_zeal)
 
     if not (os.path.isfile(js_shell) and os.access(js_shell, os.X_OK)):
         if (
@@ -507,9 +517,7 @@ def main(argv):
     )
     prologue = os.path.join(jittests.LIB_DIR, "prologue.js")
     if options.remote:
-        prologue = posixpath.join(
-            options.remote_test_root, "tests", "tests", "lib", "prologue.js"
-        )
+        prologue = posixpath.join(options.remote_test_root, "lib", "prologue.js")
 
     prefix += ["-f", prologue]
 

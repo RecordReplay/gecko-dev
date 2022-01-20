@@ -1459,10 +1459,10 @@ static bool AssumeThemePartAndStateAreTransparent(int32_t aPart,
 // with a different DPI setting from the system's default scaling, we need to
 // apply scaling to native-themed elements as the Windows theme APIs assume
 // the system default resolution.
-static inline double GetThemeDpiScaleFactor(nsIFrame* aFrame) {
+static inline double GetThemeDpiScaleFactor(nsPresContext* aPresContext) {
   if (WinUtils::IsPerMonitorDPIAware() ||
       StaticPrefs::layout_css_devPixelsPerPx() > 0.0) {
-    nsIWidget* rootWidget = aFrame->PresContext()->GetRootWidget();
+    nsIWidget* rootWidget = aPresContext->GetRootWidget();
     if (rootWidget) {
       double systemScale = WinUtils::SystemScaleFactor();
       return rootWidget->GetDefaultScale().scale / systemScale;
@@ -1471,11 +1471,15 @@ static inline double GetThemeDpiScaleFactor(nsIFrame* aFrame) {
   return 1.0;
 }
 
+static inline double GetThemeDpiScaleFactor(nsIFrame* aFrame) {
+  return GetThemeDpiScaleFactor(aFrame->PresContext());
+}
+
 NS_IMETHODIMP
 nsNativeThemeWin::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                        StyleAppearance aAppearance,
                                        const nsRect& aRect,
-                                       const nsRect& aDirtyRect) {
+                                       const nsRect& aDirtyRect, DrawOverflow) {
   if (IsWidgetScrollbarPart(aAppearance)) {
     if (MayDrawCustomScrollbarPart(aContext, aFrame, aAppearance, aRect,
                                    aDirtyRect)) {
@@ -2097,9 +2101,14 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
     case StyleAppearance::Menuseparator: {
       SIZE size(GetGutterSize(theme, nullptr));
       left = size.cx + 5;
-      top = 10;
-      bottom = 7;
     } break;
+    case StyleAppearance::Button:
+      if (aFrame->GetContent()->IsXULElement()) {
+        top = 2;
+        bottom = 3;
+        left = right = 5;
+      }
+      break;
     default:
       return false;
   }
@@ -2111,6 +2120,8 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
     aResult->right = right;
     aResult->left = left;
   }
+  aResult->top = top;
+  aResult->bottom = bottom;
 
   ScaleForFrameDPI(aResult, aFrame);
   return ok;
@@ -2634,7 +2645,6 @@ bool nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
     case StyleAppearance::ScrollbarthumbHorizontal:
     case StyleAppearance::ScrollbarVertical:
     case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarNonDisappearing:
     case StyleAppearance::Scrollcorner:
     case StyleAppearance::Menulist:
     case StyleAppearance::MenulistButton:
@@ -2813,11 +2823,6 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
 
       //      (*aResult).height = ::GetSystemMetrics(SM_CYVTHUMB) << 1;
       break;
-    case StyleAppearance::ScrollbarNonDisappearing: {
-      aResult->SizeTo(::GetSystemMetrics(SM_CXVSCROLL),
-                      ::GetSystemMetrics(SM_CYHSCROLL));
-      break;
-    }
     case StyleAppearance::RangeThumb: {
       if (IsRangeHorizontal(aFrame)) {
         (*aResult).width = 12;
@@ -2943,6 +2948,25 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
       return NS_ERROR_FAILURE;
   }
   return NS_OK;
+}
+
+auto nsNativeThemeWin::GetScrollbarSizes(nsPresContext* aPresContext,
+                                         StyleScrollbarWidth aWidth, Overlay)
+    -> ScrollbarSizes {
+  ScrollbarSizes sizes{::GetSystemMetrics(SM_CXVSCROLL),
+                       ::GetSystemMetrics(SM_CYHSCROLL)};
+  if (aWidth == StyleScrollbarWidth::Thin) {
+    sizes.mVertical = sizes.mVertical >> 1;
+    sizes.mHorizontal = sizes.mHorizontal >> 1;
+  }
+
+  double themeScale = GetThemeDpiScaleFactor(aPresContext);
+  if (themeScale != 1.0) {
+    sizes.mVertical = NSToIntRound(sizes.mVertical * themeScale);
+    sizes.mHorizontal = NSToIntRound(sizes.mHorizontal * themeScale);
+  }
+
+  return sizes;
 }
 
 nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
@@ -3941,7 +3965,7 @@ bool nsNativeThemeWin::MayDrawCustomScrollbarPart(gfxContext* aContext,
     case StyleAppearance::ScrollbarbuttonLeft:
     case StyleAppearance::ScrollbarbuttonRight: {
       nscolor buttonColor =
-          ScrollbarUtil::GetScrollbarButtonColor(trackColor, eventStates);
+          nsNativeBasicTheme::GetScrollbarButtonColor(trackColor, eventStates);
       ctx->SetColor(sRGBColor::FromABGR(buttonColor));
       ctx->Rectangle(bgRect);
       ctx->Fill();
@@ -3986,7 +4010,12 @@ bool nsNativeThemeWin::MayDrawCustomScrollbarPart(gfxContext* aContext,
       ctx->LineTo(gfxPoint(5.0, 12.0));
       ctx->ClosePath();
       // And paint the arrow.
-      nscolor arrowColor = ScrollbarUtil::GetScrollbarArrowColor(buttonColor);
+      nscolor arrowColor =
+          nsNativeBasicTheme::GetScrollbarArrowColor(buttonColor)
+              .valueOrFrom([&] {
+                return ScrollbarUtil::GetScrollbarThumbColor(aFrame,
+                                                             eventStates);
+              });
       ctx->SetColor(sRGBColor::FromABGR(arrowColor));
       ctx->Fill();
       break;

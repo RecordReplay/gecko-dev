@@ -55,7 +55,7 @@ global.loader = {
       "devtools/client/shared/keycodes",
       "devtools/client/shared/sourceeditor/editor",
       "devtools/client/shared/telemetry",
-      "devtools/client/shared/save-screenshot",
+      "devtools/client/shared/screenshot",
       "devtools/client/shared/focus",
     ];
     if (!excluded.includes(path)) {
@@ -107,8 +107,6 @@ global.document.nodePrincipal = {
 const requireHacker = require("require-hacker");
 requireHacker.global_hook("default", (path, module) => {
   const paths = {
-    "acorn/acorn": () => getModule("devtools/shared/acorn/acorn"),
-
     // For Enzyme
     "react-dom": () => getModule("devtools/client/shared/vendor/react-dom"),
     "react-dom/server": () =>

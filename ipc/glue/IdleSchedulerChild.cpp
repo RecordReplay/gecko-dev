@@ -9,16 +9,18 @@
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/IdlePeriodState.h"
+#include "mozilla/Telemetry.h"
 #include "BackgroundChild.h"
 
-namespace mozilla {
-namespace ipc {
+namespace mozilla::ipc {
 
 static IdleSchedulerChild* sMainThreadIdleScheduler = nullptr;
+static bool sIdleSchedulerDestroyed = false;
 
 IdleSchedulerChild::~IdleSchedulerChild() {
   if (sMainThreadIdleScheduler == this) {
     sMainThreadIdleScheduler = nullptr;
+    sIdleSchedulerDestroyed = true;
   }
   MOZ_ASSERT(!mIdlePeriodState);
 }
@@ -73,11 +75,47 @@ bool IdleSchedulerChild::SetPaused() {
   return false;
 }
 
+RefPtr<IdleSchedulerChild::MayGCPromise> IdleSchedulerChild::MayGCNow() {
+  if (mIsRequestingGC || mIsDoingGC) {
+    return nullptr;
+  }
+  TimeStamp wait_since = TimeStamp::Now();
+
+  mIsRequestingGC = true;
+  return SendRequestGC()->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [self = RefPtr(this), wait_since](bool aIgnored) {
+        MOZ_ASSERT(self->mIsRequestingGC && !self->mIsDoingGC);
+        // The parent process always says yes, sometimes after a delay.
+
+        Telemetry::AccumulateTimeDelta(Telemetry::GC_WAIT_FOR_IDLE_MS,
+                                       wait_since);
+        self->mIsRequestingGC = false;
+        self->mIsDoingGC = true;
+        return MayGCPromise::CreateAndResolve(true, __func__);
+      },
+      [self = RefPtr(this)](ResponseRejectReason reason) {
+        self->mIsRequestingGC = false;
+        return MayGCPromise::CreateAndReject(reason, __func__);
+      });
+}
+
+void IdleSchedulerChild::DoneGC() {
+  if (mIsDoingGC) {
+    SendDoneGC();
+    mIsDoingGC = false;
+  }
+}
+
 IdleSchedulerChild* IdleSchedulerChild::GetMainThreadIdleScheduler() {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (sMainThreadIdleScheduler) {
     return sMainThreadIdleScheduler;
+  }
+
+  if (sIdleSchedulerDestroyed) {
+    return nullptr;
   }
 
   ipc::PBackgroundChild* background =
@@ -89,5 +127,4 @@ IdleSchedulerChild* IdleSchedulerChild::GetMainThreadIdleScheduler() {
   return sMainThreadIdleScheduler;
 }
 
-}  // namespace ipc
-}  // namespace mozilla
+}  // namespace mozilla::ipc

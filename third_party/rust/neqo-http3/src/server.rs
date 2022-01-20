@@ -13,10 +13,12 @@ use crate::server_events::{ClientRequestStream, Http3ServerEvent, Http3ServerEve
 use crate::settings::HttpZeroRttChecker;
 use crate::Res;
 use neqo_common::{qtrace, Datagram};
-use neqo_crypto::{AntiReplay, Cipher};
+use neqo_crypto::{AntiReplay, Cipher, PrivateKey, PublicKey, ZeroRttChecker};
 use neqo_qpack::QpackSettings;
 use neqo_transport::server::{ActiveConnectionRef, Server, ValidateAddress};
-use neqo_transport::{ConnectionIdManager, ConnectionParameters, Output};
+use neqo_transport::{
+    tparams::PreferredAddress, ConnectionIdGenerator, ConnectionParameters, Output,
+};
 use std::cell::RefCell;
 use std::cell::RefMut;
 use std::collections::HashMap;
@@ -50,8 +52,9 @@ impl Http3Server {
         certs: &[impl AsRef<str>],
         protocols: &[impl AsRef<str>],
         anti_replay: AntiReplay,
-        cid_manager: Rc<RefCell<dyn ConnectionIdManager>>,
+        cid_manager: Rc<RefCell<dyn ConnectionIdGenerator>>,
         qpack_settings: QpackSettings,
+        zero_rtt_checker: Option<Box<dyn ZeroRttChecker>>,
     ) -> Res<Self> {
         Ok(Self {
             server: Server::new(
@@ -59,7 +62,8 @@ impl Http3Server {
                 certs,
                 protocols,
                 anti_replay,
-                Box::new(HttpZeroRttChecker::new(qpack_settings)),
+                zero_rtt_checker
+                    .unwrap_or_else(|| Box::new(HttpZeroRttChecker::new(qpack_settings))),
                 cid_manager,
                 ConnectionParameters::default(),
             )?,
@@ -79,6 +83,30 @@ impl Http3Server {
 
     pub fn set_ciphers(&mut self, ciphers: impl AsRef<[Cipher]>) {
         self.server.set_ciphers(ciphers);
+    }
+
+    pub fn set_preferred_address(&mut self, spa: PreferredAddress) {
+        self.server.set_preferred_address(spa);
+    }
+
+    /// Enable encrypted client hello (ECH).
+    ///
+    /// # Errors
+    /// Only when NSS can't serialize a configuration.
+    pub fn enable_ech(
+        &mut self,
+        config: u8,
+        public_name: &str,
+        sk: &PrivateKey,
+        pk: &PublicKey,
+    ) -> Res<()> {
+        self.server.enable_ech(config, public_name, sk, pk)?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn ech_config(&self) -> &[u8] {
+        self.server.ech_config()
     }
 
     pub fn process(&mut self, dgram: Option<Datagram>, now: Instant) -> Output {
@@ -228,16 +256,18 @@ mod tests {
     use super::{Http3Server, Http3ServerEvent, Http3State, Rc, RefCell};
     use crate::{Error, Header};
     use neqo_common::event::Provider;
-    use neqo_crypto::AuthenticationStatus;
+    use neqo_crypto::{AuthenticationStatus, ZeroRttCheckResult, ZeroRttChecker};
     use neqo_qpack::encoder::QPackEncoder;
     use neqo_qpack::QpackSettings;
     use neqo_transport::{
-        CloseError, Connection, ConnectionEvent, FixedConnectionIdManager, State, StreamType,
-        ZeroRttState,
+        Connection, ConnectionError, ConnectionEvent, State, StreamType, ZeroRttState,
     };
+    use std::collections::HashMap;
+    use std::mem;
     use std::ops::{Deref, DerefMut};
     use test_fixture::{
-        anti_replay, default_client, fixture_init, now, DEFAULT_ALPN, DEFAULT_KEYS,
+        anti_replay, default_client, fixture_init, now, CountingConnectionIdGenerator,
+        DEFAULT_ALPN, DEFAULT_KEYS,
     };
 
     const DEFAULT_SETTINGS: QpackSettings = QpackSettings {
@@ -253,8 +283,9 @@ mod tests {
             DEFAULT_KEYS,
             DEFAULT_ALPN,
             anti_replay(),
-            Rc::new(RefCell::new(FixedConnectionIdManager::new(5))),
+            Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
             settings,
+            None,
         )
         .expect("create a server")
     }
@@ -264,8 +295,14 @@ mod tests {
         create_server(DEFAULT_SETTINGS)
     }
 
+    #[allow(
+        unknown_lints,
+        renamed_and_removed_lints,
+        clippy::unknown_clippy_lints,
+        clippy::unnested_or_patterns
+    )] // Until we require rust 1.53 we can't use or_patterns.
     fn assert_closed(hconn: &mut Http3Server, expected: &Error) {
-        let err = CloseError::Application(expected.code());
+        let err = ConnectionError::Application(expected.code());
         let closed = |e| {
             matches!(e,
             Http3ServerEvent::StateChange{ state: Http3State::Closing(e), .. }
@@ -276,15 +313,27 @@ mod tests {
     }
 
     fn assert_connected(hconn: &mut Http3Server) {
-        let connected =
-            |e| matches!(e, Http3ServerEvent::StateChange{ state: Http3State::Connected, ..} );
+        let connected = |e| {
+            matches!(
+                e,
+                Http3ServerEvent::StateChange {
+                    state: Http3State::Connected,
+                    ..
+                }
+            )
+        };
         assert!(hconn.events().any(connected));
     }
 
     fn assert_not_closed(hconn: &mut Http3Server) {
         let closed = |e| {
-            matches!(e,
-            Http3ServerEvent::StateChange{ state: Http3State::Closing(..), .. })
+            matches!(
+                e,
+                Http3ServerEvent::StateChange {
+                    state: Http3State::Closing(..),
+                    ..
+                }
+            )
         };
         assert!(!hconn.events().any(closed));
     }
@@ -323,18 +372,11 @@ mod tests {
     }
 
     // Start a client/server and check setting frame.
-    fn connect_and_receive_settings() -> (Http3Server, Connection) {
-        // Create a server and connect it to a client.
-        // We will have a http3 server on one side and a neqo_transport
-        // connection on the other side so that we can check what the http3
-        // side sends and also to simulate an incorrectly behaving http3
-        // client.
-
+    fn connect_and_receive_settings_with_server(server: &mut Http3Server) -> Connection {
         const CONTROL_STREAM_DATA: &[u8] = &[0x0, 0x4, 0x6, 0x1, 0x40, 0x64, 0x7, 0x40, 0x64];
 
-        let mut server = default_server();
         let mut client = default_client();
-        connect_transport(&mut server, &mut client, false);
+        connect_transport(server, &mut client, false);
 
         let mut connected = false;
         while let Some(e) = client.next_event() {
@@ -354,7 +396,7 @@ mod tests {
                         // the control stream
                         let mut buf = [0_u8; 100];
                         let (amount, fin) = client.stream_recv(stream_id, &mut buf).unwrap();
-                        assert_eq!(fin, false);
+                        assert!(!fin);
                         assert_eq!(amount, CONTROL_STREAM_DATA.len());
                         assert_eq!(&buf[..9], CONTROL_STREAM_DATA);
                     } else if stream_id == CLIENT_SIDE_ENCODER_STREAM_ID
@@ -362,7 +404,7 @@ mod tests {
                     {
                         let mut buf = [0_u8; 100];
                         let (amount, fin) = client.stream_recv(stream_id, &mut buf).unwrap();
-                        assert_eq!(fin, false);
+                        assert!(!fin);
                         assert_eq!(amount, 1);
                         assert_eq!(buf[..1], [0x2]);
                     } else if stream_id == CLIENT_SIDE_DECODER_STREAM_ID
@@ -370,7 +412,7 @@ mod tests {
                     {
                         let mut buf = [0_u8; 100];
                         let (amount, fin) = client.stream_recv(stream_id, &mut buf).unwrap();
-                        assert_eq!(fin, false);
+                        assert!(!fin);
                         assert_eq!(amount, 1);
                         assert_eq!(buf[..1], [0x3]);
                     } else {
@@ -390,6 +432,18 @@ mod tests {
             }
         }
         assert!(connected);
+        client
+    }
+
+    fn connect_and_receive_settings() -> (Http3Server, Connection) {
+        // Create a server and connect it to a client.
+        // We will have a http3 server on one side and a neqo_transport
+        // connection on the other side so that we can check what the http3
+        // side sends and also to simulate an incorrectly behaving http3
+        // client.
+
+        let mut server = default_server();
+        let client = connect_and_receive_settings_with_server(&mut server);
         (server, client)
     }
 
@@ -397,7 +451,7 @@ mod tests {
     // The server will open the control and qpack streams and send SETTINGS frame.
     #[test]
     fn test_server_connect() {
-        let _ = connect_and_receive_settings();
+        mem::drop(connect_and_receive_settings());
     }
 
     struct PeerConnection {
@@ -427,8 +481,8 @@ mod tests {
     }
 
     // Connect transport, send and receive settings.
-    fn connect() -> (Http3Server, PeerConnection) {
-        let (mut hconn, mut neqo_trans_conn) = connect_and_receive_settings();
+    fn connect_to(server: &mut Http3Server) -> PeerConnection {
+        let mut neqo_trans_conn = connect_and_receive_settings_with_server(server);
         let control_stream = neqo_trans_conn.stream_create(StreamType::UniDi).unwrap();
         let mut sent = neqo_trans_conn.stream_send(
             control_stream,
@@ -449,24 +503,28 @@ mod tests {
         sent = neqo_trans_conn.stream_send(decoder_stream, &[0x3]);
         assert_eq!(sent, Ok(1));
         let out1 = neqo_trans_conn.process(None, now());
-        let out2 = hconn.process(out1.dgram(), now());
-        let _ = neqo_trans_conn.process(out2.dgram(), now());
+        let out2 = server.process(out1.dgram(), now());
+        mem::drop(neqo_trans_conn.process(out2.dgram(), now()));
 
         // assert no error occured.
-        assert_not_closed(&mut hconn);
-        (
-            hconn,
-            PeerConnection {
-                conn: neqo_trans_conn,
-                control_stream_id: control_stream,
-            },
-        )
+        assert_not_closed(server);
+
+        PeerConnection {
+            conn: neqo_trans_conn,
+            control_stream_id: control_stream,
+        }
+    }
+
+    fn connect() -> (Http3Server, PeerConnection) {
+        let mut server = default_server();
+        let client = connect_to(&mut server);
+        (server, client)
     }
 
     // Server: Test receiving a new control stream and a SETTINGS frame.
     #[test]
     fn test_server_receive_control_frame() {
-        let _ = connect();
+        mem::drop(connect());
     }
 
     // Server: Test that the connection will be closed if control stream
@@ -545,12 +603,14 @@ mod tests {
 
         // create a stream with unknown type.
         let new_stream_id = peer_conn.stream_create(StreamType::UniDi).unwrap();
-        let _ = peer_conn.stream_send(new_stream_id, &[0x41, 0x19, 0x4, 0x4, 0x6, 0x0, 0x8, 0x0]);
+        let _ = peer_conn
+            .stream_send(new_stream_id, &[0x41, 0x19, 0x4, 0x4, 0x6, 0x0, 0x8, 0x0])
+            .unwrap();
         let out = peer_conn.process(None, now());
         let out = hconn.process(out.dgram(), now());
-        let _ = peer_conn.process(out.dgram(), now());
+        mem::drop(peer_conn.process(out.dgram(), now()));
         let out = hconn.process(None, now());
-        let _ = peer_conn.process(out.dgram(), now());
+        mem::drop(peer_conn.process(out.dgram(), now()));
 
         // check for stop-sending with Error::HttpStreamCreation.
         let mut stop_sending_event_found = false;
@@ -576,10 +636,10 @@ mod tests {
 
         // create a push stream.
         let push_stream_id = peer_conn.stream_create(StreamType::UniDi).unwrap();
-        let _ = peer_conn.stream_send(push_stream_id, &[0x1]);
+        let _ = peer_conn.stream_send(push_stream_id, &[0x1]).unwrap();
         let out = peer_conn.process(None, now());
         let out = hconn.process(out.dgram(), now());
-        let _ = peer_conn.conn.process(out.dgram(), now());
+        mem::drop(peer_conn.conn.process(out.dgram(), now()));
         assert_closed(&mut hconn, &Error::HttpStreamCreation);
     }
 
@@ -698,10 +758,10 @@ mod tests {
 
     fn check_request_header(header: &[Header]) {
         let expected_request_header = &[
-            (String::from(":method"), String::from("GET")),
-            (String::from(":scheme"), String::from("https")),
-            (String::from(":authority"), String::from("something.com")),
-            (String::from(":path"), String::from("/")),
+            Header::new(":method", "GET"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "something.com"),
+            Header::new(":path", "/"),
         ];
         assert_eq!(header, expected_request_header);
     }
@@ -741,7 +801,7 @@ mod tests {
             match event {
                 Http3ServerEvent::Headers { headers, fin, .. } => {
                     check_request_header(&headers);
-                    assert_eq!(fin, false);
+                    assert!(!fin);
                     headers_frames += 1;
                 }
                 Http3ServerEvent::Data {
@@ -750,19 +810,19 @@ mod tests {
                     fin,
                 } => {
                     assert_eq!(data, REQUEST_BODY);
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     request
                         .set_response(
                             &[
-                                (String::from(":status"), String::from("200")),
-                                (String::from("content-length"), String::from("3")),
+                                Header::new(":status", "200"),
+                                Header::new("content-length", "3"),
                             ],
                             RESPONSE_BODY,
                         )
                         .unwrap();
                     data_received += 1;
                 }
-                _ => {}
+                Http3ServerEvent::StateChange { .. } => {}
             }
         }
         assert_eq!(headers_frames, 1);
@@ -792,7 +852,7 @@ mod tests {
                     fin,
                 } => {
                     check_request_header(&headers);
-                    assert_eq!(fin, false);
+                    assert!(!fin);
                     headers_frames += 1;
                     request
                         .stream_stop_sending(Error::HttpNoError.code())
@@ -800,8 +860,8 @@ mod tests {
                     request
                         .set_response(
                             &[
-                                (String::from(":status"), String::from("200")),
-                                (String::from("content-length"), String::from("3")),
+                                Header::new(":status", "200"),
+                                Header::new("content-length", "3"),
                             ],
                             RESPONSE_BODY,
                         )
@@ -810,7 +870,7 @@ mod tests {
                 Http3ServerEvent::Data { .. } => {
                     panic!("We should not have a Data event");
                 }
-                _ => {}
+                Http3ServerEvent::StateChange { .. } => {}
             }
         }
         let out = hconn.process(None, now());
@@ -832,7 +892,7 @@ mod tests {
                 Http3ServerEvent::Data { .. } => {
                     panic!("We should not have a Data event");
                 }
-                _ => {}
+                Http3ServerEvent::StateChange { .. } => {}
             }
         }
         assert_eq!(headers_frames, 1);
@@ -862,7 +922,7 @@ mod tests {
                     fin,
                 } => {
                     check_request_header(&headers);
-                    assert_eq!(fin, false);
+                    assert!(!fin);
                     headers_frames += 1;
                     request
                         .stream_reset(Error::HttpRequestRejected.code())
@@ -871,7 +931,7 @@ mod tests {
                 Http3ServerEvent::Data { .. } => {
                     panic!("We should not have a Data event");
                 }
-                _ => {}
+                Http3ServerEvent::StateChange { .. } => {}
             }
         }
         let out = hconn.process(None, now());
@@ -1064,5 +1124,79 @@ mod tests {
             },
             &ZeroRttState::AcceptedClient,
         );
+    }
+
+    #[test]
+    fn client_request_hash() {
+        let (mut hconn, mut peer_conn) = connect();
+
+        let request_stream_id_1 = peer_conn.stream_create(StreamType::BiDi).unwrap();
+        // Send only request headers for now.
+        peer_conn
+            .stream_send(request_stream_id_1, &REQUEST_WITH_BODY)
+            .unwrap();
+
+        let request_stream_id_2 = peer_conn.stream_create(StreamType::BiDi).unwrap();
+        // Send only request headers for now.
+        peer_conn
+            .stream_send(request_stream_id_2, &REQUEST_WITH_BODY)
+            .unwrap();
+
+        let out = peer_conn.process(None, now());
+        hconn.process(out.dgram(), now());
+
+        let mut requests = HashMap::new();
+        while let Some(event) = hconn.next_event() {
+            match event {
+                Http3ServerEvent::Headers { request, .. } => {
+                    assert!(requests.get(&request).is_none());
+                    requests.insert(request, 0);
+                }
+                Http3ServerEvent::Data { request, .. } => {
+                    assert!(requests.get(&request).is_some());
+                }
+                Http3ServerEvent::StateChange { .. } => {}
+            }
+        }
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[derive(Debug, Default)]
+    pub struct RejectZeroRtt {}
+    impl ZeroRttChecker for RejectZeroRtt {
+        fn check(&self, _token: &[u8]) -> ZeroRttCheckResult {
+            ZeroRttCheckResult::Reject
+        }
+    }
+
+    #[test]
+    fn reject_zero_server() {
+        fixture_init();
+        let mut server = Http3Server::new(
+            now(),
+            DEFAULT_KEYS,
+            DEFAULT_ALPN,
+            anti_replay(),
+            Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
+            DEFAULT_SETTINGS,
+            Some(Box::new(RejectZeroRtt::default())),
+        )
+        .expect("create a server");
+        let mut client = connect_to(&mut server);
+        let token = client.events().find_map(|e| {
+            if let ConnectionEvent::ResumptionToken(token) = e {
+                Some(token)
+            } else {
+                None
+            }
+        });
+        assert!(token.is_some());
+
+        let mut client = default_client();
+        client.enable_resumption(now(), token.unwrap()).unwrap();
+
+        connect_transport(&mut server, &mut client, true);
+        assert!(client.tls_info().unwrap().resumed());
+        assert_eq!(client.zero_rtt_state(), &ZeroRttState::Rejected);
     }
 }

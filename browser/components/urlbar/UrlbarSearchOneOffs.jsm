@@ -33,6 +33,7 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
     UrlbarPrefs.addObserver(this);
     // Override the SearchOneOffs.jsm value for the Address Bar.
     this.disableOneOffsHorizontalKeyNavigation = true;
+    this._webEngines = [];
   }
 
   /**
@@ -43,6 +44,19 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
    */
   get localButtons() {
     return this.getSelectableButtons(false).filter(b => b.source);
+  }
+
+  /**
+   * Invoked when Web provided search engines list changes.
+   * @param {Array} engines Array of Web provided search engines. Each engine
+   *        is defined as  { icon, name, tooltip, uri }.
+   */
+  updateWebEngines(engines) {
+    this._webEngines = engines;
+    this.invalidateCache();
+    if (this.view.isOpen) {
+      this._rebuild();
+    }
   }
 
   /**
@@ -177,13 +191,18 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
    *   documentation for details.
    */
   handleSearchCommand(event, searchMode) {
-    // The settings button is a special case. Its action should be executed
+    // The settings button and adding engines are a special case and executed
     // immediately.
     if (
-      this.selectedButton == this.view.oneOffSearchButtons.settingsButtonCompact
+      this.selectedButton ==
+        this.view.oneOffSearchButtons.settingsButtonCompact ||
+      this.selectedButton.classList.contains(
+        "searchbar-engine-one-off-add-engine"
+      )
     ) {
       this.input.controller.engagementEvent.discard();
       this.selectedButton.doCommand();
+      this.selectedButton = null;
       return;
     }
 
@@ -314,13 +333,24 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
   }
 
   /**
+   * Overrides _getAddEngines to return engines that can be added.
+   *
+   * @returns {array} engines
+   */
+  _getAddEngines() {
+    return this._webEngines;
+  }
+
+  /**
    * Overrides _rebuildEngineList to add the local one-offs.
    *
    * @param {array} engines
    *    The search engines to add.
+   * @param {array} addEngines
+   *        The engines that can be added.
    */
-  _rebuildEngineList(engines) {
-    super._rebuildEngineList(engines);
+  _rebuildEngineList(engines, addEngines) {
+    super._rebuildEngineList(engines, addEngines);
 
     for (let { source, pref, restrict } of UrlbarUtils.LOCAL_SEARCH_MODES) {
       if (!UrlbarPrefs.get(pref)) {
@@ -330,6 +360,7 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
       let button = this.document.createXULElement("button");
       button.id = `urlbar-engine-one-off-item-${name}`;
       button.setAttribute("class", "searchbar-engine-one-off-item");
+      button.setAttribute("tabindex", "-1");
       this.document.l10n.setAttributes(button, `search-one-offs-${name}`, {
         restrict,
       });
@@ -352,6 +383,7 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
     }
 
     let button = event.originalTarget;
+
     if (!button.engine && !button.source) {
       return;
     }

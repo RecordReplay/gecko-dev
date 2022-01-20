@@ -14,12 +14,14 @@
 #include "mozilla/DataMutex.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/Result.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/IOUtilsBinding.h"
 #include "mozilla/dom/TypedArray.h"
 #include "nsIAsyncShutdown.h"
 #include "nsISerialEventTarget.h"
 #include "nsPrintfCString.h"
+#include "nsProxyRelease.h"
 #include "nsString.h"
 #include "nsStringFwd.h"
 #include "nsTArray.h"
@@ -113,10 +115,15 @@ class IOUtils final {
 
   static already_AddRefed<Promise> SetPermissions(GlobalObject& aGlobal,
                                                   const nsAString& aPath,
-                                                  const uint32_t aPermissions);
+                                                  uint32_t aPermissions,
+                                                  const bool aHonorUmask);
 
   static already_AddRefed<Promise> Exists(GlobalObject& aGlobal,
                                           const nsAString& aPath);
+
+  static void GetProfileBeforeChange(GlobalObject& aGlobal,
+                                     JS::MutableHandle<JS::Value>,
+                                     ErrorResult& aRv);
 
   class JsBuffer;
 
@@ -141,27 +148,20 @@ class IOUtils final {
   struct InternalFileInfo;
   struct InternalWriteOpts;
   class MozLZ4;
+  class EventQueue;
+  class State;
 
-  static StaticDataMutex<StaticRefPtr<nsISerialEventTarget>>
-      sBackgroundEventTarget;
-  static StaticRefPtr<nsIAsyncShutdownClient> sBarrier;
-  static Atomic<bool> sShutdownStarted;
-
-  template <typename OkT, typename Fn, typename... Args>
-  static RefPtr<IOUtils::IOPromise<OkT>> InvokeToIOPromise(Fn aFunc,
-                                                           Args... aArgs);
-
-  static already_AddRefed<nsIAsyncShutdownClient> GetShutdownBarrier();
-
-  static already_AddRefed<nsISerialEventTarget> GetBackgroundEventTarget();
-
-  static void SetShutdownHooks();
-
+  /**
+   * Dispatch a task on the event queue and resolve or reject the associated
+   * promise based on the result.
+   *
+   * @param aPromise The promise corresponding to the task running on the event
+   * queue.
+   * @param aFunc The task to run.
+   */
   template <typename OkT, typename Fn>
-  static RefPtr<IOPromise<OkT>> RunOnBackgroundThread(Fn aFunc);
-
-  template <typename OkT, typename Fn>
-  static void RunOnBackgroundThreadAndResolve(Promise* aPromise, Fn aFunc);
+  static void DispatchAndResolve(EventQueue* aQueue, Promise* aPromise,
+                                 Fn aFunc);
 
   /**
    * Creates a new JS Promise.
@@ -171,24 +171,15 @@ class IOUtils final {
   static already_AddRefed<Promise> CreateJSPromise(GlobalObject& aGlobal);
 
   // Allow conversion of |InternalFileInfo| with |ToJSValue|.
-  friend MOZ_MUST_USE bool ToJSValue(JSContext* aCx,
-                                     const InternalFileInfo& aInternalFileInfo,
-                                     JS::MutableHandle<JS::Value> aValue);
-
-  /**
-   * Resolves |aPromise| with an appropriate JS value for |aValue|.
-   */
-  template <typename T>
-  static void ResolveJSPromise(Promise* aPromise, T&& aValue);
-  /**
-   * Rejects |aPromise| with an appropriate |DOMException| describing |aError|.
-   */
-  static void RejectJSPromise(Promise* aPromise, const IOError& aError);
+  friend bool ToJSValue(JSContext* aCx,
+                        const InternalFileInfo& aInternalFileInfo,
+                        JS::MutableHandle<JS::Value> aValue);
 
   /**
    * Attempts to read the entire file at |aPath| into a buffer.
    *
    * @param aFile       The location of the file.
+   * @param aOffset     The offset to start reading from.
    * @param aMaxBytes   If |Some|, then only read up this this number of bytes,
    *                    otherwise attempt to read the whole file.
    * @param aDecompress If true, decompress the bytes read from disk before
@@ -199,7 +190,8 @@ class IOUtils final {
    *         error.
    */
   static Result<JsBuffer, IOError> ReadSync(nsIFile* aFile,
-                                            const Maybe<uint32_t>& aMaxBytes,
+                                            const uint32_t aOffset,
+                                            const Maybe<uint32_t> aMaxBytes,
                                             const bool aDecompress,
                                             BufferKind aBufferKind);
 
@@ -237,9 +229,8 @@ class IOUtils final {
    *
    * @param aSourceFile  The location of the file to move.
    * @param aDestFile    The destination for the file.
-   * @param noOverWrite If true, abort with an error if a file already exists at
-   *                    |aDestFile|. Otherwise, the file will be overwritten by
-   *                    the move.
+   * @param aNoOverWrite If true, abort with an error if a file already exists
+   * at |aDestFile|. Otherwise, the file will be overwritten by the move.
    *
    * @return Ok if the file was moved successfully, or an error.
    */
@@ -368,6 +359,80 @@ class IOUtils final {
    * @return Whether or not the file exists.
    */
   static Result<bool, IOError> ExistsSync(nsIFile* aFile);
+
+  enum class EventQueueStatus {
+    Uninitialized,
+    Initialized,
+    Shutdown,
+  };
+
+  enum class ShutdownBlockerStatus {
+    Uninitialized,
+    Initialized,
+    Failed,
+  };
+
+  /**
+   * Internal IOUtils state.
+   */
+  class State {
+   public:
+    StaticAutoPtr<EventQueue> mEventQueue;
+    EventQueueStatus mQueueStatus = EventQueueStatus::Uninitialized;
+    ShutdownBlockerStatus mBlockerStatus = ShutdownBlockerStatus::Uninitialized;
+
+    /**
+     * Set up shutdown hooks to free our internals at shutdown.
+     *
+     * NB: Must be called on main thread.
+     */
+    void SetShutdownHooks();
+  };
+
+  using StateMutex = StaticDataMutex<State>;
+
+  /**
+   * Lock the state mutex and return a handle. If shutdown has not yet
+   * finished, the internals will be constructed if necessary.
+   *
+   * @returns A handle to the internal state, which can be used to retrieve the
+   *          event queue.
+   *          If |Some| is returned, |mEventQueue| is guaranteed to be
+   * initialized. If shutdown has finished, |Nothing| is returned.
+   */
+  static Maybe<StateMutex::AutoLock> GetState();
+
+  static StateMutex sState;
+};
+
+/**
+ * The IOUtils event queue.
+ */
+class IOUtils::EventQueue final {
+  friend void IOUtils::State::SetShutdownHooks();
+
+ public:
+  EventQueue();
+
+  EventQueue(const EventQueue&) = delete;
+  EventQueue(EventQueue&&) = delete;
+  EventQueue& operator=(const EventQueue&) = delete;
+  EventQueue& operator=(EventQueue&&) = delete;
+
+  template <typename OkT, typename Fn>
+  RefPtr<IOPromise<OkT>> Dispatch(Fn aFunc);
+
+  Result<already_AddRefed<nsIAsyncShutdownClient>, nsresult>
+  GetProfileBeforeChangeClient();
+
+  Result<already_AddRefed<nsIAsyncShutdownBarrier>, nsresult>
+  GetProfileBeforeChangeBarrier();
+
+ private:
+  nsresult SetShutdownHooks();
+
+  nsCOMPtr<nsISerialEventTarget> mBackgroundEventTarget;
+  nsCOMPtr<nsIAsyncShutdownBarrier> mProfileBeforeChangeBarrier;
 };
 
 /**
@@ -438,8 +503,8 @@ struct IOUtils::InternalFileInfo {
 struct IOUtils::InternalWriteOpts {
   RefPtr<nsIFile> mBackupFile;
   RefPtr<nsIFile> mTmpFile;
+  WriteMode mMode;
   bool mFlush = false;
-  bool mNoOverwrite = false;
   bool mCompress = false;
 
   static Result<InternalWriteOpts, IOUtils::IOError> FromBinding(
@@ -480,13 +545,25 @@ class IOUtils::MozLZ4 {
       Span<const uint8_t> aFileContents, IOUtils::BufferKind);
 };
 
-class IOUtilsShutdownBlocker : public nsIAsyncShutdownBlocker {
+class IOUtilsShutdownBlocker : public nsIAsyncShutdownBlocker,
+                               public nsIAsyncShutdownCompletionCallback {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIASYNCSHUTDOWNBLOCKER
+  NS_DECL_NSIASYNCSHUTDOWNCOMPLETIONCALLBACK
+
+  enum Phase {
+    ProfileBeforeChange,
+    XpcomWillShutdown,
+  };
+
+  explicit IOUtilsShutdownBlocker(Phase aPhase) : mPhase(aPhase) {}
 
  private:
   virtual ~IOUtilsShutdownBlocker() = default;
+
+  Phase mPhase;
+  RefPtr<nsIAsyncShutdownClient> mParentClient;
 };
 
 /**
@@ -582,8 +659,8 @@ class IOUtils::JsBuffer final {
    */
   static JSObject* IntoUint8Array(JSContext* aCx, JsBuffer aBuffer);
 
-  friend MOZ_MUST_USE bool ToJSValue(JSContext* aCx, JsBuffer&& aBuffer,
-                                     JS::MutableHandle<JS::Value> aValue);
+  friend bool ToJSValue(JSContext* aCx, JsBuffer&& aBuffer,
+                        JS::MutableHandle<JS::Value> aValue);
 
  private:
   IOUtils::BufferKind mBufferKind;

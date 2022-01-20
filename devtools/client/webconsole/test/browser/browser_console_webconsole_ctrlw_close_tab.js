@@ -13,8 +13,7 @@ add_task(async function() {
 
   let hud = await openNewTabAndConsole(TEST_URI);
 
-  const target = await TargetFactory.forTab(gBrowser.selectedTab);
-  const toolbox = gDevTools.getToolbox(target);
+  const toolbox = await gDevTools.getToolboxForTab(gBrowser.selectedTab);
 
   const tabClosed = once(gBrowser.tabContainer, "TabClose");
   tabClosed.then(() => info("tab closed"));
@@ -54,7 +53,7 @@ add_task(async function() {
     }, "web-console-destroyed");
   });
 
-  await waitForAllTargetsToBeAttached(hud.targetList);
+  await waitForAllTargetsToBeAttached(hud.commands.targetCommand);
   waitForFocus(() => {
     EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
   }, hud.iframeWindow);

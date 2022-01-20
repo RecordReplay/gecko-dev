@@ -7,7 +7,6 @@
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/WheelEvent.h"
 #include "mozilla/MouseEvents.h"
-#include "mozilla/StaticPrefs_dom.h"
 #include "prtime.h"
 
 namespace mozilla::dom {
@@ -19,10 +18,6 @@ WheelEvent::WheelEvent(EventTarget* aOwner, nsPresContext* aPresContext,
                      ? aWheelEvent
                      : new WidgetWheelEvent(false, eVoidEvent, nullptr)),
       mAppUnitsPerDevPixel(0) {
-  if (StaticPrefs::dom_event_wheel_deltaMode_lines_always_disabled()) {
-    mDeltaModeCheckingState = DeltaModeCheckingState::Unchecked;
-  }
-
   if (aWheelEvent) {
     mEventIsInternal = false;
     // If the delta mode is pixel, the WidgetWheelEvent's delta values are in
@@ -54,55 +49,99 @@ void WheelEvent::InitWheelEvent(
                              aRelatedTarget, aModifiersList);
 
   WidgetWheelEvent* wheelEvent = mEvent->AsWheelEvent();
+  // When specified by the caller (for JS-created events), don't mess with the
+  // delta mode.
+  wheelEvent->mDeltaModeCheckingState =
+      WidgetWheelEvent::DeltaModeCheckingState::Checked;
   wheelEvent->mDeltaX = aDeltaX;
   wheelEvent->mDeltaY = aDeltaY;
   wheelEvent->mDeltaZ = aDeltaZ;
   wheelEvent->mDeltaMode = aDeltaMode;
+  wheelEvent->mAllowToOverrideSystemScrollSpeed = false;
 }
 
-double WheelEvent::ToWebExposedDelta(const WidgetWheelEvent& aWidgetEvent,
-                                     double aDelta, CallerType aCallerType) {
+int32_t WheelEvent::WheelDeltaX(CallerType aCallerType) {
+  WidgetWheelEvent* ev = mEvent->AsWheelEvent();
+  if (ev->mWheelTicksX != 0.0) {
+    return int32_t(-ev->mWheelTicksX * kNativeTicksToWheelDelta);
+  }
+  if (IsTrusted()) {
+    // We always return pixels regardless of the checking-state.
+    double pixelDelta =
+        ev->mDeltaMode == WheelEvent_Binding::DOM_DELTA_PIXEL
+            ? DevToCssPixels(ev->OverriddenDeltaX())
+            : ev->OverriddenDeltaX() *
+                  CSSPixel::FromAppUnits(ev->mScrollAmount.width).Rounded();
+    return int32_t(-std::round(pixelDelta * kTrustedDeltaToWheelDelta));
+  }
+  return int32_t(-std::round(DeltaX(aCallerType)));  // This matches Safari.
+}
+
+int32_t WheelEvent::WheelDeltaY(CallerType aCallerType) {
+  WidgetWheelEvent* ev = mEvent->AsWheelEvent();
+  if (ev->mWheelTicksY != 0.0) {
+    return int32_t(-ev->mWheelTicksY * kNativeTicksToWheelDelta);
+  }
+
+  if (IsTrusted()) {
+    double pixelDelta =
+        ev->mDeltaMode == WheelEvent_Binding::DOM_DELTA_PIXEL
+            ? DevToCssPixels(ev->OverriddenDeltaY())
+            : ev->OverriddenDeltaY() *
+                  CSSPixel::FromAppUnits(ev->mScrollAmount.height).Rounded();
+    return int32_t(-std::round(pixelDelta * kTrustedDeltaToWheelDelta));
+  }
+  return int32_t(-std::round(DeltaY(aCallerType)));  // This matches Safari.
+}
+
+double WheelEvent::ToWebExposedDelta(WidgetWheelEvent& aWidgetEvent,
+                                     double aDelta, nscoord aLineOrPageAmount,
+                                     CallerType aCallerType) {
+  using DeltaModeCheckingState = WidgetWheelEvent::DeltaModeCheckingState;
   if (aCallerType != CallerType::System) {
-    if (mDeltaModeCheckingState == DeltaModeCheckingState::Unknown) {
-      mDeltaModeCheckingState = DeltaModeCheckingState::Unchecked;
+    if (aWidgetEvent.mDeltaModeCheckingState ==
+        DeltaModeCheckingState::Unknown) {
+      aWidgetEvent.mDeltaModeCheckingState = DeltaModeCheckingState::Unchecked;
     }
-    if (mDeltaModeCheckingState == DeltaModeCheckingState::Unchecked &&
-        aWidgetEvent.mDeltaMode == WheelEvent_Binding::DOM_DELTA_LINE &&
-        StaticPrefs::dom_event_wheel_deltaMode_lines_disabled()) {
-      // TODO(emilio, bug 1675949): Consider not using a fixed multiplier here?
-      return aDelta *
-             StaticPrefs::dom_event_wheel_deltaMode_lines_to_pixel_scale();
+    if (aWidgetEvent.mDeltaModeCheckingState ==
+            DeltaModeCheckingState::Unchecked &&
+        aWidgetEvent.mDeltaMode == WheelEvent_Binding::DOM_DELTA_LINE) {
+      return aDelta * CSSPixel::FromAppUnits(aLineOrPageAmount).Rounded();
     }
   }
-  if (!mAppUnitsPerDevPixel) {
-    return aDelta;
-  }
-  return aDelta * mAppUnitsPerDevPixel / AppUnitsPerCSSPixel();
+  return DevToCssPixels(aDelta);
 }
 
 double WheelEvent::DeltaX(CallerType aCallerType) {
   WidgetWheelEvent* ev = mEvent->AsWheelEvent();
-  return ToWebExposedDelta(*ev, ev->mDeltaX, aCallerType);
+  return ToWebExposedDelta(*ev, ev->OverriddenDeltaX(), ev->mScrollAmount.width,
+                           aCallerType);
 }
 
 double WheelEvent::DeltaY(CallerType aCallerType) {
   WidgetWheelEvent* ev = mEvent->AsWheelEvent();
-  return ToWebExposedDelta(*ev, ev->mDeltaY, aCallerType);
+  return ToWebExposedDelta(*ev, ev->OverriddenDeltaY(),
+                           ev->mScrollAmount.height, aCallerType);
 }
 
 double WheelEvent::DeltaZ(CallerType aCallerType) {
   WidgetWheelEvent* ev = mEvent->AsWheelEvent();
-  return ToWebExposedDelta(*ev, ev->mDeltaZ, aCallerType);
+  // XXX Unclear what scroll amount we should use for deltaZ...
+  auto amount = std::max(ev->mScrollAmount.width, ev->mScrollAmount.height);
+  return ToWebExposedDelta(*ev, ev->mDeltaZ, amount, aCallerType);
 }
 
 uint32_t WheelEvent::DeltaMode(CallerType aCallerType) {
-  uint32_t mode = mEvent->AsWheelEvent()->mDeltaMode;
+  using DeltaModeCheckingState = WidgetWheelEvent::DeltaModeCheckingState;
+
+  WidgetWheelEvent* ev = mEvent->AsWheelEvent();
+  uint32_t mode = ev->mDeltaMode;
   if (aCallerType != CallerType::System) {
-    if (mDeltaModeCheckingState == DeltaModeCheckingState::Unknown) {
-      mDeltaModeCheckingState = DeltaModeCheckingState::Checked;
-    } else if (mDeltaModeCheckingState == DeltaModeCheckingState::Unchecked &&
-               mode == WheelEvent_Binding::DOM_DELTA_LINE &&
-               StaticPrefs::dom_event_wheel_deltaMode_lines_disabled()) {
+    if (ev->mDeltaModeCheckingState == DeltaModeCheckingState::Unknown) {
+      ev->mDeltaModeCheckingState = DeltaModeCheckingState::Checked;
+    } else if (ev->mDeltaModeCheckingState ==
+                   DeltaModeCheckingState::Unchecked &&
+               mode == WheelEvent_Binding::DOM_DELTA_LINE) {
       return WheelEvent_Binding::DOM_DELTA_PIXEL;
     }
   }

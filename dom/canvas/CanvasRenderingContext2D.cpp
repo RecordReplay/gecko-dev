@@ -751,8 +751,6 @@ void CanvasGradient::AddColorStop(float aOffset, const nsACString& aColorstr,
     return aRv.ThrowSyntaxError("Invalid color");
   }
 
-  mStops = nullptr;
-
   GradientStop newStop;
 
   newStop.offset = aOffset;
@@ -1722,7 +1720,8 @@ CanvasRenderingContext2D::GetSurfaceSnapshot(gfxAlphaType* aOutAlphaType) {
     MOZ_ASSERT(
         mTarget == sErrorTarget,
         "On EnsureTarget failure mTarget should be set to sErrorTarget.");
-    return mTarget->Snapshot();
+    // In rare circumstances we may have failed to create an error target.
+    return mTarget ? mTarget->Snapshot() : nullptr;
   }
 
   // The concept of BorrowSnapshot seems a bit broken here, but the original
@@ -2185,8 +2184,10 @@ already_AddRefed<CanvasPattern> CanvasRenderingContext2D::CreatePattern(
 
   // The canvas spec says that createPattern should use the first frame
   // of animated images
-  SurfaceFromElementResult res = nsLayoutUtils::SurfaceFromElement(
-      element, nsLayoutUtils::SFE_WANT_FIRST_FRAME_IF_IMAGE, mTarget);
+  auto flags = nsLayoutUtils::SFE_WANT_FIRST_FRAME_IF_IMAGE |
+               nsLayoutUtils::SFE_EXACT_SIZE_SURFACE;
+  SurfaceFromElementResult res =
+      nsLayoutUtils::SurfaceFromElement(element, flags, mTarget);
 
   // Per spec, we should throw here for the HTMLImageElement and SVGImageElement
   // cases if the image request state is "broken".  In terms of the infromation
@@ -4042,8 +4043,28 @@ TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
 }
 
 gfxFontGroup* CanvasRenderingContext2D::GetCurrentFontStyle() {
-  // use lazy initilization for the font group since it's rather expensive
-  if (!CurrentState().fontGroup) {
+  // Use lazy (re)initialization for the fontGroup since it's rather expensive.
+
+  RefPtr<PresShell> presShell = GetPresShell();
+  gfxTextPerfMetrics* tp = nullptr;
+  FontMatchingStats* fontStats = nullptr;
+  if (presShell && !presShell->IsDestroying()) {
+    nsPresContext* pc = presShell->GetPresContext();
+    tp = pc->GetTextPerfMetrics();
+    fontStats = pc->GetFontMatchingStats();
+  }
+
+  // If we have a cached fontGroup, check that it is valid for the current
+  // prescontext; if not, we need to discard and re-create it.
+  RefPtr<gfxFontGroup>& fontGroup = CurrentState().fontGroup;
+  if (fontGroup) {
+    if (fontGroup->GetFontMatchingStats() != fontStats ||
+        fontGroup->GetTextPerfMetrics() != tp) {
+      fontGroup = nullptr;
+    }
+  }
+
+  if (!fontGroup) {
     // Creating new font groups interacts with the system and could trigger
     // unhandled divergences from the recording, so avoid this when those
     // divergences aren't allowed.
@@ -4053,9 +4074,13 @@ gfxFontGroup* CanvasRenderingContext2D::GetCurrentFontStyle() {
 
     ErrorResult err;
     constexpr auto kDefaultFontStyle = "10px sans-serif"_ns;
-    static float kDefaultFontSize = 10.0;
-    RefPtr<PresShell> presShell = GetPresShell();
-    bool fontUpdated = SetFontInternal(kDefaultFontStyle, err);
+    const float kDefaultFontSize = 10.0;
+    // If the font has already been set, we're re-creating the fontGroup
+    // and should re-use the existing font attribute; if not, we initialize
+    // it to the canvas default.
+    const nsCString& currentFont = CurrentState().font;
+    bool fontUpdated = SetFontInternal(
+        currentFont.IsEmpty() ? kDefaultFontStyle : currentFont, err);
     if (err.Failed() || !fontUpdated) {
       err.SuppressException();
       // XXX Should we get a default lang from the prescontext or something?
@@ -4063,19 +4088,15 @@ gfxFontGroup* CanvasRenderingContext2D::GetCurrentFontStyle() {
       bool explicitLanguage = false;
       gfxFontStyle style;
       style.size = kDefaultFontSize;
-      gfxTextPerfMetrics* tp = nullptr;
-      FontMatchingStats* fontStats = nullptr;
-      if (presShell && !presShell->IsDestroying()) {
-        tp = presShell->GetPresContext()->GetTextPerfMetrics();
-        fontStats = presShell->GetPresContext()->GetFontMatchingStats();
-      }
       int32_t perDevPixel, perCSSPixel;
       GetAppUnitsValues(&perDevPixel, &perCSSPixel);
       gfxFloat devToCssSize = gfxFloat(perDevPixel) / gfxFloat(perCSSPixel);
-      CurrentState().fontGroup = gfxPlatform::GetPlatform()->CreateFontGroup(
-          FontFamilyList(StyleGenericFontFamily::SansSerif), &style, language,
-          explicitLanguage, tp, fontStats, nullptr, devToCssSize);
-      if (CurrentState().fontGroup) {
+      const auto* sans =
+          Servo_FontFamily_Generic(StyleGenericFontFamily::SansSerif);
+      fontGroup = gfxPlatform::GetPlatform()->CreateFontGroup(
+          sans->families, &style, language, explicitLanguage, tp, fontStats,
+          nullptr, devToCssSize);
+      if (fontGroup) {
         CurrentState().font = kDefaultFontStyle;
       } else {
         NS_ERROR("Default canvas font is invalid");
@@ -4083,10 +4104,10 @@ gfxFontGroup* CanvasRenderingContext2D::GetCurrentFontStyle() {
     }
   } else {
     // The fontgroup needs to check if its cached families/faces are valid.
-    CurrentState().fontGroup->CheckForUpdatedPlatformList();
+    fontGroup->CheckForUpdatedPlatformList();
   }
 
-  return CurrentState().fontGroup;
+  return fontGroup;
 }
 
 //
@@ -4406,9 +4427,9 @@ SurfaceFromElementResult CanvasRenderingContext2D::CachedSurfaceFromElement(
     return res;
   }
 
-  int32_t corsmode = imgIRequest::CORS_NONE;
+  int32_t corsmode = CORS_NONE;
   if (NS_SUCCEEDED(imgRequest->GetCORSMode(&corsmode))) {
-    res.mCORSUsed = corsmode != imgIRequest::CORS_NONE;
+    res.mCORSUsed = corsmode != CORS_NONE;
   }
 
   res.mSize = res.mIntrinsicSize = res.mSourceSurface->GetSize();
@@ -4515,7 +4536,8 @@ void CanvasRenderingContext2D::DrawImage(const CanvasImageSource& aImage,
     // The canvas spec says that drawImage should draw the first frame
     // of animated images. We also don't want to rasterize vector images.
     uint32_t sfeFlags = nsLayoutUtils::SFE_WANT_FIRST_FRAME_IF_IMAGE |
-                        nsLayoutUtils::SFE_NO_RASTERIZING_VECTORS;
+                        nsLayoutUtils::SFE_NO_RASTERIZING_VECTORS |
+                        nsLayoutUtils::SFE_EXACT_SIZE_SURFACE;
 
     SurfaceFromElementResult res =
         CanvasRenderingContext2D::CachedSurfaceFromElement(element);
@@ -4525,11 +4547,16 @@ void CanvasRenderingContext2D::DrawImage(const CanvasImageSource& aImage,
     }
 
     if (!res.mSourceSurface && !res.mDrawInfo.mImgContainer) {
-      // The spec says to silently do nothing in the following cases:
+      // https://html.spec.whatwg.org/#check-the-usability-of-the-image-argument:
+      //
+      // Only throw if the request is broken and the element is an
+      // HTMLImageElement / SVGImageElement. Note that even for those the spec
+      // says to silently do nothing in the following cases:
       //   - The element is still loading.
       //   - The image is bad, but it's not in the broken state (i.e., we could
       //     decode the headers and get the size).
-      if (!res.mIsStillLoading && !res.mHasSize) {
+      if (!res.mIsStillLoading && !res.mHasSize &&
+          (aImage.IsHTMLImageElement() || aImage.IsSVGImageElement())) {
         aError.ThrowInvalidStateError("Passed-in image is \"broken\"");
       }
       return;
@@ -4796,6 +4823,7 @@ void CanvasRenderingContext2D::DrawWindow(nsGlobalWindowInner& aWindow,
                                           double aX, double aY, double aW,
                                           double aH, const nsACString& aBgColor,
                                           uint32_t aFlags,
+                                          nsIPrincipal& aSubjectPrincipal,
                                           ErrorResult& aError) {
   if (int32_t(aW) == 0 || int32_t(aH) == 0) {
     return;
@@ -4806,6 +4834,12 @@ void CanvasRenderingContext2D::DrawWindow(nsGlobalWindowInner& aWindow,
   if (!Factory::CheckSurfaceSize(IntSize(int32_t(aW), int32_t(aH)), 0xffff)) {
     aError.Throw(NS_ERROR_FAILURE);
     return;
+  }
+
+  Document* doc = aWindow.GetExtantDoc();
+  if (doc && aSubjectPrincipal.GetIsAddonOrExpandedAddonPrincipal()) {
+    doc->WarnOnceAbout(
+        DeprecatedOperations::eDrawWindowCanvasRenderingContext2D);
   }
 
   // Flush layout updates
@@ -5022,8 +5056,10 @@ nsresult CanvasRenderingContext2D::GetImageDataArray(
     nsIPrincipal& aSubjectPrincipal, JSObject** aRetval) {
   MOZ_ASSERT(aWidth && aHeight);
 
+  // Restrict the typed array length to INT32_MAX because that's all we support
+  // in dom::TypedArray::ComputeState.
   CheckedInt<uint32_t> len = CheckedInt<uint32_t>(aWidth) * aHeight * 4;
-  if (!len.isValid()) {
+  if (!len.isValid() || len.value() > INT32_MAX) {
     return NS_ERROR_DOM_INDEX_SIZE_ERR;
   }
 
@@ -5135,7 +5171,7 @@ void CanvasRenderingContext2D::EnsureErrorTarget() {
   MOZ_ASSERT(errorTarget, "Failed to allocate the error target!");
 
   sErrorTarget = errorTarget;
-  NS_ADDREF(sErrorTarget);
+  NS_IF_ADDREF(sErrorTarget);
 }
 
 void CanvasRenderingContext2D::FillRuleChanged() {
@@ -5146,13 +5182,9 @@ void CanvasRenderingContext2D::FillRuleChanged() {
 }
 
 void CanvasRenderingContext2D::PutImageData(ImageData& aImageData, int32_t aDx,
-                                            int32_t aDy, ErrorResult& aError) {
+                                            int32_t aDy, ErrorResult& aRv) {
   RootedSpiderMonkeyInterface<Uint8ClampedArray> arr(RootingCx());
-  DebugOnly<bool> inited = arr.Init(aImageData.GetDataObject());
-  MOZ_ASSERT(inited);
-
-  PutImageData_explicit(aDx, aDy, aImageData.Width(), aImageData.Height(), &arr,
-                        false, 0, 0, 0, 0, aError);
+  PutImageData_explicit(aDx, aDy, aImageData, false, 0, 0, 0, 0, aRv);
 }
 
 void CanvasRenderingContext2D::PutImageData(ImageData& aImageData, int32_t aDx,
@@ -5160,27 +5192,30 @@ void CanvasRenderingContext2D::PutImageData(ImageData& aImageData, int32_t aDx,
                                             int32_t aDirtyY,
                                             int32_t aDirtyWidth,
                                             int32_t aDirtyHeight,
-                                            ErrorResult& aError) {
-  RootedSpiderMonkeyInterface<Uint8ClampedArray> arr(RootingCx());
-  DebugOnly<bool> inited = arr.Init(aImageData.GetDataObject());
-  MOZ_ASSERT(inited);
-
-  PutImageData_explicit(aDx, aDy, aImageData.Width(), aImageData.Height(), &arr,
-                        true, aDirtyX, aDirtyY, aDirtyWidth, aDirtyHeight,
-                        aError);
+                                            ErrorResult& aRv) {
+  PutImageData_explicit(aDx, aDy, aImageData, true, aDirtyX, aDirtyY,
+                        aDirtyWidth, aDirtyHeight, aRv);
 }
 
 void CanvasRenderingContext2D::PutImageData_explicit(
-    int32_t aX, int32_t aY, uint32_t aW, uint32_t aH,
-    dom::Uint8ClampedArray* aArray, bool aHasDirtyRect, int32_t aDirtyX,
-    int32_t aDirtyY, int32_t aDirtyWidth, int32_t aDirtyHeight,
+    int32_t aX, int32_t aY, ImageData& aImageData, bool aHasDirtyRect,
+    int32_t aDirtyX, int32_t aDirtyY, int32_t aDirtyWidth, int32_t aDirtyHeight,
     ErrorResult& aRv) {
-  if (aW == 0 || aH == 0) {
+  RootedSpiderMonkeyInterface<Uint8ClampedArray> arr(RootingCx());
+  if (!arr.Init(aImageData.GetDataObject())) {
+    return aRv.ThrowInvalidStateError(
+        "Failed to extract Uint8ClampedArray from ImageData (security check "
+        "failed?)");
+  }
+
+  const uint32_t width = aImageData.Width();
+  const uint32_t height = aImageData.Height();
+  if (width == 0 || height == 0) {
     return aRv.ThrowInvalidStateError("Passed-in image is empty");
   }
 
   IntRect dirtyRect;
-  IntRect imageDataRect(0, 0, aW, aH);
+  IntRect imageDataRect(0, 0, width, height);
 
   if (aHasDirtyRect) {
     // fix up negative dimensions
@@ -5232,11 +5267,11 @@ void CanvasRenderingContext2D::PutImageData_explicit(
     return;
   }
 
-  aArray->ComputeState();
+  arr.ComputeState();
 
-  uint32_t dataLen = aArray->Length();
+  uint32_t dataLen = arr.Length();
 
-  uint32_t len = aW * aH * 4;
+  uint32_t len = width * height * 4;
   if (dataLen != len) {
     return aRv.ThrowInvalidStateError("Invalid width or height");
   }
@@ -5284,10 +5319,10 @@ void CanvasRenderingContext2D::PutImageData_explicit(
   }
 
   IntRect srcRect = dirtyRect - IntPoint(aX, aY);
-  uint8_t* srcData = aArray->Data() + srcRect.y * (aW * 4) + srcRect.x * 4;
+  uint8_t* srcData = arr.Data() + srcRect.y * (width * 4) + srcRect.x * 4;
 
   PremultiplyData(
-      srcData, aW * 4, SurfaceFormat::R8G8B8A8, dstData, dstStride,
+      srcData, width * 4, SurfaceFormat::R8G8B8A8, dstData, dstStride,
       mOpaque ? SurfaceFormat::X8R8G8B8_UINT32 : SurfaceFormat::A8R8G8B8_UINT32,
       dirtyRect.Size());
 
@@ -5309,8 +5344,10 @@ static already_AddRefed<ImageData> CreateImageData(
   if (aW == 0) aW = 1;
   if (aH == 0) aH = 1;
 
+  // Restrict the typed array length to INT32_MAX because that's all we support
+  // in dom::TypedArray::ComputeState.
   CheckedInt<uint32_t> len = CheckedInt<uint32_t>(aW) * aH * 4;
-  if (!len.isValid()) {
+  if (!len.isValid() || len.value() > INT32_MAX) {
     aError.ThrowIndexSizeError("Invalid width or height");
     return nullptr;
   }

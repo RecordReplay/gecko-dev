@@ -5,14 +5,12 @@
 job-defaults:
     max-run-time: 1800
     suite: raptor
-    webrender-run-on-projects: []
-    variants: ["webrender"]
     run-on-projects:
         by-test-platform:
-            android-hw-p2-.*-api-16/(?!opt).*: []
-            android-hw-p2-.*-api-16-shippable/opt: []
-            android-hw(?!-p2).*(?<!-api-16-shippable)/opt.*: []
-            default: ['mozilla-central']
+            android-hw-p2-.*-arm7/(?!opt).*: []
+            android-hw-p2-.*-arm7-shippable/opt: []
+            android-hw(?!-p2).*(?<!-arm7-shippable)/opt.*: []
+            default: [mozilla-central]
     target: geckoview_example.apk
     test-manifest-loader: null  # don't load tests in the taskgraph
     tier: 1
@@ -21,13 +19,12 @@ job-defaults:
         script: raptor_script.py
         config:
             - raptor/android_hw_config.py
-        extra-options:
-            - --no-conditioned-profile
     optimization:
         skip-unless-backstop: null
+    python-3: true
 
 raptor-speedometer-geckoview-cpu-memory:
-    description: "Raptor Speedometer cpu/memory on GeckoView"
+    description: Raptor Speedometer cpu/memory on GeckoView
     try-name: raptor-speedometer-geckoview-cpu-memory
     treeherder-symbol: Rap(sp-cm)
     target: geckoview_example.apk
@@ -44,7 +41,7 @@ raptor-speedometer-geckoview-cpu-memory:
             - --activity=org.mozilla.geckoview_example.GeckoViewActivity
 
 raptor-speedometer-geckoview-cpu-memory-power:
-    description: "Raptor Speedometer cpu/memory/power on GeckoView"
+    description: Raptor Speedometer cpu/memory/power on GeckoView
     try-name: raptor-speedometer-geckoview-cpu-memory-power
     treeherder-symbol: Rap(sp-cmp)
     target: geckoview_example.apk
@@ -62,7 +59,7 @@ raptor-speedometer-geckoview-cpu-memory-power:
             - --activity=org.mozilla.geckoview_example.GeckoViewActivity
 
 raptor-scn-cpu-memory-idle-geckoview:
-    description: "Raptor idle-browser cpu/memory on GeckoView"
+    description: Raptor idle-browser cpu/memory on GeckoView
     try-name: raptor-scn-cpu-memory-idle-geckoview
     treeherder-symbol: Rap(idl-cm)
     run-on-projects: []
@@ -76,7 +73,7 @@ raptor-scn-cpu-memory-idle-geckoview:
             - --activity=org.mozilla.geckoview_example.GeckoViewActivity
 
 raptor-scn-cpu-memory-power-idle-geckoview:
-    description: "Raptor idle-browser cpu/memory/power on GeckoView"
+    description: Raptor idle-browser cpu/memory/power on GeckoView
     try-name: raptor-scn-cpu-memory-power-idle-geckoview
     treeherder-symbol: Rap(idl-cmp)
     run-on-projects: []
@@ -91,7 +88,7 @@ raptor-scn-cpu-memory-power-idle-geckoview:
             - --activity=org.mozilla.geckoview_example.GeckoViewActivity
 
 raptor-scn-cpu-memory-idle-bg-geckoview:
-    description: "Raptor idle-browser (backgrounded) cpu/memory on GeckoView"
+    description: Raptor idle-browser (backgrounded) cpu/memory on GeckoView
     try-name: raptor-scn-cpu-memory-idle-bg-geckoview
     treeherder-symbol: Rap(idlbg-cm)
     run-on-projects: []
@@ -105,7 +102,7 @@ raptor-scn-cpu-memory-idle-bg-geckoview:
             - --activity=org.mozilla.geckoview_example.GeckoViewActivity
 
 raptor-scn-cpu-memory-power-idle-bg-geckoview:
-    description: "Raptor idle-browser (backgrounded) cpu/memory/power on GeckoView"
+    description: Raptor idle-browser (backgrounded) cpu/memory/power on GeckoView
     try-name: raptor-scn-cpu-memory-power-idle-bg-geckoview
     treeherder-symbol: Rap(idlbg-cmp)
     run-on-projects: []

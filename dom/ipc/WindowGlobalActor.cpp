@@ -9,6 +9,7 @@
 #include "AutoplayPolicy.h"
 #include "nsContentUtils.h"
 #include "mozJSComponentLoader.h"
+#include "mozilla/Components.h"
 #include "mozilla/ContentBlockingAllowList.h"
 #include "mozilla/Logging.h"
 #include "mozilla/dom/Document.h"
@@ -55,6 +56,7 @@ WindowGlobalInit WindowGlobalActor::BaseInitializer(
   auto& fields = ctx.mFields;
   fields.mEmbedderPolicy = InheritedPolicy(aBrowsingContext);
   fields.mAutoplayPermission = nsIPermissionManager::UNKNOWN_ACTION;
+  fields.mAllowJavascript = true;
   return init;
 }
 
@@ -65,6 +67,7 @@ WindowGlobalInit WindowGlobalActor::AboutBlankInitializer(
                       nsContentUtils::GenerateWindowId());
 
   init.principal() = aPrincipal;
+  init.storagePrincipal() = aPrincipal;
   Unused << NS_NewURI(getter_AddRefs(init.documentURI()), "about:blank");
 
   return init;
@@ -77,6 +80,7 @@ WindowGlobalInit WindowGlobalActor::WindowInitializer(
                       aWindow->GetOuterWindow()->WindowID());
 
   init.principal() = aWindow->GetPrincipal();
+  init.storagePrincipal() = aWindow->GetEffectiveStoragePrincipal();
   init.documentURI() = aWindow->GetDocumentURI();
 
   Document* doc = aWindow->GetDocument();
@@ -104,28 +108,30 @@ WindowGlobalInit WindowGlobalActor::WindowInitializer(
 
   // Initialize top level permission fields
   if (aWindow->GetBrowsingContext()->IsTop()) {
+    fields.mAllowMixedContent = [&] {
+      uint32_t permit = nsIPermissionManager::UNKNOWN_ACTION;
+      nsCOMPtr<nsIPermissionManager> permissionManager =
+          components::PermissionManager::Service();
+
+      if (permissionManager) {
+        permissionManager->TestPermissionFromPrincipal(
+            init.principal(), "mixed-content"_ns, &permit);
+      }
+
+      return permit == nsIPermissionManager::ALLOW_ACTION;
+    }();
+
     fields.mShortcutsPermission =
         nsGlobalWindowInner::GetShortcutsPermission(init.principal());
   }
 
-  auto policy = doc->GetEmbedderPolicy();
-  if (policy.isSome()) {
+  if (auto policy = doc->GetEmbedderPolicy()) {
     fields.mEmbedderPolicy = *policy;
   }
 
   // Init Mixed Content Fields
   nsCOMPtr<nsIURI> innerDocURI = NS_GetInnermostURI(doc->GetDocumentURI());
-  if (innerDocURI) {
-    fields.mIsSecure = innerDocURI->SchemeIs("https");
-  }
-  nsCOMPtr<nsIChannel> mixedChannel;
-  aWindow->GetDocShell()->GetMixedContentChannel(getter_AddRefs(mixedChannel));
-  // A non null mixedContent channel on the docshell indicates,
-  // that the user has overriden mixed content to allow mixed
-  // content loads to happen.
-  if (mixedChannel && (mixedChannel == doc->GetChannel())) {
-    fields.mAllowMixedContent = true;
-  }
+  fields.mIsSecure = innerDocURI && innerDocURI->SchemeIs("https");
 
   nsCOMPtr<nsITransportSecurityInfo> securityInfo;
   if (nsCOMPtr<nsIChannel> channel = doc->GetChannel()) {

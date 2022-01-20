@@ -59,7 +59,7 @@ class SocketProcessParent final
       const uint16_t& aType, const OriginAttributes& aOriginAttributes,
       const uint32_t& aFlags);
   virtual mozilla::ipc::IPCResult RecvPDNSRequestConstructor(
-      PDNSRequestParent* actor, const nsCString& hostName,
+      PDNSRequestParent* actor, const nsCString& aHost,
       const nsCString& trrServer, const uint16_t& type,
       const OriginAttributes& aOriginAttributes,
       const uint32_t& flags) override;
@@ -118,6 +118,8 @@ class SocketProcessParent final
   mozilla::ipc::IPCResult RecvPRemoteLazyInputStreamConstructor(
       PRemoteLazyInputStreamParent* aActor, const nsID& aID,
       const uint64_t& aSize);
+
+  mozilla::ipc::IPCResult RecvODoHServiceActivated(const bool& aActivated);
 
  private:
   SocketProcessHost* mHost;

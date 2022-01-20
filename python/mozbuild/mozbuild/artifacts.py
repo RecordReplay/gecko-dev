@@ -34,6 +34,7 @@ consumers will need to arrange this themselves.
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import buildconfig
 import collections
 import functools
 import glob
@@ -53,31 +54,16 @@ import six.moves.urllib_parse as urlparse
 import zipfile
 
 import pylru
-from taskgraph.util.taskcluster import (
-    find_task_id,
-    get_artifact_url,
-    list_artifacts,
-)
+from taskgraph.util.taskcluster import find_task_id, get_artifact_url, list_artifacts
 
 from mach.util import UserError
 
 from mozbuild.artifact_cache import ArtifactCache
 from mozbuild.artifact_builds import JOB_CHOICES
-from mozbuild.util import (
-    ensureParentDir,
-    FileAvoidWrite,
-    mkdir,
-    ensure_subprocess_env,
-)
+from mozbuild.util import ensureParentDir, FileAvoidWrite, mkdir
 import mozinstall
-from mozpack.files import (
-    JarFinder,
-    TarFinder,
-)
-from mozpack.mozjar import (
-    JarReader,
-    JarWriter,
-)
+from mozpack.files import JarFinder, TarFinder
+from mozpack.mozjar import JarReader, JarWriter
 from mozpack.packager.unpack import UnpackFinder
 import mozpack.path as mozpath
 
@@ -102,11 +88,19 @@ PROCESSED_SUFFIX = ".processed.jar"
 
 class ArtifactJob(object):
     trust_domain = "gecko"
-    candidate_trees = [
+    default_candidate_trees = [
+        "releases/mozilla-release",
+    ]
+    nightly_candidate_trees = [
         "mozilla-central",
         "integration/autoland",
+    ]
+    beta_candidate_trees = [
         "releases/mozilla-beta",
-        "releases/mozilla-release",
+    ]
+    # The list below list should be updated when we have new ESRs.
+    esr_candidate_trees = [
+        "releases/mozilla-esr91",
     ]
     try_tree = "try"
 
@@ -171,6 +165,7 @@ class ArtifactJob(object):
         elif download_symbols:
             self._symbols_archive_suffix = "crashreporter-symbols.zip"
         self._mozbuild = mozbuild
+        self._candidate_trees = None
 
     def log(self, *args, **kwargs):
         if self._log:
@@ -417,14 +412,30 @@ class ArtifactJob(object):
         else:
             raise RuntimeError("Unsupported archive type for %s" % filename)
 
+    @property
+    def candidate_trees(self):
+        if not self._candidate_trees:
+            self._candidate_trees = self.select_candidate_trees()
+        return self._candidate_trees
+
+    def select_candidate_trees(self):
+        version_display = buildconfig.substs.get("MOZ_APP_VERSION_DISPLAY")
+
+        if "esr" in version_display:
+            return self.esr_candidate_trees
+        elif re.search("a\d+$", version_display):
+            return self.nightly_candidate_trees
+        elif re.search("b\d+$", version_display):
+            return self.beta_candidate_trees
+
+        return self.default_candidate_trees
+
 
 class AndroidArtifactJob(ArtifactJob):
     package_re = r"public/build/geckoview_example\.apk"
     product = "mobile"
 
-    package_artifact_patterns = {
-        "**/*.so",
-    }
+    package_artifact_patterns = {"**/*.so"}
 
     def process_package_artifact(self, filename, processed_filename):
         # Extract all .so files into the root, which will get copied into dist/bin.
@@ -612,7 +623,7 @@ class MacArtifactJob(ArtifactJob):
                         # 'gmp-fake/1.0/libfake.dylib',
                         # 'gmp-fakeopenh264/1.0/libfakeopenh264.dylib',
                     ],
-                ),
+                )
             ]
 
             with JarWriter(file=processed_filename, compress_level=5) as writer:
@@ -723,10 +734,18 @@ class WinArtifactJob(ArtifactJob):
 class ThunderbirdMixin(object):
     trust_domain = "comm"
     product = "thunderbird"
-    candidate_trees = [
+    try_tree = "try-comm-central"
+
+    nightly_candidate_trees = [
         "comm-central",
     ]
-    try_tree = "try-comm-central"
+    beta_candidate_trees = [
+        "releases/comm-beta",
+    ]
+    # The list below list should be updated when we have new ESRs.
+    esr_candidate_trees = [
+        "releases/comm-esr91",
+    ]
 
 
 class LinuxThunderbirdArtifactJob(ThunderbirdMixin, LinuxArtifactJob):
@@ -1038,7 +1057,6 @@ class Artifacts(object):
     def run_hg(self, *args, **kwargs):
         env = kwargs.get("env", {})
         env["HGPLAIN"] = "1"
-        kwargs["env"] = ensure_subprocess_env(env)
         kwargs["universal_newlines"] = True
         return subprocess.check_output([self._hg] + list(args), **kwargs)
 
@@ -1057,7 +1075,7 @@ class Artifacts(object):
                 return "android-x86" + target_suffix
             if self._substs["ANDROID_CPU_ARCH"] == "arm64-v8a":
                 return "android-aarch64" + target_suffix
-            return "android-api-16" + target_suffix
+            return "android-arm" + target_suffix
 
         target_64bit = False
         if self._substs["target_cpu"] == "x86_64":

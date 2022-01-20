@@ -30,13 +30,14 @@
  * @constructor
  */
 var Meta;
+let Services;
 if (typeof Components != "undefined") {
   // Global definition of |exports|, to keep everybody happy.
   // In non-main thread, |exports| is provided by the module
   // loader.
   this.exports = {};
-
-  ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+  ({ Services } = ChromeUtils.import("resource://gre/modules/Services.jsm"));
+  this.Services = Services;
   Meta = ChromeUtils.import("resource://gre/modules/PromiseWorker.jsm", {})
     .BasePromiseWorker.Meta;
 } else {
@@ -1346,7 +1347,7 @@ Object.defineProperty(exports.OS.Shared, "DEBUG", {
     return Config.DEBUG;
   },
   set(x) {
-    return (Config.DEBUG = x);
+    Config.DEBUG = x;
   },
 });
 Object.defineProperty(exports.OS.Shared, "TEST", {
@@ -1354,7 +1355,7 @@ Object.defineProperty(exports.OS.Shared, "TEST", {
     return Config.TEST;
   },
   set(x) {
-    return (Config.TEST = x);
+    Config.TEST = x;
   },
 });
 

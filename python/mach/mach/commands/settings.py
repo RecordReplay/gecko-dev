@@ -24,10 +24,6 @@ class Settings(MachCommandBase):
     people create configs via a wizard, etc.
     """
 
-    def __init__(self, *args, **kwargs):
-        super(Settings, self).__init__(*args, **kwargs)
-        self._settings = self._mach_context.settings
-
     @Command(
         "settings", category="devenv", description="Show available config settings."
     )
@@ -38,16 +34,16 @@ class Settings(MachCommandBase):
         action="store_true",
         help="Show settings in a concise list",
     )
-    def run_settings(self, short=None):
+    def run_settings(self, command_context, short=None):
         """List available settings."""
         types = {v: k for k, v in TYPE_CLASSES.items()}
         wrapper = TextWrapper(initial_indent="# ", subsequent_indent="# ")
-        for i, section in enumerate(sorted(self._settings)):
+        for i, section in enumerate(sorted(self._mach_context.settings)):
             if not short:
                 print("%s[%s]" % ("" if i == 0 else "\n", section))
 
-            for option in sorted(self._settings[section]._settings):
-                meta = self._settings[section].get_meta(option)
+            for option in sorted(self._mach_context.settings[section]._settings):
+                meta = self._mach_context.settings[section].get_meta(option)
                 desc = meta["description"]
 
                 if short:

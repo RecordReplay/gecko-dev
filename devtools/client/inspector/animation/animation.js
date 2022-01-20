@@ -147,8 +147,8 @@ class AnimationInspector {
   }
 
   async initListeners() {
-    await this.inspector.toolbox.targetList.watchTargets(
-      [this.inspector.toolbox.targetList.TYPES.FRAME],
+    await this.inspector.commands.targetCommand.watchTargets(
+      [this.inspector.commands.targetCommand.TYPES.FRAME],
       this.onTargetAvailable
     );
 
@@ -250,9 +250,8 @@ class AnimationInspector {
    *           distance: {Number} use as y coordinate in graph,
    *         }
    */
-  async getAnimatedPropertyMap(animation) {
-    // getProperties might throw an error.
-    const properties = await animation.getProperties();
+  getAnimatedPropertyMap(animation) {
+    const properties = animation.state.properties;
     const animatedPropertyMap = new Map();
 
     for (const { name, values } of properties) {

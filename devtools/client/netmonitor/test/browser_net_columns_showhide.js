@@ -7,6 +7,12 @@
  * Test showing/hiding columns.
  */
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   const { monitor } = await initNetMonitor(SIMPLE_URL, { requestCount: 1 });
   info("Starting test... ");
 
@@ -65,7 +71,7 @@ async function testWhiteSpaceContextMenuItem(column, document, monitor) {
   );
 
   info(`Right clicking on white-space in the header to get the context menu`);
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "contextmenu" },
     document.querySelector(".requests-list-headers")
   );
@@ -82,7 +88,7 @@ async function testVisibleColumnContextMenuItem(column, document, monitor) {
   );
 
   info(`Clicking context-menu item for ${column}`);
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "contextmenu" },
     document.querySelector("#requests-list-status-button") ||
       document.querySelector("#requests-list-waterfall-button")
@@ -133,7 +139,7 @@ async function testHiddenColumnContextMenuItem(column, document, monitor) {
   );
 
   info(`Clicking context-menu item for ${column}`);
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "contextmenu" },
     document.querySelector("#requests-list-status-button") ||
       document.querySelector("#requests-list-waterfall-button")

@@ -312,8 +312,8 @@ void DCLayerTree::Bind(wr::NativeTileId aId, wr::DeviceIntPoint* aOffset,
   auto tile = surface->GetTile(aId.x, aId.y);
   wr::DeviceIntPoint targetOffset{0, 0};
 
-  gfx::IntRect validRect(aValidRect.origin.x, aValidRect.origin.y,
-                         aValidRect.size.width, aValidRect.size.height);
+  gfx::IntRect validRect(aValidRect.min.x, aValidRect.min.y, aValidRect.width(),
+                         aValidRect.height());
   if (!tile->mValidRect.IsEqualEdges(validRect)) {
     tile->mValidRect = validRect;
     surface->DirtyAllocatedRect();
@@ -447,9 +447,8 @@ void DCLayerTree::AddSurface(wr::NativeSurfaceId aId,
   // on that. I suspect that will perform worse though, so we should only do
   // that for complex transforms (which are never provided right now).
   MOZ_ASSERT(transform.IsRectilinear());
-  gfx::Rect clip = transform.Inverse().TransformBounds(
-      gfx::Rect(aClipRect.origin.x, aClipRect.origin.y, aClipRect.size.width,
-                aClipRect.size.height));
+  gfx::Rect clip = transform.Inverse().TransformBounds(gfx::Rect(
+      aClipRect.min.x, aClipRect.min.y, aClipRect.width(), aClipRect.height()));
   // Set the clip rect - converting from world space to the pre-offset space
   // that DC requires for rectangle clips.
   visual->SetClip(D2DRect(clip));
@@ -592,7 +591,7 @@ bool DCSurface::Initialize() {
       mIsOpaque ? DXGI_ALPHA_MODE_IGNORE : DXGI_ALPHA_MODE_PREMULTIPLIED;
 
   hr = dCompDevice->CreateVirtualSurface(
-      VIRTUAL_SURFACE_SIZE, VIRTUAL_SURFACE_SIZE, DXGI_FORMAT_B8G8R8A8_UNORM,
+      VIRTUAL_SURFACE_SIZE, VIRTUAL_SURFACE_SIZE, DXGI_FORMAT_R8G8B8A8_UNORM,
       alpha_mode, getter_AddRefs(mVirtualSurface));
   MOZ_ASSERT(SUCCEEDED(hr));
 
@@ -758,6 +757,7 @@ bool DCSurfaceVideo::CreateVideoSwapChain(RenderTextureHost* aTexture) {
   return true;
 }
 
+// TODO: Replace with YUVRangedColorSpace
 static Maybe<DXGI_COLOR_SPACE_TYPE> GetSourceDXGIColorSpace(
     const gfx::YUVColorSpace aYUVColorSpace,
     const gfx::ColorRange aColorRange) {
@@ -786,14 +786,20 @@ static Maybe<DXGI_COLOR_SPACE_TYPE> GetSourceDXGIColorSpace(
   return Nothing();
 }
 
+static Maybe<DXGI_COLOR_SPACE_TYPE> GetSourceDXGIColorSpace(
+    const gfx::YUVRangedColorSpace aYUVColorSpace) {
+  const auto info = FromYUVRangedColorSpace(aYUVColorSpace);
+  return GetSourceDXGIColorSpace(info.space, info.range);
+}
+
 bool DCSurfaceVideo::CallVideoProcessorBlt(RenderTextureHost* aTexture) {
   HRESULT hr;
   const auto videoDevice = mDCLayerTree->GetVideoDevice();
   const auto videoContext = mDCLayerTree->GetVideoContext();
   const auto texture = aTexture->AsRenderDXGITextureHost();
 
-  Maybe<DXGI_COLOR_SPACE_TYPE> sourceColorSpace = GetSourceDXGIColorSpace(
-      texture->GetYUVColorSpace(), texture->GetColorRange());
+  Maybe<DXGI_COLOR_SPACE_TYPE> sourceColorSpace =
+      GetSourceDXGIColorSpace(texture->GetYUVColorSpace());
   if (sourceColorSpace.isNothing()) {
     gfxCriticalNote << "Unsupported color space";
     return false;
@@ -961,24 +967,24 @@ GLuint DCLayerTree::CreateEGLSurfaceForCompositionSurface(
   POINT offset;
 
   RECT update_rect;
-  update_rect.left = aSurfaceOffset.x + aDirtyRect.origin.x;
-  update_rect.top = aSurfaceOffset.y + aDirtyRect.origin.y;
-  update_rect.right = update_rect.left + aDirtyRect.size.width;
-  update_rect.bottom = update_rect.top + aDirtyRect.size.height;
+  update_rect.left = aSurfaceOffset.x + aDirtyRect.min.x;
+  update_rect.top = aSurfaceOffset.y + aDirtyRect.min.y;
+  update_rect.right = aSurfaceOffset.x + aDirtyRect.max.x;
+  update_rect.bottom = aSurfaceOffset.y + aDirtyRect.max.y;
 
   hr = aCompositionSurface->BeginDraw(&update_rect, __uuidof(ID3D11Texture2D),
                                       (void**)getter_AddRefs(backBuf), &offset);
   if (FAILED(hr)) {
     gfxCriticalNote << "DCompositionSurface::BeginDraw failed: "
                     << gfx::hexa(hr);
-    RenderThread::Get()->HandleWebRenderError(WebRenderError::NEW_SURFACE);
+    RenderThread::Get()->HandleWebRenderError(WebRenderError::BEGIN_DRAW);
     return false;
   }
 
   // DC includes the origin of the dirty / update rect in the draw offset,
   // undo that here since WR expects it to be an absolute offset.
-  offset.x -= aDirtyRect.origin.x;
-  offset.y -= aDirtyRect.origin.y;
+  offset.x -= aDirtyRect.min.x;
+  offset.y -= aDirtyRect.min.y;
 
   D3D11_TEXTURE2D_DESC desc;
   backBuf->GetDesc(&desc);

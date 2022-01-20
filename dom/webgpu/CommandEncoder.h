@@ -13,27 +13,29 @@
 #include "ObjectModel.h"
 
 namespace mozilla {
+class ErrorResult;
+
 namespace dom {
 struct GPUComputePassDescriptor;
-struct GPUTextureDataLayout;
 class HTMLCanvasElement;
 template <typename T>
 class Sequence;
+struct GPUCommandBufferDescriptor;
 class GPUComputePipelineOrGPURenderPipeline;
 class RangeEnforcedUnsignedLongSequenceOrGPUExtent3DDict;
-struct GPUBufferCopyView;
-struct GPUCommandBufferDescriptor;
+struct GPUImageCopyBuffer;
+struct GPUImageCopyTexture;
 struct GPUImageBitmapCopyView;
+struct GPUImageDataLayout;
 struct GPURenderPassDescriptor;
-struct GPUTextureCopyView;
 typedef RangeEnforcedUnsignedLongSequenceOrGPUExtent3DDict GPUExtent3D;
 }  // namespace dom
 namespace webgpu {
 namespace ffi {
 struct WGPUComputePass;
 struct WGPURenderPass;
-struct WGPUTextureDataLayout;
-struct WGPUTextureCopyView_TextureId;
+struct WGPUImageDataLayout;
+struct WGPUImageCopyTexture_TextureId;
 struct WGPUExtent3d;
 }  // namespace ffi
 
@@ -54,11 +56,11 @@ class CommandEncoder final : public ObjectBase, public ChildOf<Device> {
   const RawId mId;
 
   static void ConvertTextureDataLayoutToFFI(
-      const dom::GPUTextureDataLayout& aLayout,
-      ffi::WGPUTextureDataLayout* aLayoutFFI);
+      const dom::GPUImageDataLayout& aLayout,
+      ffi::WGPUImageDataLayout* aLayoutFFI);
   static void ConvertTextureCopyViewToFFI(
-      const dom::GPUTextureCopyView& aView,
-      ffi::WGPUTextureCopyView_TextureId* aViewFFI);
+      const dom::GPUImageCopyTexture& aCopy,
+      ffi::WGPUImageCopyTexture_TextureId* aViewFFI);
   static void ConvertExtent3DToFFI(const dom::GPUExtent3D& aExtent,
                                    ffi::WGPUExtent3d* aExtentFFI);
 
@@ -67,8 +69,7 @@ class CommandEncoder final : public ObjectBase, public ChildOf<Device> {
   void Cleanup();
 
   RefPtr<WebGPUChild> mBridge;
-  // TODO: support multiple target canvases per command encoder
-  WeakPtr<dom::HTMLCanvasElement> mTargetCanvasElement;
+  nsTArray<WeakPtr<dom::HTMLCanvasElement>> mTargetCanvases;
 
  public:
   void EndComputePass(ffi::WGPUComputePass& aPass, ErrorResult& aRv);
@@ -78,14 +79,14 @@ class CommandEncoder final : public ObjectBase, public ChildOf<Device> {
                           const Buffer& aDestination,
                           BufferAddress aDestinationOffset,
                           BufferAddress aSize);
-  void CopyBufferToTexture(const dom::GPUBufferCopyView& aSource,
-                           const dom::GPUTextureCopyView& aDestination,
+  void CopyBufferToTexture(const dom::GPUImageCopyBuffer& aSource,
+                           const dom::GPUImageCopyTexture& aDestination,
                            const dom::GPUExtent3D& aCopySize);
-  void CopyTextureToBuffer(const dom::GPUTextureCopyView& aSource,
-                           const dom::GPUBufferCopyView& aDestination,
+  void CopyTextureToBuffer(const dom::GPUImageCopyTexture& aSource,
+                           const dom::GPUImageCopyBuffer& aDestination,
                            const dom::GPUExtent3D& aCopySize);
-  void CopyTextureToTexture(const dom::GPUTextureCopyView& aSource,
-                            const dom::GPUTextureCopyView& aDestination,
+  void CopyTextureToTexture(const dom::GPUImageCopyTexture& aSource,
+                            const dom::GPUImageCopyTexture& aDestination,
                             const dom::GPUExtent3D& aCopySize);
 
   already_AddRefed<ComputePassEncoder> BeginComputePass(

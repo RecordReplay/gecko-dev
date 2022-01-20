@@ -56,7 +56,7 @@ class GeckoTextMarker final {
   int32_t mOffset;
 
   HyperTextAccessibleWrap* ContainerAsHyperTextWrap() const {
-    return mContainer.IsAccessible()
+    return (!mContainer.IsNull() && mContainer.IsAccessible())
                ? static_cast<HyperTextAccessibleWrap*>(
                      mContainer.AsAccessible()->AsHyperText())
                : nullptr;
@@ -89,6 +89,11 @@ class GeckoTextMarkerRange final {
    * Return text enclosed by the range.
    */
   NSString* Text() const;
+
+  /**
+   * Return the attributed text enclosed by the range.
+   */
+  NSAttributedString* AttributedText() const;
 
   /**
    * Return length of characters enclosed by the range.

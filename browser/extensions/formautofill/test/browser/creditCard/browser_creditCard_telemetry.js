@@ -160,11 +160,9 @@ add_task(async function test_popup_opened() {
     1,
     "There should be 1 section detected."
   );
-  TelemetryTestUtils.assertScalar(
+  TelemetryTestUtils.assertScalarUnset(
     TelemetryTestUtils.getProcessScalars("content"),
-    "formautofill.creditCards.submitted_sections_count",
-    0,
-    "There should be no sections submitted."
+    "formautofill.creditCards.submitted_sections_count"
   );
 
   SpecialPowers.clearUserPref(AUTOFILL_CREDITCARDS_AVAILABLE_PREF);
@@ -688,14 +686,16 @@ add_task(async function test_submit_creditCard_new_with_hidden_ui() {
   await BrowserTestUtils.withNewTab(
     { gBrowser, url: CREDITCARD_FORM_URL },
     async function(browser) {
-      await openPopupOn(browser, "form #cc-number").then(
-        () => {
-          return Promise.reject("Popup should not be displayed");
-        },
-        () => {
-          ok(true, "Popup has not been displayed");
-        }
-      );
+      let rejectPopup = () => {
+        ok(false, "Popup should not be displayed");
+      };
+      browser.addEventListener("popupshowing", rejectPopup, true);
+
+      await SimpleTest.promiseFocus(browser);
+      await focusAndWaitForFieldsIdentified(browser, "form #cc-number");
+      await BrowserTestUtils.synthesizeKey("VK_DOWN", {}, browser);
+
+      is(PopupNotifications.panel.state, "closed", "Doorhanger is hidden");
 
       await SpecialPowers.spawn(browser, [], async function() {
         let form = content.document.getElementById("form");
@@ -715,7 +715,12 @@ add_task(async function test_submit_creditCard_new_with_hidden_ui() {
       });
 
       await sleep(1000);
-      is(PopupNotifications.panel.state, "closed", "Doorhanger is hidden");
+      is(
+        PopupNotifications.panel.state,
+        "closed",
+        "Doorhanger is still hidden"
+      );
+      browser.removeEventListener("popupshowing", rejectPopup, true);
     }
   );
 

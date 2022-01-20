@@ -12,6 +12,7 @@
  * See devtools/docs/backend/actor-hierarchy.md for more details.
  */
 
+const { Ci } = require("chrome");
 const Services = require("Services");
 const {
   connectToFrame,
@@ -62,6 +63,7 @@ const TabDescriptorActor = ActorClassWithSpec(tabDescriptorSpec, {
       traits: {
         // Supports the Watcher actor. Can be removed as part of Bug 1680280.
         watcher: true,
+        supportsReloadDescriptor: true,
       },
       url: this._getUrl(),
     };
@@ -139,6 +141,14 @@ const TabDescriptorActor = ActorClassWithSpec(tabDescriptorSpec, {
           error: "tabDestroyed",
           message: "Tab destroyed while performing a TabDescriptorActor update",
         });
+
+        // Targets created from the TabDescriptor are not created via JSWindowActors and
+        // we need to notify the watcher manually about their destruction.
+        // TabDescriptor's targets are created via TabDescriptor.getTarget and are still using
+        // message manager instead of JSWindowActors.
+        if (this.watcher && this.targetActorForm) {
+          this.watcher.notifyTargetDestroyed(this.targetActorForm);
+        }
       };
 
       try {
@@ -153,7 +163,7 @@ const TabDescriptorActor = ActorClassWithSpec(tabDescriptorSpec, {
           this._browser,
           onDestroy
         );
-
+        this.targetActorForm = connectForm;
         resolve(connectForm);
       } catch (e) {
         reject({
@@ -206,7 +216,20 @@ const TabDescriptorActor = ActorClassWithSpec(tabDescriptorSpec, {
     return tab?.hasAttribute && tab.hasAttribute("pending");
   },
 
+  reloadDescriptor({ bypassCache }) {
+    if (!this._browser || !this._browser.browsingContext) {
+      return;
+    }
+
+    this._browser.browsingContext.reload(
+      bypassCache
+        ? Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE
+        : Ci.nsIWebNavigation.LOAD_FLAGS_NONE
+    );
+  },
+
   destroy() {
+    this.emit("descriptor-destroyed");
     this._browser = null;
 
     Actor.prototype.destroy.call(this);

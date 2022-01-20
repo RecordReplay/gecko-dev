@@ -231,10 +231,14 @@ public final class GeckoEditableChild extends JNIObject implements IGeckoEditabl
     }
 
     @WrapForJNI(calledFrom = "gecko", exceptionMode = "ignore")
-    private void onSelectionChange(final int start, final int end) throws RemoteException {
+    private void onSelectionChange(final int start, final int end, final boolean causedOnlyByComposition)
+            throws RemoteException {
         if (DEBUG) {
             ThreadUtils.assertOnGeckoThread();
-            Log.d(LOGTAG, "onSelectionChange(" + start + ", " + end + ")");
+            final StringBuilder sb = new StringBuilder("onSelectionChange(");
+            sb.append(start).append(", ").append(end).append(", ")
+                .append(causedOnlyByComposition).append(")");
+            Log.d(LOGTAG, sb.toString());
         }
         if (!hasEditableParent()) {
             return;
@@ -247,7 +251,7 @@ public final class GeckoEditableChild extends JNIObject implements IGeckoEditabl
             throw new IllegalArgumentException("invalid selection notification range");
         }
 
-        mEditableParent.onSelectionChange(mEditableChild.asBinder(), start, end);
+        mEditableParent.onSelectionChange(mEditableChild.asBinder(), start, end, causedOnlyByComposition);
     }
 
     @WrapForJNI(calledFrom = "gecko", exceptionMode = "ignore")
@@ -282,7 +286,20 @@ public final class GeckoEditableChild extends JNIObject implements IGeckoEditabl
 
         mCurrentTextLength += start + text.length() - oldEnd;
         // Need unboundedOldEnd so GeckoEditable can distinguish changed text vs cleared text.
-        mEditableParent.onTextChange(mEditableChild.asBinder(), text, start, unboundedOldEnd);
+        if (text.length() == 0) {
+            // Remove text in range.
+            mEditableParent.onTextChange(mEditableChild.asBinder(), text, start, unboundedOldEnd);
+            return;
+        }
+        // Using large text causes TransactionTooLargeException, so split text data.
+        int offset = 0;
+        int newUnboundedOldEnd = unboundedOldEnd;
+        while (offset < text.length()) {
+            final int end = Math.min(offset + 1024 * 64 /* 64KB */, text.length());
+            mEditableParent.onTextChange(mEditableChild.asBinder(), text.subSequence(offset, end), start + offset, newUnboundedOldEnd);
+            offset = end;
+            newUnboundedOldEnd = start + offset;
+        }
     }
 
     @WrapForJNI(calledFrom = "gecko")
@@ -290,7 +307,7 @@ public final class GeckoEditableChild extends JNIObject implements IGeckoEditabl
         if (DEBUG) {
             // GeckoEditableListener methods should all be called from the Gecko thread
             ThreadUtils.assertOnGeckoThread();
-            StringBuilder sb = new StringBuilder("onDefaultKeyEvent(");
+            final StringBuilder sb = new StringBuilder("onDefaultKeyEvent(");
             sb.append("action=").append(event.getAction()).append(", ")
                 .append("keyCode=").append(event.getKeyCode()).append(", ")
                 .append("metaState=").append(event.getMetaState()).append(", ")

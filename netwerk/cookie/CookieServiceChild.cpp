@@ -93,8 +93,7 @@ CookieServiceChild::CookieServiceChild() {
 
 void CookieServiceChild::MoveCookies() {
   TimeStamp start = TimeStamp::Now();
-  for (auto iter = mCookiesMap.Iter(); !iter.Done(); iter.Next()) {
-    CookiesList* cookiesList = iter.UserData();
+  for (const auto& cookiesList : mCookiesMap.Values()) {
     CookiesList newCookiesList;
     for (uint32_t i = 0; i < cookiesList->Length(); ++i) {
       Cookie* cookie = cookiesList->ElementAt(i);
@@ -274,7 +273,7 @@ void CookieServiceChild::RecordDocumentCookie(Cookie* aCookie,
   mCookiesMap.Get(key, &cookiesList);
 
   if (!cookiesList) {
-    cookiesList = mCookiesMap.LookupOrAdd(key);
+    cookiesList = mCookiesMap.GetOrInsertNew(key);
   }
   for (uint32_t i = 0; i < cookiesList->Length(); i++) {
     Cookie* cookie = cookiesList->ElementAt(i);
@@ -362,7 +361,10 @@ CookieServiceChild::GetCookieStringFromDocument(Document* aDocument,
   }
 
   nsAutoCString hostFromURI;
-  principal->GetAsciiHost(hostFromURI);
+  rv = nsContentUtils::GetHostOrIPv6WithBrackets(principal, hostFromURI);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return NS_OK;
+  }
 
   nsAutoCString pathFromURI;
   principal->GetFilePath(pathFromURI);

@@ -10,6 +10,12 @@
  */
 
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   const { monitor } = await initNetMonitor(SIMPLE_URL, { requestCount: 1 });
   info("Starting test... ");
 
@@ -27,10 +33,10 @@ add_task(async function() {
   const waitForHeaders = waitUntil(() =>
     document.querySelector(".headers-overview")
   );
-  await EventUtils.sendMouseEvent({ type: "mousedown" }, firstRequest);
+  EventUtils.sendMouseEvent({ type: "mousedown" }, firstRequest);
   await waitForHeaders;
   await waitForRequestData(store, ["requestHeaders"]);
-  await EventUtils.sendMouseEvent({ type: "contextmenu" }, firstRequest);
+  EventUtils.sendMouseEvent({ type: "contextmenu" }, firstRequest);
 
   // Open "New Request" form
   const contextResend = getContextMenuItem(

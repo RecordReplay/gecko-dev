@@ -79,23 +79,25 @@ include = [
   "BreakWithin",
   "BorderStyle",
   "OutlineStyle",
+  "CaptionSide",
+  "FontSizeAdjust",
   "ComputedFontStretchRange",
   "ComputedFontStyleDescriptor",
   "ComputedFontWeightRange",
   "ComputedTimingFunction",
   "ComputedValueFlags",
-  "ContrastPref",
   "CursorKind",
   "DisplayOutside",
   "DisplayInside",
   "DisplayMode",
   "PrefersColorScheme",
-  "ExtremumLength",
+  "PrefersContrast",
   "FillRule",
   "FontDisplay",
   "FontFaceSourceListComponent",
   "FontLanguageOverride",
   "GenericFontFamily",
+  "FontFamily",
   "FontFamilyNameSyntax",
   "OverflowWrap",
   "TimingFunction",
@@ -149,15 +151,21 @@ include = [
   "TextDecorationLine",
   "TextUnderlinePosition",
   "TextTransform",
+  "TextJustify",
   "TextOverflow",
+  "MozControlCharacterVisibility",
+  "RubyPosition",
   "MozListReversed",
   "Owned",
   "OwnedOrNull",
   "Strong",
   "ScrollbarColor",
+  "CaretColor",
   "Color",
   "ColorOrAuto",
   "SystemColor",
+  "SystemColorScheme",
+  "SystemFont",
   "GradientItem",
   "VerticalAlign",
   "BasicShape",
@@ -177,7 +185,6 @@ include = [
   "ComputedUrl",
   "ComputedImageUrl",
   "UrlOrNone",
-  "ImageUrlOrNone",
   "Filter",
   "Gradient",
   "GridTemplateAreas",
@@ -222,6 +229,8 @@ include = [
   "AspectRatio",
   "DefaultFontSizes",
   "RuleChangeKind",
+  "PageSize",
+  "DProperty",
 ]
 item_types = ["enums", "structs", "unions", "typedefs", "functions", "constants"]
 renaming_overrides_prefixing = true
@@ -233,7 +242,6 @@ renaming_overrides_prefixing = true
 "nsIURI" = "nsIURI"
 "imgRequestProxy" = "imgRequestProxy"
 "nsCompatibility" = "nsCompatibility"
-"SharedFontList" = "SharedFontList"
 "nsSimpleContentList" = "nsSimpleContentList"
 "nsACString" = "nsACString"
 "nsAString" = "nsAString"
@@ -490,6 +498,7 @@ renaming_overrides_prefixing = true
 """
 
 "GenericColor" = """
+  static inline StyleGenericColor CurrentColor();
   static inline StyleGenericColor FromColor(nscolor);
   static inline StyleGenericColor Black();
   static inline StyleGenericColor White();
@@ -567,11 +576,13 @@ renaming_overrides_prefixing = true
   inline StyleArcSlice();
   inline StyleArcSlice(const StyleArcSlice& aOther);
 
-  // Should be easily implementable if wanted, but the default implementation would leak.
-  StyleArcSlice& operator=(const StyleArcSlice&) = delete;
-  StyleArcSlice& operator=(StyleArcSlice&&) = delete;
+  inline StyleArcSlice& operator=(const StyleArcSlice&);
+  inline StyleArcSlice& operator=(StyleArcSlice&&);
 
   inline explicit StyleArcSlice(const StyleForgottenArcSlicePtr<T>& aPtr);
+ private:
+  inline void Release();
+ public:
   inline ~StyleArcSlice();
   inline Span<const T> AsSpan() const;
   inline size_t Length() const;
@@ -785,6 +796,16 @@ renaming_overrides_prefixing = true
 
 "GenericImage" = """
  public:
+  // Returns the intrinsic resolution of the image.
+  //
+  // The resolution is in dppx, and should be used to impact the intrinsic
+  // size of the image.
+  ImageResolution GetResolution() const;
+
+  // Returns the intrinsic size of the image, if there's one, accounting for
+  // resolution as needed.
+  Maybe<CSSIntSize> GetIntrinsicSize() const;
+
   // If this is an image-set(), the final image we've selected, otherwise it
   // returns *this.
   const StyleGenericImage& FinalImage() const;
@@ -839,4 +860,18 @@ renaming_overrides_prefixing = true
   static StyleGenericAspectRatio Auto() {
     return {true, StylePreferredRatio<N>::None()};
   }
+"""
+
+"FontFamilyList" = """
+  // Whether the `fallback` generic is already on the family list.
+  inline bool ContainsFallback() const;
+  static StyleFontFamilyList WithOneUnquotedFamily(const nsACString&);
+  // Constructs a font family list with a list of names.
+  static StyleFontFamilyList WithNames(nsTArray<StyleSingleFontFamily>&&);
+"""
+
+"SingleFontFamily" = """
+  static StyleSingleFontFamily Parse(const nsACString& aName);
+  void AppendToString(nsACString& aFamily, bool aIncludeQuotes = true) const;
+  bool IsNamedFamily(const nsAString&) const;
 """

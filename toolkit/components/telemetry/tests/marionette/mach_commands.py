@@ -48,7 +48,7 @@ def run_telemetry(tests, binary=None, topsrcdir=None, **kwargs):
     args.binary = binary
     args.logger = kwargs.pop("log", None)
 
-    for k, v in kwargs.iteritems():
+    for k, v in kwargs.items():
         setattr(args, k, v)
 
     parser.verify_usage(args)
@@ -74,7 +74,7 @@ class TelemetryTest(MachCommandBase):
         conditions=[conditions.is_firefox_or_android],
         parser=create_parser_tests,
     )
-    def telemetry_test(self, tests, **kwargs):
+    def telemetry_test(self, command_context, tests, **kwargs):
         if "test_objects" in kwargs:
             tests = []
             for obj in kwargs["test_objects"]:

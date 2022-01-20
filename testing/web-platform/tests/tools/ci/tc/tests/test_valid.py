@@ -1,20 +1,17 @@
 import json
 import os
-from io import open
-import sys
+from unittest import mock
 
 import jsone
-import mock
 import pytest
 import requests
 import yaml
 from jsonschema import validate
 
+from tools.ci.tc import decision
+
 here = os.path.dirname(__file__)
 root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
-sys.path.insert(0, root)
-
-from tools.ci.tc import decision
 
 
 def data_path(filename):
@@ -132,18 +129,14 @@ def test_verify_payload():
       'lint']),
     ("pr_event.json", True, {".taskcluster.yml", ".travis.yml", "tools/ci/start.sh"},
      ['lint',
-      'tools/ unittests (Python 2)',
       'tools/ unittests (Python 3.6)',
-      'tools/ unittests (Python 3.8)',
-      'tools/ integration tests (Python 2)',
+      'tools/ unittests (Python 3.9)',
       'tools/ integration tests (Python 3.6)',
-      'tools/ integration tests (Python 3.8)',
-      'resources/ tests (Python 2)',
+      'tools/ integration tests (Python 3.9)',
       'resources/ tests (Python 3.6)',
-      'resources/ tests (Python 3.8)',
+      'resources/ tests (Python 3.9)',
       'download-firefox-nightly',
       'infrastructure/ tests',
-      'infrastructure/ tests (Python 3)',
       'sink-task']),
     # More tests are affected in the actual PR but it shouldn't affect the scheduled tasks
     ("pr_event_tests_affected.json", True, {"layout-instability/clip-negative-bottom-margin.html",

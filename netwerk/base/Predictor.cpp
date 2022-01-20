@@ -171,16 +171,13 @@ Predictor::Action::Action(bool fullUri, bool predict, Predictor::Reason reason,
 }
 
 NS_IMETHODIMP
-Predictor::Action::OnCacheEntryCheck(nsICacheEntry* entry,
-                                     nsIApplicationCache* appCache,
-                                     uint32_t* result) {
+Predictor::Action::OnCacheEntryCheck(nsICacheEntry* entry, uint32_t* result) {
   *result = nsICacheEntryOpenCallback::ENTRY_WANTED;
   return NS_OK;
 }
 
 NS_IMETHODIMP
 Predictor::Action::OnCacheEntryAvailable(nsICacheEntry* entry, bool isNew,
-                                         nsIApplicationCache* appCache,
                                          nsresult result) {
   MOZ_ASSERT(NS_IsMainThread(), "Got cache entry off main thread!");
 
@@ -232,10 +229,8 @@ NS_IMPL_ISUPPORTS(Predictor, nsINetworkPredictor, nsIObserver,
                   nsICacheEntryMetaDataVisitor, nsINetworkPredictorVerifier)
 
 Predictor::Predictor()
-    : mInitialized(false),
-      mStartupTime(0),
-      mLastStartupTime(0),
-      mStartupCount(1) {
+
+{
   MOZ_ASSERT(!sSelf, "multiple Predictor instances!");
   sSelf = this;
 }
@@ -574,7 +569,7 @@ Predictor::PredictNative(nsIURI* targetURI, nsIURI* sourceURI,
       return NS_ERROR_INVALID_ARG;
   }
 
-  Predictor::Reason argReason;
+  Predictor::Reason argReason{};
   argReason.mPredict = reason;
 
   // First we open the regular cache entry, to ensure we don't gum up the works
@@ -592,7 +587,7 @@ Predictor::PredictNative(nsIURI* targetURI, nsIURI* sourceURI,
   RefPtr<LoadContextInfo> lci = new LoadContextInfo(false, originAttributes);
 
   nsresult rv = mCacheStorageService->DiskCacheStorage(
-      lci, false, getter_AddRefs(cacheDiskStorage));
+      lci, getter_AddRefs(cacheDiskStorage));
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint32_t openFlags =
@@ -730,7 +725,7 @@ bool Predictor::PredictForPageload(nsICacheEntry* entry, nsIURI* targetURI,
   if (WouldRedirect(entry, loadCount, lastLoad, globalDegradation,
                     getter_AddRefs(redirectURI))) {
     mPreconnects.AppendElement(redirectURI);
-    Predictor::Reason reason;
+    Predictor::Reason reason{};
     reason.mPredict = nsINetworkPredictor::PREDICT_LOAD;
     RefPtr<Predictor::Action> redirectAction = new Predictor::Action(
         Predictor::Action::IS_FULL_URI, Predictor::Action::DO_PREDICT, reason,
@@ -741,7 +736,7 @@ bool Predictor::PredictForPageload(nsICacheEntry* entry, nsIURI* targetURI,
     nsCOMPtr<nsICacheStorage> cacheDiskStorage;
 
     rv = mCacheStorageService->DiskCacheStorage(
-        lci, false, getter_AddRefs(cacheDiskStorage));
+        lci, getter_AddRefs(cacheDiskStorage));
     NS_ENSURE_SUCCESS(rv, false);
 
     PREDICTOR_LOG(("    Predict redirect uri=%s action=%p",
@@ -1331,7 +1326,7 @@ Predictor::LearnNative(nsIURI* targetURI, nsIURI* sourceURI,
   Telemetry::AutoCounter<Telemetry::PREDICTOR_LEARN_ATTEMPTS> learnAttempts;
   ++learnAttempts;
 
-  Predictor::Reason argReason;
+  Predictor::Reason argReason{};
   argReason.mLearn = reason;
 
   // We always open the full uri (general cache) entry first, so we don't gum up
@@ -1355,7 +1350,7 @@ Predictor::LearnNative(nsIURI* targetURI, nsIURI* sourceURI,
 
   RefPtr<LoadContextInfo> lci = new LoadContextInfo(false, originAttributes);
 
-  rv = mCacheStorageService->DiskCacheStorage(lci, false,
+  rv = mCacheStorageService->DiskCacheStorage(lci,
                                               getter_AddRefs(cacheDiskStorage));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1762,16 +1757,13 @@ Predictor::Resetter::Resetter(Predictor* predictor)
     : mEntriesToVisit(0), mPredictor(predictor) {}
 
 NS_IMETHODIMP
-Predictor::Resetter::OnCacheEntryCheck(nsICacheEntry* entry,
-                                       nsIApplicationCache* appCache,
-                                       uint32_t* result) {
+Predictor::Resetter::OnCacheEntryCheck(nsICacheEntry* entry, uint32_t* result) {
   *result = nsICacheEntryOpenCallback::ENTRY_WANTED;
   return NS_OK;
 }
 
 NS_IMETHODIMP
 Predictor::Resetter::OnCacheEntryAvailable(nsICacheEntry* entry, bool isNew,
-                                           nsIApplicationCache* appCache,
                                            nsresult result) {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -1847,7 +1839,7 @@ Predictor::Resetter::OnCacheEntryInfo(nsIURI* uri, const nsACString& idEnhance,
     nsCOMPtr<nsICacheStorage> cacheDiskStorage;
 
     rv = mPredictor->mCacheStorageService->DiskCacheStorage(
-        aInfo, false, getter_AddRefs(cacheDiskStorage));
+        aInfo, getter_AddRefs(cacheDiskStorage));
 
     NS_ENSURE_SUCCESS(rv, rv);
     cacheDiskStorage->AsyncDoomURI(uri, idEnhance, nullptr);
@@ -1890,7 +1882,7 @@ Predictor::Resetter::OnCacheEntryVisitCompleted() {
     nsCOMPtr<nsICacheStorage> cacheDiskStorage;
 
     rv = mPredictor->mCacheStorageService->DiskCacheStorage(
-        infosToVisit[i], false, getter_AddRefs(cacheDiskStorage));
+        infosToVisit[i], getter_AddRefs(cacheDiskStorage));
     NS_ENSURE_SUCCESS(rv, rv);
 
     urisToVisit[i]->GetAsciiSpec(u);
@@ -2283,7 +2275,7 @@ void Predictor::UpdateCacheabilityInternal(
 
   RefPtr<LoadContextInfo> lci = new LoadContextInfo(false, originAttributes);
 
-  rv = mCacheStorageService->DiskCacheStorage(lci, false,
+  rv = mCacheStorageService->DiskCacheStorage(lci,
                                               getter_AddRefs(cacheDiskStorage));
   if (NS_FAILED(rv)) {
     PREDICTOR_LOG(("    cannot get disk cache storage"));
@@ -2307,7 +2299,6 @@ NS_IMPL_ISUPPORTS(Predictor::CacheabilityAction, nsICacheEntryOpenCallback,
 
 NS_IMETHODIMP
 Predictor::CacheabilityAction::OnCacheEntryCheck(nsICacheEntry* entry,
-                                                 nsIApplicationCache* appCache,
                                                  uint32_t* result) {
   *result = nsICacheEntryOpenCallback::ENTRY_WANTED;
   return NS_OK;
@@ -2326,9 +2317,9 @@ enum PrefetchDecisionReason {
 }
 
 NS_IMETHODIMP
-Predictor::CacheabilityAction::OnCacheEntryAvailable(
-    nsICacheEntry* entry, bool isNew, nsIApplicationCache* appCache,
-    nsresult result) {
+Predictor::CacheabilityAction::OnCacheEntryAvailable(nsICacheEntry* entry,
+                                                     bool isNew,
+                                                     nsresult result) {
   MOZ_ASSERT(NS_IsMainThread());
   // This is being opened read-only, so isNew should always be false
   MOZ_ASSERT(!isNew);

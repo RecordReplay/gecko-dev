@@ -33,6 +33,7 @@
 #include "mozilla/Hal.h"
 #include "mozilla/widget/ScreenManager.h"
 #include "HeadlessScreenHelper.h"
+#include "MOZMenuOpeningCoordinator.h"
 #include "pratom.h"
 #if !defined(RELEASE_OR_BETA) || defined(DEBUG)
 #  include "nsSandboxViolationSink.h"
@@ -44,6 +45,7 @@
 
 #include "nsIObserverService.h"
 #include "mozilla/Services.h"
+#include "mozilla/StaticPrefs_widget.h"
 
 using namespace mozilla;
 using namespace mozilla::widget;
@@ -122,14 +124,34 @@ extern int32_t gXULModalLevel;
 
 static bool gAppShellMethodsSwizzled = false;
 
+void OnUncaughtException(NSException* aException) {
+  nsObjCExceptionLog(aException);
+  MOZ_CRASH("Uncaught Objective C exception from NSSetUncaughtExceptionHandler");
+}
+
 @implementation GeckoNSApplication
 
-- (void)sendEvent:(NSEvent*)anEvent {
-  // Mark this function as non-idle because it's one of the exit points from
-  // the event loop (running inside of -[GeckoNSApplication nextEventMatchingMask:...])
-  // into non-idle code. So we basically unset the IDLE category from the inside.
-  AUTO_PROFILER_LABEL("-[GeckoNSApplication sendEvent:]", OTHER);
+// Load is called very early during startup, when the Objective C runtime loads this class.
++ (void)load {
+  NSSetUncaughtExceptionHandler(OnUncaughtException);
+}
 
+// This method is called from NSDefaultTopLevelErrorHandler, which is invoked when an Objective C
+// exception propagates up into the native event loop. It is possible that it is also called in
+// other cases.
+- (void)reportException:(NSException*)aException {
+  if (ShouldIgnoreObjCException(aException)) {
+    return;
+  }
+
+  nsObjCExceptionLog(aException);
+
+#ifdef NIGHTLY_BUILD
+  MOZ_CRASH("Uncaught Objective C exception from -[GeckoNSApplication reportException:]");
+#endif
+}
+
+- (void)sendEvent:(NSEvent*)anEvent {
   mozilla::BackgroundHangMonitor().NotifyActivity();
 
   if ([anEvent type] == NSEventTypeApplicationDefined && [anEvent subtype] == kEventSubtypeTrace) {
@@ -139,31 +161,10 @@ static bool gAppShellMethodsSwizzled = false;
   [super sendEvent:anEvent];
 }
 
-#if defined(MAC_OS_X_VERSION_10_12) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_12 && \
-    __LP64__
-// 10.12 changed `mask` to NSEventMask (unsigned long long) for x86_64 builds.
 - (NSEvent*)nextEventMatchingMask:(NSEventMask)mask
-#else
-- (NSEvent*)nextEventMatchingMask:(NSUInteger)mask
-#endif
                         untilDate:(NSDate*)expiration
                            inMode:(NSString*)mode
                           dequeue:(BOOL)flag {
-  // When we're waiting in the event loop, this is the last function under our
-  // control that's on the stack, so this is the function that we mark with the
-  // IDLE category.
-  // However, when we're processing an event or when our CFRunLoopSource runs,
-  // this function is still on the stack - "the event loop calls us". So we
-  // need to mark functions that enter non-idle code with a different profiler
-  // category, usually OTHER. This gives the profiler a rough approximation of
-  // idleness but isn't perfect. For example, sometimes there's some Cocoa-
-  // internal activity that's triggered from the event loop, and we'll
-  // misidentify the stacks for that activity as idle because there's no Gecko
-  // code on the stack that can change the stack's category to something
-  // non-idle.
-  AUTO_PROFILER_LABEL("-[GeckoNSApplication nextEventMatchingMask:untilDate:inMode:dequeue:]",
-                      IDLE);
-
   if (expiration) {
     mozilla::BackgroundHangMonitor().NotifyWait();
   }
@@ -191,7 +192,6 @@ static bool gAppShellMethodsSwizzled = false;
 
 - (id)initWithAppShell:(nsAppShell*)aAppShell;
 - (void)applicationWillTerminate:(NSNotification*)aNotification;
-- (void)beginMenuTracking:(NSNotification*)aNotification;
 @end
 
 // nsAppShell implementation
@@ -223,7 +223,7 @@ nsAppShell::nsAppShell()
 }
 
 nsAppShell::~nsAppShell() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   hal::Shutdown();
 
@@ -231,6 +231,10 @@ nsAppShell::~nsAppShell() {
     if (mCFRunLoopSource) {
       ::CFRunLoopRemoveSource(mCFRunLoop, mCFRunLoopSource, kCFRunLoopCommonModes);
       ::CFRelease(mCFRunLoopSource);
+    }
+    if (mCFRunLoopObserver) {
+      ::CFRunLoopRemoveObserver(mCFRunLoop, mCFRunLoopObserver, kCFRunLoopCommonModes);
+      ::CFRelease(mCFRunLoopObserver);
     }
     ::CFRelease(mCFRunLoop);
   }
@@ -243,7 +247,7 @@ nsAppShell::~nsAppShell() {
 
   [mDelegate release];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK
+  NS_OBJC_END_TRY_IGNORE_BLOCK
 }
 
 NS_IMPL_ISUPPORTS(MacWakeLockListener, nsIDOMMozWakeLockListener)
@@ -270,6 +274,47 @@ static void RemoveScreenWakeLockListener() {
   }
 }
 
+void RunLoopObserverCallback(CFRunLoopObserverRef aObserver, CFRunLoopActivity aActivity,
+                             void* aInfo) {
+  static_cast<nsAppShell*>(aInfo)->OnRunLoopActivityChanged(aActivity);
+}
+
+void nsAppShell::OnRunLoopActivityChanged(CFRunLoopActivity aActivity) {
+  if (aActivity == kCFRunLoopBeforeWaiting) {
+    mozilla::BackgroundHangMonitor().NotifyWait();
+  }
+
+#ifdef MOZ_GECKO_PROFILER
+  // When the event loop is in its waiting state, we would like the profiler to know that the thread
+  // is idle. The usual way to notify the profiler of idleness would be to place a profiler label
+  // frame with the IDLE category on the stack, for the duration of the function that does the
+  // waiting. However, since macOS uses an event loop model where "the event loop calls you", we do
+  // not control the function that does the waiting; the waiting happens inside CFRunLoop code.
+  // Instead, the run loop notifies us when it enters and exits the waiting state, by calling this
+  // function.
+  // So we do not have a function under our control that stays on the stack for the duration of the
+  // wait. So, rather than putting an AutoProfilerLabel on the stack, we will manually push and pop
+  // the label frame here.
+  // The location in the stack where this label frame is inserted is somewhat arbitrary. In
+  // practice, the label frame will be at the very tip of the stack, looking like it's "inside" the
+  // mach_msg_trap wait function.
+  if (aActivity == kCFRunLoopBeforeWaiting) {
+    if (ProfilingStackOwner* profilingStackOwner =
+            AutoProfilerLabel::ProfilingStackOwnerTLS::Get()) {
+      mProfilingStackOwnerWhileWaiting = profilingStackOwner;
+      uint8_t variableOnStack = 0;
+      mProfilingStackOwnerWhileWaiting->ProfilingStack().pushLabelFrame(
+          "Native event loop idle", nullptr, &variableOnStack, JS::ProfilingCategoryPair::IDLE, 0);
+    }
+  } else {
+    if (mProfilingStackOwnerWhileWaiting) {
+      mProfilingStackOwnerWhileWaiting->ProfilingStack().pop();
+      mProfilingStackOwnerWhileWaiting = nullptr;
+    }
+  }
+#endif
+}
+
 // Init
 //
 // Loads the nib (see bug 316076c21) and sets up the CFRunLoopSource used to
@@ -277,7 +322,7 @@ static void RemoveScreenWakeLockListener() {
 //
 // public
 nsresult nsAppShell::Init() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   // No event loop is running yet (unless an embedding app that uses
   // NSApplicationMain() is running).
@@ -325,6 +370,19 @@ nsresult nsAppShell::Init() {
 
   ::CFRunLoopAddSource(mCFRunLoop, mCFRunLoopSource, kCFRunLoopCommonModes);
 
+  // Add a CFRunLoopObserver so that the profiler can be notified when we enter and exit the waiting
+  // state.
+  CFRunLoopObserverContext observerContext;
+  PodZero(&observerContext);
+  observerContext.info = this;
+
+  mCFRunLoopObserver = ::CFRunLoopObserverCreate(
+      kCFAllocatorDefault, kCFRunLoopBeforeWaiting | kCFRunLoopAfterWaiting | kCFRunLoopExit, true,
+      0, RunLoopObserverCallback, &observerContext);
+  NS_ENSURE_STATE(mCFRunLoopObserver);
+
+  ::CFRunLoopAddObserver(mCFRunLoop, mCFRunLoopObserver, kCFRunLoopCommonModes);
+
   hal::Init();
 
   if (XRE_IsParentProcess()) {
@@ -359,7 +417,7 @@ nsresult nsAppShell::Init() {
 
   return rv;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 // ProcessGeckoEvents
@@ -373,7 +431,7 @@ nsresult nsAppShell::Init() {
 //
 // protected static
 void nsAppShell::ProcessGeckoEvents(void* aInfo) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
   AUTO_PROFILER_LABEL("nsAppShell::ProcessGeckoEvents", OTHER);
 
   nsAppShell* self = static_cast<nsAppShell*>(aInfo);
@@ -464,7 +522,7 @@ void nsAppShell::ProcessGeckoEvents(void* aInfo) {
     }
   }
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 // WillTerminate
@@ -507,7 +565,7 @@ void nsAppShell::WillTerminate() {
 //
 // protected virtual
 void nsAppShell::ScheduleNativeEventCallback() {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   if (mTerminated) return;
 
@@ -521,7 +579,7 @@ void nsAppShell::ScheduleNativeEventCallback() {
   ::CFRunLoopSourceSignal(mCFRunLoopSource);
   ::CFRunLoopWakeUp(mCFRunLoop);
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 // Undocumented Cocoa Event Manager function, present in the same form since
@@ -539,12 +597,20 @@ extern "C" EventAttributes GetEventAttributes(EventRef inEvent);
 bool nsAppShell::ProcessNextNativeEvent(bool aMayWait) {
   bool moreEvents = false;
 
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   bool eventProcessed = false;
   NSString* currentMode = nil;
 
   if (mTerminated) return false;
+
+  // Do not call -[NSApplication nextEventMatchingMask:...] when we're trying to close a native
+  // menu. Doing so could confuse the NSMenu's closing mechanism. Instead, we try to unwind the
+  // stack as quickly as possible and return to the parent event loop. At that point, native events
+  // will be processed.
+  if (MOZMenuOpeningCoordinator.needToUnwindForMenuClosing) {
+    return false;
+  }
 
   bool wasRunningEventLoop = mRunningEventLoop;
   mRunningEventLoop = aMayWait;
@@ -636,7 +702,7 @@ bool nsAppShell::ProcessNextNativeEvent(bool aMayWait) {
 
   mRunningEventLoop = wasRunningEventLoop;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 
   if (!moreEvents) {
     nsChildView::UpdateCurrentInputEventCount();
@@ -671,7 +737,9 @@ nsAppShell::Run(void) {
   // We use the native Gecko event loop in content processes.
   nsresult rv = NS_OK;
   if (XRE_UseNativeEventProcessing()) {
-    NS_OBJC_TRY_ABORT([NSApp run]);
+    NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
+    [NSApp run];
+    NS_OBJC_END_TRY_IGNORE_BLOCK;
   } else {
     rv = nsBaseAppShell::Run();
   }
@@ -685,7 +753,7 @@ nsAppShell::Run(void) {
 
 NS_IMETHODIMP
 nsAppShell::Exit(void) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   // This method is currently called more than once -- from (according to
   // mento) an nsAppExitEvent dispatched by nsAppStartup::Quit() and from an
@@ -731,7 +799,7 @@ nsAppShell::Exit(void) {
 
   return nsBaseAppShell::Exit();
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 // OnProcessNextEvent
@@ -746,7 +814,7 @@ nsAppShell::Exit(void) {
 // public
 NS_IMETHODIMP
 nsAppShell::OnProcessNextEvent(nsIThreadInternal* aThread, bool aMayWait) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   NS_ASSERTION(mAutoreleasePools, "No stack on which to store autorelease pool");
 
@@ -755,7 +823,7 @@ nsAppShell::OnProcessNextEvent(nsIThreadInternal* aThread, bool aMayWait) {
 
   return nsBaseAppShell::OnProcessNextEvent(aThread, aMayWait);
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 // AfterProcessNextEvent
@@ -767,7 +835,7 @@ nsAppShell::OnProcessNextEvent(nsIThreadInternal* aThread, bool aMayWait) {
 // public
 NS_IMETHODIMP
 nsAppShell::AfterProcessNextEvent(nsIThreadInternal* aThread, bool aEventWasProcessed) {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   CFIndex count = ::CFArrayGetCount(mAutoreleasePools);
 
@@ -780,7 +848,7 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal* aThread, bool aEventWasProc
 
   return nsBaseAppShell::AfterProcessNextEvent(aThread, aEventWasProcessed);
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
 }
 
 // AppShellDelegate implementation
@@ -790,7 +858,7 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal* aThread, bool aEventWasProc
 //
 // Constructs the AppShellDelegate object
 - (id)initWithAppShell:(nsAppShell*)aAppShell {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   // This message will not be called while replaying (as for other messages
   // sent to Gecko objects), so don't add any recorded events.
@@ -807,37 +875,32 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal* aThread, bool aEventWasProc
                                              selector:@selector(applicationDidBecomeActive:)
                                                  name:NSApplicationDidBecomeActiveNotification
                                                object:NSApp];
-    [[NSDistributedNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(beginMenuTracking:)
-               name:@"com.apple.HIToolbox.beginMenuTrackingNotification"
-             object:nil];
   }
 
   return self;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_END_TRY_BLOCK_RETURN(nil);
 }
 
 - (void)dealloc {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
   [super dealloc];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 // applicationWillTerminate:
 //
 // Notify the nsAppShell that native event processing should be discontinued.
 - (void)applicationWillTerminate:(NSNotification*)aNotification {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   mAppShell->WillTerminate();
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 // applicationDidBecomeActive
@@ -846,7 +909,7 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal* aThread, bool aEventWasProc
 // active (since we won't have received [ChildView flagsChanged:] messages
 // while inactive).
 - (void)applicationDidBecomeActive:(NSNotification*)aNotification {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
 
   // [NSEvent modifierFlags] is valid on every kind of event, so we don't need
   // to worry about getting an NSInternalInconsistencyException here.
@@ -861,25 +924,7 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal* aThread, bool aEventWasProc
     observerService->NotifyObservers(nullptr, NS_WIDGET_MAC_APP_ACTIVATE_OBSERVER_TOPIC, nullptr);
   }
 
-  NS_OBJC_END_TRY_ABORT_BLOCK;
-}
-
-// beginMenuTracking
-//
-// Roll up our context menu (if any) when some other app (or the OS) opens
-// any sort of menu.  But make sure we don't do this for notifications we
-// send ourselves (whose 'sender' will be @"org.mozilla.gecko.PopupWindow").
-- (void)beginMenuTracking:(NSNotification*)aNotification {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  NSString* sender = [aNotification object];
-  if (!sender || ![sender isEqualToString:@"org.mozilla.gecko.PopupWindow"]) {
-    nsIRollupListener* rollupListener = nsBaseWidget::GetActiveRollupListener();
-    nsCOMPtr<nsIWidget> rollupWidget = rollupListener->GetRollupWidget();
-    if (rollupWidget) rollupListener->Rollup(0, true, nullptr, nullptr);
-  }
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
 @end

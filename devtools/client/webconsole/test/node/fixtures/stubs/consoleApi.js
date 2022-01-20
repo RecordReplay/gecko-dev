@@ -43,7 +43,8 @@ rawPackets.set(`console.log('foobar', 'test')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log(undefined)`, {
@@ -72,7 +73,8 @@ rawPackets.set(`console.log(undefined)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.warn('danger, will robinson!')`, {
@@ -99,7 +101,8 @@ rawPackets.set(`console.warn('danger, will robinson!')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log(NaN)`, {
@@ -128,7 +131,8 @@ rawPackets.set(`console.log(NaN)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log(null)`, {
@@ -157,7 +161,8 @@ rawPackets.set(`console.log(null)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('鼬')`, {
@@ -184,7 +189,8 @@ rawPackets.set(`console.log('鼬')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.clear()`, {
@@ -209,7 +215,8 @@ rawPackets.set(`console.clear()`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count('bar')`, {
@@ -239,7 +246,8 @@ rawPackets.set(`console.count('bar')`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.assert(false, {message: 'foobar'})`, {
@@ -268,8 +276,10 @@ rawPackets.set(`console.assert(false, {message: 'foobar'})`, {
               }
             },
             "ownSymbols": [],
+            "privateProperties": [],
             "ownPropertiesLength": 1,
             "ownSymbolsLength": 0,
+            "privatePropertiesLength": 0,
             "safeGetterValues": {}
           }
         },
@@ -302,7 +312,8 @@ rawPackets.set(`console.assert(false, {message: 'foobar'})`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('úṇĩçödê țĕșť')`, {
@@ -329,7 +340,8 @@ rawPackets.set(`console.log('úṇĩçödê țĕșť')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.dirxml(window)`, {
@@ -372,7 +384,8 @@ rawPackets.set(`console.dirxml(window)`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('myarray', ['red', 'green', 'blue'])`, {
@@ -421,7 +434,8 @@ rawPackets.set(`console.log('myarray', ['red', 'green', 'blue'])`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('myregex', /a.b.c/)`, {
@@ -462,7 +476,8 @@ rawPackets.set(`console.log('myregex', /a.b.c/)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.table(['red', 'green', 'blue']);`, {
@@ -522,7 +537,8 @@ rawPackets.set(`console.table(['red', 'green', 'blue']);`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('myobject', {red: 'redValue', green: 'greenValue', blue: 'blueValue'});`, {
@@ -564,8 +580,10 @@ rawPackets.set(`console.log('myobject', {red: 'redValue', green: 'greenValue', b
               }
             },
             "ownSymbols": [],
+            "privateProperties": [],
             "ownPropertiesLength": 3,
             "ownSymbolsLength": 0,
+            "privatePropertiesLength": 0,
             "safeGetterValues": {}
           }
         },
@@ -589,7 +607,8 @@ rawPackets.set(`console.log('myobject', {red: 'redValue', green: 'greenValue', b
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.debug('debug message');`, {
@@ -616,7 +635,8 @@ rawPackets.set(`console.debug('debug message');`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.info('info message');`, {
@@ -643,7 +663,8 @@ rawPackets.set(`console.info('info message');`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.error('error message');`, {
@@ -679,7 +700,8 @@ rawPackets.set(`console.error('error message');`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('mymap')`, {
@@ -733,7 +755,8 @@ rawPackets.set(`console.log('mymap')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log('myset')`, {
@@ -781,7 +804,8 @@ rawPackets.set(`console.log('myset')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.trace()`, {
@@ -829,7 +853,8 @@ rawPackets.set(`console.trace()`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.trace('bar', {'foo': 'bar'}, [1,2,3])`, {
@@ -859,8 +884,10 @@ rawPackets.set(`console.trace('bar', {'foo': 'bar'}, [1,2,3])`, {
               }
             },
             "ownSymbols": [],
+            "privateProperties": [],
             "ownPropertiesLength": 1,
             "ownSymbolsLength": 0,
+            "privatePropertiesLength": 0,
             "safeGetterValues": {}
           }
         },
@@ -929,7 +956,8 @@ rawPackets.set(`console.trace('bar', {'foo': 'bar'}, [1,2,3])`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.trace("%cHello%c|%cWorld")`, {
@@ -971,7 +999,8 @@ rawPackets.set(`console.trace("%cHello%c|%cWorld")`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 10737418241
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.time('bar')`, {
@@ -1000,7 +1029,8 @@ rawPackets.set(`console.time('bar')`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`timerAlreadyExists`, {
@@ -1030,7 +1060,8 @@ rawPackets.set(`timerAlreadyExists`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.timeLog('bar') - 1`, {
@@ -1060,7 +1091,8 @@ rawPackets.set(`console.timeLog('bar') - 1`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.timeLog('bar') - 2`, {
@@ -1091,8 +1123,10 @@ rawPackets.set(`console.timeLog('bar') - 2`, {
               }
             },
             "ownSymbols": [],
+            "privateProperties": [],
             "ownPropertiesLength": 1,
             "ownSymbolsLength": 0,
+            "privatePropertiesLength": 0,
             "safeGetterValues": {}
           }
         },
@@ -1119,7 +1153,8 @@ rawPackets.set(`console.timeLog('bar') - 2`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.timeEnd('bar')`, {
@@ -1149,7 +1184,8 @@ rawPackets.set(`console.timeEnd('bar')`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`timeEnd.timerDoesntExist`, {
@@ -1179,7 +1215,8 @@ rawPackets.set(`timeEnd.timerDoesntExist`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`timeLog.timerDoesntExist`, {
@@ -1209,7 +1246,8 @@ rawPackets.set(`timeLog.timerDoesntExist`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.table('bar')`, {
@@ -1236,7 +1274,8 @@ rawPackets.set(`console.table('bar')`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.table(['a', 'b', 'c'])`, {
@@ -1296,7 +1335,8 @@ rawPackets.set(`console.table(['a', 'b', 'c'])`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.group('bar')`, {
@@ -1323,7 +1363,8 @@ rawPackets.set(`console.group('bar')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupEnd('bar')`, {
@@ -1348,7 +1389,8 @@ rawPackets.set(`console.groupEnd('bar')`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupCollapsed('foo')`, {
@@ -1375,7 +1417,8 @@ rawPackets.set(`console.groupCollapsed('foo')`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupEnd('foo')`, {
@@ -1400,7 +1443,8 @@ rawPackets.set(`console.groupEnd('foo')`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.group()`, {
@@ -1425,7 +1469,8 @@ rawPackets.set(`console.group()`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupEnd()`, {
@@ -1450,7 +1495,8 @@ rawPackets.set(`console.groupEnd()`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log(%cfoobar)`, {
@@ -1481,7 +1527,8 @@ rawPackets.set(`console.log(%cfoobar)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log("%cHello%c|%cWorld")`, {
@@ -1514,7 +1561,8 @@ rawPackets.set(`console.log("%cHello%c|%cWorld")`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.group(%cfoo%cbar)`, {
@@ -1545,7 +1593,8 @@ rawPackets.set(`console.group(%cfoo%cbar)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupEnd(%cfoo%cbar)`, {
@@ -1570,7 +1619,8 @@ rawPackets.set(`console.groupEnd(%cfoo%cbar)`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupCollapsed(%cfoo%cbaz)`, {
@@ -1601,7 +1651,8 @@ rawPackets.set(`console.groupCollapsed(%cfoo%cbaz)`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.groupEnd(%cfoo%cbaz)`, {
@@ -1626,7 +1677,8 @@ rawPackets.set(`console.groupEnd(%cfoo%cbaz)`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.dir({C, M, Y, K})`, {
@@ -1673,8 +1725,10 @@ rawPackets.set(`console.dir({C, M, Y, K})`, {
               }
             },
             "ownSymbols": [],
+            "privateProperties": [],
             "ownPropertiesLength": 4,
             "ownSymbolsLength": 0,
+            "privatePropertiesLength": 0,
             "safeGetterValues": {}
           }
         },
@@ -1698,7 +1752,8 @@ rawPackets.set(`console.dir({C, M, Y, K})`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | default: 1`, {
@@ -1728,7 +1783,8 @@ rawPackets.set(`console.count | default: 1`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | default: 2`, {
@@ -1758,7 +1814,8 @@ rawPackets.set(`console.count | default: 2`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | test counter: 1`, {
@@ -1788,7 +1845,8 @@ rawPackets.set(`console.count | test counter: 1`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | test counter: 2`, {
@@ -1818,7 +1876,8 @@ rawPackets.set(`console.count | test counter: 2`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | default: 3`, {
@@ -1848,7 +1907,8 @@ rawPackets.set(`console.count | default: 3`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | clear`, {
@@ -1873,7 +1933,8 @@ rawPackets.set(`console.count | clear`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | default: 4`, {
@@ -1903,7 +1964,8 @@ rawPackets.set(`console.count | default: 4`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.count | test counter: 3`, {
@@ -1933,7 +1995,8 @@ rawPackets.set(`console.count | test counter: 3`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.countReset | test counter: 0`, {
@@ -1963,7 +2026,8 @@ rawPackets.set(`console.countReset | test counter: 0`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.countReset | counterDoesntExist`, {
@@ -1993,7 +2057,8 @@ rawPackets.set(`console.countReset | counterDoesntExist`, {
     "styles": [],
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 rawPackets.set(`console.log escaped characters`, {
@@ -2020,7 +2085,8 @@ rawPackets.set(`console.log escaped characters`, {
     "workerType": "none",
     "category": "webdev",
     "innerWindowID": 8589934593
-  }
+  },
+  "isAlreadyExistingResource": false
 });
 
 

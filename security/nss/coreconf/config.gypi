@@ -99,6 +99,7 @@
     'disable_arm_hw_aes%': 0,
     'disable_arm_hw_sha1%': 0,
     'disable_arm_hw_sha2%': 0,
+    'disable_intel_hw_sha%': 0,
     'disable_tests%': 0,
     'disable_chachapoly%': 0,
     'disable_deprecated_seed%': 0,
@@ -107,6 +108,7 @@
     'disable_libpkix%': 1,
     'disable_werror%': 0,
     'disable_altivec%': 0,
+    'disable_crypto_vsx%': 0,
     'disable_arm32_neon%': 0,
     'mozilla_client%': 0,
     'comm_client%': 0,
@@ -208,7 +210,7 @@
           },
         },
       }],
-      [ 'target_arch=="arm64" or target_arch=="aarch64" or target_arch=="sparc64" or target_arch=="ppc64" or target_arch=="ppc64le" or target_arch=="s390x" or target_arch=="mips64" or target_arch=="e2k"', {
+      [ 'target_arch=="arm64" or target_arch=="aarch64" or target_arch=="sparc64" or target_arch=="ppc64" or target_arch=="ppc64le" or target_arch=="s390x" or target_arch=="mips64" or target_arch=="e2k" or target_arch=="riscv64"', {
         'defines': [
           'NSS_USE_64',
         ],
@@ -570,11 +572,6 @@
           [ 'disable_dbm==1', {
             'defines': [
               'NSS_DISABLE_DBM',
-            ],
-          }],
-          [ 'enable_draft_hpke==1', {
-            'defines': [
-              'NSS_ENABLE_DRAFT_HPKE',
             ],
           }],
           [ 'disable_libpkix==1', {

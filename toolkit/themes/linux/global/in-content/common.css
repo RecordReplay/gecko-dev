@@ -4,7 +4,7 @@
 
 %include ../../../shared/in-content/common.inc.css
 
-@media (prefers-color-scheme: dark) {
+@media (-moz-toolbar-prefers-color-scheme: dark) {
   /* Don't apply scrollbar-color since it removes the native scrollbar style on Linux */
   :root {
     scrollbar-color: initial;
@@ -30,10 +30,6 @@ xul|button[type="menu"] > xul|*.button-box > xul|*.button-menu-dropmarker {
   appearance: none !important;
 }
 
-xul|*.help-button > xul|*.button-box > xul|*.button-icon {
-  margin-inline-end: 0;
-}
-
 xul|menulist {
   font-size: inherit;
 }
@@ -45,10 +41,6 @@ xul|menulist::part(dropmarker) {
 
 xul|menulist:-moz-focusring::part(label-box) {
   outline: none;
-}
-
-html|input[type="checkbox"]:-moz-focusring + html|label:before {
-  outline: 1px dotted;
 }
 
 html|button {

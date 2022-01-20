@@ -93,7 +93,7 @@ const presets = {
       "Recommended preset for most web app debugging, with low overhead.",
     entries: 128 * 1024 * 1024,
     interval: 1,
-    features: ["screenshots", "js"],
+    features: ["screenshots", "js", "cpu"],
     threads: ["GeckoMain", "Compositor", "Renderer", "DOM Worker"],
     duration: 0,
     profilerViewMode: "active-tab",
@@ -103,7 +103,7 @@ const presets = {
     description: "Recommended preset for internal Firefox platform debugging.",
     entries: 128 * 1024 * 1024,
     interval: 1,
-    features: ["screenshots", "js", "leaf", "stackwalk", "java"],
+    features: ["screenshots", "js", "leaf", "stackwalk", "cpu", "java"],
     threads: ["GeckoMain", "Compositor", "Renderer", "SwComposite"],
     duration: 0,
   },
@@ -112,7 +112,7 @@ const presets = {
     description: "Recommended preset for internal Firefox front-end debugging.",
     entries: 128 * 1024 * 1024,
     interval: 1,
-    features: ["screenshots", "js", "leaf", "stackwalk", "java"],
+    features: ["screenshots", "js", "leaf", "stackwalk", "cpu", "java"],
     threads: ["GeckoMain", "Compositor", "Renderer", "DOM Worker"],
     duration: 0,
   },
@@ -122,7 +122,7 @@ const presets = {
       "Recommended preset for Firefox graphics performance investigation.",
     entries: 128 * 1024 * 1024,
     interval: 1,
-    features: ["leaf", "stackwalk", "js", "java"],
+    features: ["leaf", "stackwalk", "js", "cpu", "java"],
     threads: [
       "GeckoMain",
       "Compositor",
@@ -131,6 +131,7 @@ const presets = {
       "RenderBackend",
       "SceneBuilder",
       "WrWorker",
+      "CanvasWorkers",
     ],
     duration: 0,
   },
@@ -139,21 +140,29 @@ const presets = {
     description: "Recommended preset for diagnosing audio and video problems.",
     entries: 128 * 1024 * 1024,
     interval: 1,
-    features: ["js", "leaf", "stackwalk", "audiocallbacktracing"],
+    features: ["js", "leaf", "stackwalk", "cpu", "audiocallbacktracing"],
     threads: [
       "AsyncCubebTask",
+      "AudioEncoderQueue",
       "AudioIPC",
+      "call_worker_queue",
       "Compositor",
+      "DecodingThread",
       "GeckoMain",
       "GraphRunner",
+      "IncomingVideoStream",
+      "InotifyEventThread",
       "MediaDecoderStateMachine",
       "MediaPDecoder",
       "MediaSupervisor",
       "MediaTimer",
+      "ModuleProcessThread",
       "NativeAudioCallback",
+      "PacerThread",
       "RenderBackend",
       "Renderer",
       "SwComposite",
+      "VoiceProcessThread",
     ],
     duration: 0,
   },
@@ -274,16 +283,16 @@ function startProfiler(pageContext) {
     getRecordingPreferences(pageContext, Services.profiler.GetFeatures())
   );
 
-  // Get the active BrowsingContext ID from browser.
-  const { getActiveBrowsingContextID } = lazy.RecordingUtils();
-  const activeBrowsingContextID = getActiveBrowsingContextID();
+  // Get the active Browser ID from browser.
+  const { getActiveBrowserID } = lazy.RecordingUtils();
+  const activeTabID = getActiveBrowserID();
 
   Services.profiler.StartProfiler(
     entries,
     interval,
     features,
     threads,
-    activeBrowsingContextID,
+    activeTabID,
     duration
   );
 }

@@ -111,18 +111,6 @@ let gExceptionsList = [
     key: "securityOverride.warningContent",
     type: "single-quote",
   },
-  {
-    file: "pocket.properties",
-    key: "tos",
-    type: "double-quote",
-  },
-  // This string contains HTML markup describing `<link rel="preload">` and therefore
-  // is meant to contain actual double quotes.
-  {
-    file: "features.ftl",
-    key: "experimental-features-web-api-link-preload-description",
-    type: "double-quote",
-  },
 ];
 
 /**

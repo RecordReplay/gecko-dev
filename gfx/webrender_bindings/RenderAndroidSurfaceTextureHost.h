@@ -9,13 +9,17 @@
 
 #include "mozilla/java/GeckoSurfaceTextureWrappers.h"
 #include "mozilla/layers/TextureHostOGL.h"
-#include "RenderTextureHost.h"
+#include "RenderTextureHostSWGL.h"
 
 namespace mozilla {
 
+namespace gfx {
+class DataSourceSurface;
+}
+
 namespace wr {
 
-class RenderAndroidSurfaceTextureHost final : public RenderTextureHost {
+class RenderAndroidSurfaceTextureHost final : public RenderTextureHostSWGL {
  public:
   explicit RenderAndroidSurfaceTextureHost(
       const java::GeckoSurfaceTexture::GlobalRef& aSurfTex, gfx::IntSize aSize,
@@ -33,9 +37,33 @@ class RenderAndroidSurfaceTextureHost final : public RenderTextureHost {
   void NotifyForUse() override;
   void NotifyNotUsed() override;
 
+  // RenderTextureHostSWGL
+  gfx::SurfaceFormat GetFormat() const override;
+  gfx::ColorDepth GetColorDepth() const override {
+    return gfx::ColorDepth::COLOR_8;
+  }
+  size_t GetPlaneCount() const override { return 1; }
+  bool MapPlane(RenderCompositor* aCompositor, uint8_t aChannelIndex,
+                PlaneInfo& aPlaneInfo) override;
+  void UnmapPlanes() override;
+
+  RenderAndroidSurfaceTextureHost* AsRenderAndroidSurfaceTextureHost()
+      override {
+    return this;
+  }
+
+  mozilla::java::GeckoSurfaceTexture::GlobalRef mSurfTex;
+  const gfx::IntSize mSize;
+  const gfx::SurfaceFormat mFormat;
+  // mContinuousUpdate was used for rendering video in the past.
+  // It is not used on current gecko.
+  const bool mContinuousUpdate;
+
  private:
   virtual ~RenderAndroidSurfaceTextureHost();
   bool EnsureAttachedToGLContext();
+
+  already_AddRefed<gfx::DataSourceSurface> ReadTexImage();
 
   enum PrepareStatus {
     STATUS_NONE,
@@ -44,17 +72,13 @@ class RenderAndroidSurfaceTextureHost final : public RenderTextureHost {
     STATUS_PREPARED
   };
 
-  const mozilla::java::GeckoSurfaceTexture::GlobalRef mSurfTex;
-  const gfx::IntSize mSize;
-  const gfx::SurfaceFormat mFormat;
-  // mContinuousUpdate was used for rendering video in the past.
-  // It is not used on current gecko.
-  const bool mContinuousUpdate;
   // XXX const bool mIgnoreTransform;
   PrepareStatus mPrepareStatus;
   bool mAttachedToGLContext;
 
   RefPtr<gl::GLContext> mGL;
+
+  RefPtr<gfx::DataSourceSurface> mReadback;
 };
 
 }  // namespace wr

@@ -538,23 +538,36 @@ def av1(value):
         return True
 
 
-@depends(target, nasm_version, when=av1 & compile_environment)
-def dav1d_asm(target, nasm_version):
-    if target.cpu == "aarch64":
+@depends(target, when=av1 & compile_environment)
+def dav1d_asm(target):
+    if target.cpu in ("aarch64", "x86", "x86_64"):
         return True
-    elif target.cpu in ("x86", "x86_64"):
-        if (not nasm_version) or nasm_version < "2.14":
-            die(
-                "nasm 2.14 or greater is required for AV1 support. "
-                "Either install nasm or add --disable-av1 to your configure options."
-            )
-        return True
+
+
+@depends(target, when=av1 & compile_environment)
+def dav1d_nasm(target):
+    if target.cpu in ("x86", "x86_64"):
+        return namespace(version="2.14", what="AV1")
 
 
 set_config("MOZ_DAV1D_ASM", dav1d_asm)
 set_define("MOZ_DAV1D_ASM", dav1d_asm)
 set_config("MOZ_AV1", av1)
 set_define("MOZ_AV1", av1)
+
+# JXL Image Codec Support
+# ==============================================================
+option("--disable-jxl", help="Disable jxl image support")
+
+
+@depends("--disable-jxl", milestone.is_nightly)
+def jxl(value, is_nightly):
+    if is_nightly and value:
+        return True
+
+
+set_config("MOZ_JXL", jxl)
+set_define("MOZ_JXL", jxl)
 
 # Built-in fragmented MP4 support.
 # ==============================================================
@@ -774,9 +787,9 @@ add_old_configure_assignment(
 )
 
 
-@depends("MOZ_TELEMETRY_REPORTING", milestone.is_nightly, fennec_nightly)
-def telemetry_on_by_default(reporting, is_nightly, fennec_nightly):
-    return reporting and (is_nightly or fennec_nightly)
+@depends("MOZ_TELEMETRY_REPORTING", milestone.is_nightly)
+def telemetry_on_by_default(reporting, is_nightly):
+    return reporting and is_nightly
 
 
 set_define("MOZ_TELEMETRY_ON_BY_DEFAULT", True, when=telemetry_on_by_default)
@@ -958,35 +971,6 @@ def skia_pdf(value, skia, target, milestone):
 set_config("MOZ_ENABLE_SKIA_PDF", skia_pdf)
 set_define("MOZ_ENABLE_SKIA_PDF", skia_pdf)
 
-option("--enable-skia-pdf-sfntly", help="Enable SFNTLY font subsetting in Skia PDF")
-
-
-@depends("--enable-skia-pdf-sfntly", skia_pdf)
-def skia_pdf_sfntly(value, skia_pdf):
-    if value.origin == "default":
-        return skia_pdf
-    if value and not skia_pdf:
-        die("Cannot enable SFNTLY subsetting without enabling Skia PDF")
-    if skia_pdf and value:
-        return True
-
-
-set_config("MOZ_ENABLE_SKIA_PDF_SFNTLY", skia_pdf_sfntly)
-set_define("MOZ_ENABLE_SKIA_PDF_SFNTLY", skia_pdf_sfntly)
-
-
-@depends(skia_pdf_sfntly)
-def sfntly_includes(skia_pdf_sfntly):
-    includes = []
-    if skia_pdf_sfntly:
-        includes += [
-            "/gfx/sfntly/cpp/src",
-        ]
-    return includes
-
-
-set_config("SFNTLY_INCLUDES", sfntly_includes)
-
 
 @depends(skia)
 def skia_includes(skia):
@@ -1040,65 +1024,60 @@ set_config("FT2_LIBS", ft2_info.libs)
 add_old_configure_assignment("FT2_LIBS", ft2_info.libs)
 add_old_configure_assignment("FT2_CFLAGS", ft2_info.cflags)
 
-
-# Remote agent
-# (partial implementation of Chromium Remote Debugging Protocol)
+# WebDriver (HTTP / BiDi)
 # ==============================================================
 #
-# See https://firefox-source-docs.mozilla.org/remote/ for more.
-# The source code lives under ../remote.
-
-
-@depends(target, build_project)
-def remote_default(target, project):
-    # no support for Android
-    if target.os == "Android":
-        return False
-
-    # enable for Firefox Desktop only
-    return project == "browser"
-
-
-option("--enable-cdp", default=remote_default, help="{Enable|Disable} remote agent")
-
-
-@depends("--enable-cdp")
-def remote(value):
-    if value:
-        return True
-
-
-set_config("ENABLE_REMOTE_AGENT", remote)
-set_define("ENABLE_REMOTE_AGENT", remote)
-
-
+# WebDriver is a remote control interface that enables introspection and
+# control of user agents. It provides a platform- and language-neutral wire
+# protocol as a way for out-of-process programs to remotely instruct the
+# behavior of web browsers.
+#
+# The Gecko implementation is backed by Marionette and Remote Agent.
+# Both protocols are not really toolkit features, as much as Gecko engine
+# features. But they are enabled based on the toolkit, so here it lives.
+#
 # Marionette remote protocol
-# ==============================================================
+# -----------------------------------------------------------
 #
 # Marionette is the Gecko remote protocol used for various remote control,
-# automation, and testing purposes throughout Gecko, Firefox, and Fennec.
-# Marionette lives in ../testing/marionette.
-#
-# Marionette is not really a toolkit feature, as much as a Gecko
-# engine feature.  But it is enabled based on the toolkit, so here it
-# lives.
+# automation, and testing purposes throughout Gecko-based applications like
+# Firefox, Thunderbird, and any mobile browser built upon GeckoView.
 #
 # It also backs ../testing/geckodriver, which is Mozilla's WebDriver
 # implementation.
 #
-# For more information, see
-# https://developer.mozilla.org/en-US/docs/Mozilla/QA/Marionette.
+# The source of Marionette lives in ../remote/marionette.
+#
+# For more information, see:
+# https://firefox-source-docs.mozilla.org/testing/marionette/index.html
+#
+# Remote Agent (WebDriver BiDi / partial CDP)
+# -----------------------------------------------------------
+#
+# The primary purpose is the implementation of the WebDriver BiDi specification.
+# But it also complements the existing Firefox Developer Tools Remote Debugging
+# Protocol (RDP) by implementing a subset of the Chrome DevTools Protocol (CDP).
+#
+# The source of Remote Agent lives in ../remote.
+#
+# For more information, see:
+# https://firefox-source-docs.mozilla.org/remote/index.html
 
-option("--disable-marionette", help="Disable Marionette remote protocol")
+
+option(
+    "--disable-webdriver",
+    help="Disable support for WebDriver remote protocols",
+)
 
 
-@depends("--disable-marionette")
-def marionette(value):
-    if value:
+@depends("--disable-webdriver")
+def webdriver(enabled):
+    if enabled:
         return True
 
 
-set_config("ENABLE_MARIONETTE", marionette)
+set_config("ENABLE_WEBDRIVER", webdriver)
+set_define("ENABLE_WEBDRIVER", webdriver)
 
 
 # geckodriver WebDriver implementation
@@ -1115,9 +1094,6 @@ set_config("ENABLE_MARIONETTE", marionette)
 )
 def geckodriver_default(enable_tests, target, cross_compile, hazard, asan, automation):
     if not enable_tests:
-        return False
-    # geckodriver depends on winapi 0.2.8, which doesn't work with AArch64.
-    if target.os == "WINNT" and target.cpu == "aarch64":
         return False
     if hazard or target.os == "Android" or (asan and cross_compile):
         return False
@@ -1140,7 +1116,7 @@ def geckodriver(enabled):
         return True
 
 
-set_config("ENABLE_GECKODRIVER", geckodriver)
+set_config("MOZ_GECKODRIVER", geckodriver)
 
 
 # WebRTC
@@ -1312,6 +1288,24 @@ def proxy_bypass_protection(_):
 set_config("MOZ_PROXY_BYPASS_PROTECTION", proxy_bypass_protection)
 set_define("MOZ_PROXY_BYPASS_PROTECTION", proxy_bypass_protection)
 
+# Proxy direct failover
+# ==============================================================
+
+option(
+    "--disable-proxy-direct-failover",
+    help="Disable direct failover for system requests",
+)
+
+
+@depends_if("--disable-proxy-direct-failover")
+def proxy_direct_failover(value):
+    if value:
+        return True
+
+
+set_config("MOZ_PROXY_DIRECT_FAILOVER", proxy_direct_failover)
+set_define("MOZ_PROXY_DIRECT_FAILOVER", proxy_direct_failover)
+
 # MIDL
 # ==============================================================
 
@@ -1424,8 +1418,22 @@ set_config("ACCESSIBILITY", accessibility)
 set_define("ACCESSIBILITY", accessibility)
 add_old_configure_assignment("ACCESSIBILITY", accessibility)
 
+
 # Addon signing
 # ==============================================================
+@depends(milestone)
+def require_signing(milestone):
+    return milestone.is_release_or_beta and not milestone.is_esr
+
+
+option(
+    env="MOZ_REQUIRE_SIGNING",
+    default=require_signing,
+    help="Enforce that add-ons are signed by the trusted root",
+)
+
+set_config("MOZ_REQUIRE_SIGNING", True, when="MOZ_REQUIRE_SIGNING")
+set_define("MOZ_REQUIRE_SIGNING", True, when="MOZ_REQUIRE_SIGNING")
 
 option(
     "--with-unsigned-addon-scopes",
@@ -1446,31 +1454,42 @@ def unsigned_addon_scopes(scopes):
 set_config("MOZ_UNSIGNED_APP_SCOPE", unsigned_addon_scopes.app)
 set_config("MOZ_UNSIGNED_SYSTEM_SCOPE", unsigned_addon_scopes.system)
 
+
 # Addon sideloading
 # ==============================================================
-
-
-@depends(update_channel)
-def addon_sideload_allowed_default(update_channel):
-    if update_channel == "esr":
-        return True
-
-
 option(
     "--allow-addon-sideload",
-    default=addon_sideload_allowed_default,
+    default=milestone.is_esr,
     help="Addon sideloading is allowed",
 )
 
 
-@depends("--allow-addon-sideload")
-def addon_sideload_allowed(value):
-    allowed = bool(value)
-    if allowed:
-        return True
+set_config("MOZ_ALLOW_ADDON_SIDELOAD", True, when="--allow-addon-sideload")
+
+# WebExtensions API WebIDL bindings
+# ==============================================================
 
 
-set_config("MOZ_ALLOW_ADDON_SIDELOAD", addon_sideload_allowed)
+@depends(milestone)
+def extensions_webidl_bindings_default(milestone):
+    # Only enable the webidl bindings for the WebExtensions APIs
+    # in Nightly.
+    return milestone.is_nightly
+
+
+option(
+    "--enable-extensions-webidl-bindings",
+    default=extensions_webidl_bindings_default,
+    help="{Enable|Disable} building experimental WebExtensions WebIDL bindings",
+)
+
+
+@depends("--enable-extensions-webidl-bindings")
+def extensions_webidl_enabled(value):
+    return bool(value)
+
+
+set_config("MOZ_WEBEXT_WEBIDL_ENABLED", extensions_webidl_enabled)
 
 # Launcher process (Windows only)
 # ==============================================================
@@ -1582,14 +1601,6 @@ set_define(
     depends_if("--enable-bundled-fonts", when=allow_bundled_fonts)(lambda _: True),
 )
 
-# TaskTracer
-# ==============================================================
-
-option("--enable-tasktracer", help="Enable TaskTracer")
-
-set_define("MOZ_TASK_TRACER", depends_if("--enable-tasktracer")(lambda _: True))
-set_config("MOZ_TASK_TRACER", depends_if("--enable-tasktracer")(lambda _: True))
-
 # Reflow counting
 # ==============================================================
 
@@ -1673,21 +1684,21 @@ with only_when(compile_environment):
 
         set_config("MOZ_SYSTEM_LIBVPX", True)
 
-    @depends("--with-system-libvpx", target, gnu_as)
-    def in_tree_vpx(system_libvpx, target, gnu_as):
+    @depends("--with-system-libvpx", target)
+    def in_tree_vpx(system_libvpx, target):
         if system_libvpx:
             return
 
-        use_yasm = (target.cpu in ("x86", "x86_64")) or None
-        need_yasm = False
-        arm_asm = (target.cpu == "arm" and gnu_as) or None
+        arm_asm = (target.cpu == "arm") or None
+        return namespace(arm_asm=arm_asm)
 
-        if use_yasm:
-            need_yasm = True
+    @depends(target, when=in_tree_vpx)
+    def vpx_nasm(target):
+        if target.cpu in ("x86", "x86_64"):
             if target.kernel == "WINNT":
-                need_yasm = Version("1.1")
-
-        return namespace(arm_asm=arm_asm, use_yasm=use_yasm, need_yasm=need_yasm)
+                # Version 2.03 is needed for automatic safeseh support.
+                return namespace(version="2.03", what="VPX")
+            return namespace(what="VPX")
 
     # Building with -mfpu=neon requires either the "softfp" or the
     # "hardfp" ABI. Depending on the compiler's default target, and the
@@ -1708,8 +1719,8 @@ with only_when(compile_environment):
         when=in_tree_vpx.arm_asm,
     )
 
-    @depends(in_tree_vpx, softfp, target)
-    def vpx_as_flags(vpx, softfp, target):
+    @depends(in_tree_vpx, vpx_nasm, softfp, target)
+    def vpx_as_flags(vpx, vpx_nasm, softfp, target):
         flags = []
         if vpx and vpx.arm_asm:
             # These flags are a lie; they're just used to enable the requisite
@@ -1717,11 +1728,11 @@ with only_when(compile_environment):
             flags = ["-march=armv7-a", "-mfpu=neon"]
             if softfp:
                 flags.append("-mfloat-abi=softfp")
-        elif vpx and vpx.use_yasm and target.os != "WINNT" and target.cpu != "x86_64":
+        elif vpx and vpx_nasm and target.os != "WINNT" and target.cpu != "x86_64":
             flags = ["-DPIC"]
         return flags
 
-    set_config("VPX_USE_YASM", in_tree_vpx.use_yasm)
+    set_config("VPX_USE_NASM", True, when=vpx_nasm)
     set_config("VPX_ASFLAGS", vpx_as_flags)
 
 
@@ -1801,186 +1812,202 @@ with only_when(compile_environment):
         if system_jpeg:
             return
 
-        flags = ()
-        use_yasm = None
-        need_yasm = False
         if target.kernel == "Darwin":
             if target.cpu == "x86":
-                flags = ("-DPIC", "-DMACHO")
+                return ("-DPIC", "-DMACHO")
             elif target.cpu == "x86_64":
-                flags = ("-D__x86_64__", "-DPIC", "-DMACHO")
+                return ("-D__x86_64__", "-DPIC", "-DMACHO")
         elif target.kernel == "WINNT":
             if target.cpu == "x86":
-                flags = ("-DPIC", "-DWIN32")
+                return ("-DPIC", "-DWIN32")
             elif target.cpu == "x86_64":
-                flags = ("-D__x86_64__", "-DPIC", "-DWIN64", "-DMSVC")
+                return ("-D__x86_64__", "-DPIC", "-DWIN64", "-DMSVC")
         elif target.cpu == "arm":
-            flags = ("-march=armv7-a", "-mfpu=neon")
+            return ("-march=armv7-a", "-mfpu=neon")
         elif target.cpu == "aarch64":
-            flags = ("-march=armv8-a",)
+            return ("-march=armv8-a",)
         elif target.cpu == "mips32":
-            flags = ("-mdspr2",)
+            return ("-mdspr2",)
         elif target.cpu == "x86":
-            flags = ("-DPIC", "-DELF")
+            return ("-DPIC", "-DELF")
         elif target.cpu == "x86_64":
-            flags = ("-D__x86_64__", "-DPIC", "-DELF")
+            return ("-D__x86_64__", "-DPIC", "-DELF")
 
+    @depends(target, when=in_tree_jpeg)
+    def jpeg_nasm(target):
         if target.cpu in ("x86", "x86_64"):
-            use_yasm = True
-            if target.kernel == "Linux" and target.os == "GNU":
-                need_yasm = Version("1.0.1")
-            else:
-                need_yasm = Version("1.1")
+            # libjpeg-turbo 2.0.6 requires nasm 2.10.
+            return namespace(version="2.10", what="JPEG")
 
-        return namespace(flags=flags, use_yasm=use_yasm, need_yasm=need_yasm)
-
-    set_config("LIBJPEG_TURBO_USE_YASM", in_tree_jpeg.use_yasm)
-    set_config("LIBJPEG_TURBO_ASFLAGS", in_tree_jpeg.flags)
+    set_config("LIBJPEG_TURBO_USE_NASM", True, when=jpeg_nasm)
+    set_config("LIBJPEG_TURBO_ASFLAGS", in_tree_jpeg)
 
 
-# Libav-fft Support
+# FFmpeg's ffvpx configuration
 # ==============================================================
 with only_when(compile_environment):
 
     @depends(target)
     def libav_fft(target):
-        flags = None
-        if target.kernel == "WINNT" and target.cpu == "x86":
-            flags = ["-DPIC", "-DWIN32"]
-        elif target.kernel == "WINNT" and target.cpu == "aarch64":
-            flags = ["-DPIC", "-DWIN64"]
-        elif target.cpu == "x86_64":
-            if target.kernel == "Darwin":
-                flags = ["-D__x86_64__", "-DPIC", "-DMACHO"]
-            elif target.kernel == "WINNT":
-                flags = ["-D__x86_64__", "-DPIC", "-DWIN64", "-DMSVC"]
-            else:
-                flags = ["-D__x86_64__", "-DPIC", "-DELF"]
-        if flags:
-            if target.kernel == "Linux" and target.os == "GNU":
-                need_yasm = Version("1.0.1")
-            else:
-                need_yasm = Version("1.1")
-            return namespace(flags=flags, need_yasm=need_yasm)
+        return target.kernel == "WINNT" or target.cpu == "x86_64"
 
     set_config("MOZ_LIBAV_FFT", depends(when=libav_fft)(lambda: True))
     set_define("MOZ_LIBAV_FFT", depends(when=libav_fft)(lambda: True))
-    set_config("LIBAV_FFT_ASFLAGS", libav_fft.flags)
 
 
-# FFmpeg's ffvpx configuration
-# ==============================================================
 # Artifact builds need MOZ_FFVPX defined as if compilation happened.
 with only_when(compile_environment | artifact_builds):
 
-    @depends_if(yasm_version)
-    def yasm_has_avx2(yasm_version):
-        return yasm_version >= "1.2"
-
-    set_config("YASM_HAS_AVX2", yasm_has_avx2)
-
-    @depends(yasm_has_avx2, libav_fft, vpx_as_flags, target)
-    def ffvpx(yasm_has_avx2, libav_fft, vpx_as_flags, target):
-        enable = flac_only = use_yasm = False
+    @depends(target)
+    def ffvpx(target):
+        enable = use_nasm = True
+        flac_only = False
         flags = []
-        if (
-            target.cpu in ("x86", "x86_64")
-            or target.cpu == "aarch64"
-            and target.kernel in ("WINNT", "Darwin")
-        ):
-            enable = True
-            if libav_fft and libav_fft.flags:
-                use_yasm = True
-                flags.extend(libav_fft.flags)
-                if target.kernel == "WINNT":
-                    if target.cpu == "x86":
-                        # 32-bit windows need to prefix symbols with an underscore.
-                        flags.extend(("-DPREFIX", "-Pconfig_win32.asm"))
-                    elif target.cpu == "aarch64":
-                        use_yasm = False
-                    else:
-                        flags.append("-Pconfig_win64.asm")
-                elif target.kernel == "Darwin":
-                    # 32/64-bit macosx assemblers need to prefix symbols with an
-                    # underscore.
-                    flags.extend(("-DPREFIX", "-Pconfig_darwin64.asm"))
-                else:
-                    # Default to unix.
-                    flags.append("-Pconfig_unix64.asm")
+
+        if target.kernel == "WINNT":
+            if target.cpu == "x86":
+                # 32-bit windows need to prefix symbols with an underscore.
+                flags = ["-DPIC", "-DWIN32", "-DPREFIX", "-Pconfig_win32.asm"]
+            elif target.cpu == "x86_64":
+                flags = [
+                    "-D__x86_64__",
+                    "-DPIC",
+                    "-DWIN64",
+                    "-DMSVC",
+                    "-Pconfig_win64.asm",
+                ]
+            elif target.cpu == "aarch64":
+                flags = ["-DPIC", "-DWIN64"]
+                use_nasm = False
+        elif target.kernel == "Darwin":
+            if target.cpu == "x86_64":
+                # 32/64-bit macosx asemblers need to prefix symbols with an
+                # underscore.
+                flags = [
+                    "-D__x86_64__",
+                    "-DPIC",
+                    "-DMACHO",
+                    "-DPREFIX",
+                    "-Pconfig_darwin64.asm",
+                ]
             else:
                 flac_only = True
-        elif target.cpu in ("arm", "aarch64") and target.kernel not in (
-            "WINNT",
-            "Darwin",
-        ):
-            enable = flac_only = True
-            if vpx_as_flags:
-                flags.extend(vpx_as_flags)
+        elif target.cpu == "x86_64":
+            flags = ["-D__x86_64__", "-DPIC", "-DELF", "-Pconfig_unix64.asm"]
+        elif target.cpu in ("x86", "arm", "aarch64"):
+            flac_only = True
+        else:
+            enable = False
 
-        if use_yasm:
+        if flac_only or not enable:
+            use_nasm = False
+
+        if use_nasm:
             # default disabled components
             flags.append("-Pdefaults_disabled.asm")
-            if not yasm_has_avx2:
-                flags.extend(
-                    (
-                        "-DHAVE_AVX2=0",
-                        "-DHAVE_AVX2_INTERNAL=0",
-                        "-DHAVE_AVX2_EXTERNAL=0",
-                    )
-                )
 
         return namespace(
             enable=enable,
-            use_yasm=use_yasm,
+            use_nasm=use_nasm,
             flac_only=flac_only,
             flags=flags,
         )
+
+    @depends(when=ffvpx.use_nasm)
+    def ffvpx_nasm():
+        # nasm 2.10 for AVX-2 support.
+        return namespace(version="2.10", what="FFVPX")
+
+    # ffvpx_nasm can't indirectly depend on vpx_as_flags, because it depends
+    # on a compiler test, so we have to do a little bit of dance here.
+    @depends(ffvpx, vpx_as_flags, target)
+    def ffvpx(ffvpx, vpx_as_flags, target):
+        if ffvpx and vpx_as_flags and target.cpu in ("arm", "aarch64"):
+            ffvpx.flags.extend(vpx_as_flags)
+        return ffvpx
 
     set_config("MOZ_FFVPX", True, when=ffvpx.enable)
     set_define("MOZ_FFVPX", True, when=ffvpx.enable)
     set_config("MOZ_FFVPX_AUDIOONLY", True, when=ffvpx.flac_only)
     set_define("MOZ_FFVPX_AUDIOONLY", True, when=ffvpx.flac_only)
     set_config("FFVPX_ASFLAGS", ffvpx.flags)
-    set_config("FFVPX_USE_YASM", True, when=ffvpx.use_yasm)
+    set_config("FFVPX_USE_NASM", True, when=ffvpx.use_nasm)
 
 
-@depends(
-    yasm_version,
-    in_tree_vpx.need_yasm,
-    in_tree_jpeg.use_yasm,
-    libav_fft.need_yasm,
-    ffvpx.use_yasm,
-)
-@imports(_from="__builtin__", _import="sorted")
-def valid_yasm_version(yasm_version, for_vpx, for_jpeg, for_libav, for_ffvpx=False):
-    # Note: the default for for_ffvpx above only matters for unit tests.
+# nasm detection
+# ==============================================================
+@depends(dav1d_nasm, vpx_nasm, jpeg_nasm, ffvpx_nasm, when=compile_environment)
+def need_nasm(*requirements):
     requires = {
-        "vpx": for_vpx,
-        "jpeg": for_jpeg,
-        "libav": for_libav,
-        "ffvpx": for_ffvpx,
+        x.what: x.version if hasattr(x, "version") else True for x in requirements if x
     }
-    requires = {k: v for (k, v) in requires.items() if v}
-    if requires and not yasm_version:
+    if requires:
         items = sorted(requires.keys())
         if len(items) > 1:
             what = " and ".join((", ".join(items[:-1]), items[-1]))
         else:
             what = items[0]
-        die(
-            "Yasm is required to build with %s, but you do not appear to have "
-            "Yasm installed." % what
-        )
+        versioned = {k: v for (k, v) in requires.items() if v is not True}
+        return namespace(what=what, versioned=versioned)
 
-    versioned = {k: v for (k, v) in requires.items() if v is not True}
+
+nasm = check_prog(
+    "NASM",
+    ["nasm"],
+    allow_missing=True,
+    bootstrap="nasm",
+    when=need_nasm,
+)
+
+
+@depends(nasm, need_nasm.what)
+def check_nasm(nasm, what):
+    if not nasm and what:
+        die("Nasm is required to build with %s, but it was not found." % what)
+    return nasm
+
+
+@depends_if(check_nasm)
+@checking("nasm version")
+def nasm_version(nasm):
+    version = (
+        check_cmd_output(nasm, "-v", onerror=lambda: die("Failed to get nasm version."))
+        .splitlines()[0]
+        .split()[2]
+    )
+    return Version(version)
+
+
+@depends(nasm_version, need_nasm.versioned, when=need_nasm.versioned)
+def check_nasm_version(nasm_version, versioned):
     by_version = sorted(versioned.items(), key=lambda x: x[1])
-    if by_version:
-        what, version = by_version[-1]
-        if yasm_version < version:
-            die(
-                "Yasm version %s or greater is required to build with %s."
-                % (version, what)
-            )
+    what, version = by_version[-1]
+    if nasm_version < version:
+        die(
+            "Nasm version %s or greater is required to build with %s." % (version, what)
+        )
+    return nasm_version
+
+
+@depends(target, when=check_nasm_version)
+def nasm_asflags(target):
+    asflags = {
+        ("OSX", "x86"): ["-f", "macho32"],
+        ("OSX", "x86_64"): ["-f", "macho64"],
+        ("WINNT", "x86"): ["-f", "win32"],
+        ("WINNT", "x86_64"): ["-f", "win64"],
+    }.get((target.os, target.cpu), None)
+    if asflags is None:
+        # We're assuming every x86 platform we support that's
+        # not Windows or Mac is ELF.
+        if target.cpu == "x86":
+            asflags = ["-f", "elf32"]
+        elif target.cpu == "x86_64":
+            asflags = ["-f", "elf64"]
+    return asflags
+
+
+set_config("NASM_ASFLAGS", nasm_asflags)
 
 
 # ANGLE OpenGL->D3D translator for WebGL
@@ -2045,6 +2072,7 @@ def wasm_sandboxing_libraries():
     return (
         "graphite",
         "ogg",
+        "hunspell",
     )
 
 
@@ -2067,7 +2095,7 @@ set_config("MOZ_USING_WASM_SANDBOXING", requires_wasm_sandboxing)
 set_define("MOZ_USING_WASM_SANDBOXING", requires_wasm_sandboxing)
 
 with only_when(requires_wasm_sandboxing & compile_environment):
-    lucetc = check_prog("LUCETC", ["lucetc"], paths=bootstrap_search_path("lucetc"))
+    lucetc = check_prog("LUCETC", ["lucetc"], bootstrap="lucetc")
 
     option(
         "--with-wasi-sysroot",
@@ -2185,17 +2213,6 @@ with only_when(requires_wasm_sandboxing & compile_environment):
 
     set_config("WASM_CXXFLAGS", wasm_cxxflags)
 
-    option(
-        env="WASM_LDFLAGS", nargs=1, help="Options to pass when linking wasm modules"
-    )
-
-    @depends("WASM_LDFLAGS")
-    def wasm_ldflags(value):
-        if value:
-            return value
-
-    set_config("WASM_LDFLAGS", wasm_ldflags)
-
     # This function is returning "ldflags" that lucetc will use when invoking
     # the linker, but really lucetc is going to be invoking the compiler, since
     # the compiler handles lots of details for us (like finding the linker in
@@ -2287,27 +2304,12 @@ set_define("MOZ_NEW_NOTIFICATION_STORE", True, when=new_notification_store)
 
 
 @depends(target)
-def glean(target):
-    if target.os != "Android":
-        return True
+def glean_android(target):
+    return target.os == "Android"
 
 
-set_config("MOZ_GLEAN", True, when=glean)
-set_define("MOZ_GLEAN", True, when=glean)
-
-
-# New Firefox Accounts client implemented in Rust
-# ===============================================
-
-
-@depends(milestone, target)
-def rust_fxa_client(milestone, target):
-    if milestone.is_nightly and target.os != "Android":
-        return True
-
-
-set_config("MOZ_RUST_FXA_CLIENT", True, when=rust_fxa_client)
-set_define("MOZ_RUST_FXA_CLIENT", True, when=rust_fxa_client)
+set_config("MOZ_GLEAN_ANDROID", True, when=glean_android)
+set_define("MOZ_GLEAN_ANDROID", True, when=glean_android)
 
 
 # dump_syms
@@ -2317,7 +2319,7 @@ check_prog(
     "DUMP_SYMS",
     ["dump_syms"],
     allow_missing=True,
-    paths=bootstrap_search_path("dump_syms"),
+    bootstrap="dump_syms",
     when=compile_environment,
 )
 
@@ -2326,7 +2328,7 @@ check_prog(
     "PDBSTR",
     ["pdbstr.exe"],
     allow_missing=True,
-    paths=bootstrap_search_path("pdbstr", when=compile_environment & target_is_windows),
+    bootstrap="pdbstr",
     when=compile_environment & target_is_windows,
 )
 
@@ -2342,9 +2344,7 @@ def allow_missing_winchecksec(automation, c_compiler):
 check_prog(
     "WINCHECKSEC",
     ["winchecksec.exe", "winchecksec"],
-    paths=bootstrap_search_path(
-        "winchecksec", when=compile_environment & target_is_windows
-    ),
+    bootstrap="winchecksec",
     allow_missing=allow_missing_winchecksec,
     when=compile_environment & target_is_windows,
 )
@@ -2353,7 +2353,9 @@ check_prog(
 @depends(target, build_project)
 def forkserver_default(target, build_project):
     return build_project == "browser" and (
-        (target.os == "GNU" and target.kernel == "Linux") or target.os == "FreeBSD"
+        (target.os == "GNU" and target.kernel == "Linux")
+        or target.os == "FreeBSD"
+        or target.os == "OpenBSD"
     )
 
 
@@ -2371,6 +2373,7 @@ def forkserver_flag(value, target):
         target.os == "Android"
         or (target.os == "GNU" and target.kernel == "Linux")
         or target.os == "FreeBSD"
+        or target.os == "OpenBSD"
     ):
         return bool(value)
     pass
@@ -2392,10 +2395,28 @@ with only_when(compile_environment & target_is_linux):
 # ==============================================================
 include("../build/moz.configure/nss.configure")
 
+
+# Enable or disable running in background task mode: headless for
+# periodic, short-lived, maintenance tasks.
+# ==============================================================================
+
+
+option(
+    "--disable-backgroundtasks",
+    help="Disable running in background task mode",
+)
+
+
+set_config(
+    "MOZ_BACKGROUNDTASKS", depends_if("--enable-backgroundtasks")(lambda _: True)
+)
+
+
 # Update-related programs: updater, maintenance service, update agent,
 # default browser agent.
 # ==============================================================
 include("../build/moz.configure/update-programs.configure")
+
 
 # Mobile optimizations
 # ==============================================================
@@ -2483,12 +2504,27 @@ option(
 set_define("MOZ_USE_NATIVE_POPUP_WINDOWS", True, when="MOZ_USE_NATIVE_POPUP_WINDOWS")
 
 
+# Alternative Crashreporter setting
+option(
+    "--with-crashreporter-url",
+    env="MOZ_CRASHREPORTER_URL",
+    default="https://crash-reports.mozilla.com/",
+    nargs=1,
+    help="Set an alternative crashreporter url",
+)
+
+set_config(
+    "MOZ_CRASHREPORTER_URL",
+    depends("--with-crashreporter-url")(lambda x: x[0].rstrip("/")),
+)
+
+
 # Crash reporter options
 # ==============================================================
 @depends(target)
 def oxidized_breakpad(target):
     if target.kernel == "Linux" and target.os != "Android":
-        return False  # Disabled pending further testing
+        return target.cpu in ("x86", "x86_64")
     return False
 
 

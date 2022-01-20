@@ -1,5 +1,6 @@
 ﻿// © 2016 and later: Unicode, Inc. and others.
-// License & terms of use: http://www.unicode.org/copyright.html#License
+// License & terms of use: http://www.unicode.org/copyright.html
+// Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 ug{
     AuxExemplarCharacters{"[\u200E\u200F ئ]"}
     ExemplarCharacters{
@@ -143,13 +144,12 @@ ug{
         }
         minimalPairs{
             plural{
-                one{"{0}  كىتاب"}
+                one{"{0} كىتاب"}
                 other{"{0} بېلىق كۆردۈم ۋە ئۇنى يەۋەتتىم."}
             }
         }
         native{"arabext"}
     }
-    Version{"37"}
     calendar{
         buddhist{
             eras{

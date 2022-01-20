@@ -59,6 +59,10 @@ class LIRGeneratorARM : public LIRGeneratorShared {
       LInstructionHelper<INT64_PIECES, INT64_PIECES + 1, Temps>* ins,
       MDefinition* mir, MDefinition* lhs, MDefinition* rhs);
 
+  void lowerForCompareI64AndBranch(MTest* mir, MCompare* comp, JSOp op,
+                                   MDefinition* left, MDefinition* right,
+                                   MBasicBlock* ifTrue, MBasicBlock* ifFalse);
+
   void lowerForFPU(LInstructionHelper<1, 1, 0>* ins, MDefinition* mir,
                    MDefinition* src);
   template <size_t Temps>
@@ -80,14 +84,21 @@ class LIRGeneratorARM : public LIRGeneratorShared {
   void lowerWasmBuiltinModI64(MWasmBuiltinModI64* mod);
   void lowerUDivI64(MDiv* div);
   void lowerUModI64(MMod* mod);
+  void lowerNegI(MInstruction* ins, MDefinition* input);
+  void lowerNegI64(MInstruction* ins, MDefinition* input);
   void lowerMulI(MMul* mul, MDefinition* lhs, MDefinition* rhs);
   void lowerUDiv(MDiv* div);
   void lowerUMod(MMod* mod);
+  void lowerWasmSelectI(MWasmSelect* select);
+  void lowerWasmSelectI64(MWasmSelect* select);
 
   void lowerBigIntLsh(MBigIntLsh* ins);
   void lowerBigIntRsh(MBigIntRsh* ins);
   void lowerBigIntDiv(MBigIntDiv* ins);
   void lowerBigIntMod(MBigIntMod* ins);
+
+  void lowerAtomicLoad64(MLoadUnboxedScalar* ins);
+  void lowerAtomicStore64(MStoreUnboxedScalar* ins);
 
   LTableSwitch* newLTableSwitch(const LAllocation& in,
                                 const LDefinition& inputCopy,

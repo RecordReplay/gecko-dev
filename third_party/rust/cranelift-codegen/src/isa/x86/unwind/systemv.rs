@@ -3,7 +3,7 @@
 use crate::ir::Function;
 use crate::isa::{
     unwind::systemv::{RegisterMappingError, UnwindInfo},
-    CallConv, RegUnit, TargetIsa,
+    RegUnit, TargetIsa,
 };
 use crate::result::CodegenResult;
 use gimli::{write::CommonInformationEntry, Encoding, Format, Register, X86_64};
@@ -97,8 +97,8 @@ pub(crate) fn create_unwind_info(
     isa: &dyn TargetIsa,
 ) -> CodegenResult<Option<UnwindInfo>> {
     // Only System V-like calling conventions are supported
-    match func.signature.call_conv {
-        CallConv::Fast | CallConv::Cold | CallConv::SystemV => {}
+    match isa.unwind_info_kind() {
+        crate::machinst::UnwindInfoKind::SystemV => {}
         _ => return Ok(None),
     }
 
@@ -121,6 +121,9 @@ pub(crate) fn create_unwind_info(
         fn sp(&self) -> u16 {
             X86_64::RSP.0
         }
+        fn fp(&self) -> Option<u16> {
+            Some(X86_64::RBP.0)
+        }
     }
     let map = RegisterMapper(isa);
 
@@ -134,7 +137,7 @@ mod tests {
     use crate::ir::{
         types, AbiParam, ExternalName, InstBuilder, Signature, StackSlotData, StackSlotKind,
     };
-    use crate::isa::{lookup, CallConv};
+    use crate::isa::{lookup_variant, BackendVariant, CallConv};
     use crate::settings::{builder, Flags};
     use crate::Context;
     use gimli::write::Address;
@@ -142,9 +145,8 @@ mod tests {
     use target_lexicon::triple;
 
     #[test]
-    #[cfg_attr(feature = "x64", should_panic)] // TODO #2079
     fn test_simple_func() {
-        let isa = lookup(triple!("x86_64"))
+        let isa = lookup_variant(triple!("x86_64"), BackendVariant::Legacy)
             .expect("expect x86 ISA")
             .finish(Flags::new(builder()));
 
@@ -185,9 +187,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "x64", should_panic)] // TODO #2079
     fn test_multi_return_func() {
-        let isa = lookup(triple!("x86_64"))
+        let isa = lookup_variant(triple!("x86_64"), BackendVariant::Legacy)
             .expect("expect x86 ISA")
             .finish(Flags::new(builder()));
 

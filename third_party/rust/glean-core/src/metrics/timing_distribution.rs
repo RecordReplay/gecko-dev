@@ -47,6 +47,7 @@ impl Timings {
     }
 
     /// Start a new timer and set it to the `start_time`.
+    /// Multiple timers can run simultaneously.
     ///
     /// Returns a new [`TimerId`] identifying the timer.
     fn set_start(&mut self, start_time: u64) -> TimerId {
@@ -313,13 +314,70 @@ impl TimingDistributionMetric {
         }
     }
 
+    /// Accumulates the provided samples in the metric.
+    ///
+    /// # Arguments
+    ///
+    /// * `samples` - A list of samples recorded by the metric.
+    ///               Samples must be in nanoseconds.
+    /// ## Notes
+    ///
+    /// Reports an [`ErrorType::InvalidOverflow`] error for samples that
+    /// are longer than `MAX_SAMPLE_TIME`.
+    pub fn accumulate_raw_samples_nanos(&mut self, glean: &Glean, samples: &[u64]) {
+        if !self.should_record(glean) {
+            return;
+        }
+
+        let mut num_too_long_samples = 0;
+        let min_sample_time = self.time_unit.as_nanos(1);
+        let max_sample_time = self.time_unit.as_nanos(MAX_SAMPLE_TIME);
+
+        glean.storage().record_with(glean, &self.meta, |old_value| {
+            let mut hist = match old_value {
+                Some(Metric::TimingDistribution(hist)) => hist,
+                _ => Histogram::functional(LOG_BASE, BUCKETS_PER_MAGNITUDE),
+            };
+
+            for &sample in samples.iter() {
+                let mut sample = sample;
+
+                if sample < min_sample_time {
+                    sample = min_sample_time;
+                } else if sample > max_sample_time {
+                    num_too_long_samples += 1;
+                    sample = max_sample_time;
+                }
+
+                // `sample` is in nanoseconds.
+                hist.accumulate(sample);
+            }
+
+            Metric::TimingDistribution(hist)
+        });
+
+        if num_too_long_samples > 0 {
+            let msg = format!(
+                "{} samples are longer than the maximum of {}",
+                num_too_long_samples, max_sample_time
+            );
+            record_error(
+                glean,
+                &self.meta,
+                ErrorType::InvalidOverflow,
+                msg,
+                num_too_long_samples,
+            );
+        }
+    }
+
     /// **Test-only API (exported for FFI purposes).**
     ///
     /// Gets the currently stored value as an integer.
     ///
     /// This doesn't clear the stored value.
     pub fn test_get_value(&self, glean: &Glean, storage_name: &str) -> Option<DistributionData> {
-        match StorageManager.snapshot_metric(
+        match StorageManager.snapshot_metric_for_test(
             glean.storage(),
             storage_name,
             &self.meta.identifier(glean),

@@ -8,11 +8,24 @@ const {
 } = require("../utils");
 
 const replayRevision = getLatestReplayRevision();
-const playwrightRevision = getLatestPlaywrightRevision();
+const unmergedPlaywrightRevision = getLatestPlaywrightRevision();
+
+const mergePlaywrightTask = newTask(
+  `Merge into playwright branch`,
+  {
+    kind: "MergeBranches",
+    mergeKind: "geckoPlaywright",
+    sourceRevision: replayRevision,
+    targetRevision: unmergedPlaywrightRevision,
+    updateRevisionTasks: [],
+  },
+  "macOS"
+);
 
 sendBuildTestRequest({
   name: `Gecko Build/Test ${replayRevision}`,
   tasks: [
+    mergePlaywrightTask,
     ...platformTasks("macOS"),
     ...platformTasks("linux"),
     ...platformTasks("windows"),
@@ -50,21 +63,24 @@ function platformTasks(platform) {
       {
         kind: "BuildRuntime",
         runtime: "geckoPlaywright",
-        revision: playwrightRevision,
+        revision: "",
       },
-      platform
+      platform,
+      [mergePlaywrightTask]
     );
+    mergePlaywrightTask.updateRevisionTasks.push(buildPlaywrightTask.id);
 
     const testPlaywrightTask = newTask(
       `Test Gecko/Playwright ${platform}`,
       {
         kind: "PlaywrightLiveTests",
         runtime: "geckoPlaywright",
-        revision: playwrightRevision,
+        revision: "",
       },
       platform,
       [buildPlaywrightTask]
     );
+    mergePlaywrightTask.updateRevisionTasks.push(testPlaywrightTask.id);
 
     tasks.push(buildPlaywrightTask, testPlaywrightTask);
   }

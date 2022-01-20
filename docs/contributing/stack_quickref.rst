@@ -8,6 +8,14 @@ This also helps to breakdown the work for different reviewers.
 As it can be complex for new comers, this documentation explains the
 various commands.
 
+In Phabricator, the stack can be seen in the `Revision Contents` section.
+The top of the stack (most recent change) is first in the list.
+
+**Example:**
+
+.. image:: img/example-stack.png
+
+
 For the overall quick reference guide, see the :ref:`Firefox Contributors Quick Reference <Firefox Contributors' Quick Reference>`
 
 Visualize the stack
@@ -101,3 +109,12 @@ mozilla-central before landing the changes.
     $ git remote update
     $ git rebase mozilla/central
 
+
+Reorganizing the stack in Phabricator
+-------------------------------------
+
+`moz-phab reorg [start_rev] [end_rev]` allows you to reorganize the stack in Phabricator.
+
+If you've changed the local stack by adding, removing or moving the commits around, you need to change the parent/child relation of the revisions in Phabricator.
+
+`moz-phab reorg` command will compare the stack, display what will be changed and ask for permission before taking any action.

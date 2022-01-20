@@ -24,7 +24,9 @@
 #include "nsFrameSelection.h"
 #include "nsIContent.h"
 #include "nsIInterfaceRequestorUtils.h"
+#include "nsILoadContext.h"
 #include "nsINode.h"
+#include "nsITransferable.h"
 #include "nsRange.h"
 #include "nsStyleStruct.h"
 #include "nsTextFragment.h"
@@ -85,6 +87,60 @@ EditActionResult& EditActionResult::operator|=(
  * mozilla::AutoRangeArray
  *****************************************************************************/
 
+// static
+bool AutoRangeArray::IsEditableRange(const dom::AbstractRange& aRange,
+                                     const Element& aEditingHost) {
+  // TODO: Perhaps, we should check whether the start/end boundaries are
+  //       first/last point of non-editable element.
+  //       See https://github.com/w3c/editing/issues/283#issuecomment-788654850
+  EditorRawDOMPoint atStart(aRange.StartRef());
+  const bool isStartEditable =
+      atStart.IsInContentNode() &&
+      EditorUtils::IsEditableContent(*atStart.ContainerAsContent(),
+                                     EditorUtils::EditorType::HTML) &&
+      !HTMLEditUtils::IsNonEditableReplacedContent(
+          *atStart.ContainerAsContent());
+  if (!isStartEditable) {
+    return false;
+  }
+
+  if (!aRange.Collapsed()) {
+    EditorRawDOMPoint atEnd(aRange.EndRef());
+    const bool isEndEditable =
+        atEnd.IsInContentNode() &&
+        EditorUtils::IsEditableContent(*atEnd.ContainerAsContent(),
+                                       EditorUtils::EditorType::HTML) &&
+        !HTMLEditUtils::IsNonEditableReplacedContent(
+            *atEnd.ContainerAsContent());
+    if (!isEndEditable) {
+      return false;
+    }
+
+    // Now, both start and end points are editable, but if they are in
+    // different editing host, we cannot edit the range.
+    if (atStart.ContainerAsContent() != atEnd.ContainerAsContent() &&
+        atStart.ContainerAsContent()->GetEditingHost() !=
+            atEnd.ContainerAsContent()->GetEditingHost()) {
+      return false;
+    }
+  }
+
+  // HTMLEditor does not support modifying outside `<body>` element for now.
+  nsINode* commonAncestor = aRange.GetClosestCommonInclusiveAncestor();
+  return commonAncestor && commonAncestor->IsContent() &&
+         commonAncestor->IsInclusiveDescendantOf(&aEditingHost);
+}
+
+void AutoRangeArray::EnsureOnlyEditableRanges(const Element& aEditingHost) {
+  for (size_t i = mRanges.Length(); i > 0; i--) {
+    const OwningNonNull<nsRange>& range = mRanges[i - 1];
+    if (!AutoRangeArray::IsEditableRange(range, aEditingHost)) {
+      mRanges.RemoveElementAt(i - 1);
+    }
+  }
+  mAnchorFocusRange = mRanges.IsEmpty() ? nullptr : mRanges.LastElement().get();
+}
+
 Result<nsIEditor::EDirection, nsresult>
 AutoRangeArray::ExtendAnchorFocusRangeFor(
     const EditorBase& aEditorBase, nsIEditor::EDirection aDirectionAndAmount) {
@@ -99,21 +155,29 @@ AutoRangeArray::ExtendAnchorFocusRangeFor(
     return aDirectionAndAmount;
   }
 
-  const RefPtr<Selection>& selection = aEditorBase.SelectionRefPtr();
-  if (NS_WARN_IF(!selection->RangeCount())) {
+  if (NS_WARN_IF(!aEditorBase.SelectionRef().RangeCount())) {
     return Err(NS_ERROR_FAILURE);
   }
 
   // At this point, the anchor-focus ranges must match for bidi information.
   // See `EditorBase::AutoCaretBidiLevelManager`.
-  MOZ_ASSERT(selection->GetAnchorFocusRange()->StartRef() ==
+  MOZ_ASSERT(aEditorBase.SelectionRef().GetAnchorFocusRange()->StartRef() ==
              mAnchorFocusRange->StartRef());
-  MOZ_ASSERT(selection->GetAnchorFocusRange()->EndRef() ==
+  MOZ_ASSERT(aEditorBase.SelectionRef().GetAnchorFocusRange()->EndRef() ==
              mAnchorFocusRange->EndRef());
 
-  RefPtr<nsFrameSelection> frameSelection = selection->GetFrameSelection();
+  RefPtr<nsFrameSelection> frameSelection =
+      aEditorBase.SelectionRef().GetFrameSelection();
   if (NS_WARN_IF(!frameSelection)) {
     return Err(NS_ERROR_NOT_INITIALIZED);
+  }
+
+  RefPtr<Element> editingHost;
+  if (aEditorBase.IsHTMLEditor()) {
+    editingHost = aEditorBase.AsHTMLEditor()->GetActiveEditingHost();
+    if (!editingHost) {
+      return Err(NS_ERROR_FAILURE);
+    }
   }
 
   Result<RefPtr<nsRange>, nsresult> result(NS_ERROR_UNEXPECTED);
@@ -241,6 +305,12 @@ AutoRangeArray::ExtendAnchorFocusRangeFor(
   if (!extendedRange || NS_WARN_IF(!extendedRange->IsPositioned())) {
     NS_WARNING("Failed to extend the range, but ignored");
     return directionAndAmountResult;
+  }
+
+  // If the new range isn't editable, keep using the original range.
+  if (aEditorBase.IsHTMLEditor() &&
+      !AutoRangeArray::IsEditableRange(*extendedRange, *editingHost)) {
+    return aDirectionAndAmount;
   }
 
   if (NS_WARN_IF(!frameSelection->IsValidSelectionPoint(
@@ -490,7 +560,7 @@ bool EditorUtils::IsContentPreformatted(nsIContent& aContent) {
 
 bool EditorUtils::IsPointInSelection(const Selection& aSelection,
                                      const nsINode& aParentNode,
-                                     int32_t aOffset) {
+                                     uint32_t aOffset) {
   if (aSelection.IsCollapsed()) {
     return false;
   }
@@ -517,6 +587,39 @@ bool EditorUtils::IsPointInSelection(const Selection& aSelection,
   }
 
   return false;
+}
+
+// static
+Result<nsCOMPtr<nsITransferable>, nsresult>
+EditorUtils::CreateTransferableForPlainText(const Document& aDocument) {
+  // Create generic Transferable for getting the data
+  nsresult rv;
+  nsCOMPtr<nsITransferable> transferable =
+      do_CreateInstance("@mozilla.org/widget/transferable;1", &rv);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("do_CreateInstance() failed to create nsITransferable instance");
+    return Err(rv);
+  }
+
+  if (!transferable) {
+    NS_WARNING("do_CreateInstance() returned nullptr, but ignored");
+    return nsCOMPtr<nsITransferable>();
+  }
+
+  DebugOnly<nsresult> rvIgnored =
+      transferable->Init(aDocument.GetLoadContext());
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
+                       "nsITransferable::Init() failed, but ignored");
+
+  rvIgnored = transferable->AddDataFlavor(kUnicodeMime);
+  NS_WARNING_ASSERTION(
+      NS_SUCCEEDED(rvIgnored),
+      "nsITransferable::AddDataFlavor(kUnicodeMime) failed, but ignored");
+  rvIgnored = transferable->AddDataFlavor(kMozTextInternal);
+  NS_WARNING_ASSERTION(
+      NS_SUCCEEDED(rvIgnored),
+      "nsITransferable::AddDataFlavor(kMozTextInternal) failed, but ignored");
+  return transferable;
 }
 
 }  // namespace mozilla

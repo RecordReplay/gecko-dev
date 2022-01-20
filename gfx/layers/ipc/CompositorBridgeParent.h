@@ -33,8 +33,6 @@
 #include "mozilla/layers/PCompositorBridgeParent.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 
-struct DxgiAdapterDesc;
-
 namespace mozilla {
 
 class CancelableRunnable;
@@ -99,11 +97,15 @@ class CompositorThreadHolder;
 class InProcessCompositorSession;
 class UiCompositorControllerParent;
 class WebRenderBridgeParent;
+class WebRenderScrollDataWrapper;
 struct CollectedFrames;
 
 struct ScopedLayerTreeRegistration {
-  ScopedLayerTreeRegistration(APZCTreeManager* aApzctm, LayersId aLayersId,
-                              Layer* aRoot,
+  // For Layers
+  ScopedLayerTreeRegistration(LayersId aLayersId, Layer* aRoot,
+                              GeckoContentController* aController);
+  // For WebRender
+  ScopedLayerTreeRegistration(LayersId aLayersId,
                               GeckoContentController* aController);
   ~ScopedLayerTreeRegistration();
 
@@ -255,14 +257,12 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
   virtual bool DeallocPCompositorWidgetParent(
       PCompositorWidgetParent* aActor) = 0;
 
-  virtual mozilla::ipc::IPCResult RecvRemotePluginsReady() = 0;
   virtual mozilla::ipc::IPCResult RecvAdoptChild(const LayersId& id) = 0;
   virtual mozilla::ipc::IPCResult RecvFlushRenderingAsync() = 0;
   virtual mozilla::ipc::IPCResult RecvForcePresent() = 0;
   virtual mozilla::ipc::IPCResult RecvNotifyRegionInvalidated(
       const nsIntRegion& region) = 0;
   virtual mozilla::ipc::IPCResult RecvRequestNotifyAfterRemotePaint() = 0;
-  virtual mozilla::ipc::IPCResult RecvAllPluginsCaptured() = 0;
   virtual mozilla::ipc::IPCResult RecvBeginRecording(
       const TimeStamp& aRecordingStart, BeginRecordingResolver&& aResolve) = 0;
   virtual mozilla::ipc::IPCResult RecvEndRecordingToDisk(
@@ -296,14 +296,6 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
   virtual mozilla::ipc::IPCResult RecvInitPCanvasParent(
       Endpoint<PCanvasParent>&& aEndpoint) = 0;
   virtual mozilla::ipc::IPCResult RecvReleasePCanvasParent() = 0;
-
-  virtual mozilla::ipc::IPCResult RecvSupportsAsyncDXGISurface(bool* value) {
-    return IPC_FAIL_NO_REASON(this);
-  }
-  virtual mozilla::ipc::IPCResult RecvPreferredDXGIAdapter(
-      DxgiAdapterDesc* desc) {
-    return IPC_FAIL_NO_REASON(this);
-  }
 
   virtual already_AddRefed<PWebGLParent> AllocPWebGLParent() = 0;
 
@@ -388,7 +380,6 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
 
   void SetLayerManager(HostLayerManager* aLayerManager);
 
-  mozilla::ipc::IPCResult RecvAllPluginsCaptured() override;
   mozilla::ipc::IPCResult RecvBeginRecording(
       const TimeStamp& aRecordingStart,
       BeginRecordingResolver&& aResolve) override;
@@ -566,8 +557,6 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
     ContentCompositorBridgeParent* mContentCompositorBridgeParent;
     TargetConfig mTargetConfig;
     LayerTransactionParent* mLayerTree;
-    nsTArray<PluginWindowData> mPluginData;
-    bool mUpdatedPluginDataAvailable;
 
     CompositorController* GetCompositorController() const;
     MetricsSharingController* CrossProcessSharingController() const;
@@ -606,32 +595,6 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
    */
   static GeckoContentController* GetGeckoContentControllerForRoot(
       LayersId aContentLayersId);
-
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-  /**
-   * Calculates and requests the main thread update plugin positioning, clip,
-   * and visibility via ipc.
-   */
-  bool UpdatePluginWindowState(LayersId aId);
-
-  /**
-   * Plugin visibility helpers for the apz (main thread) and compositor
-   * thread.
-   */
-  void ScheduleShowAllPluginWindows() override;
-  void ScheduleHideAllPluginWindows() override;
-  void ShowAllPluginWindows();
-  void HideAllPluginWindows();
-#else
-  void ScheduleShowAllPluginWindows() override {}
-  void ScheduleHideAllPluginWindows() override {}
-#endif
-
-  /**
-   * Main thread response for a plugin visibility request made by the
-   * compositor thread.
-   */
-  mozilla::ipc::IPCResult RecvRemotePluginsReady() override;
 
   /**
    * Used by the profiler to denote when a vsync occured
@@ -745,6 +708,8 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
    */
   Maybe<CollectedFramesParams> WrapCollectedFrames(CollectedFrames&& aFrames);
 
+  void MaybeDeclareStable();
+
  protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~CompositorBridgeParent();
@@ -778,8 +743,6 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
   void CompositeToTarget(VsyncId aId, gfx::DrawTarget* aTarget,
                          const gfx::IntRect* aRect = nullptr) override;
 
-  bool InitializeAdvancedLayers(const nsTArray<LayersBackend>& aBackendHints,
-                                TextureFactoryIdentifier* aOutIdentifier);
   RefPtr<Compositor> NewCompositor(
       const nsTArray<LayersBackend>& aBackendHints);
 
@@ -811,8 +774,9 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
   void DidComposite(const VsyncId& aId, TimeStamp& aCompositeStart,
                     TimeStamp& aCompositeEnd);
 
-  void NotifyDidComposite(TransactionId aTransactionId, VsyncId aId,
-                          TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd);
+  void NotifyDidComposite(const nsTArray<TransactionId>& aTransactionIds,
+                          VsyncId aId, TimeStamp& aCompositeStart,
+                          TimeStamp& aCompositeEnd);
 
   // The indirect layer tree lock must be held before calling this function.
   // Callback should take (LayerTreeState* aState, const LayersId& aLayersId)
@@ -835,7 +799,7 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
   CSSToLayoutDeviceScale mScale;
   TimeDuration mVsyncRate;
 
-  TransactionId mPendingTransaction;
+  AutoTArray<TransactionId, 2> mPendingTransactions;
   TimeStamp mRefreshStartTime;
   TimeStamp mTxnStartTime;
   TimeStamp mFwdTime;
@@ -871,24 +835,6 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
   RefPtr<CompositorAnimationStorage> mAnimationStorage;
 
   TimeDuration mPaintTime;
-
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-  // cached plugin data used to reduce the number of updates we request.
-  LayersId mLastPluginUpdateLayerTreeId;
-  nsIntPoint mPluginsLayerOffset;
-  nsIntRegion mPluginsLayerVisibleRegion;
-  nsTArray<PluginWindowData> mCachedPluginData;
-  // Time until which we will block composition to wait for plugin updates.
-  TimeStamp mWaitForPluginsUntil;
-  // Indicates that we have actually blocked a composition waiting for plugins.
-  bool mHaveBlockedForPlugins = false;
-  // indicates if plugin window visibility and metric updates are currently
-  // being defered due to a scroll operation.
-  bool mDeferPluginWindows;
-  // indicates if the plugin windows were hidden, and need to be made
-  // visible again even if their geometry has not changed.
-  bool mPluginWindowsHidden;
-#endif
 
   DISALLOW_EVIL_CONSTRUCTORS(CompositorBridgeParent);
 };

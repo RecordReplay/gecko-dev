@@ -15,6 +15,7 @@
 #include "sslimpl.h"
 #include "sslproto.h"
 #include "ssl3exthandle.h"
+#include "tls13ech.h"
 #include "tls13err.h"
 #include "tls13exthandle.h"
 #include "tls13subcerts.h"
@@ -54,6 +55,7 @@ static const ssl3ExtensionHandler clientHelloHandlers[] = {
     { ssl_tls13_psk_key_exchange_modes_xtn, &tls13_ServerHandlePskModesXtn },
     { ssl_tls13_cookie_xtn, &tls13_ServerHandleCookieXtn },
     { ssl_tls13_post_handshake_auth_xtn, &tls13_ServerHandlePostHandshakeAuthXtn },
+    { ssl_tls13_ech_is_inner_xtn, &tls13_ServerHandleEchIsInnerXtn },
     { ssl_record_size_limit_xtn, &ssl_HandleRecordSizeLimitXtn },
     { 0, NULL }
 };
@@ -835,9 +837,6 @@ ssl_SendEmptyExtension(const sslSocket *ss, TLSExtensionData *xtnData,
 static unsigned int
 ssl_CalculatePaddingExtLen(const sslSocket *ss, unsigned int clientHelloLength)
 {
-    unsigned int recordLength = 1 /* handshake message type */ +
-                                3 /* handshake message length */ +
-                                clientHelloLength;
     unsigned int extensionLen;
 
     /* Don't pad for DTLS, for SSLv3, or for renegotiation. */
@@ -851,11 +850,11 @@ ssl_CalculatePaddingExtLen(const sslSocket *ss, unsigned int clientHelloLength)
      * the ClientHello doesn't have a length between 256 and 511 bytes
      * (inclusive). Initial ClientHello records with such lengths trigger bugs
      * in F5 devices. */
-    if (recordLength < 256 || recordLength >= 512) {
+    if (clientHelloLength < 256 || clientHelloLength >= 512) {
         return 0;
     }
 
-    extensionLen = 512 - recordLength;
+    extensionLen = 512 - clientHelloLength;
     /* Extensions take at least four bytes to encode. Always include at least
      * one byte of data if we are padding. Some servers will time out or
      * terminate the connection if the last ClientHello extension is empty. */
@@ -1020,12 +1019,8 @@ ssl3_DestroyExtensionData(TLSExtensionData *xtnData)
     PORT_Free(xtnData->advertised);
     tls13_DestroyDelegatedCredential(xtnData->peerDelegCred);
 
-    /* ECH State */
-    SECITEM_FreeItem(&xtnData->innerCh, PR_FALSE);
-    SECITEM_FreeItem(&xtnData->echSenderPubKey, PR_FALSE);
-    SECITEM_FreeItem(&xtnData->echConfigId, PR_FALSE);
-    SECITEM_FreeItem(&xtnData->echRetryConfigs, PR_FALSE);
-    xtnData->echRetryConfigsValid = PR_FALSE;
+    tls13_DestroyEchXtnState(xtnData->ech);
+    xtnData->ech = NULL;
 }
 
 /* Free everything that has been allocated and then reset back to

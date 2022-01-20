@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 from abc import ABCMeta, abstractmethod
+from io import open
 
 import six
 from logger.logger import RaptorLogger
@@ -17,10 +18,10 @@ from output import RaptorOutput, BrowsertimeOutput
 
 LOG = RaptorLogger(component="perftest-results-handler")
 KNOWN_TEST_MODIFIERS = [
-    "nocondprof",
+    "condprof-settled",
     "fission",
     "live",
-    "gecko_profile",
+    "gecko-profile",
     "cold",
     "webrender",
 ]
@@ -38,7 +39,7 @@ class PerftestResultsHandler(object):
         memory_test=False,
         live_sites=False,
         app=None,
-        no_conditioned_profile=False,
+        conditioned_profile=None,
         cold=False,
         enable_webrender=False,
         chimera=False,
@@ -50,6 +51,7 @@ class PerftestResultsHandler(object):
         self.memory_test = memory_test
         self.live_sites = live_sites
         self.app = app
+        self.conditioned_profile = conditioned_profile
         self.results = []
         self.page_timeout_list = []
         self.images = []
@@ -60,7 +62,6 @@ class PerftestResultsHandler(object):
         self.webrender_enabled = enable_webrender
         self.browser_version = None
         self.browser_name = None
-        self.no_conditioned_profile = no_conditioned_profile
         self.cold = cold
         self.chimera = chimera
 
@@ -75,14 +76,19 @@ class PerftestResultsHandler(object):
         # checking all known fields. Otherwise, we only check
         # the fields that were given to us.
         if modifiers is None:
-            if self.no_conditioned_profile:
-                extra_options.append("nocondprof")
+            if self.conditioned_profile:
+                # Don't add an option/tag for the base test case
+                if self.conditioned_profile != "settled":
+                    extra_options.append(
+                        "condprof-%s"
+                        % self.conditioned_profile.replace("artifact:", "")
+                    )
             if self.fission_enabled:
                 extra_options.append("fission")
             if self.live_sites:
                 extra_options.append("live")
             if self.gecko_profile:
-                extra_options.append("gecko_profile")
+                extra_options.append("gecko-profile")
             if self.cold:
                 extra_options.append("cold")
             if self.webrender_enabled:
@@ -191,10 +197,6 @@ class PerftestResultsHandler(object):
 
         expected_perfherder = 1
 
-        if output.mozproxy_data:
-            # Check if we have mozproxy data available.
-            expected_perfherder += 1
-
         if is_resource_test():
             # when resource tests are run, no perfherder data is output
             # for the regular raptor tests (i.e. speedometer) so we
@@ -233,7 +235,7 @@ class PerftestResultsHandler(object):
         )
         LOG.info("Validating PERFHERDER_DATA against %s" % schema_path)
         try:
-            with open(schema_path) as f:
+            with open(schema_path, encoding="utf-8") as f:
                 schema = json.load(f)
             if output.summarized_results:
                 data = output.summarized_results
@@ -259,7 +261,10 @@ class RaptorResultsHandler(PerftestResultsHandler):
         new_result_json.setdefault("extra_options", []).extend(
             self.build_extra_options(
                 [
-                    (self.no_conditioned_profile, "nocondprof"),
+                    (
+                        self.conditioned_profile,
+                        "condprof-%s" % self.conditioned_profile,
+                    ),
                     (self.fission_enabled, "fission"),
                     (self.webrender_enabled, "webrender"),
                 ]
@@ -274,7 +279,10 @@ class RaptorResultsHandler(PerftestResultsHandler):
         # summarize the result data, write to file and output PERFHERDER_DATA
         LOG.info("summarizing raptor test results")
         output = RaptorOutput(
-            self.results, self.supporting_data, test_config["subtest_alert_on"]
+            self.results,
+            self.supporting_data,
+            test_config["subtest_alert_on"],
+            self.app,
         )
         output.set_browser_meta(self.browser_name, self.browser_version)
         output.summarize(test_names)
@@ -554,12 +562,11 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                 vismet_result["statistics"] = raw_result["statistics"]["visualMetrics"]
                 results.append(vismet_result)
 
-            custom_types = raw_result["browserScripts"][0].get("custom")
+            custom_types = raw_result["extras"][0]
             if custom_types:
                 for custom_type in custom_types:
-                    bt_result["measurements"].update(
-                        {k: [v] for k, v in custom_types[custom_type].items()}
-                    )
+                    for k, v in custom_types[custom_type].items():
+                        bt_result["measurements"].setdefault(k, []).append(v)
             else:
                 # extracting values from browserScripts and statistics
                 for bt, raptor in conversion:
@@ -574,9 +581,6 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                         )
                         and bt in ("fnbpaint", "dcf")
                     ):
-                        continue
-                    # fennec doesn't support 'fcp'
-                    if self.app and "fennec" in self.app.lower() and bt == "fcp":
                         continue
 
                     # FCP uses a different path to get the timing, so we need to do
@@ -616,6 +620,7 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
         browsertime_json,
         json_name="browsertime.json",
         extra_options=[],
+        accept_zero_vismet=False,
     ):
         # The visual metrics task expects posix paths.
         def _normalized_join(*args):
@@ -629,6 +634,7 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
             "browsertime_json_path": _normalized_join(reldir, json_name),
             "test_name": test_name,
             "extra_options": extra_options,
+            "accept_zero_vismet": accept_zero_vismet,
         }
 
     def summarize_and_output(self, test_config, tests, test_names):
@@ -664,6 +670,8 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
 
         for test in tests:
             test_name = test["name"]
+            accept_zero_vismet = test.get("accept_zero_vismet", False)
+
             bt_res_json = os.path.join(
                 self.result_dir_for_test(test), "browsertime.json"
             )
@@ -674,7 +682,7 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                 return False
 
             try:
-                with open(bt_res_json, "r") as f:
+                with open(bt_res_json, "r", encoding="utf8") as f:
                     raw_btresults = json.load(f)
             except Exception as e:
                 LOG.error("Exception reading %s" % bt_res_json)
@@ -712,6 +720,7 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                             cold_path,
                             json_name="cold-browsertime.json",
                             extra_options=list(extra_options),
+                            accept_zero_vismet=accept_zero_vismet,
                         )
                     )
 
@@ -723,12 +732,16 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
                             warm_path,
                             json_name="warm-browsertime.json",
                             extra_options=list(extra_options),
+                            accept_zero_vismet=accept_zero_vismet,
                         )
                     )
                 else:
                     video_jobs.append(
                         self._extract_vmetrics(
-                            test_name, bt_res_json, extra_options=list(extra_options)
+                            test_name,
+                            bt_res_json,
+                            extra_options=list(extra_options),
+                            accept_zero_vismet=accept_zero_vismet,
                         )
                     )
 
@@ -823,7 +836,10 @@ class BrowsertimeResultsHandler(PerftestResultsHandler):
 
         # now have all results gathered from all browsertime test URLs; format them for output
         output = BrowsertimeOutput(
-            self.results, self.supporting_data, test_config["subtest_alert_on"]
+            self.results,
+            self.supporting_data,
+            test_config["subtest_alert_on"],
+            self.app,
         )
         output.set_browser_meta(self.browser_name, self.browser_version)
         output.summarize(test_names)

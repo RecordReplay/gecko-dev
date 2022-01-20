@@ -13,12 +13,10 @@ var { gDevTools } = require("devtools/client/framework/devtools");
 var { BrowserLoader } = ChromeUtils.import(
   "resource://devtools/client/shared/browser-loader.js"
 );
-var promise = require("promise");
 var Services = require("Services");
 var { DevToolsServer } = require("devtools/server/devtools-server");
 var { DevToolsClient } = require("devtools/client/devtools-client");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
-var { TargetFactory } = require("devtools/client/framework/target");
 var { Toolbox } = require("devtools/client/framework/toolbox");
 
 var { require: browserRequire } = BrowserLoader({

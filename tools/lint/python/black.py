@@ -11,8 +11,10 @@ import signal
 import subprocess
 import sys
 
+from mozfile import which
 from mozlint import result
 from mozlint.pathutils import expand_exclusions
+import mozpack.path as mozpath
 from mozprocess import ProcessHandler
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -49,7 +51,8 @@ def get_black_version(binary):
     except subprocess.CalledProcessError as e:
         output = e.output
 
-    return re.match(r"black, version (.*)$", output)[1]
+    # Accept `black.EXE, version ...` on Windows.
+    return re.match(r"black.*, version (.*)$", output)[1]
 
 
 def parse_issues(config, output, paths, *, log):
@@ -108,6 +111,27 @@ def run_process(config, cmd):
 
 
 def setup(root, **lintargs):
+    log = lintargs["log"]
+    virtualenv_bin_path = lintargs.get("virtualenv_bin_path")
+    # Using `which` searches multiple directories and handles `.exe` on Windows.
+    binary = which("black", path=(virtualenv_bin_path, default_bindir()))
+
+    if binary and os.path.exists(binary):
+        binary = mozpath.normsep(binary)
+        log.debug("Looking for black at {}".format(binary))
+        version = get_black_version(binary)
+        versions = [
+            line.split()[0].strip()
+            for line in open(BLACK_REQUIREMENTS_PATH).readlines()
+            if line.startswith("black==")
+        ]
+        if ["black=={}".format(version)] == versions:
+            log.debug("Black is present with expected version {}".format(version))
+            return 0
+        else:
+            log.debug("Black is present but unexpected version {}".format(version))
+
+    log.debug("Black needs to be installed or updated")
     virtualenv_manager = lintargs["virtualenv_manager"]
     try:
         virtualenv_manager.install_pip_requirements(BLACK_REQUIREMENTS_PATH, quiet=True)
@@ -117,6 +141,7 @@ def setup(root, **lintargs):
 
 
 def run_black(config, paths, fix=None, *, log, virtualenv_bin_path):
+    fixed = 0
     binary = os.path.join(virtualenv_bin_path or default_bindir(), "black")
 
     log.debug("Black version {}".format(get_black_version(binary)))
@@ -124,9 +149,17 @@ def run_black(config, paths, fix=None, *, log, virtualenv_bin_path):
     cmd_args = [binary]
     if not fix:
         cmd_args.append("--check")
+
     base_command = cmd_args + paths
     log.debug("Command: {}".format(" ".join(base_command)))
-    return parse_issues(config, run_process(config, base_command), paths, log=log)
+    output = parse_issues(config, run_process(config, base_command), paths, log=log)
+
+    # black returns an issue for fixed files as well
+    for eachIssue in output:
+        if eachIssue.message == "reformatted":
+            fixed += 1
+
+    return {"results": output, "fixed": fixed}
 
 
 def lint(paths, config, fix=None, **lintargs):

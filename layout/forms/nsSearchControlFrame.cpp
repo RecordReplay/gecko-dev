@@ -41,7 +41,7 @@ nsSearchControlFrame::nsSearchControlFrame(ComputedStyle* aStyle,
 
 void nsSearchControlFrame::DestroyFrom(nsIFrame* aDestructRoot,
                                        PostDestroyData& aPostDestroyData) {
-  aPostDestroyData.AddAnonymousContent(mOuterWrapper.forget());
+  aPostDestroyData.AddAnonymousContent(mClearButton.forget());
   nsTextControlFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
@@ -51,52 +51,33 @@ nsresult nsSearchControlFrame::CreateAnonymousContent(
   // follows:
   //
   // input
-  //   div      - outer wrapper with "display:flex" by default
-  //     div    - editor root
-  //     button - clear button
-  //   div      - placeholder
-  //   div      - preview div
+  //   div    - placeholder
+  //   div    - preview div
+  //   div    - editor root
+  //   button - clear button
   //
-  // If you change this, be careful to change the destruction order in
-  // nsSearchControlFrame::DestroyFrom.
+  // If you change this, be careful to change the order of stuff in
+  // AppendAnonymousContentTo.
 
-  // Create the anonymous outer wrapper:
-  mOuterWrapper = MakeAnonElement(PseudoStyleType::mozComplexControlWrapper);
-
-  aElements.AppendElement(mOuterWrapper);
-
-  nsTArray<ContentInfo> nestedContent;
-  nsTextControlFrame::CreateAnonymousContent(nestedContent);
-  for (auto& content : nestedContent) {
-    // The root goes inside the container.
-    if (content.mContent == mRootNode) {
-      mOuterWrapper->AppendChildTo(content.mContent, false);
-    } else {
-      // The rest (placeholder and preview), directly under us.
-      aElements.AppendElement(std::move(content));
-    }
-  }
+  nsTextControlFrame::CreateAnonymousContent(aElements);
 
   // Create the ::-moz-search-clear-button pseudo-element:
-  mClearButton = MakeAnonElement(PseudoStyleType::mozSearchClearButton,
-                                 mOuterWrapper, nsGkAtoms::button);
+  mClearButton = MakeAnonElement(PseudoStyleType::mozSearchClearButton, nullptr,
+                                 nsGkAtoms::button);
 
   // Update clear button visibility based on value
   UpdateClearButtonState();
+
+  aElements.AppendElement(mClearButton);
 
   return NS_OK;
 }
 
 void nsSearchControlFrame::AppendAnonymousContentTo(
     nsTArray<nsIContent*>& aElements, uint32_t aFilter) {
-  if (mOuterWrapper) {
-    aElements.AppendElement(mOuterWrapper);
-  }
-  if (mPlaceholderDiv) {
-    aElements.AppendElement(mPlaceholderDiv);
-  }
-  if (mPreviewDiv) {
-    aElements.AppendElement(mPreviewDiv);
+  nsTextControlFrame::AppendAnonymousContentTo(aElements, aFilter);
+  if (mClearButton) {
+    aElements.AppendElement(mClearButton);
   }
 }
 

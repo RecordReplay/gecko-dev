@@ -35,9 +35,6 @@
 #include "nsGkAtoms.h"
 #include "nsGlobalWindowInner.h"
 #include "nsNetCID.h"
-#include "nsIOfflineCacheUpdate.h"
-#include "nsIApplicationCache.h"
-#include "nsIApplicationCacheChannel.h"
 #include "nsICookieService.h"
 #include "nsContentUtils.h"
 #include "nsNodeInfoManager.h"
@@ -47,9 +44,10 @@
 #include "mozAutoDocUpdate.h"
 #include "nsIWebNavigation.h"
 #include "nsGenericHTMLElement.h"
-#include "nsHTMLDNSPrefetch.h"
 #include "nsIObserverService.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/dom/HTMLDNSPrefetch.h"
 #include "mozilla/dom/ServiceWorkerDescriptor.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "nsParserConstants.h"
@@ -459,110 +457,109 @@ nsresult nsContentSink::ProcessLinkHeader(const nsAString& aLinkData) {
           equals++;
         }
 
-        if (*equals != kNullCh) {
-          *equals = kNullCh;
-          nsAutoString attr(start);
-          attr.StripWhitespace();
+        const bool hadEquals = *equals != kNullCh;
+        *equals = kNullCh;
+        nsAutoString attr(start);
+        attr.StripWhitespace();
 
-          char16_t* value = ++equals;
-          while (nsCRT::IsAsciiSpace(*value)) {
-            value++;
+        char16_t* value = hadEquals ? ++equals : equals;
+        while (nsCRT::IsAsciiSpace(*value)) {
+          value++;
+        }
+
+        if ((*value == kQuote) && (*value == *last)) {
+          *last = kNullCh;
+          value++;
+        }
+
+        if (wasQuotedString) {
+          // unescape in-place
+          char16_t* unescaped = value;
+          char16_t* src = value;
+
+          while (*src != kNullCh) {
+            if (*src == kBackSlash && *(src + 1) != kNullCh) {
+              src++;
+            }
+            *unescaped++ = *src++;
           }
 
-          if ((*value == kQuote) && (*value == *last)) {
-            *last = kNullCh;
-            value++;
+          *unescaped = kNullCh;
+        }
+
+        if (attr.LowerCaseEqualsLiteral("rel")) {
+          if (rel.IsEmpty()) {
+            rel = value;
+            rel.CompressWhitespace();
           }
-
-          if (wasQuotedString) {
-            // unescape in-place
-            char16_t* unescaped = value;
-            char16_t* src = value;
-
-            while (*src != kNullCh) {
-              if (*src == kBackSlash && *(src + 1) != kNullCh) {
-                src++;
-              }
-              *unescaped++ = *src++;
-            }
-
-            *unescaped = kNullCh;
+        } else if (attr.LowerCaseEqualsLiteral("title")) {
+          if (title.IsEmpty()) {
+            title = value;
+            title.CompressWhitespace();
           }
+        } else if (attr.LowerCaseEqualsLiteral("title*")) {
+          if (titleStar.IsEmpty() && !wasQuotedString) {
+            // RFC 5987 encoding; uses token format only, so skip if we get
+            // here with a quoted-string
+            nsAutoString tmp;
+            tmp = value;
+            if (Decode5987Format(tmp)) {
+              titleStar = tmp;
+              titleStar.CompressWhitespace();
+            } else {
+              // header value did not parse, throw it away
+              titleStar.Truncate();
+            }
+          }
+        } else if (attr.LowerCaseEqualsLiteral("type")) {
+          if (type.IsEmpty()) {
+            type = value;
+            type.StripWhitespace();
+          }
+        } else if (attr.LowerCaseEqualsLiteral("media")) {
+          if (media.IsEmpty()) {
+            media = value;
 
-          if (attr.LowerCaseEqualsLiteral("rel")) {
-            if (rel.IsEmpty()) {
-              rel = value;
-              rel.CompressWhitespace();
-            }
-          } else if (attr.LowerCaseEqualsLiteral("title")) {
-            if (title.IsEmpty()) {
-              title = value;
-              title.CompressWhitespace();
-            }
-          } else if (attr.LowerCaseEqualsLiteral("title*")) {
-            if (titleStar.IsEmpty() && !wasQuotedString) {
-              // RFC 5987 encoding; uses token format only, so skip if we get
-              // here with a quoted-string
-              nsAutoString tmp;
-              tmp = value;
-              if (Decode5987Format(tmp)) {
-                titleStar = tmp;
-                titleStar.CompressWhitespace();
-              } else {
-                // header value did not parse, throw it away
-                titleStar.Truncate();
-              }
-            }
-          } else if (attr.LowerCaseEqualsLiteral("type")) {
-            if (type.IsEmpty()) {
-              type = value;
-              type.StripWhitespace();
-            }
-          } else if (attr.LowerCaseEqualsLiteral("media")) {
-            if (media.IsEmpty()) {
-              media = value;
-
-              // The HTML5 spec is formulated in terms of the CSS3 spec,
-              // which specifies that media queries are case insensitive.
-              nsContentUtils::ASCIIToLower(media);
-            }
-          } else if (attr.LowerCaseEqualsLiteral("anchor")) {
-            if (anchor.IsEmpty()) {
-              anchor = value;
-              anchor.StripWhitespace();
-            }
-          } else if (attr.LowerCaseEqualsLiteral("crossorigin")) {
-            if (crossOrigin.IsVoid()) {
-              crossOrigin.SetIsVoid(false);
-              crossOrigin = value;
-              crossOrigin.StripWhitespace();
-            }
-          } else if (attr.LowerCaseEqualsLiteral("as")) {
-            if (as.IsEmpty()) {
-              as = value;
-              as.CompressWhitespace();
-            }
-          } else if (attr.LowerCaseEqualsLiteral("referrerpolicy")) {
-            // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#referrer-policy-attribute
-            // Specs says referrer policy attribute is an enumerated attribute,
-            // case insensitive and includes the empty string
-            // We will parse the value with AttributeReferrerPolicyFromString
-            // later, which will handle parsing it as an enumerated attribute.
-            if (referrerPolicy.IsEmpty()) {
-              referrerPolicy = value;
-            }
-          } else if (attr.LowerCaseEqualsLiteral("integrity")) {
-            if (integrity.IsEmpty()) {
-              integrity = value;
-            }
-          } else if (attr.LowerCaseEqualsLiteral("imagesrcset")) {
-            if (srcset.IsEmpty()) {
-              srcset = value;
-            }
-          } else if (attr.LowerCaseEqualsLiteral("imagesizes")) {
-            if (sizes.IsEmpty()) {
-              sizes = value;
-            }
+            // The HTML5 spec is formulated in terms of the CSS3 spec,
+            // which specifies that media queries are case insensitive.
+            nsContentUtils::ASCIIToLower(media);
+          }
+        } else if (attr.LowerCaseEqualsLiteral("anchor")) {
+          if (anchor.IsEmpty()) {
+            anchor = value;
+            anchor.StripWhitespace();
+          }
+        } else if (attr.LowerCaseEqualsLiteral("crossorigin")) {
+          if (crossOrigin.IsVoid()) {
+            crossOrigin.SetIsVoid(false);
+            crossOrigin = value;
+            crossOrigin.StripWhitespace();
+          }
+        } else if (attr.LowerCaseEqualsLiteral("as")) {
+          if (as.IsEmpty()) {
+            as = value;
+            as.CompressWhitespace();
+          }
+        } else if (attr.LowerCaseEqualsLiteral("referrerpolicy")) {
+          // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#referrer-policy-attribute
+          // Specs says referrer policy attribute is an enumerated attribute,
+          // case insensitive and includes the empty string
+          // We will parse the value with AttributeReferrerPolicyFromString
+          // later, which will handle parsing it as an enumerated attribute.
+          if (referrerPolicy.IsEmpty()) {
+            referrerPolicy = value;
+          }
+        } else if (attr.LowerCaseEqualsLiteral("integrity")) {
+          if (integrity.IsEmpty()) {
+            integrity = value;
+          }
+        } else if (attr.LowerCaseEqualsLiteral("imagesrcset")) {
+          if (srcset.IsEmpty()) {
+            srcset = value;
+          }
+        } else if (attr.LowerCaseEqualsLiteral("imagesizes")) {
+          if (sizes.IsEmpty()) {
+            sizes = value;
           }
         }
       }
@@ -799,13 +796,13 @@ void nsContentSink::PrefetchDNS(const nsAString& aHref) {
     isHttps = uri->SchemeIs("https");
   }
 
-  if (!hostname.IsEmpty() && nsHTMLDNSPrefetch::IsAllowed(mDocument)) {
+  if (!hostname.IsEmpty() && HTMLDNSPrefetch::IsAllowed(mDocument)) {
     OriginAttributes oa;
     StoragePrincipalHelper::GetOriginAttributesForNetworkState(mDocument, oa);
 
-    nsHTMLDNSPrefetch::Prefetch(hostname, isHttps, oa,
-                                mDocument->GetChannel()->GetTRRMode(),
-                                nsHTMLDNSPrefetch::Priority::Low);
+    HTMLDNSPrefetch::Prefetch(hostname, isHttps, oa,
+                              mDocument->GetChannel()->GetTRRMode(),
+                              HTMLDNSPrefetch::Priority::Low);
   }
 }
 
@@ -819,268 +816,6 @@ void nsContentSink::Preconnect(const nsAString& aHref,
   if (uri && mDocument) {
     mDocument->MaybePreconnect(uri,
                                dom::Element::StringToCORSMode(aCrossOrigin));
-  }
-}
-
-nsresult nsContentSink::SelectDocAppCache(
-    nsIApplicationCache* aLoadApplicationCache, nsIURI* aManifestURI,
-    bool aFetchedWithHTTPGetOrEquiv, CacheSelectionAction* aAction) {
-  nsresult rv;
-
-  *aAction = CACHE_SELECTION_NONE;
-
-  if (aLoadApplicationCache) {
-    nsCOMPtr<nsIURI> groupURI;
-    rv = aLoadApplicationCache->GetManifestURI(getter_AddRefs(groupURI));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    bool equal = false;
-    rv = groupURI->Equals(aManifestURI, &equal);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    if (!equal) {
-      // This is a foreign entry, force a reload to avoid loading the foreign
-      // entry. The entry will be marked as foreign to avoid loading it again.
-
-      *aAction = CACHE_SELECTION_RELOAD;
-    } else {
-      // The http manifest attribute URI is equal to the manifest URI of
-      // the cache the document was loaded from - associate the document with
-      // that cache and invoke the cache update process.
-#ifdef DEBUG
-      nsAutoCString docURISpec, clientID;
-      mDocumentURI->GetAsciiSpec(docURISpec);
-      aLoadApplicationCache->GetClientID(clientID);
-      SINK_TRACE(static_cast<LogModule*>(gContentSinkLogModuleInfo),
-                 SINK_TRACE_CALLS,
-                 ("Selection: assigning app cache %s to document %s",
-                  clientID.get(), docURISpec.get()));
-#endif
-
-      rv = mDocument->SetApplicationCache(aLoadApplicationCache);
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      // Document will be added as implicit entry to the cache as part of
-      // the update process.
-      *aAction = CACHE_SELECTION_UPDATE;
-    }
-  } else {
-    // The document was not loaded from an application cache
-    // Here we know the manifest has the same origin as the
-    // document. There is call to CheckMayLoadWithReporting() on it above.
-
-    if (!aFetchedWithHTTPGetOrEquiv) {
-      // The document was not loaded using HTTP GET or equivalent
-      // method. The spec says to run the cache selection algorithm w/o
-      // the manifest specified.
-      *aAction = CACHE_SELECTION_RESELECT_WITHOUT_MANIFEST;
-    } else {
-      // Always do an update in this case
-      *aAction = CACHE_SELECTION_UPDATE;
-    }
-  }
-
-  return NS_OK;
-}
-
-nsresult nsContentSink::SelectDocAppCacheNoManifest(
-    nsIApplicationCache* aLoadApplicationCache, nsIURI** aManifestURI,
-    CacheSelectionAction* aAction) {
-  *aManifestURI = nullptr;
-  *aAction = CACHE_SELECTION_NONE;
-
-  nsresult rv;
-
-  if (aLoadApplicationCache) {
-    // The document was loaded from an application cache, use that
-    // application cache as the document's application cache.
-#ifdef DEBUG
-    nsAutoCString docURISpec, clientID;
-    mDocumentURI->GetAsciiSpec(docURISpec);
-    aLoadApplicationCache->GetClientID(clientID);
-    SINK_TRACE(static_cast<LogModule*>(gContentSinkLogModuleInfo),
-               SINK_TRACE_CALLS,
-               ("Selection, no manifest: assigning app cache %s to document %s",
-                clientID.get(), docURISpec.get()));
-#endif
-
-    rv = mDocument->SetApplicationCache(aLoadApplicationCache);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    // Return the uri and invoke the update process for the selected
-    // application cache.
-    rv = aLoadApplicationCache->GetManifestURI(aManifestURI);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    *aAction = CACHE_SELECTION_UPDATE;
-  }
-
-  return NS_OK;
-}
-
-void nsContentSink::ProcessOfflineManifest(nsIContent* aElement) {
-  // Only check the manifest for root document nodes.
-  if (aElement != mDocument->GetRootElement()) {
-    return;
-  }
-
-  // Don't bother processing offline manifest for documents
-  // without a docshell
-  if (!mDocShell) {
-    return;
-  }
-
-  // Check for a manifest= attribute.
-  nsAutoString manifestSpec;
-  aElement->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::manifest,
-                                 manifestSpec);
-  ProcessOfflineManifest(manifestSpec);
-}
-
-void nsContentSink::ProcessOfflineManifest(const nsAString& aManifestSpec) {
-  // Don't bother processing offline manifest for documents
-  // without a docshell
-  if (!mDocShell) {
-    return;
-  }
-
-  // If offline storage is disabled skip processing
-  if (!StaticPrefs::browser_cache_offline_storage_enable()) {
-    return;
-  }
-
-  // If this document has been interecepted, let's skip the processing of the
-  // manifest.
-  if (mDocument->GetController().isSome()) {
-    return;
-  }
-
-  // If the docshell's in private browsing mode, we don't want to do any
-  // manifest processing.
-  nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(mDocShell);
-  if (loadContext->UsePrivateBrowsing()) {
-    return;
-  }
-
-  nsresult rv;
-
-  // Grab the application cache the document was loaded from, if any.
-  nsCOMPtr<nsIApplicationCache> applicationCache;
-
-  nsCOMPtr<nsIApplicationCacheChannel> applicationCacheChannel =
-      do_QueryInterface(mDocument->GetChannel());
-  if (applicationCacheChannel) {
-    bool loadedFromApplicationCache;
-    rv = applicationCacheChannel->GetLoadedFromApplicationCache(
-        &loadedFromApplicationCache);
-    if (NS_FAILED(rv)) {
-      return;
-    }
-
-    if (loadedFromApplicationCache) {
-      rv = applicationCacheChannel->GetApplicationCache(
-          getter_AddRefs(applicationCache));
-      if (NS_FAILED(rv)) {
-        return;
-      }
-    }
-  }
-
-  if (aManifestSpec.IsEmpty() && !applicationCache) {
-    // Not loaded from an application cache, and no manifest
-    // attribute.  Nothing to do here.
-    return;
-  }
-
-  CacheSelectionAction action = CACHE_SELECTION_NONE;
-  nsCOMPtr<nsIURI> manifestURI;
-
-  if (aManifestSpec.IsEmpty()) {
-    action = CACHE_SELECTION_RESELECT_WITHOUT_MANIFEST;
-  } else {
-    nsContentUtils::NewURIWithDocumentCharset(
-        getter_AddRefs(manifestURI), aManifestSpec, mDocument, mDocumentURI);
-    if (!manifestURI) {
-      return;
-    }
-
-    // Documents must list a manifest from the same origin
-    rv = mDocument->NodePrincipal()->CheckMayLoadWithReporting(
-        manifestURI, false, mDocument->InnerWindowID());
-    if (NS_FAILED(rv)) {
-      action = CACHE_SELECTION_RESELECT_WITHOUT_MANIFEST;
-    } else {
-      if (!nsContentUtils::OfflineAppAllowed(mDocument->NodePrincipal())) {
-        nsCOMPtr<nsIOfflineCacheUpdateService> updateService =
-            components::OfflineCacheUpdate::Service();
-        if (!updateService) {
-          return;
-        }
-        rv = updateService->AllowOfflineApp(mDocument->NodePrincipal());
-        if (NS_FAILED(rv)) {
-          return;
-        }
-      }
-
-      bool fetchedWithHTTPGetOrEquiv = false;
-      nsCOMPtr<nsIHttpChannel> httpChannel(
-          do_QueryInterface(mDocument->GetChannel()));
-      if (httpChannel) {
-        nsAutoCString method;
-        rv = httpChannel->GetRequestMethod(method);
-        if (NS_SUCCEEDED(rv))
-          fetchedWithHTTPGetOrEquiv = method.EqualsLiteral("GET");
-      }
-
-      rv = SelectDocAppCache(applicationCache, manifestURI,
-                             fetchedWithHTTPGetOrEquiv, &action);
-      if (NS_FAILED(rv)) {
-        return;
-      }
-    }
-  }
-
-  if (action == CACHE_SELECTION_RESELECT_WITHOUT_MANIFEST) {
-    rv = SelectDocAppCacheNoManifest(applicationCache,
-                                     getter_AddRefs(manifestURI), &action);
-    if (NS_FAILED(rv)) {
-      return;
-    }
-  }
-
-  switch (action) {
-    case CACHE_SELECTION_NONE:
-      break;
-    case CACHE_SELECTION_UPDATE: {
-      nsCOMPtr<nsIOfflineCacheUpdateService> updateService =
-          components::OfflineCacheUpdate::Service();
-
-      if (updateService) {
-        updateService->ScheduleOnDocumentStop(
-            manifestURI, mDocumentURI, mDocument->NodePrincipal(), mDocument);
-      }
-      break;
-    }
-    case CACHE_SELECTION_RELOAD: {
-      // This situation occurs only for toplevel documents, see bottom
-      // of SelectDocAppCache method.
-      // The document has been loaded from a different offline cache group than
-      // the manifest it refers to, i.e. this is a foreign entry, mark it as
-      // such and force a reload to avoid loading it.  The next attempt will not
-      // choose it.
-
-      applicationCacheChannel->MarkOfflineCacheEntryAsForeign();
-
-      nsCOMPtr<nsIWebNavigation> webNav = do_QueryInterface(mDocShell);
-
-      webNav->Stop(nsIWebNavigation::STOP_ALL);
-      webNav->Reload(nsIWebNavigation::LOAD_FLAGS_NONE);
-      break;
-    }
-    default:
-      NS_ASSERTION(false,
-                   "Cache selection algorithm didn't decide on proper action");
-      break;
   }
 }
 

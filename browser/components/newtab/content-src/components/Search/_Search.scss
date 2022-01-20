@@ -2,13 +2,13 @@ $search-height: 48px;
 $search-height-new: 52px;
 $search-icon-size: 24px;
 $search-icon-padding: 12px;
-$search-icon-width: 2 * $search-icon-padding + $search-icon-size -2;
+$search-icon-width: 2 * $search-icon-padding + $search-icon-size - 2px;
 $search-button-width: 48px;
 $glyph-forward: url('chrome://browser/skin/forward.svg');
 
 .outer-wrapper.newtab-experience {
   $search-icon-padding: 16px;
-  $search-icon-width: 2 * $search-icon-padding + $search-icon-size -4;
+  $search-icon-width: 2 * $search-icon-padding + $search-icon-size - 4px;
 
   &.visible-logo {
     .logo-and-wordmark {
@@ -53,7 +53,7 @@ $glyph-forward: url('chrome://browser/skin/forward.svg');
       box-shadow: 0 0 0 2px var(--newtab-focus-outline);
     }
 
-    &.fake-focus {
+    &.fake-focus:not(.search.disabled) {
       .search-handoff-button {
         border: 1px solid var(--newtab-focus-border);
         box-shadow: 0 0 0 2px var(--newtab-focus-outline);
@@ -66,16 +66,22 @@ $glyph-forward: url('chrome://browser/skin/forward.svg');
       background-size: $search-icon-size;
       padding-inline-start: $search-icon-width;
       padding-inline-end: 10px;
-      box-shadow: 0 3px 8px var(--newtab-search-first-shadow), 0 0 2px var(--newtab-search-second-shadow);
+      box-shadow: var(--newtab-search-first-shadow);
       border: 1px solid transparent;
       border-radius: 8px;
       color: var(--newtab-search-text-color);
       font-weight: 500;
       font-size: 15px;
+
+      &:dir(rtl) {
+        background-position-x: right $search-icon-padding;
+      }
     }
 
     .search-handoff-button {
       padding-inline-end: 15px;
+      fill: currentColor;
+      -moz-context-properties: fill;
 
       .fake-caret {
         top: 18px;
@@ -263,7 +269,6 @@ $glyph-forward: url('chrome://browser/skin/forward.svg');
   padding-inline-end: 48px;
   padding-inline-start: 46px;
   opacity: 1;
-  transition: opacity 500ms;
   width: 100%;
 
   &:dir(rtl) {
@@ -274,7 +279,7 @@ $glyph-forward: url('chrome://browser/skin/forward.svg');
     box-shadow: $shadow-secondary, 0 0 0 1px $black-25;
   }
 
-  .fake-focus & {
+  .fake-focus:not(.search-disabled) & {
     border: $input-border-active;
     box-shadow: var(--newtab-textbox-focus-boxshadow);
 
@@ -283,9 +288,9 @@ $glyph-forward: url('chrome://browser/skin/forward.svg');
     }
   }
 
-  .search-hidden & {
-    opacity: 0;
-    visibility: hidden;
+  .search-disabled & {
+    opacity: 0.5;
+    box-shadow: none;
   }
 
   .fake-editable:focus {

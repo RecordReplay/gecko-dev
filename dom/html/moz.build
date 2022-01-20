@@ -12,6 +12,7 @@ DIRS += ["input"]
 MOCHITEST_MANIFESTS += [
     "test/dialog/mochitest.ini",
     "test/forms/mochitest.ini",
+    "test/forms/without_selectionchange/mochitest.ini",
     "test/mochitest.ini",
 ]
 
@@ -32,7 +33,6 @@ XPIDL_MODULE = "content_html"
 EXPORTS += [
     "nsGenericHTMLElement.h",
     "nsGenericHTMLFrameElement.h",
-    "nsHTMLDNSPrefetch.h",
     "nsHTMLDocument.h",
     "nsIConstraintValidation.h",
     "nsIForm.h",
@@ -63,6 +63,7 @@ EXPORTS.mozilla.dom += [
     "HTMLDetailsElement.h",
     "HTMLDialogElement.h",
     "HTMLDivElement.h",
+    "HTMLDNSPrefetch.h",
     "HTMLEmbedElement.h",
     "HTMLFieldSetElement.h",
     "HTMLFontElement.h",
@@ -144,6 +145,7 @@ UNIFIED_SOURCES += [
     "HTMLDetailsElement.cpp",
     "HTMLDialogElement.cpp",
     "HTMLDivElement.cpp",
+    "HTMLDNSPrefetch.cpp",
     "HTMLElement.cpp",
     "HTMLEmbedElement.cpp",
     "HTMLFieldSetElement.cpp",
@@ -209,7 +211,6 @@ UNIFIED_SOURCES += [
     "nsGenericHTMLElement.cpp",
     "nsGenericHTMLFrameElement.cpp",
     "nsHTMLContentSink.cpp",
-    "nsHTMLDNSPrefetch.cpp",
     "nsHTMLDocument.cpp",
     "nsIConstraintValidation.cpp",
     "nsRadioVisitor.cpp",
@@ -220,11 +221,6 @@ UNIFIED_SOURCES += [
     "TimeRanges.cpp",
     "ValidityState.cpp",
     "VideoDocument.cpp",
-]
-
-SOURCES += [
-    # Includes npapi.h.
-    "PluginDocument.cpp",
 ]
 
 EXTRA_JS_MODULES += [

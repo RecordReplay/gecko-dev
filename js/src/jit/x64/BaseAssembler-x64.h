@@ -413,6 +413,17 @@ class BaseAssemblerX64 : public BaseAssembler {
     m_formatter.twoByteOp64(OP2_IMUL_GvEv, offset, base, dst);
   }
 
+  void imulq_ir(int32_t value, RegisterID src, RegisterID dst) {
+    spew("imulq      $%d, %s, %s", value, GPReg64Name(src), GPReg64Name(dst));
+    if (CAN_SIGN_EXTEND_8_32(value)) {
+      m_formatter.oneByteOp64(OP_IMUL_GvEvIb, src, dst);
+      m_formatter.immediate8s(value);
+    } else {
+      m_formatter.oneByteOp64(OP_IMUL_GvEvIz, src, dst);
+      m_formatter.immediate32(value);
+    }
+  }
+
   void cqo() {
     spew("cqo        ");
     m_formatter.oneByteOp64(OP_CDQ);
@@ -438,6 +449,13 @@ class BaseAssemblerX64 : public BaseAssembler {
   void cmpq_rm(RegisterID rhs, int32_t offset, RegisterID base) {
     spew("cmpq       %s, " MEM_ob, GPReg64Name(rhs), ADDR_ob(offset, base));
     m_formatter.oneByteOp64(OP_CMP_EvGv, offset, base, rhs);
+  }
+
+  void cmpq_rm(RegisterID rhs, int32_t offset, RegisterID base,
+               RegisterID index, int scale) {
+    spew("cmpq       %s, " MEM_obs, GPReg64Name(rhs),
+         ADDR_obs(offset, base, index, scale));
+    m_formatter.oneByteOp64(OP_CMP_EvGv, offset, base, index, scale, rhs);
   }
 
   void cmpq_mr(int32_t offset, RegisterID base, RegisterID lhs) {

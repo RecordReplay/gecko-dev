@@ -9,6 +9,7 @@
 #include "CacheFileUtils.h"
 #include "CacheIndex.h"
 
+#include "nsIAsyncOutputStream.h"
 #include "nsIInputStream.h"
 #include "nsIOutputStream.h"
 #include "nsISeekableStream.h"
@@ -29,8 +30,7 @@
 #include <math.h>
 #include <algorithm>
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 static uint32_t const ENTRY_WANTED = nsICacheEntryOpenCallback::ENTRY_WANTED;
 static uint32_t const RECHECK_AFTER_WRITE_FINISHED =
@@ -44,8 +44,7 @@ NS_IMPL_ISUPPORTS(CacheEntryHandle, nsICacheEntry)
 
 // CacheEntryHandle
 
-CacheEntryHandle::CacheEntryHandle(CacheEntry* aEntry)
-    : mEntry(aEntry), mClosed(false) {
+CacheEntryHandle::CacheEntryHandle(CacheEntry* aEntry) : mEntry(aEntry) {
 #ifdef DEBUG
   if (!mEntry->HandlesCount()) {
     // CacheEntry.mHandlesCount must go from zero to one only under
@@ -113,8 +112,8 @@ CacheEntry::Callback::Callback(CacheEntry* aEntry,
       mRecheckAfterWrite(false),
       mNotWanted(false),
       mSecret(false),
-      mDoomWhenFoundPinned(aDoomWhenFoundInPinStatus == true),
-      mDoomWhenFoundNonPinned(aDoomWhenFoundInPinStatus == false) {
+      mDoomWhenFoundPinned(aDoomWhenFoundInPinStatus),
+      mDoomWhenFoundNonPinned(!aDoomWhenFoundInPinStatus) {
   MOZ_COUNT_CTOR(CacheEntry::Callback);
   MOZ_ASSERT(mEntry->HandlesCount());
   mEntry->AddHandleRef();
@@ -202,25 +201,16 @@ uint64_t CacheEntry::GetNextId() {
 CacheEntry::CacheEntry(const nsACString& aStorageID, const nsACString& aURI,
                        const nsACString& aEnhanceID, bool aUseDisk,
                        bool aSkipSizeCheck, bool aPin)
-    : mFrecency(0),
-      mSortingExpirationTime(uint32_t(-1)),
-      mLock("CacheEntry"),
-      mFileStatus(NS_ERROR_NOT_INITIALIZED),
-      mURI(aURI),
+    : mURI(aURI),
       mEnhanceID(aEnhanceID),
       mStorageID(aStorageID),
       mUseDisk(aUseDisk),
       mSkipSizeCheck(aSkipSizeCheck),
-      mIsDoomed(false),
       mSecurityInfoLoaded(false),
       mPreventCallbacks(false),
       mHasData(false),
       mPinned(aPin),
       mPinningKnown(false),
-      mState(NOTLOADED),
-      mRegistration(NEVERREGISTERED),
-      mWriter(nullptr),
-      mUseCount(0),
       mCacheEntryId(GetNextId()) {
   LOG(("CacheEntry::CacheEntry [this=%p]", this));
 
@@ -571,16 +561,18 @@ void CacheEntry::TransferCallbacks(CacheEntry& aFromEntry) {
 
   LOG(("CacheEntry::TransferCallbacks [entry=%p, from=%p]", this, &aFromEntry));
 
-  if (!mCallbacks.Length())
+  if (!mCallbacks.Length()) {
     mCallbacks.SwapElements(aFromEntry.mCallbacks);
-  else
+  } else {
     mCallbacks.AppendElements(aFromEntry.mCallbacks);
+  }
 
   uint32_t callbacksLength = mCallbacks.Length();
   if (callbacksLength) {
     // Carry the entry reference (unfortunately, needs to be done manually...)
-    for (uint32_t i = 0; i < callbacksLength; ++i)
+    for (uint32_t i = 0; i < callbacksLength; ++i) {
       mCallbacks[i].ExchangeEntry(this);
+    }
 
     BackgroundOp(Ops::CALLBACKS, true);
   }
@@ -737,8 +729,8 @@ bool CacheEntry::InvokeCallback(Callback& aCallback) {
 
           RefPtr<CacheEntryHandle> handle = NewHandle();
 
-          nsresult rv = aCallback.mCallback->OnCacheEntryCheck(handle, nullptr,
-                                                               &checkResult);
+          nsresult rv =
+              aCallback.mCallback->OnCacheEntryCheck(handle, &checkResult);
           LOG(("  OnCacheEntryCheck: rv=0x%08" PRIx32 ", result=%" PRId32,
                static_cast<uint32_t>(rv), static_cast<uint32_t>(checkResult)));
 
@@ -847,7 +839,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const& aCallback) {
     LOG(
         ("  doomed or not wanted, notifying OCEA with "
          "NS_ERROR_CACHE_KEY_NOT_FOUND"));
-    aCallback.mCallback->OnCacheEntryAvailable(nullptr, false, nullptr,
+    aCallback.mCallback->OnCacheEntryAvailable(nullptr, false,
                                                NS_ERROR_CACHE_KEY_NOT_FOUND);
     return;
   }
@@ -863,7 +855,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const& aCallback) {
     OnFetched(aCallback);
 
     RefPtr<CacheEntryHandle> handle = NewHandle();
-    aCallback.mCallback->OnCacheEntryAvailable(handle, false, nullptr, NS_OK);
+    aCallback.mCallback->OnCacheEntryAvailable(handle, false, NS_OK);
     return;
   }
 
@@ -872,7 +864,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const& aCallback) {
     LOG(
         ("  r/o and not ready, notifying OCEA with "
          "NS_ERROR_CACHE_KEY_NOT_FOUND"));
-    aCallback.mCallback->OnCacheEntryAvailable(nullptr, false, nullptr,
+    aCallback.mCallback->OnCacheEntryAvailable(nullptr, false,
                                                NS_ERROR_CACHE_KEY_NOT_FOUND);
     return;
   }
@@ -890,7 +882,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const& aCallback) {
 
   RefPtr<CacheEntryHandle> handle = NewWriteHandle();
   rv = aCallback.mCallback->OnCacheEntryAvailable(handle, state == WRITING,
-                                                  nullptr, NS_OK);
+                                                  NS_OK);
 
   if (NS_FAILED(rv)) {
     LOG(("  writing/revalidating failed (0x%08" PRIx32 ")",
@@ -1395,8 +1387,9 @@ nsresult CacheEntry::AsyncDoom(nsICacheEntryDoomCallback* aCallback) {
   {
     mozilla::MutexAutoLock lock(mLock);
 
-    if (mIsDoomed || mDoomCallback)
+    if (mIsDoomed || mDoomCallback) {
       return NS_ERROR_IN_PROGRESS;  // to aggregate have DOOMING state
+    }
 
     RemoveForcedValidity();
 
@@ -1789,8 +1782,9 @@ void CacheEntry::BackgroundOp(uint32_t aOperations, bool aForceAsync) {
   mLock.AssertCurrentThreadOwns();
 
   if (!CacheStorageService::IsOnManagementThread() || aForceAsync) {
-    if (mBackgroundOperations.Set(aOperations))
+    if (mBackgroundOperations.Set(aOperations)) {
       CacheStorageService::Self()->Dispatch(this);
+    }
 
     LOG(("CacheEntry::BackgroundOp this=%p dipatch of %x", this, aOperations));
     return;
@@ -1909,5 +1903,4 @@ size_t CacheEntry::SizeOfIncludingThis(
   return mallocSizeOf(this) + SizeOfExcludingThis(mallocSizeOf);
 }
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net

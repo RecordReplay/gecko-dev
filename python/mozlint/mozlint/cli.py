@@ -6,6 +6,7 @@ import os
 import sys
 from argparse import REMAINDER, SUPPRESS, ArgumentParser
 
+from mozlint.errors import NoValidLinter
 from mozlint.formatters import all_formatters
 
 
@@ -161,6 +162,15 @@ class MozlintParser(ArgumentParser):
             },
         ],
         [
+            ["--check-exclude-list"],
+            {
+                "dest": "check_exclude_list",
+                "default": False,
+                "action": "store_true",
+                "help": "Run linters for all the paths in the exclude list.",
+            },
+        ],
+        [
             ["extra_args"],
             {
                 "nargs": REMAINDER,
@@ -205,6 +215,10 @@ class MozlintParser(ArgumentParser):
         if args.formats:
             formats = []
             for fmt in args.formats:
+                if isinstance(fmt, tuple):  # format is already processed
+                    formats.append(fmt)
+                    continue
+
                 path = None
                 if ":" in fmt:
                     # Detect optional formatter path
@@ -252,7 +266,37 @@ def find_linters(config_paths, linters=None):
                 continue
 
             lints[name] = os.path.join(search_path, f)
-    return lints.values()
+
+    linters_not_found = list(set(linters).difference(set(lints.keys())))
+    return {"lint_paths": lints.values(), "linters_not_found": linters_not_found}
+
+
+def get_exclude_list_output(result, paths):
+    # Store the paths of all the subdirectories leading to the error files
+    error_file_paths = set()
+    for issues in result.issues.values():
+        error_file = issues[0].relpath
+        error_file_paths.add(error_file)
+        parent_dir = os.path.dirname(error_file)
+        while parent_dir:
+            error_file_paths.add(parent_dir)
+            parent_dir = os.path.dirname(parent_dir)
+
+    paths = [os.path.dirname(path) if path[-1] == "/" else path for path in paths]
+    # Remove all the error paths to get the list of green paths
+    green_paths = sorted(set(paths).difference(error_file_paths))
+
+    if green_paths:
+        out = (
+            "The following list of paths are now green "
+            "and can be removed from the exclude list:\n\n"
+        )
+        out += "\n".join(green_paths)
+
+    else:
+        out = "No path in the exclude list is green."
+
+    return out
 
 
 def run(
@@ -263,6 +307,7 @@ def run(
     workdir,
     rev,
     edit,
+    check_exclude_list,
     setup=False,
     list_linters=False,
     num_procs=None,
@@ -276,28 +321,75 @@ def run(
         os.path.join(lintargs["root"], p) for p in lintargs["config_paths"]
     ]
 
+    # Always perform exhaustive linting for exclude list paths
+    lintargs["use_filters"] = lintargs["use_filters"] and not check_exclude_list
+
     if list_linters:
         lint_paths = find_linters(lintargs["config_paths"], linters)
-        linters = [os.path.splitext(os.path.basename(l))[0] for l in lint_paths]
+        linters = [
+            os.path.splitext(os.path.basename(l))[0] for l in lint_paths["lint_paths"]
+        ]
         print("\n".join(sorted(linters)))
         return 0
 
     lint = LintRoller(**lintargs)
-    lint.read(find_linters(lintargs["config_paths"], linters))
+    linters_info = find_linters(lintargs["config_paths"], linters)
 
-    # Always run bootstrapping, but return early if --setup was passed in.
-    ret = lint.setup(virtualenv_manager=virtualenv_manager)
-    if setup:
-        return ret
+    result = None
 
-    # run all linters
-    result = lint.roll(
-        paths, outgoing=outgoing, workdir=workdir, rev=rev, num_procs=num_procs
-    )
+    try:
+
+        lint.read(linters_info["lint_paths"])
+
+        if check_exclude_list:
+            if len(lint.linters) > 1:
+                print("error: specify a single linter to check with `-l/--linter`")
+                return 1
+            paths = lint.linters[0]["local_exclude"]
+
+        if (
+            not linters
+            and not paths
+            and os.getcwd() == lint.root
+            and not (outgoing or workdir)
+        ):
+            print(
+                "warning: linting the entire repo takes a long time, using --outgoing and "
+                "--workdir instead. If you want to lint the entire repo, run `./mach lint .`"
+            )
+            # Setting the default values
+            outgoing = "default"
+            workdir = "all"
+
+        # Always run bootstrapping, but return early if --setup was passed in.
+        ret = lint.setup(virtualenv_manager=virtualenv_manager)
+        if setup:
+            return ret
+
+        if linters_info["linters_not_found"] != []:
+            raise NoValidLinter
+
+        # run all linters
+        result = lint.roll(
+            paths, outgoing=outgoing, workdir=workdir, rev=rev, num_procs=num_procs
+        )
+    except NoValidLinter as e:
+        result = lint.result
+        print(str(e))
 
     if edit and result.issues:
         edit_issues(result)
         result = lint.roll(result.issues.keys(), num_procs=num_procs)
+
+    for every in linters_info["linters_not_found"]:
+        result.failed_setup.add(every)
+
+    if check_exclude_list:
+        # Get and display all those paths in the exclude list which are
+        # now green and can be safely removed from the list
+        out = get_exclude_list_output(result, paths)
+        print(out, file=sys.stdout)
+        return result.returncode
 
     for formatter_name, path in formats:
         formatter = formatters.get(formatter_name)

@@ -21,6 +21,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_ui.h"
+#include "nsCRT.h"
 #include "nsIFormAutoComplete.h"
 #include "nsIInputListAutoComplete.h"
 #include "nsIAutoCompleteSimpleResult.h"
@@ -242,7 +243,7 @@ nsFormFillController::AttachPopupElementToDocument(Document* aDocument,
   nsCOMPtr<nsIAutoCompletePopup> popup = aPopupEl->AsAutoCompletePopup();
   NS_ENSURE_STATE(popup);
 
-  mPopups.Put(aDocument, popup);
+  mPopups.InsertOrUpdate(aDocument, popup);
   return NS_OK;
 }
 
@@ -271,7 +272,7 @@ nsFormFillController::MarkAsLoginManagerField(HTMLInputElement* aInput) {
     return NS_OK;
   }
 
-  mPwmgrInputs.Put(aInput, true);
+  mPwmgrInputs.InsertOrUpdate(aInput, true);
   aInput->AddMutationObserverUnlessExists(this);
 
   nsFocusManager* fm = nsFocusManager::GetFocusManager();
@@ -307,7 +308,7 @@ nsFormFillController::MarkAsAutofillField(HTMLInputElement* aInput) {
     return NS_OK;
   }
 
-  mAutofillInputs.Put(aInput, true);
+  mAutofillInputs.InsertOrUpdate(aInput, true);
   aInput->AddMutationObserverUnlessExists(this);
 
   aInput->EnablePreview();

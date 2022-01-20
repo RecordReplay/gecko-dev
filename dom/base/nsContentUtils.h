@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <tuple>
 #include <utility>
 #include "ErrorList.h"
 #include "Units.h"
@@ -41,6 +42,7 @@
 #include "mozilla/fallible.h"
 #include "mozilla/gfx/Point.h"
 #include "nsCOMPtr.h"
+#include "nsHashtablesFwd.h"
 #include "nsIContentPolicy.h"
 #include "nsID.h"
 #include "nsINode.h"
@@ -124,8 +126,6 @@ class nsWrapperCache;
 struct JSContext;
 struct nsPoint;
 
-template <class K, class V>
-class nsDataHashtable;
 template <class T>
 class nsRefPtrHashKey;
 
@@ -135,12 +135,12 @@ class Message;
 
 namespace JS {
 class Value;
-
-struct PropertyDescriptor;
+class PropertyDescriptor;
 }  // namespace JS
 
 namespace mozilla {
 class Dispatcher;
+class EditorBase;
 class ErrorResult;
 class EventListenerManager;
 class HTMLEditor;
@@ -246,6 +246,10 @@ struct EventNameMapping {
   bool mMaybeSpecialSVGorSMILEvent;
 };
 
+namespace mozilla {
+enum class PreventDefaultResult : uint8_t { No, ByContent, ByChrome };
+}
+
 class nsContentUtils {
   friend class nsAutoScriptBlockerSuppressNodeRemoved;
   typedef mozilla::dom::Element Element;
@@ -280,6 +284,8 @@ class nsContentUtils {
 
   static bool IsCallerChromeOrElementTransformGettersEnabled(JSContext* aCx,
                                                              JSObject*);
+
+  static bool IsCallerChromeOrErrorPage(JSContext*, JSObject*);
 
   // The APIs for checking whether the caller is system (in the sense of system
   // principal) should only be used when the JSContext is known to accurately
@@ -353,6 +359,7 @@ class nsContentUtils {
   static bool ShouldResistFingerprinting(
       mozilla::dom::WorkerPrivate* aWorkerPrivate);
   static bool ShouldResistFingerprinting(const Document* aDoc);
+  static bool ShouldResistFingerprinting(nsIChannel* aChannel);
 
   // Prevent system colors from being exposed to CSS or canvas.
   static bool UseStandinsForNativeColors();
@@ -369,14 +376,11 @@ class nsContentUtils {
       int32_t* aOutputHeight);
 
   /**
-   * Returns the parent node of aChild crossing document boundaries.
+   * Returns the parent node of aChild crossing document boundaries, but skips
+   * any cross-process parent frames and continues with the nearest in-process
+   * frame in the hierarchy.
+   *
    * Uses the parent node in the composed document.
-   */
-  static nsINode* GetCrossDocParentNode(nsINode* aChild);
-
-  /**
-   * Like GetCrossDocParentNode, but skips any cross-process parent frames and
-   * continues with the nearest in-process frame in the hierarchy.
    */
   static nsINode* GetNearestInProcessCrossDocParentNode(nsINode* aChild);
 
@@ -620,7 +624,12 @@ class nsContentUtils {
    * Returns true if aChar is of class Lu, Ll, Lt, Lm, Lo, Nd, Nl or No
    */
   static bool IsAlphanumeric(uint32_t aChar);
-  static bool IsAlphanumericAt(const nsTextFragment* aFrag, uint32_t aOffset);
+  /**
+   * Returns true if aChar is of class L*, N* or S* (for first-letter).
+   */
+  static bool IsAlphanumericOrSymbol(uint32_t aChar);
+  static bool IsAlphanumericOrSymbolAt(const nsTextFragment* aFrag,
+                                       uint32_t aOffset);
 
   /*
    * Is the character an HTML whitespace character?
@@ -1493,7 +1502,7 @@ class nsContentUtils {
    * @param aEditorInputType    The inputType value of InputEvent.
    *                            If aEventTarget won't dispatch "input" event
    *                            with InputEvent, set EditorInputType::eUnknown.
-   * @param aTextEditor         Optional.  If this is called by editor,
+   * @param aEditorBase         Optional.  If this is called by editor,
    *                            editor should set this.  Otherwise, leave
    *                            nullptr.
    * @param aOptions            Optional.  If aEditorInputType value requires
@@ -1510,7 +1519,7 @@ class nsContentUtils {
   MOZ_CAN_RUN_SCRIPT static nsresult DispatchInputEvent(
       Element* aEventTarget, mozilla::EventMessage aEventMessage,
       mozilla::EditorInputType aEditorInputType,
-      mozilla::TextEditor* aTextEditor, mozilla::InputEventOptions&& aOptions,
+      mozilla::EditorBase* aEditorBase, mozilla::InputEventOptions&& aOptions,
       nsEventStatus* aEventStatus = nullptr);
 
   /**
@@ -1893,9 +1902,9 @@ class nsContentUtils {
    * @param aResult the result. Out param.
    * @return false on out of memory errors, true otherwise.
    */
-  MOZ_MUST_USE
-  static bool GetNodeTextContent(nsINode* aNode, bool aDeep, nsAString& aResult,
-                                 const mozilla::fallible_t&);
+  [[nodiscard]] static bool GetNodeTextContent(nsINode* aNode, bool aDeep,
+                                               nsAString& aResult,
+                                               const mozilla::fallible_t&);
 
   static void GetNodeTextContent(nsINode* aNode, bool aDeep,
                                  nsAString& aResult);
@@ -2227,7 +2236,8 @@ class nsContentUtils {
       bool aAlt = false, bool aShift = false, bool aMeta = false,
       // Including MouseEventBinding here leads
       // to incude loops, unfortunately.
-      uint16_t inputSource = 0 /* MouseEvent_Binding::MOZ_SOURCE_UNKNOWN */);
+      uint16_t inputSource = 0 /* MouseEvent_Binding::MOZ_SOURCE_UNKNOWN */,
+      int16_t aButton = 0);
 
   static bool CheckMayLoad(nsIPrincipal* aPrincipal, nsIChannel* aChannel,
                            bool aAllowIfInheritsPrincipal);
@@ -2239,26 +2249,24 @@ class nsContentUtils {
    */
   static bool CanAccessNativeAnon();
 
-  MOZ_MUST_USE
-  static nsresult WrapNative(JSContext* cx, nsISupports* native,
-                             const nsIID* aIID, JS::MutableHandle<JS::Value> vp,
-                             bool aAllowWrapping = true) {
+  [[nodiscard]] static nsresult WrapNative(JSContext* cx, nsISupports* native,
+                                           const nsIID* aIID,
+                                           JS::MutableHandle<JS::Value> vp,
+                                           bool aAllowWrapping = true) {
     return WrapNative(cx, native, nullptr, aIID, vp, aAllowWrapping);
   }
 
   // Same as the WrapNative above, but use this one if aIID is nsISupports' IID.
-  MOZ_MUST_USE
-  static nsresult WrapNative(JSContext* cx, nsISupports* native,
-                             JS::MutableHandle<JS::Value> vp,
-                             bool aAllowWrapping = true) {
+  [[nodiscard]] static nsresult WrapNative(JSContext* cx, nsISupports* native,
+                                           JS::MutableHandle<JS::Value> vp,
+                                           bool aAllowWrapping = true) {
     return WrapNative(cx, native, nullptr, nullptr, vp, aAllowWrapping);
   }
 
-  MOZ_MUST_USE
-  static nsresult WrapNative(JSContext* cx, nsISupports* native,
-                             nsWrapperCache* cache,
-                             JS::MutableHandle<JS::Value> vp,
-                             bool aAllowWrapping = true) {
+  [[nodiscard]] static nsresult WrapNative(JSContext* cx, nsISupports* native,
+                                           nsWrapperCache* cache,
+                                           JS::MutableHandle<JS::Value> vp,
+                                           bool aAllowWrapping = true) {
     return WrapNative(cx, native, cache, nullptr, vp, aAllowWrapping);
   }
 
@@ -2281,9 +2289,8 @@ class nsContentUtils {
    * @param aString the string to convert the newlines inside [in/out]
    */
   static void PlatformToDOMLineBreaks(nsString& aString);
-  MOZ_MUST_USE
-  static bool PlatformToDOMLineBreaks(nsString& aString,
-                                      const mozilla::fallible_t&);
+  [[nodiscard]] static bool PlatformToDOMLineBreaks(nsString& aString,
+                                                    const mozilla::fallible_t&);
 
   /**
    * Populates aResultString with the contents of the string-buffer aBuf, up
@@ -2317,6 +2324,11 @@ class nsContentUtils {
    */
   static mozilla::PresShell* FindPresShellForDocument(
       const Document* aDocument);
+
+  /**
+   * Like FindPresShellForDocument, but returns the shell's PresContext instead.
+   */
+  static nsPresContext* FindPresContextForDocument(const Document* aDocument);
 
   /**
    * Returns the widget for this document if there is one. Looks at all ancestor
@@ -2440,18 +2452,10 @@ class nsContentUtils {
   static bool HasPluginWithUncontrolledEventDispatch(nsIContent* aContent);
 
   /**
-   * Returns the root document in a document hierarchy. Normally this
-   * will be the chrome document.
+   * Returns the in-process subtree root document in a document hierarchy.
+   * This could be a chrome document.
    */
-  static Document* GetRootDocument(Document* aDoc);
-
-  /**
-   * Returns true if aContext and the current pointer lock document
-   * have common top BrowsingContext.
-   * Note that this method returns true only if caller is in the same process
-   * as pointer lock document.
-   */
-  static bool IsInPointerLockContext(mozilla::dom::BrowsingContext* aContext);
+  static Document* GetInProcessSubtreeRootDocument(Document* aDoc);
 
   static void GetShiftText(nsAString& text);
   static void GetControlText(nsAString& text);
@@ -2505,6 +2509,11 @@ class nsContentUtils {
    * viewer principal.
    */
   static bool IsPDFJS(nsIPrincipal* aPrincipal);
+  /**
+   * Same, but from WebIDL bindings. Checks whether the subject principal is for
+   * the internal PDF viewer.
+   */
+  static bool IsPDFJS(JSContext*, JSObject*);
 
   /**
    * Checks if internal SWF player is enabled.
@@ -2514,7 +2523,7 @@ class nsContentUtils {
   enum ContentViewerType {
     TYPE_UNSUPPORTED,
     TYPE_CONTENT,
-    TYPE_PLUGIN,
+    TYPE_FALLBACK,
     TYPE_UNKNOWN
   };
 
@@ -2706,8 +2715,8 @@ class nsContentUtils {
    * even if there is no active editing host.
    * Note that this does not return editor in descendant documents.
    */
-  static mozilla::TextEditor* GetActiveEditor(nsPresContext* aPresContext);
-  static mozilla::TextEditor* GetActiveEditor(nsPIDOMWindowOuter* aWindow);
+  static mozilla::EditorBase* GetActiveEditor(nsPresContext* aPresContext);
+  static mozilla::EditorBase* GetActiveEditor(nsPIDOMWindowOuter* aWindow);
 
   /**
    * Returns `TextEditor` which manages `aAnonymousContent` if there is.
@@ -2723,6 +2732,11 @@ class nsContentUtils {
    * @param aNode The node to test.
    */
   static bool IsNodeInEditableRegion(nsINode* aNode);
+
+  /**
+   * Returns a LogModule that logs debugging info from RFP functions.
+   */
+  static mozilla::LogModule* ResistFingerprintingLog();
 
   /**
    * Returns a LogModule that dump calls from content script are logged to.
@@ -2788,6 +2802,11 @@ class nsContentUtils {
    * Returns the inner window ID for the window associated with a load group.
    */
   static uint64_t GetInnerWindowID(nsILoadGroup* aLoadGroup);
+
+  /**
+   * Encloses aHost in brackets if it is an IPv6 address.
+   */
+  static void MaybeFixIPv6Host(nsACString& aHost);
 
   /**
    * If the hostname for aURI is an IPv6 it encloses it in brackets,
@@ -2902,8 +2921,8 @@ class nsContentUtils {
       float aY, int32_t aButton, int32_t aButtons, int32_t aClickCount,
       int32_t aModifiers, bool aIgnoreRootScrollFrame, float aPressure,
       unsigned short aInputSourceArg, uint32_t aIdentifier, bool aToWindow,
-      bool* aPreventDefault, bool aIsDOMEventSynthesized,
-      bool aIsWidgetEventSynthesized);
+      mozilla::PreventDefaultResult* aPreventDefault,
+      bool aIsDOMEventSynthesized, bool aIsWidgetEventSynthesized);
 
   static void FirePageShowEventForFrameLoaderSwap(
       nsIDocShellTreeItem* aItem,
@@ -2965,13 +2984,6 @@ class nsContentUtils {
   static bool IsSpecificAboutPage(JSObject* aGlobal, const char* aUri);
 
   static void SetScrollbarsVisibility(nsIDocShell* aDocShell, bool aVisible);
-
-  /*
-   * Return the associated presentation URL of the presented content.
-   * Will return empty string if the docshell is not in a presented content.
-   */
-  static void GetPresentationURL(nsIDocShell* aDocShell,
-                                 nsAString& aPresentationUrl);
 
   /*
    * Try to find the docshell corresponding to the given event target.
@@ -3079,6 +3091,14 @@ class nsContentUtils {
                                     aTriggeringPrincipal);
   }
 
+  // Returns whether the image for the given URI and triggering principal is
+  // already available. Ideally this should exactly match the "list of available
+  // images" in the HTML spec, but our implementation of that at best only
+  // resembles it.
+  static bool IsImageAvailable(nsIContent*, nsIURI*,
+                               nsIPrincipal* aDefaultTriggeringPrincipal,
+                               mozilla::CORSMode);
+
   /**
    * Returns the content policy type that should be used for loading images
    * for displaying in the UI.  The sources of such images can be <xul:image>,
@@ -3158,6 +3178,8 @@ class nsContentUtils {
    */
   static uint64_t GenerateProcessSpecificId(uint64_t aId);
 
+  static std::tuple<uint64_t, uint64_t> SplitProcessSpecificId(uint64_t aId);
+
   /**
    * Generate a window ID which is unique across processes and will never be
    * recycled.
@@ -3178,7 +3200,7 @@ class nsContentUtils {
 
   // Alternate data MIME type used by the ScriptLoader to register and read
   // bytecode out of the nsCacheInfoChannel.
-  static MOZ_MUST_USE bool InitJSBytecodeMimeType();
+  [[nodiscard]] static bool InitJSBytecodeMimeType();
   static nsCString& JSBytecodeMimeType() {
     MOZ_ASSERT(sJSBytecodeMimeType);
     return *sJSBytecodeMimeType;
@@ -3355,9 +3377,8 @@ class nsContentUtils {
 
   static nsIConsoleService* sConsoleService;
 
-  static nsDataHashtable<nsRefPtrHashKey<nsAtom>, EventNameMapping>*
-      sAtomEventTable;
-  static nsDataHashtable<nsStringHashKey, EventNameMapping>* sStringEventTable;
+  static nsTHashMap<nsRefPtrHashKey<nsAtom>, EventNameMapping>* sAtomEventTable;
+  static nsTHashMap<nsStringHashKey, EventNameMapping>* sStringEventTable;
   static nsTArray<RefPtr<nsAtom>>* sUserDefinedEvents;
 
   static nsIStringBundleService* sStringBundleService;
@@ -3411,6 +3432,7 @@ class nsContentUtils {
   // bytecode out of the nsCacheInfoChannel.
   static nsCString* sJSBytecodeMimeType;
 
+  static mozilla::LazyLogModule gResistFingerprintingLog;
   static mozilla::LazyLogModule sDOMDumpLog;
 
   static int32_t sInnerOrOuterWindowCount;
@@ -3474,6 +3496,12 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType) {
       return static_cast<ExtContentPolicyType>(aType);
   }
 }
+
+namespace mozilla {
+std::ostream& operator<<(
+    std::ostream& aOut,
+    const mozilla::PreventDefaultResult aPreventDefaultResult);
+}  // namespace mozilla
 
 class MOZ_RAII nsAutoScriptBlocker {
  public:

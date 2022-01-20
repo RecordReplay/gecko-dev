@@ -159,7 +159,7 @@ impl Default for PipelineId {
 impl PipelineId {
     ///
     pub fn dummy() -> Self {
-        PipelineId(0, 0)
+        PipelineId(!0, !0)
     }
 }
 
@@ -557,6 +557,8 @@ bitflags! {
         const PROFILER_CAPTURE = (1 as u32) << 25; // need "as u32" until we have cbindgen#556
         /// Invalidate picture tiles every frames (useful when inspecting GPU work in external tools).
         const FORCE_PICTURE_INVALIDATION = (1 as u32) << 26;
+        const USE_BATCHED_TEXTURE_UPLOADS = (1 as u32) << 27;
+        const USE_DRAW_CALLS_FOR_TEXTURE_COPY = (1 as u32) << 28;
     }
 }
 
@@ -593,32 +595,17 @@ pub enum ScrollLocation {
     End,
 }
 
-/// Represents a zoom factor.
-#[derive(Clone, Copy, Debug)]
-pub struct ZoomFactor(f32);
-
-impl ZoomFactor {
-    /// Construct a new zoom factor.
-    pub fn new(scale: f32) -> Self {
-        ZoomFactor(scale)
-    }
-
-    /// Get the zoom factor as an untyped float.
-    pub fn get(self) -> f32 {
-        self.0
-    }
-}
-
 /// Crash annotations included in crash reports.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub enum CrashAnnotation {
     CompileShader = 0,
+    DrawShader = 1,
 }
 
 /// Handler to expose support for annotating crash reports.
 pub trait CrashAnnotator : Send {
-    fn set(&self, annotation: CrashAnnotation, value: &str);
+    fn set(&self, annotation: CrashAnnotation, value: &std::ffi::CStr);
     fn clear(&self, annotation: CrashAnnotation);
     fn box_clone(&self) -> Box<dyn CrashAnnotator>;
 }
@@ -636,7 +623,11 @@ pub struct CrashAnnotatorGuard<'a> {
 }
 
 impl<'a> CrashAnnotatorGuard<'a> {
-    pub fn new(annotator: &'a Option<Box<dyn CrashAnnotator>>, annotation: CrashAnnotation, value: &str) -> Self {
+    pub fn new(
+        annotator: &'a Option<Box<dyn CrashAnnotator>>,
+        annotation: CrashAnnotation,
+        value: &std::ffi::CStr,
+    ) -> Self {
         if let Some(ref annotator) = annotator {
             annotator.set(annotation, value);
         }

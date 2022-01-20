@@ -5,9 +5,10 @@
 
 loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/event-emitter");
 
-function PerformancePanel(iframeWindow, toolbox) {
+function PerformancePanel(iframeWindow, toolbox, commands) {
   this.panelWin = iframeWindow;
   this.toolbox = toolbox;
+  this.commands = commands;
   this._targetAvailablePromise = Promise.resolve();
 
   this._onTargetAvailable = this._onTargetAvailable.bind(this);
@@ -49,8 +50,8 @@ PerformancePanel.prototype = {
     // the `watchTargets` function.
     // So this `await` waits for initialization with current target, happening
     // in `_onTargetAvailable`.
-    await this.toolbox.targetList.watchTargets(
-      [this.toolbox.targetList.TYPES.FRAME],
+    await this.commands.targetCommand.watchTargets(
+      [this.commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable
     );
 
@@ -58,9 +59,6 @@ PerformancePanel.prototype = {
     // that caused this start up, and no state change yet, so we can highlight the
     // tab if we need.
     this._checkRecordingStatus();
-
-    this.isReady = true;
-    this.emit("ready");
 
     this._opening = new Promise(resolve => {
       resolve(this);
@@ -90,8 +88,8 @@ PerformancePanel.prototype = {
       this._checkRecordingStatus
     );
 
-    this.toolbox.targetList.unwatchTargets(
-      [this.toolbox.targetList.TYPES.FRAME],
+    this.commands.targetCommand.unwatchTargets(
+      [this.commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable
     );
     await PerformanceController.destroy();

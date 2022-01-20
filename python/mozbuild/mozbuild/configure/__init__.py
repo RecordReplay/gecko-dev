@@ -25,13 +25,8 @@ from mozbuild.configure.options import (
     OptionValue,
 )
 from mozbuild.configure.help import HelpFormatter
-from mozbuild.configure.util import (
-    ConfigureOutputHandler,
-    getpreferredencoding,
-    LineIO,
-)
+from mozbuild.configure.util import ConfigureOutputHandler, getpreferredencoding, LineIO
 from mozbuild.util import (
-    ensure_subprocess_env,
     exec_,
     memoize,
     memoized_property,
@@ -297,26 +292,27 @@ class ConfigureSandbox(dict):
         {
             b: getattr(__builtin__, b, None)
             for b in (
-                "None",
+                "AssertionError",
                 "False",
+                "None",
                 "True",
-                "int",
-                "bool",
-                "any",
+                "__build_class__",  # will be None on py2
                 "all",
-                "len",
-                "list",
-                "tuple",
-                "set",
+                "any",
+                "bool",
                 "dict",
-                "isinstance",
+                "enumerate",
                 "getattr",
                 "hasattr",
-                "enumerate",
+                "int",
+                "isinstance",
+                "len",
+                "list",
                 "range",
+                "set",
+                "sorted",
+                "tuple",
                 "zip",
-                "AssertionError",
-                "__build_class__",  # will be None on py2
             )
         },
         __import__=forbidden_import,
@@ -1015,21 +1011,18 @@ class ConfigureSandbox(dict):
 
         def wrap(function):
             def wrapper(*args, **kwargs):
-                if "env" not in kwargs:
+                if kwargs.get("env") is None and self._environ:
                     kwargs["env"] = dict(self._environ)
-                # Subprocess on older Pythons can't handle unicode keys or
-                # values in environment dicts while subprocess on newer Pythons
-                # needs text in the env. Normalize automagically so callers
-                # don't have to deal with this.
-                kwargs["env"] = ensure_subprocess_env(
-                    kwargs["env"], encoding=system_encoding
-                )
+
                 return function(*args, **kwargs)
 
             return wrapper
 
-        for f in ("call", "check_call", "check_output", "Popen"):
-            wrapped_subprocess[f] = wrap(wrapped_subprocess[f])
+        for f in ("call", "check_call", "check_output", "Popen", "run"):
+            # `run` is new to python 3.5. In case this still runs from python2
+            # code, avoid failing here.
+            if f in wrapped_subprocess:
+                wrapped_subprocess[f] = wrap(wrapped_subprocess[f])
 
         return ReadOnlyNamespace(**wrapped_subprocess)
 
@@ -1257,6 +1250,7 @@ class ConfigureSandbox(dict):
             __name__=self._paths[-1] if self._paths else "",
             os=self.OS,
             log=self.log_impl,
+            namespace=ReadOnlyNamespace,
         )
         if update_globals:
             update_globals(glob)

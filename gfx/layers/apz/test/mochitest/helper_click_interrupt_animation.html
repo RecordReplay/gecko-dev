@@ -40,14 +40,19 @@ async function test() {
   // Click at the bottom of the scrollbar track to trigger a page-down kind of
   // scroll. This should use "desktop zooming" scrollbar code which should
   // trigger an APZ scroll animation.
-  await promiseNativeClick(anchor, xoffset, yoffset);
+  await promiseNativeMouseEventWithAPZ({
+    type: "click",
+    target: anchor,
+    offsetX: xoffset,
+    offsetY: yoffset,
+  });
 
   // Run a few frames, that should be enough to let the scroll animation
   // start. We check to make sure the scroll position has changed.
   for (let i = 0; i < 5; i++) {
     utils.advanceTimeAndRefresh(16);
   }
-  await promiseApzRepaintsFlushed();
+  await promiseOnlyApzControllerFlushed();
 
   let curPos = scroller.scrollTop;
   ok(curPos > 0,
@@ -55,11 +60,16 @@ async function test() {
 
   // Now we click on the content, which should cancel the animation. Run
   // everything to reach a stable state.
-  await promiseNativeClick(anchor, -5, -5);
+  await promiseNativeMouseEventWithAPZ({
+    type: "click",
+    target: anchor,
+    offsetX: -5,
+    offsetY: -5,
+  });
   for (let i = 0; i < 1000; i++) {
     utils.advanceTimeAndRefresh(16);
   }
-  await promiseApzRepaintsFlushed();
+  await promiseOnlyApzControllerFlushed();
 
   // Ensure the scroll position hasn't changed since the last time we checked,
   // which indicates the animation got interrupted.

@@ -623,15 +623,6 @@ nsDocShellTreeOwner::GetMainWidget(nsIWidget** aMainWidget) {
 }
 
 NS_IMETHODIMP
-nsDocShellTreeOwner::SetFocus() {
-  nsCOMPtr<nsIEmbeddingSiteWindow> ownerWin = GetOwnerWin();
-  if (ownerWin) {
-    return ownerWin->SetFocus();
-  }
-  return NS_ERROR_NULL_POINTER;
-}
-
-NS_IMETHODIMP
 nsDocShellTreeOwner::GetTitle(nsAString& aTitle) {
   nsCOMPtr<nsIEmbeddingSiteWindow> ownerWin = GetOwnerWin();
   if (ownerWin) {

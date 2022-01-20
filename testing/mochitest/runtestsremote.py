@@ -268,29 +268,6 @@ class MochiRemote(MochitestDesktop):
     def getLogFilePath(self, logFile):
         return logFile
 
-    def printDeviceInfo(self, printLogcat=False):
-        try:
-            if printLogcat:
-                logcat = self.device.get_logcat()
-                for l in logcat:
-                    ul = l.decode("utf-8", errors="replace")
-                    sl = ul.encode("iso8859-1", errors="replace")
-                    self.log.info(sl)
-            self.log.info("Device info:")
-            devinfo = self.device.get_info()
-            for category in devinfo:
-                if type(devinfo[category]) is list:
-                    self.log.info("  %s:" % category)
-                    for item in devinfo[category]:
-                        self.log.info("     %s" % item)
-                else:
-                    self.log.info("  %s: %s" % (category, devinfo[category]))
-            self.log.info("Test root: %s" % self.device.test_root)
-        except ADBTimeoutError:
-            raise
-        except Exception as e:
-            self.log.warning("Error getting device information: %s" % str(e))
-
     def getGMPPluginPath(self, options):
         # TODO: bug 1149374
         return None
@@ -364,6 +341,8 @@ class MochiRemote(MochitestDesktop):
         bisectChunk=None,
         marionette_args=None,
         e10s=True,
+        runFailures=False,
+        crashAsPass=False,
     ):
         """
         Run the app, log the duration it took to execute, return the status code.
@@ -384,16 +363,21 @@ class MochiRemote(MochitestDesktop):
         startTime = datetime.datetime.now()
         status = 0
         profileDirectory = self.remoteProfile + "/"
-        extraArgs.extend(("-no-remote", "-profile", profileDirectory))
+        args = []
+        args.extend(extraArgs)
+        args.extend(("-no-remote", "-profile", profileDirectory))
 
         pid = rpm.launch(
             app,
             debuggerInfo,
             testUrl,
-            extraArgs,
+            args,
             env=self.environment(env=env, crashreporter=not debuggerInfo),
             e10s=e10s,
         )
+
+        # TODO: not using runFailures or crashAsPass, if we choose to use them
+        # we need to adjust status and check_for_crashes
         self.log.info("runtestsremote.py | Application pid: %d" % pid)
         if not rpm.wait(timeout):
             status = 1
@@ -446,11 +430,7 @@ def run_test_harness(parser, options):
 
     mochitest = MochiRemote(options)
 
-    if options.log_mach is None and not options.verify:
-        mochitest.printDeviceInfo()
-
     try:
-        device_exception = False
         if options.verify:
             retVal = mochitest.verifyTests(options)
         else:
@@ -460,7 +440,6 @@ def run_test_harness(parser, options):
         traceback.print_exc()
         if isinstance(e, ADBTimeoutError):
             mochitest.log.info("Device disconnected. Will not run mochitest.cleanup().")
-            device_exception = True
         else:
             try:
                 mochitest.cleanup(options)
@@ -468,9 +447,6 @@ def run_test_harness(parser, options):
                 # device error cleaning up... oh well!
                 traceback.print_exc()
         retVal = 1
-
-    if not device_exception and options.log_mach is None and not options.verify:
-        mochitest.printDeviceInfo(printLogcat=(retVal != 0))
 
     mochitest.archiveMozLogs()
     mochitest.message_logger.finish()

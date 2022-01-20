@@ -9,17 +9,17 @@ with Files("**"):
 
 EXPORTS.mozilla.webrender += [
     "RenderBufferTextureHost.h",
-    "RenderBufferTextureHostSWGL.h",
     "RenderCompositor.h",
     "RenderCompositorEGL.h",
+    "RenderCompositorLayersSWGL.h",
     "RenderCompositorOGL.h",
+    "RenderCompositorOGLSWGL.h",
     "RenderCompositorSWGL.h",
     "RenderEGLImageTextureHost.h",
     "RendererOGL.h",
     "RendererScreenshotGrabber.h",
     "RenderExternalTextureHost.h",
     "RenderSharedSurfaceTextureHost.h",
-    "RenderSharedSurfaceTextureHostSWGL.h",
     "RenderTextureHost.h",
     "RenderTextureHostSWGL.h",
     "RenderTextureHostWrapper.h",
@@ -32,17 +32,17 @@ EXPORTS.mozilla.webrender += [
 UNIFIED_SOURCES += [
     "Moz2DImageRenderer.cpp",
     "RenderBufferTextureHost.cpp",
-    "RenderBufferTextureHostSWGL.cpp",
     "RenderCompositor.cpp",
     "RenderCompositorEGL.cpp",
+    "RenderCompositorLayersSWGL.cpp",
     "RenderCompositorOGL.cpp",
+    "RenderCompositorOGLSWGL.cpp",
     "RenderCompositorSWGL.cpp",
     "RenderEGLImageTextureHost.cpp",
     "RendererOGL.cpp",
     "RendererScreenshotGrabber.cpp",
     "RenderExternalTextureHost.cpp",
     "RenderSharedSurfaceTextureHost.cpp",
-    "RenderSharedSurfaceTextureHostSWGL.cpp",
     "RenderTextureHost.cpp",
     "RenderTextureHostSWGL.cpp",
     "RenderTextureHostWrapper.cpp",
@@ -90,9 +90,11 @@ if CONFIG["MOZ_ENABLE_D3D10_LAYER"]:
 
 if CONFIG["MOZ_WAYLAND"]:
     EXPORTS.mozilla.webrender += [
+        "RenderCompositorNative.h",
         "RenderDMABUFTextureHost.h",
     ]
     SOURCES += [
+        "RenderCompositorNative.cpp",
         "RenderDMABUFTextureHost.cpp",
     ]
 
@@ -121,3 +123,4 @@ FINAL_LIBRARY = "xul"
 
 CXXFLAGS += CONFIG["TK_CFLAGS"]
 CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
+CXXFLAGS += ["-Werror=switch"]

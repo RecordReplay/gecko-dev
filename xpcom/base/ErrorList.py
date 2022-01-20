@@ -233,15 +233,9 @@ with modules["GFX"]:
 with modules["WIDGET"]:
     # Used by:
     #   - nsIWidget::NotifyIME()
-    #   - nsIWidget::OnWindowedPluginKeyEvent()
     # Returned when the notification or the event is handled and it's consumed
     # by somebody.
     errors["NS_SUCCESS_EVENT_CONSUMED"] = SUCCESS(1)
-    # Used by:
-    #   - nsIWidget::OnWindowedPluginKeyEvent()
-    # Returned when the event is handled correctly but the result will be
-    # notified asynchronously.
-    errors["NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY"] = SUCCESS(2)
 
 
 # =======================================================================
@@ -342,6 +336,8 @@ with modules["NETWORK"]:
     errors["NS_ERROR_NET_HTTP2_SENT_GOAWAY"] = FAILURE(83)
     # HTTP/3 protocol internal error
     errors["NS_ERROR_NET_HTTP3_PROTOCOL_ERROR"] = FAILURE(84)
+    # A timeout error code that can be used to cancel requests.
+    errors["NS_ERROR_NET_TIMEOUT_EXTERNAL"] = FAILURE(85)
 
     # XXX really need to better rationalize these error codes.  are consumers of
     # necko really expected to know how to discern the meaning of these??
@@ -365,14 +361,6 @@ with modules["NETWORK"]:
     # The request occurred in docshell that lacks a treeowner, so it is
     # probably in the process of being torn down.
     errors["NS_ERROR_DOCSHELL_DYING"] = FAILURE(78)
-
-    # FTP specific error codes:
-
-    errors["NS_ERROR_FTP_LOGIN"] = FAILURE(21)
-    errors["NS_ERROR_FTP_CWD"] = FAILURE(22)
-    errors["NS_ERROR_FTP_PASV"] = FAILURE(23)
-    errors["NS_ERROR_FTP_PWD"] = FAILURE(24)
-    errors["NS_ERROR_FTP_LIST"] = FAILURE(28)
 
     # DNS specific error codes:
 
@@ -429,10 +417,6 @@ with modules["NETWORK"]:
     # observer is taking over responsibility for the data buffer, and the loader
     # should NOT free it.
     errors["NS_SUCCESS_ADOPTED_DATA"] = SUCCESS(90)
-
-    # FTP
-    errors["NS_NET_STATUS_BEGIN_FTP_TRANSACTION"] = SUCCESS(27)
-    errors["NS_NET_STATUS_END_FTP_TRANSACTION"] = SUCCESS(28)
 
     # This success code may be returned by nsIAuthModule::getNextToken to
     # indicate that the authentication is finished and thus there's no need
@@ -652,7 +636,6 @@ with modules["FILES"]:
     errors["NS_ERROR_FILE_COPY_OR_MOVE_FAILED"] = FAILURE(7)
     errors["NS_ERROR_FILE_ALREADY_EXISTS"] = FAILURE(8)
     errors["NS_ERROR_FILE_INVALID_PATH"] = FAILURE(9)
-    errors["NS_ERROR_FILE_DISK_FULL"] = FAILURE(10)
     errors["NS_ERROR_FILE_CORRUPTED"] = FAILURE(11)
     errors["NS_ERROR_FILE_NOT_DIRECTORY"] = FAILURE(12)
     errors["NS_ERROR_FILE_IS_DIRECTORY"] = FAILURE(13)
@@ -664,6 +647,8 @@ with modules["FILES"]:
     errors["NS_ERROR_FILE_READ_ONLY"] = FAILURE(19)
     errors["NS_ERROR_FILE_DIR_NOT_EMPTY"] = FAILURE(20)
     errors["NS_ERROR_FILE_ACCESS_DENIED"] = FAILURE(21)
+    errors["NS_ERROR_FILE_FS_CORRUPTED"] = FAILURE(22)
+    errors["NS_ERROR_FILE_DEVICE_FAILURE"] = FAILURE(23)
 
     errors["NS_SUCCESS_FILE_DIRECTORY_EMPTY"] = SUCCESS(1)
     # Result codes used by nsIDirectoryServiceProvider2
@@ -729,36 +714,6 @@ with modules["DOM"]:
     errors["NS_ERROR_DOM_INVALID_HEADER_NAME"] = FAILURE(1017)
 
     errors["NS_ERROR_DOM_INVALID_STATE_XHR_HAS_INVALID_CONTEXT"] = FAILURE(1018)
-    errors["NS_ERROR_DOM_INVALID_STATE_XHR_MUST_BE_OPENED"] = FAILURE(1019)
-    errors["NS_ERROR_DOM_INVALID_STATE_XHR_MUST_NOT_BE_SENDING"] = FAILURE(1020)
-    errors[
-        "NS_ERROR_DOM_INVALID_STATE_XHR_MUST_NOT_BE_LOADING_OR_DONE_RESPONSE_TYPE"
-    ] = FAILURE(
-        1021
-    )  # NOQA: E501
-    errors[
-        "NS_ERROR_DOM_INVALID_STATE_XHR_MUST_NOT_BE_LOADING_OR_DONE_OVERRIDE_MIME_TYPE"
-    ] = FAILURE(
-        1037
-    )  # NOQA: E501
-    errors[
-        "NS_ERROR_DOM_INVALID_STATE_XHR_HAS_WRONG_RESPONSETYPE_FOR_RESPONSEXML"
-    ] = FAILURE(1022)
-    errors[
-        "NS_ERROR_DOM_INVALID_STATE_XHR_HAS_WRONG_RESPONSETYPE_FOR_RESPONSETEXT"
-    ] = FAILURE(
-        1023
-    )  # NOQA: E501
-    errors[
-        "NS_ERROR_DOM_INVALID_STATE_XHR_CHUNKED_RESPONSETYPES_UNSUPPORTED_FOR_SYNC"
-    ] = FAILURE(
-        1024
-    )  # NOQA: E501
-    errors[
-        "NS_ERROR_DOM_INVALID_ACCESS_XHR_TIMEOUT_AND_RESPONSETYPE_UNSUPPORTED_FOR_SYNC"
-    ] = FAILURE(
-        1025
-    )  # NOQA: E501
 
     # When manipulating the bytecode cache with the JS API, some transcoding
     # errors, such as a different bytecode format can cause failures of the
@@ -770,20 +725,21 @@ with modules["DOM"]:
     errors["NS_ERROR_DOM_IMAGE_INVALID_REQUEST"] = FAILURE(1028)
     errors["NS_ERROR_DOM_IMAGE_BROKEN"] = FAILURE(1029)
 
-    # Editing command errors.
-    errors["NS_ERROR_DOM_INVALID_STATE_DOCUMENT_EXEC_COMMAND"] = FAILURE(1030)
-    errors["NS_ERROR_DOM_INVALID_STATE_DOCUMENT_QUERY_COMMAND_ENABLED"] = FAILURE(1031)
-    errors["NS_ERROR_DOM_INVALID_STATE_DOCUMENT_QUERY_COMMAND_INDETERM"] = FAILURE(1032)
-    errors["NS_ERROR_DOM_INVALID_STATE_DOCUMENT_QUERY_COMMAND_STATE"] = FAILURE(1033)
-    errors["NS_ERROR_DOM_INVALID_STATE_DOCUMENT_QUERY_COMMAND_SUPPORTED"] = FAILURE(
-        1034
-    )
-    errors["NS_ERROR_DOM_INVALID_STATE_DOCUMENT_QUERY_COMMAND_VALUE"] = FAILURE(1035)
-
     # Used to indicate that a resource with the Cross-Origin-Resource-Policy
     # response header set failed the origin check.
     # https://fetch.spec.whatwg.org/#cross-origin-resource-policy-header
     errors["NS_ERROR_DOM_CORP_FAILED"] = FAILURE(1036)
+
+    # Used to indicate that a URI may not be loaded into a cross-origin
+    # context.
+    errors["NS_ERROR_DOM_BAD_CROSS_ORIGIN_URI"] = FAILURE(1037)
+
+    # The request failed because there are too many recursive iframes or
+    # objects being loaded.
+    errors["NS_ERROR_RECURSIVE_DOCUMENT_LOAD"] = FAILURE(1038)
+
+    # WebExtension content script may not load this URL.
+    errors["NS_ERROR_DOM_WEBEXT_CONTENT_SCRIPT_URI"] = FAILURE(1039)
 
     # May be used to indicate when e.g. setting a property value didn't
     # actually change the value, like for obj.foo = "bar"; obj.foo = "bar";
@@ -828,6 +784,11 @@ with modules["EDITOR"]:
     # don't make this as a success code since it's not check with NS_FAILED()
     # and may keep handling the operation unexpectedly.
     errors["NS_ERROR_EDITOR_ACTION_CANCELED"] = FAILURE(3)
+
+    # An error code that indicates that there is no editable selection ranges.
+    # E.g., Selection has no range, caret is in non-editable element,
+    # non-collapsed range crosses editing host boundaries.
+    errors["NS_ERROR_EDITOR_NO_EDITABLE_RANGE"] = FAILURE(4)
 
     errors["NS_SUCCESS_EDITOR_ELEMENT_NOT_FOUND"] = SUCCESS(1)
     errors["NS_SUCCESS_EDITOR_FOUND_TARGET"] = SUCCESS(2)
@@ -878,7 +839,6 @@ with modules["XPCONNECT"]:
     errors["NS_ERROR_XPC_SECURITY_MANAGER_VETO"] = FAILURE(39)
     errors["NS_ERROR_XPC_INTERFACE_NOT_SCRIPTABLE"] = FAILURE(40)
     errors["NS_ERROR_XPC_INTERFACE_NOT_FROM_NSISUPPORTS"] = FAILURE(41)
-    errors["NS_ERROR_XPC_CANT_GET_JSOBJECT_OF_DOM_OBJECT"] = FAILURE(42)
     errors["NS_ERROR_XPC_CANT_SET_READ_ONLY_CONSTANT"] = FAILURE(43)
     errors["NS_ERROR_XPC_CANT_SET_READ_ONLY_ATTRIBUTE"] = FAILURE(44)
     errors["NS_ERROR_XPC_CANT_SET_READ_ONLY_METHOD"] = FAILURE(45)
@@ -939,14 +899,6 @@ with modules["SECURITY"]:
     errors["NS_ERROR_CMS_VERIFY_CERT_WITHOUT_ADDRESS"] = FAILURE(1040)
     errors["NS_ERROR_CMS_ENCRYPT_NO_BULK_ALG"] = FAILURE(1056)
     errors["NS_ERROR_CMS_ENCRYPT_INCOMPLETE"] = FAILURE(1057)
-
-
-# =======================================================================
-# 22: NS_ERROR_MODULE_DOM_XPATH
-# =======================================================================
-with modules["DOM_XPATH"]:
-    # DOM error codes from http://www.w3.org/TR/DOM-Level-3-XPath/
-    errors["NS_ERROR_DOM_INVALID_EXPRESSION_ERR"] = FAILURE(51)
 
 
 # =======================================================================
@@ -1057,16 +1009,6 @@ with modules["IPC"]:
 
 
 # =======================================================================
-# 29: NS_ERROR_MODULE_SVG
-# =======================================================================
-with modules["SVG"]:
-    # SVG DOM error codes from http://www.w3.org/TR/SVG11/svgdom.html
-    errors["NS_ERROR_DOM_SVG_WRONG_TYPE_ERR"] = FAILURE(0)
-    # Yes, the spec says "INVERTABLE", not "INVERTIBLE"
-    errors["NS_ERROR_DOM_SVG_MATRIX_NOT_INVERTABLE"] = FAILURE(2)
-
-
-# =======================================================================
 # 30: NS_ERROR_MODULE_STORAGE
 # =======================================================================
 with modules["STORAGE"]:
@@ -1156,13 +1098,6 @@ with modules["DOM_FILESYSTEM"]:
 # =======================================================================
 with modules["SIGNED_APP"]:
     errors["NS_ERROR_SIGNED_APP_MANIFEST_INVALID"] = FAILURE(1)
-
-
-# =======================================================================
-# 39: NS_ERROR_MODULE_DOM_ANIM
-# =======================================================================
-with modules["DOM_ANIM"]:
-    errors["NS_ERROR_DOM_ANIM_MISSING_PROPS_ERR"] = FAILURE(1)
 
 
 # =======================================================================

@@ -6,6 +6,7 @@ const { AddonTestUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ExtensionParent: "resource://gre/modules/ExtensionParent.jsm",
+  SearchTestUtils: "resource://testing-common/SearchTestUtils.jsm",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarProvidersManager: "resource:///modules/UrlbarProvidersManager.jsm",
   UrlbarQueryContext: "resource:///modules/UrlbarUtils.jsm",
@@ -21,6 +22,9 @@ AddonTestUtils.createAppInfo(
   "1",
   "42"
 );
+SearchTestUtils.init(this);
+SearchTestUtils.initXPCShellAddonManager(this, "system");
+
 // Override ExtensionXPCShellUtils.jsm's overriding of the pref as the
 // search service needs it.
 Services.prefs.clearUserPref("services.settings.default_bucket");
@@ -67,11 +71,14 @@ add_task(async function startup() {
   // Add a test engine and make it default so that when we do searches below,
   // Firefox doesn't try to include search suggestions from the actual default
   // engine from over the network.
-  let engine = await Services.search.addEngineWithDetails("Test engine", {
-    template: "http://example.com/?s=%S",
-    alias: "@testengine",
+  await SearchTestUtils.installSearchExtension({
+    name: "Test engine",
+    keyword: "@testengine",
+    search_url_get_params: "s={searchTerms}",
   });
-  Services.search.defaultEngine = engine;
+  Services.search.defaultEngine = Services.search.getEngineByName(
+    "Test engine"
+  );
 });
 
 // Extensions must specify the "urlbar" permission to use browser.urlbar.
@@ -221,8 +228,9 @@ add_task(async function test_onProviderResultsRequested() {
             source: "tabs",
             payload: {
               title: "Test remote_tab-tabs result",
-              url: "http://example.com/remote_tab-tabs",
+              url: "https://example.com/remote_tab-tabs",
               device: "device",
+              lastUsed: 1621366890,
             },
           },
           {
@@ -238,7 +246,7 @@ add_task(async function test_onProviderResultsRequested() {
             source: "tabs",
             payload: {
               title: "Test tab-tabs result",
-              url: "http://example.com/tab-tabs",
+              url: "https://example.com/tab-tabs",
             },
           },
           {
@@ -247,8 +255,8 @@ add_task(async function test_onProviderResultsRequested() {
             payload: {
               text: "Test tip-local result text",
               buttonText: "Test tip-local result button text",
-              buttonUrl: "http://example.com/tip-button",
-              helpUrl: "http://example.com/tip-help",
+              buttonUrl: "https://example.com/tip-button",
+              helpUrl: "https://example.com/tip-help",
             },
           },
           {
@@ -256,7 +264,7 @@ add_task(async function test_onProviderResultsRequested() {
             source: "history",
             payload: {
               title: "Test url-history result",
-              url: "http://example.com/url-history",
+              url: "https://example.com/url-history",
             },
           },
         ];
@@ -317,9 +325,10 @@ add_task(async function test_onProviderResultsRequested() {
       heuristic: false,
       payload: {
         title: "Test remote_tab-tabs result",
-        url: "http://example.com/remote_tab-tabs",
-        displayUrl: "http://example.com/remote_tab-tabs",
+        url: "https://example.com/remote_tab-tabs",
+        displayUrl: "example.com/remote_tab-tabs",
         device: "device",
+        lastUsed: 1621366890,
       },
     },
     {
@@ -329,8 +338,8 @@ add_task(async function test_onProviderResultsRequested() {
       heuristic: false,
       payload: {
         title: "Test tab-tabs result",
-        url: "http://example.com/tab-tabs",
-        displayUrl: "http://example.com/tab-tabs",
+        url: "https://example.com/tab-tabs",
+        displayUrl: "example.com/tab-tabs",
       },
     },
     {
@@ -341,8 +350,8 @@ add_task(async function test_onProviderResultsRequested() {
       payload: {
         text: "Test tip-local result text",
         buttonText: "Test tip-local result button text",
-        buttonUrl: "http://example.com/tip-button",
-        helpUrl: "http://example.com/tip-help",
+        buttonUrl: "https://example.com/tip-button",
+        helpUrl: "https://example.com/tip-help",
         type: "extension",
       },
     },
@@ -353,13 +362,13 @@ add_task(async function test_onProviderResultsRequested() {
       heuristic: false,
       payload: {
         title: "Test url-history result",
-        url: "http://example.com/url-history",
-        displayUrl: "http://example.com/url-history",
+        url: "https://example.com/url-history",
+        displayUrl: "example.com/url-history",
       },
     },
   ];
 
-  Assert.ok(context.results.every(r => r.suggestedIndex == -1));
+  Assert.ok(context.results.every(r => !r.hasSuggestedIndex));
   let actualResults = context.results.map(r => ({
     type: r.type,
     source: r.source,
@@ -407,7 +416,7 @@ add_task(async function test_onProviderResultsRequested_searchEngines() {
             type: "search",
             source: "search",
             payload: {
-              url: "http://example.com/?s",
+              url: "https://example.com/?s",
               suggestion: "url specified",
             },
           },
@@ -417,7 +426,7 @@ add_task(async function test_onProviderResultsRequested_searchEngines() {
             payload: {
               engine: "Test engine",
               keyword: "@testengine",
-              url: "http://example.com/?s",
+              url: "https://example.com/?s",
               suggestion: "engine, keyword, and url specified",
             },
           },
@@ -426,7 +435,7 @@ add_task(async function test_onProviderResultsRequested_searchEngines() {
             source: "search",
             payload: {
               keyword: "@testengine",
-              url: "http://example.com/?s",
+              url: "https://example.com/?s",
               suggestion: "keyword and url specified",
             },
           },
@@ -573,7 +582,7 @@ add_task(async function test_activeAndInactiveProviders() {
               source: "history",
               payload: {
                 title: `Test result ${behavior}`,
-                url: `http://example.com/${behavior}`,
+                url: `https://example.com/${behavior}`,
               },
             },
           ];
@@ -634,7 +643,7 @@ add_task(async function test_threeActiveProviders() {
               source: "history",
               payload: {
                 title: `Test result ${i}`,
-                url: `http://example.com/${i}`,
+                url: `https://example.com/${i}`,
               },
             },
           ];
@@ -760,7 +769,7 @@ add_task(async function test_activeInactiveAndRestrictingProviders() {
               source: "history",
               payload: {
                 title: `Test result ${behavior}`,
-                url: `http://example.com/${behavior}`,
+                url: `https://example.com/${behavior}`,
               },
             },
           ];
@@ -824,7 +833,7 @@ add_task(async function test_heuristicRestricting() {
             heuristic: true,
             payload: {
               title: "Test result",
-              url: "http://example.com/",
+              url: "https://example.com/",
             },
           },
         ];
@@ -856,7 +865,7 @@ add_task(async function test_heuristicRestricting() {
 
 // Adds a non-restricting provider that returns a heuristic result.  The actual
 // result created from the extension's result should *not* be a heuristic, and
-// the usual UnifiedComplete heuristic should be present.
+// the usual UrlbarProviderHeuristicFallback heuristic should be present.
 add_task(async function test_heuristicNonRestricting() {
   let ext = ExtensionTestUtils.loadExtension({
     manifest: {
@@ -876,7 +885,7 @@ add_task(async function test_heuristicNonRestricting() {
             heuristic: true,
             payload: {
               title: "Test result",
-              url: "http://example.com/",
+              url: "https://example.com/",
             },
           },
         ];
@@ -899,7 +908,8 @@ add_task(async function test_heuristicNonRestricting() {
   let controller = UrlbarTestUtils.newMockController();
   await controller.startQuery(context);
 
-  // Check the results.  The first result should be UnifiedComplete's heuristic.
+  // Check the results.  The first result should be
+  // UrlbarProviderHeuristicFallback's heuristic.
   let firstResult = context.results[0];
   Assert.ok(firstResult.heuristic);
   Assert.equal(firstResult.type, UrlbarUtils.RESULT_TYPE.SEARCH);
@@ -981,7 +991,7 @@ add_task(async function test_badPayload() {
             source: "history",
             payload: {
               title: "Test result",
-              url: "http://example.com/",
+              url: "https://example.com/",
             },
           },
         ];
@@ -1127,7 +1137,7 @@ add_task(async function test_onResultsRequestedTimeout() {
             source: "history",
             payload: {
               title: "Test result",
-              url: "http://example.com/",
+              url: "https://example.com/",
             },
           },
         ];
@@ -1375,7 +1385,7 @@ add_task(async function test_nonPrivateBrowsing() {
             source: "history",
             payload: {
               title: "Test result",
-              url: "http://example.com/",
+              url: "https://example.com/",
             },
             suggestedIndex: 1,
           },

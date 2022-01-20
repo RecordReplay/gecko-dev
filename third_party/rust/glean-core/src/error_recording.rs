@@ -16,8 +16,8 @@ use std::convert::TryFrom;
 use std::fmt::Display;
 
 use crate::error::{Error, ErrorKind};
+use crate::metrics::labeled::{combine_base_identifier_and_label, strip_label};
 use crate::metrics::CounterMetric;
-use crate::metrics::{combine_base_identifier_and_label, strip_label};
 use crate::CommonMetricData;
 use crate::Glean;
 use crate::Lifetime;
@@ -26,7 +26,7 @@ use crate::Lifetime;
 /// Note: the cases in this enum must be kept in sync with the ones
 /// in the platform-specific code (e.g. `ErrorType.kt`) and with the
 /// metrics in the registry files.
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ErrorType {
     /// For when the value to be recorded does not match the metric-specific restrictions
     InvalidValue,

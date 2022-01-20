@@ -43,7 +43,8 @@ nsSHEntry::nsSHEntry()
       mScrollRestorationIsManual(false),
       mLoadedInThisProcess(false),
       mPersist(true),
-      mHasUserInteraction(false) {}
+      mHasUserInteraction(false),
+      mHasUserActivation(false) {}
 
 nsSHEntry::nsSHEntry(const nsSHEntry& aOther)
     : mShared(aOther.mShared),
@@ -70,7 +71,8 @@ nsSHEntry::nsSHEntry(const nsSHEntry& aOther)
       mScrollRestorationIsManual(false),
       mLoadedInThisProcess(aOther.mLoadedInThisProcess),
       mPersist(aOther.mPersist),
-      mHasUserInteraction(false) {}
+      mHasUserInteraction(false),
+      mHasUserActivation(aOther.mHasUserActivation) {}
 
 nsSHEntry::~nsSHEntry() {
   // Null out the mParent pointers on all our kids.
@@ -325,6 +327,18 @@ nsSHEntry::SetHasUserInteraction(bool aFlag) {
 }
 
 NS_IMETHODIMP
+nsSHEntry::GetHasUserActivation(bool* aFlag) {
+  *aFlag = mHasUserActivation;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetHasUserActivation(bool aFlag) {
+  mHasUserActivation = aFlag;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsSHEntry::GetCacheKey(uint32_t* aResult) {
   *aResult = mShared->mCacheKey;
   return NS_OK;
@@ -360,7 +374,7 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
                   nsIURI* aResultPrincipalURI, bool aLoadReplace,
                   nsIReferrerInfo* aReferrerInfo, const nsAString& aSrcdocData,
                   bool aSrcdocEntry, nsIURI* aBaseURI, bool aSaveLayoutState,
-                  bool aExpired) {
+                  bool aExpired, bool aUserActivation) {
   MOZ_ASSERT(
       aTriggeringPrincipal,
       "need a valid triggeringPrincipal to create a session history entry");
@@ -401,6 +415,8 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
   mResultPrincipalURI = aResultPrincipalURI;
   mLoadReplace = aLoadReplace;
   mReferrerInfo = aReferrerInfo;
+
+  mHasUserActivation = aUserActivation;
 
   mShared->mLayoutHistoryState = nullptr;
 
@@ -915,9 +931,12 @@ nsSHEntry::CreateLoadInfo(nsDocShellLoadState** aLoadState) {
   }
   loadState->SetSrcdocData(srcdoc);
   loadState->SetBaseURI(baseURI);
-  loadState->SetLoadFlags(flags);
+  loadState->SetInternalLoadFlags(flags);
 
   loadState->SetFirstParty(true);
+
+  loadState->SetHasValidUserGestureActivation(GetHasUserActivation());
+
   loadState->SetSHEntry(this);
 
   loadState.forget(aLoadState);
@@ -1059,8 +1078,9 @@ bool nsSHEntry::HasDetachedEditor() {
   return GetState()->mEditorData != nullptr;
 }
 
-bool nsSHEntry::HasBFCacheEntry(nsIBFCacheEntry* aEntry) {
-  return static_cast<nsIBFCacheEntry*>(GetState()) == aEntry;
+bool nsSHEntry::HasBFCacheEntry(
+    mozilla::dom::SHEntrySharedParentState* aEntry) {
+  return GetState() == aEntry;
 }
 
 NS_IMETHODIMP

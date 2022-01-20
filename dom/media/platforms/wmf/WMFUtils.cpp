@@ -65,21 +65,22 @@ GetDefaultStride(IMFMediaType* aType, uint32_t aWidth, uint32_t* aOutStride) {
   return hr;
 }
 
-gfx::YUVColorSpace GetYUVColorSpace(IMFMediaType* aType) {
+Maybe<gfx::YUVColorSpace> GetYUVColorSpace(IMFMediaType* aType) {
   UINT32 yuvColorMatrix;
   HRESULT hr = aType->GetUINT32(MF_MT_YUV_MATRIX, &yuvColorMatrix);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), gfx::YUVColorSpace::UNKNOWN);
+  NS_ENSURE_TRUE(SUCCEEDED(hr), {});
 
   switch (yuvColorMatrix) {
     case MFVideoTransferMatrix_BT2020_10:
     case MFVideoTransferMatrix_BT2020_12:
-      return gfx::YUVColorSpace::BT2020;
+      return Some(gfx::YUVColorSpace::BT2020);
     case MFVideoTransferMatrix_BT709:
-      return gfx::YUVColorSpace::BT709;
+      return Some(gfx::YUVColorSpace::BT709);
     case MFVideoTransferMatrix_BT601:
-      return gfx::YUVColorSpace::BT601;
+      return Some(gfx::YUVColorSpace::BT601);
     default:
-      return gfx::YUVColorSpace::UNKNOWN;
+      MOZ_ASSERT_UNREACHABLE("Unhandled MFVideoTransferMatrix_?");
+      return {};
   }
 }
 
@@ -90,7 +91,8 @@ int32_t MFOffsetToInt32(const MFOffset& aOffset) {
 TimeUnit GetSampleDuration(IMFSample* aSample) {
   NS_ENSURE_TRUE(aSample, TimeUnit::Invalid());
   int64_t duration = 0;
-  aSample->GetSampleDuration(&duration);
+  HRESULT hr = aSample->GetSampleDuration(&duration);
+  NS_ENSURE_TRUE(SUCCEEDED(hr), TimeUnit::Invalid());
   return TimeUnit::FromMicroseconds(HNsToUsecs(duration));
 }
 
@@ -317,6 +319,25 @@ MFCreateDXGISurfaceBuffer(REFIID riid, IUnknown* punkSurface,
   ENSURE_FUNCTION_PTR(MFCreateDXGISurfaceBuffer, mfplat.dll)
   return (MFCreateDXGISurfaceBufferPtr)(riid, punkSurface, uSubresourceIndex,
                                         fButtomUpWhenLinear, ppBuffer);
+}
+
+HRESULT
+MFTEnumEx(GUID guidCategory, UINT32 Flags,
+          const MFT_REGISTER_TYPE_INFO* pInputType,
+          const MFT_REGISTER_TYPE_INFO* pOutputType,
+          IMFActivate*** pppMFTActivate, UINT32* pnumMFTActivate) {
+  ENSURE_FUNCTION_PTR(MFTEnumEx, mfplat.dll)
+  return (MFTEnumExPtr)(guidCategory, Flags, pInputType, pOutputType,
+                        pppMFTActivate, pnumMFTActivate);
+}
+
+HRESULT MFTGetInfo(CLSID clsidMFT, LPWSTR* pszName,
+                   MFT_REGISTER_TYPE_INFO** ppInputTypes, UINT32* pcInputTypes,
+                   MFT_REGISTER_TYPE_INFO** ppOutputTypes,
+                   UINT32* pcOutputTypes, IMFAttributes** ppAttributes) {
+  ENSURE_FUNCTION_PTR(MFTGetInfo, mfplat.dll)
+  return (MFTGetInfoPtr)(clsidMFT, pszName, ppInputTypes, pcInputTypes,
+                         ppOutputTypes, pcOutputTypes, ppAttributes);
 }
 
 }  // end namespace wmf

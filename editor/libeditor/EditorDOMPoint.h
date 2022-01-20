@@ -10,6 +10,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RangeBoundary.h"
+#include "mozilla/ToString.h"
 #include "mozilla/dom/AbstractRange.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Text.h"
@@ -84,8 +85,8 @@ class EditorDOMPointBase final {
       : mParent(nullptr), mChild(nullptr), mIsChildInitialized(false) {}
 
   template <typename ContainerType>
-  EditorDOMPointBase(ContainerType* aContainer, int32_t aOffset)
-      : mParent(aContainer),
+  EditorDOMPointBase(const ContainerType* aContainer, uint32_t aOffset)
+      : mParent(const_cast<ContainerType*>(aContainer)),
         mChild(nullptr),
         mOffset(mozilla::Some(aOffset)),
         mIsChildInitialized(false) {
@@ -99,7 +100,7 @@ class EditorDOMPointBase final {
 
   template <typename ContainerType, template <typename> typename StrongPtr>
   EditorDOMPointBase(const StrongPtr<ContainerType>& aContainer,
-                     int32_t aOffset)
+                     uint32_t aOffset)
       : EditorDOMPointBase(aContainer.get(), aOffset) {}
 
   /**
@@ -122,7 +123,7 @@ class EditorDOMPointBase final {
   }
 
   EditorDOMPointBase(nsINode* aContainer, nsIContent* aPointedNode,
-                     int32_t aOffset)
+                     uint32_t aOffset)
       : mParent(aContainer),
         mChild(aPointedNode),
         mOffset(mozilla::Some(aOffset)),
@@ -282,6 +283,17 @@ class EditorDOMPointBase final {
   }
 
   /**
+   * GetChildOrContainerIfDataNode() returns the child content node,
+   * or container content node if the container is a data node.
+   */
+  nsIContent* GetChildOrContainerIfDataNode() const {
+    if (IsInDataNode()) {
+      return ContainerAsContent();
+    }
+    return GetChild();
+  }
+
+  /**
    * GetNextSiblingOfChild() returns next sibling of the child node.
    * If this refers after the last child or the container cannot have children,
    * this returns nullptr with warning.
@@ -431,7 +443,7 @@ class EditorDOMPointBase final {
    * mOffset may be invalidated.
    */
   template <typename ContainerType>
-  void Set(ContainerType* aContainer, int32_t aOffset) {
+  void Set(ContainerType* aContainer, uint32_t aOffset) {
     mParent = aContainer;
     mChild = nullptr;
     mOffset = mozilla::Some(aOffset);
@@ -440,7 +452,7 @@ class EditorDOMPointBase final {
                  "The offset is out of bounds");
   }
   template <typename ContainerType, template <typename> typename StrongPtr>
-  void Set(const StrongPtr<ContainerType>& aContainer, int32_t aOffset) {
+  void Set(const StrongPtr<ContainerType>& aContainer, uint32_t aOffset) {
     Set(aContainer.get(), aOffset);
   }
   void Set(const nsINode* aChild) {
@@ -957,6 +969,21 @@ class EditorDOMPointBase final {
     Maybe<int32_t> comp = nsContentUtils::ComparePoints(
         ToRawRangeBoundary(), aOther.ToRawRangeBoundary());
     return comp.isSome() && comp.value() <= 0;
+  }
+
+  friend std::ostream& operator<<(std::ostream& aStream,
+                                  const SelfType& aDOMPoint) {
+    aStream << "{ mParent=" << aDOMPoint.mParent.get();
+    if (aDOMPoint.mParent) {
+      aStream << " (" << *aDOMPoint.mParent << ")";
+    }
+    aStream << ", mChild=" << aDOMPoint.mChild.get();
+    if (aDOMPoint.mChild) {
+      aStream << " (" << *aDOMPoint.mChild << ")";
+    }
+    aStream << ", mOffset=" << aDOMPoint.mOffset << ", mIsChildInitialized="
+            << (aDOMPoint.mIsChildInitialized ? "true" : "false") << " }";
+    return aStream;
   }
 
  private:

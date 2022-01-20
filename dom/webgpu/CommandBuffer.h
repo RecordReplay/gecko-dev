@@ -7,6 +7,7 @@
 #define GPU_CommandBuffer_H_
 
 #include "mozilla/WeakPtr.h"
+#include "mozilla/webgpu/WebGPUTypes.h"
 #include "nsWrapperCache.h"
 #include "ObjectModel.h"
 
@@ -24,7 +25,7 @@ class CommandBuffer final : public ObjectBase, public ChildOf<Device> {
   GPU_DECL_JS_WRAP(CommandBuffer)
 
   CommandBuffer(Device* const aParent, RawId aId,
-                const WeakPtr<dom::HTMLCanvasElement>& aTargetCanvasElement);
+                nsTArray<WeakPtr<dom::HTMLCanvasElement>>&& aTargetCanvases);
 
   Maybe<RawId> Commit();
 
@@ -34,7 +35,7 @@ class CommandBuffer final : public ObjectBase, public ChildOf<Device> {
   void Cleanup();
 
   const RawId mId;
-  const WeakPtr<dom::HTMLCanvasElement> mTargetCanvasElement;
+  const nsTArray<WeakPtr<dom::HTMLCanvasElement>> mTargetCanvases;
 };
 
 }  // namespace webgpu

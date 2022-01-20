@@ -214,17 +214,35 @@ DataTextureSourceD3D11::DataTextureSourceD3D11(gfx::SurfaceFormat aFormat,
 
 DataTextureSourceD3D11::~DataTextureSourceD3D11() {}
 
+enum class SerializeWithMoz2D : bool { No, Yes };
+
 template <typename T>  // ID3D10Texture2D or ID3D11Texture2D
-static bool LockD3DTexture(T* aTexture) {
+static bool LockD3DTexture(
+    T* aTexture, SerializeWithMoz2D aSerialize = SerializeWithMoz2D::No) {
   MOZ_ASSERT(aTexture);
   RefPtr<IDXGIKeyedMutex> mutex;
   aTexture->QueryInterface((IDXGIKeyedMutex**)getter_AddRefs(mutex));
   // Textures created by the DXVA decoders don't have a mutex for
   // synchronization
   if (mutex) {
-    HRESULT hr = mutex->AcquireSync(0, 10000);
+    HRESULT hr;
+    if (aSerialize == SerializeWithMoz2D::Yes) {
+      AutoSerializeWithMoz2D serializeWithMoz2D(BackendType::DIRECT2D1_1);
+      hr = mutex->AcquireSync(0, 10000);
+    } else {
+      hr = mutex->AcquireSync(0, 10000);
+    }
     if (hr == WAIT_TIMEOUT) {
-      gfxDevCrash(LogReason::D3DLockTimeout) << "D3D lock mutex timeout";
+      RefPtr<ID3D11Device> device;
+      aTexture->GetDevice(getter_AddRefs(device));
+      if (!device) {
+        gfxCriticalNote << "GFX: D3D11 lock mutex timeout - no device returned";
+      } else if (device->GetDeviceRemovedReason() != S_OK) {
+        gfxCriticalNote << "GFX: D3D11 lock mutex timeout - device removed";
+      } else {
+        gfxDevCrash(LogReason::D3DLockTimeout)
+            << "D3D lock mutex timeout - device not removed";
+      }
     } else if (hr == WAIT_ABANDONED) {
       gfxCriticalNote << "GFX: D3D11 lock mutex abandoned";
     }
@@ -239,18 +257,26 @@ static bool LockD3DTexture(T* aTexture) {
 
 template <typename T>
 static bool HasKeyedMutex(T* aTexture) {
+  MOZ_ASSERT(aTexture);
   RefPtr<IDXGIKeyedMutex> mutex;
   aTexture->QueryInterface((IDXGIKeyedMutex**)getter_AddRefs(mutex));
   return !!mutex;
 }
 
 template <typename T>  // ID3D10Texture2D or ID3D11Texture2D
-static void UnlockD3DTexture(T* aTexture) {
+static void UnlockD3DTexture(
+    T* aTexture, SerializeWithMoz2D aSerialize = SerializeWithMoz2D::No) {
   MOZ_ASSERT(aTexture);
   RefPtr<IDXGIKeyedMutex> mutex;
   aTexture->QueryInterface((IDXGIKeyedMutex**)getter_AddRefs(mutex));
   if (mutex) {
-    HRESULT hr = mutex->ReleaseSync(0);
+    HRESULT hr;
+    if (aSerialize == SerializeWithMoz2D::Yes) {
+      AutoSerializeWithMoz2D serializeWithMoz2D(BackendType::DIRECT2D1_1);
+      hr = mutex->ReleaseSync(0);
+    } else {
+      hr = mutex->ReleaseSync(0);
+    }
     if (FAILED(hr)) {
       NS_WARNING("Failed to unlock the texture");
     }
@@ -265,11 +291,11 @@ D3D11TextureData::D3D11TextureData(ID3D11Texture2D* aTexture,
       mFormat(aFormat),
       mNeedsClear(aFlags & ALLOC_CLEAR_BUFFER),
       mNeedsClearWhite(aFlags & ALLOC_CLEAR_BUFFER_WHITE),
+      mHasSynchronization(HasKeyedMutex(aTexture)),
       mIsForOutOfBandContent(aFlags & ALLOC_FOR_OUT_OF_BAND_CONTENT),
       mTexture(aTexture),
       mAllocationFlags(aFlags) {
   MOZ_ASSERT(aTexture);
-  mHasSynchronization = HasKeyedMutex(aTexture);
 }
 
 static void DestroyDrawTarget(RefPtr<DrawTarget>& aDT,
@@ -277,9 +303,12 @@ static void DestroyDrawTarget(RefPtr<DrawTarget>& aDT,
   // An Azure DrawTarget needs to be locked when it gets nullptr'ed as this is
   // when it calls EndDraw. This EndDraw should not execute anything so it
   // shouldn't -really- need the lock but the debug layer chokes on this.
-  LockD3DTexture(aTexture.get());
+  LockD3DTexture(aTexture.get(), SerializeWithMoz2D::Yes);
   aDT = nullptr;
-  UnlockD3DTexture(aTexture.get());
+
+  // Do the serialization here, so we can hold it while destroying the texture.
+  AutoSerializeWithMoz2D serializeWithMoz2D(BackendType::DIRECT2D1_1);
+  UnlockD3DTexture(aTexture.get(), SerializeWithMoz2D::No);
   aTexture = nullptr;
 }
 
@@ -290,7 +319,7 @@ D3D11TextureData::~D3D11TextureData() {
 }
 
 bool D3D11TextureData::Lock(OpenMode aMode) {
-  if (!LockD3DTexture(mTexture.get())) {
+  if (!LockD3DTexture(mTexture.get(), SerializeWithMoz2D::Yes)) {
     return false;
   }
 
@@ -331,7 +360,9 @@ bool D3D11TextureData::PrepareDrawTargetInLock(OpenMode aMode) {
   return true;
 }
 
-void D3D11TextureData::Unlock() { UnlockD3DTexture(mTexture.get()); }
+void D3D11TextureData::Unlock() {
+  UnlockD3DTexture(mTexture.get(), SerializeWithMoz2D::Yes);
+}
 
 void D3D11TextureData::FillInfo(TextureData::Info& aInfo) const {
   aInfo.size = mSize;
@@ -481,6 +512,7 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
   RefPtr<ID3D11Texture2D> texture11;
 
   {
+    AutoSerializeWithMoz2D serializeWithMoz2D(BackendType::DIRECT2D1_1);
     D3D11MTAutoEnter lock(mt.forget());
 
     HRESULT hr = device->CreateTexture2D(&newDesc, uploadDataPtr,
@@ -515,10 +547,10 @@ D3D11TextureData* D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat,
   // aSurface then bizarely this isn't covered, so we insert a manual
   // lock/unlock pair to force this.
   if (aSurface && newDesc.MiscFlags == D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) {
-    if (!LockD3DTexture(texture11.get())) {
+    if (!LockD3DTexture(texture11.get(), SerializeWithMoz2D::Yes)) {
       return nullptr;
     }
-    UnlockD3DTexture(texture11.get());
+    UnlockD3DTexture(texture11.get(), SerializeWithMoz2D::Yes);
   }
   texture11->SetPrivateDataInterface(
       sD3D11TextureUsage,
@@ -684,7 +716,7 @@ void DXGIYCbCrTextureData::Deallocate(LayersIPCChannel*) {
 }
 
 TextureFlags DXGIYCbCrTextureData::GetTextureFlags() const {
-  TextureFlags flags = TextureFlags::DEALLOCATE_MAIN_THREAD;
+  TextureFlags flags = TextureFlags::NO_FLAGS;
   // With WebRender, resource open happens asynchronously on RenderThread.
   // During opening the resource on host side, TextureClient needs to be alive.
   // With WAIT_HOST_USAGE_END, keep TextureClient alive during host side usage.
@@ -1012,7 +1044,11 @@ void DXGITextureHostD3D11::PushResourceUpdates(
       MOZ_ASSERT(aImageKeys.length() == 1);
 
       wr::ImageDescriptor descriptor(mSize, GetFormat());
-      auto imageType = gfx::gfxVars::UseSoftwareWebRender()
+      // Prefer TextureExternal unless the backend requires TextureRect.
+      TextureHost::NativeTexturePolicy policy =
+          TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
+                                                  mSize);
+      auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                            ? wr::ExternalImageType::TextureHandle(
                                  wr::ImageBufferKind::TextureRect)
                            : wr::ExternalImageType::TextureHandle(
@@ -1034,7 +1070,11 @@ void DXGITextureHostD3D11::PushResourceUpdates(
                                       mFormat == gfx::SurfaceFormat::NV12
                                           ? gfx::SurfaceFormat::R8G8
                                           : gfx::SurfaceFormat::R16G16);
-      auto imageType = gfx::gfxVars::UseSoftwareWebRender()
+      // Prefer TextureExternal unless the backend requires TextureRect.
+      TextureHost::NativeTexturePolicy policy =
+          TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
+                                                  mSize);
+      auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                            ? wr::ExternalImageType::TextureHandle(
                                  wr::ImageBufferKind::TextureRect)
                            : wr::ExternalImageType::TextureHandle(
@@ -1066,11 +1106,11 @@ void DXGITextureHostD3D11::PushDisplayItems(
     case gfx::SurfaceFormat::B8G8R8A8:
     case gfx::SurfaceFormat::B8G8R8X8: {
       MOZ_ASSERT(aImageKeys.length() == 1);
-      aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0],
-                         !(mFlags & TextureFlags::NON_PREMULTIPLIED),
-                         wr::ColorF{1.0f, 1.0f, 1.0f, 1.0f},
-                         preferCompositorSurface,
-                         SupportsExternalCompositing());
+      aBuilder.PushImage(
+          aBounds, aClip, true, aFilter, aImageKeys[0],
+          !(mFlags & TextureFlags::NON_PREMULTIPLIED),
+          wr::ColorF{1.0f, 1.0f, 1.0f, 1.0f}, preferCompositorSurface,
+          SupportsExternalCompositing(aBuilder.GetBackendType()));
       break;
     }
     case gfx::SurfaceFormat::P010:
@@ -1083,7 +1123,7 @@ void DXGITextureHostD3D11::PushDisplayItems(
                                                   : wr::ColorDepth::Color16,
           wr::ToWrYuvColorSpace(mYUVColorSpace),
           wr::ToWrColorRange(mColorRange), aFilter, preferCompositorSurface,
-          SupportsExternalCompositing());
+          SupportsExternalCompositing(aBuilder.GetBackendType()));
       break;
     }
     default: {
@@ -1092,8 +1132,9 @@ void DXGITextureHostD3D11::PushDisplayItems(
   }
 }
 
-bool DXGITextureHostD3D11::SupportsExternalCompositing() {
-  if (gfx::gfxVars::UseSoftwareWebRender()) {
+bool DXGITextureHostD3D11::SupportsExternalCompositing(
+    WebRenderBackend aBackend) {
+  if (aBackend == WebRenderBackend::SOFTWARE) {
     return true;
   }
   // XXX Add P010 and P016 support.
@@ -1288,7 +1329,14 @@ void DXGIYCbCrTextureHostD3D11::PushResourceUpdates(
   auto method = aOp == TextureHost::ADD_IMAGE
                     ? &wr::TransactionBuilder::AddExternalImage
                     : &wr::TransactionBuilder::UpdateExternalImage;
-  auto imageType = gfx::gfxVars::UseSoftwareWebRender()
+
+  // Prefer TextureExternal unless the backend requires TextureRect.
+  // Use a size that is the maximum of the Y and CbCr sizes.
+  IntSize textureSize = std::max(mSizeY, mSizeCbCr);
+  TextureHost::NativeTexturePolicy policy =
+      TextureHost::BackendNativeTexturePolicy(aResources.GetBackendType(),
+                                              textureSize);
+  auto imageType = policy == TextureHost::NativeTexturePolicy::REQUIRE
                        ? wr::ExternalImageType::TextureHandle(
                              wr::ImageBufferKind::TextureRect)
                        : wr::ExternalImageType::TextureHandle(
@@ -1319,14 +1367,12 @@ void DXGIYCbCrTextureHostD3D11::PushDisplayItems(
       wr::ToWrColorDepth(mColorDepth), wr::ToWrYuvColorSpace(mYUVColorSpace),
       wr::ToWrColorRange(mColorRange), aFilter,
       aFlags.contains(PushDisplayItemFlag::PREFER_COMPOSITOR_SURFACE),
-      SupportsExternalCompositing());
+      SupportsExternalCompositing(aBuilder.GetBackendType()));
 }
 
-bool DXGIYCbCrTextureHostD3D11::SupportsExternalCompositing() {
-  if (gfx::gfxVars::UseSoftwareWebRender()) {
-    return true;
-  }
-  return false;
+bool DXGIYCbCrTextureHostD3D11::SupportsExternalCompositing(
+    WebRenderBackend aBackend) {
+  return aBackend == WebRenderBackend::SOFTWARE;
 }
 
 bool DXGIYCbCrTextureHostD3D11::AcquireTextureSource(
@@ -1340,10 +1386,12 @@ bool DXGIYCbCrTextureHostD3D11::AcquireTextureSource(
 
 bool DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
                                     nsIntRegion* aDestRegion,
-                                    IntPoint* aSrcOffset) {
+                                    IntPoint* aSrcOffset,
+                                    IntPoint* aDstOffset) {
   // Incremental update with a source offset is only used on Mac so it is not
   // clear that we ever will need to support it for D3D.
   MOZ_ASSERT(!aSrcOffset);
+  MOZ_RELEASE_ASSERT(!aDstOffset);
   MOZ_ASSERT(aSurface);
 
   MOZ_ASSERT(mAllowTextureUploads);

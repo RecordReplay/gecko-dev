@@ -4,21 +4,25 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Localized } from "./MSLocalized";
-import { Zap } from "./Zap";
 import { AboutWelcomeUtils } from "../../lib/aboutwelcome-utils";
+import { MultiStageScreen } from "./MultiStageScreen";
+import { MultiStageProtonScreen } from "./MultiStageProtonScreen";
 import {
   BASE_PARAMS,
   addUtmParams,
 } from "../../asrouter/templates/FirstRun/addUtmParams";
 
+// Amount of milliseconds for all transitions to complete (including delays).
+const TRANSITION_OUT_TIME = 1000;
+
 export const MultiStageAboutWelcome = props => {
   const [index, setScreenIndex] = useState(0);
   useEffect(() => {
     // Send impression ping when respective screen first renders
-    props.screens.forEach(screen => {
-      if (index === screen.order) {
+    props.screens.forEach((screen, order) => {
+      if (index === order) {
         AboutWelcomeUtils.sendImpressionTelemetry(
-          `${props.message_id}_${screen.id}`
+          `${props.message_id}_${order}_${screen.id}`
         );
       }
     });
@@ -51,15 +55,43 @@ export const MultiStageAboutWelcome = props => {
     })();
   }, [metricsFlowUri]);
 
+  // Allow "in" style to render to actually transition towards regular state,
+  // which also makes using browser back/forward navigation skip transitions.
+  const [transition, setTransition] = useState(props.transitions ? "in" : "");
+  useEffect(() => {
+    if (transition === "in") {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => setTransition(""))
+      );
+    }
+  }, [transition]);
+
   // Transition to next screen, opening about:home on last screen button CTA
-  const handleTransition =
-    index < props.screens.length - 1
-      ? () => setScreenIndex(prevState => prevState + 1)
-      : () =>
+  const handleTransition = () => {
+    // Only handle transitioning out from a screen once.
+    if (transition === "out") {
+      return;
+    }
+
+    // Start transitioning things "out" immediately when moving forwards.
+    setTransition(props.transitions ? "out" : "");
+
+    // Actually move forwards after all transitions finish.
+    setTimeout(
+      () => {
+        if (index < props.screens.length - 1) {
+          setTransition(props.transitions ? "in" : "");
+          setScreenIndex(prevState => prevState + 1);
+        } else {
           AboutWelcomeUtils.handleUserAction({
             type: "OPEN_ABOUT_PAGE",
             data: { args: "home", where: "current" },
           });
+        }
+      },
+      props.transitions ? TRANSITION_OUT_TIME : 0
+    );
+  };
 
   // Update top sites with default sites by region when region is available
   const [region, setRegion] = useState(null);
@@ -107,23 +139,29 @@ export const MultiStageAboutWelcome = props => {
 
   return (
     <React.Fragment>
-      <div className={`outer-wrapper onboardingContainer`}>
-        {props.screens.map(screen => {
-          return index === screen.order ? (
+      <div
+        className={`outer-wrapper onboardingContainer ${props.design} transition-${transition}`}
+        style={{
+          backgroundImage: `url(${props.background_url})`,
+        }}
+      >
+        {props.screens.map((screen, order) => {
+          return index === order ? (
             <WelcomeScreen
-              key={screen.id}
+              key={screen.id + order}
               id={screen.id}
               totalNumberOfScreens={props.screens.length}
-              order={screen.order}
+              order={order}
               content={screen.content}
               navigate={handleTransition}
               topSites={topSites}
-              messageId={`${props.message_id}_${screen.id}`}
+              messageId={`${props.message_id}_${order}_${screen.id}`}
               UTMTerm={props.utm_term}
               flowParams={flowParams}
               activeTheme={activeTheme}
               initialTheme={initialTheme}
               setActiveTheme={setActiveTheme}
+              design={props.design}
             />
           ) : null;
         })}
@@ -132,10 +170,44 @@ export const MultiStageAboutWelcome = props => {
   );
 };
 
+export const SecondaryCTA = props => {
+  let targetElement = props.position
+    ? `secondary_button_${props.position}`
+    : `secondary_button`;
+  return (
+    <div
+      className={
+        props.position ? `secondary-cta ${props.position}` : "secondary-cta"
+      }
+    >
+      <Localized text={props.content[targetElement].text}>
+        <span />
+      </Localized>
+      <Localized text={props.content[targetElement].label}>
+        <button
+          className="secondary text-link"
+          value={targetElement}
+          onClick={props.handleAction}
+        />
+      </Localized>
+    </div>
+  );
+};
+
+export const StepsIndicator = props => {
+  let steps = [];
+  for (let i = 0; i < props.totalNumberOfScreens; i++) {
+    let className = i === props.order ? "current" : "";
+    steps.push(<div key={i} className={`indicator ${className}`} />);
+  }
+  return steps;
+};
+
 export class WelcomeScreen extends React.PureComponent {
   constructor(props) {
     super(props);
     this.handleAction = this.handleAction.bind(this);
+    this.state = { alternateContent: "" };
   }
 
   handleOpenURL(action, flowParams, UTMTerm) {
@@ -193,6 +265,25 @@ export class WelcomeScreen extends React.PureComponent {
       }
     }
 
+    // Wait until we become default browser to continue rest of action.
+    if (action.waitForDefault) {
+      // Update the UI to show additional "waiting" content.
+      this.setState({ alternateContent: "waiting_for_default" });
+
+      // Keep checking frequently as we want the UI to be responsive.
+      await new Promise(resolve =>
+        (async function checkDefault() {
+          if (await window.AWIsDefaultBrowser()) {
+            resolve();
+          } else {
+            setTimeout(checkDefault, 100);
+          }
+        })()
+      );
+
+      AboutWelcomeUtils.sendActionTelemetry(props.messageId, "default_browser");
+    }
+
     // A special tiles.action.theme value indicates we should use the event's value vs provided value.
     if (action.theme) {
       let themeToUse =
@@ -209,237 +300,40 @@ export class WelcomeScreen extends React.PureComponent {
     }
   }
 
-  renderSecondaryCTA(className) {
-    return (
-      <div
-        className={className ? `secondary-cta ${className}` : `secondary-cta`}
-      >
-        <Localized text={this.props.content.secondary_button.text}>
-          <span />
-        </Localized>
-        <Localized text={this.props.content.secondary_button.label}>
-          <button
-            className="secondary"
-            value="secondary_button"
-            onClick={this.handleAction}
-          />
-        </Localized>
-      </div>
-    );
-  }
-
-  renderTiles() {
-    switch (this.props.content.tiles.type) {
-      case "topsites":
-        return this.props.topSites && this.props.topSites.data ? (
-          <div
-            className={`tiles-container ${
-              this.props.content.tiles.info ? "info" : ""
-            }`}
-          >
-            <div
-              className="tiles-topsites-section"
-              name="topsites-section"
-              id="topsites-section"
-              aria-labelledby="helptext"
-              role="region"
-            >
-              {this.props.topSites.data
-                .slice(0, 5)
-                .map(({ icon, label, title }) => (
-                  <div
-                    className="site"
-                    key={icon + label}
-                    aria-label={title ? title : label}
-                    role="img"
-                  >
-                    <div
-                      className="icon"
-                      style={
-                        icon
-                          ? {
-                              backgroundColor: "transparent",
-                              backgroundImage: `url(${icon})`,
-                            }
-                          : {}
-                      }
-                    >
-                      {icon ? "" : label && label[0].toUpperCase()}
-                    </div>
-                    {this.props.content.tiles.showTitles && (
-                      <div className="host">{title || label}</div>
-                    )}
-                  </div>
-                ))}
-            </div>
-          </div>
-        ) : null;
-      case "theme":
-        return this.props.content.tiles.data ? (
-          <div className="tiles-theme-container">
-            <div>
-              <fieldset className="tiles-theme-section">
-                <Localized text={this.props.content.subtitle}>
-                  <legend className="sr-only" />
-                </Localized>
-                {this.props.content.tiles.data.map(
-                  ({ theme, label, tooltip, description }) => (
-                    <Localized
-                      key={theme + label}
-                      text={typeof tooltip === "object" ? tooltip : {}}
-                    >
-                      <label
-                        className={`theme${
-                          theme === this.props.activeTheme ? " selected" : ""
-                        }`}
-                        title={theme + label}
-                      >
-                        <Localized
-                          text={
-                            typeof description === "object" ? description : {}
-                          }
-                        >
-                          <input
-                            type="radio"
-                            value={theme}
-                            name="theme"
-                            checked={theme === this.props.activeTheme}
-                            className="sr-only input"
-                            onClick={this.handleAction}
-                            data-l10n-attrs="aria-description"
-                          />
-                        </Localized>
-                        <div className={`icon ${theme}`} />
-                        {label && (
-                          <Localized text={label}>
-                            <div className="text" />
-                          </Localized>
-                        )}
-                      </label>
-                    </Localized>
-                  )
-                )}
-              </fieldset>
-            </div>
-          </div>
-        ) : null;
-      case "video":
-        return this.props.content.tiles.source ? (
-          <div
-            className={`tiles-media-section ${this.props.content.tiles.media_type}`}
-          >
-            <div className="fade" />
-            <video
-              className="media"
-              autoPlay="true"
-              loop="true"
-              muted="true"
-              src={
-                AboutWelcomeUtils.hasDarkMode()
-                  ? this.props.content.tiles.source.dark
-                  : this.props.content.tiles.source.default
-              }
-            />
-          </div>
-        ) : null;
-      case "image":
-        return this.props.content.tiles.source ? (
-          <div className={`${this.props.content.tiles.media_type}`}>
-            <img
-              src={
-                AboutWelcomeUtils.hasDarkMode() &&
-                this.props.content.tiles.source.dark
-                  ? this.props.content.tiles.source.dark
-                  : this.props.content.tiles.source.default
-              }
-              role="presentation"
-              alt=""
-            />
-          </div>
-        ) : null;
-    }
-    return null;
-  }
-
-  renderStepsIndicator() {
-    let steps = [];
-    for (let i = 0; i < this.props.totalNumberOfScreens; i++) {
-      let className = i === this.props.order ? "current" : "";
-      steps.push(<div key={i} className={`indicator ${className}`} />);
-    }
-    return steps;
-  }
-
-  renderHelpText() {
-    return (
-      <Localized text={this.props.content.help_text.text}>
-        <p
-          id="helptext"
-          className={`helptext ${this.props.content.help_text.position}`}
-        />
-      </Localized>
-    );
-  }
-
   render() {
+    // Use the provided content or switch to an alternate one.
     const { content, topSites } = this.props;
-    const hasSecondaryTopCTA =
-      content.secondary_button && content.secondary_button.position === "top";
-    const showImportableSitesDisclaimer =
-      content.tiles &&
-      content.tiles.type === "topsites" &&
-      topSites &&
-      topSites.showImportable;
+    let newContent = content;
+    if (content[this.state.alternateContent]) {
+      newContent = {
+        ...content,
+        ...content[this.state.alternateContent],
+      };
+    }
 
+    if (this.props.design === "proton") {
+      return (
+        <MultiStageProtonScreen
+          content={newContent}
+          id={this.props.id}
+          order={this.props.order}
+          activeTheme={this.props.activeTheme}
+          totalNumberOfScreens={this.props.totalNumberOfScreens - 1}
+          handleAction={this.handleAction}
+          design={this.props.design}
+        />
+      );
+    }
     return (
-      <main className={`screen ${this.props.id}`}>
-        {hasSecondaryTopCTA ? this.renderSecondaryCTA("top") : null}
-        <div className={`brand-logo ${hasSecondaryTopCTA ? "cta-top" : ""}`} />
-        <div className="welcome-text">
-          <Zap hasZap={content.zap} text={content.title} />
-          <Localized text={content.subtitle}>
-            <h2 />
-          </Localized>
-        </div>
-        {content.tiles ? this.renderTiles() : null}
-        <div>
-          <Localized
-            text={content.primary_button ? content.primary_button.label : null}
-          >
-            <button
-              className="primary"
-              value="primary_button"
-              onClick={this.handleAction}
-            />
-          </Localized>
-        </div>
-        {content.secondary_button && content.secondary_button.position !== "top"
-          ? this.renderSecondaryCTA()
-          : null}
-        {content.help_text && content.help_text.position === "default"
-          ? this.renderHelpText()
-          : null}
-        <nav
-          className={
-            (content.help_text && content.help_text.position === "footer") ||
-            showImportableSitesDisclaimer
-              ? "steps has-helptext"
-              : "steps"
-          }
-          data-l10n-id={"onboarding-welcome-steps-indicator"}
-          data-l10n-args={`{"current": ${parseInt(this.props.order, 10) +
-            1}, "total": ${this.props.totalNumberOfScreens}}`}
-        >
-          {/* These empty elements are here to help trigger the nav for screen readers. */}
-          <br />
-          <p />
-          {this.renderStepsIndicator()}
-        </nav>
-        {(content.help_text && content.help_text.position === "footer") ||
-        showImportableSitesDisclaimer
-          ? this.renderHelpText()
-          : null}
-      </main>
+      <MultiStageScreen
+        content={newContent}
+        id={this.props.id}
+        order={this.props.order}
+        topSites={topSites}
+        activeTheme={this.props.activeTheme}
+        totalNumberOfScreens={this.props.totalNumberOfScreens}
+        handleAction={this.handleAction}
+      />
     );
   }
 }

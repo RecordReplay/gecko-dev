@@ -164,6 +164,8 @@ struct ParamTraits<mozilla::WidgetWheelEvent> {
     WriteParam(aMsg, aParam.mDeltaY);
     WriteParam(aMsg, aParam.mDeltaZ);
     WriteParam(aMsg, aParam.mDeltaMode);
+    WriteParam(aMsg, aParam.mWheelTicksX);
+    WriteParam(aMsg, aParam.mWheelTicksY);
     WriteParam(aMsg, aParam.mCustomizedByUserPrefs);
     WriteParam(aMsg, aParam.mMayHaveMomentum);
     WriteParam(aMsg, aParam.mIsMomentum);
@@ -189,6 +191,8 @@ struct ParamTraits<mozilla::WidgetWheelEvent> {
         ReadParam(aMsg, aIter, &aResult->mDeltaY) &&
         ReadParam(aMsg, aIter, &aResult->mDeltaZ) &&
         ReadParam(aMsg, aIter, &aResult->mDeltaMode) &&
+        ReadParam(aMsg, aIter, &aResult->mWheelTicksX) &&
+        ReadParam(aMsg, aIter, &aResult->mWheelTicksY) &&
         ReadParam(aMsg, aIter, &aResult->mCustomizedByUserPrefs) &&
         ReadParam(aMsg, aIter, &aResult->mMayHaveMomentum) &&
         ReadParam(aMsg, aIter, &aResult->mIsMomentum) &&
@@ -243,6 +247,7 @@ struct ParamTraits<mozilla::WidgetMouseEvent> {
     WriteParam(aMsg, static_cast<const mozilla::WidgetMouseEventBase&>(aParam));
     WriteParam(aMsg, static_cast<const mozilla::WidgetPointerHelper&>(aParam));
     WriteParam(aMsg, aParam.mIgnoreRootScrollFrame);
+    WriteParam(aMsg, aParam.mClickEventPrevented);
     WriteParam(aMsg, static_cast<paramType::ReasonType>(aParam.mReason));
     WriteParam(aMsg, static_cast<paramType::ContextMenuTriggerType>(
                          aParam.mContextMenuTrigger));
@@ -265,6 +270,7 @@ struct ParamTraits<mozilla::WidgetMouseEvent> {
          ReadParam(aMsg, aIter,
                    static_cast<mozilla::WidgetPointerHelper*>(aResult)) &&
          ReadParam(aMsg, aIter, &aResult->mIgnoreRootScrollFrame) &&
+         ReadParam(aMsg, aIter, &aResult->mClickEventPrevented) &&
          ReadParam(aMsg, aIter, &reason) &&
          ReadParam(aMsg, aIter, &contextMenuTrigger);
     aResult->mReason = static_cast<paramType::Reason>(reason);
@@ -325,10 +331,13 @@ struct ParamTraits<mozilla::WidgetPointerEvent> {
 
 template <>
 struct ParamTraits<mozilla::WidgetTouchEvent> {
-  typedef mozilla::WidgetTouchEvent paramType;
+  using paramType = mozilla::WidgetTouchEvent;
 
   static void Write(Message* aMsg, const paramType& aParam) {
     WriteParam(aMsg, static_cast<const mozilla::WidgetInputEvent&>(aParam));
+    WriteParam(aMsg, aParam.mInputSource);
+    WriteParam(aMsg, aParam.mButton);
+    WriteParam(aMsg, aParam.mButtons);
     // Sigh, Touch bites us again!  We want to be able to do
     //   WriteParam(aMsg, aParam.mTouches);
     const paramType::TouchArray& touches = aParam.mTouches;
@@ -340,6 +349,9 @@ struct ParamTraits<mozilla::WidgetTouchEvent> {
       WriteParam(aMsg, touch->mRadius);
       WriteParam(aMsg, touch->mRotationAngle);
       WriteParam(aMsg, touch->mForce);
+      WriteParam(aMsg, touch->tiltX);
+      WriteParam(aMsg, touch->tiltY);
+      WriteParam(aMsg, touch->twist);
     }
   }
 
@@ -348,6 +360,9 @@ struct ParamTraits<mozilla::WidgetTouchEvent> {
     paramType::TouchArray::size_type numTouches;
     if (!ReadParam(aMsg, aIter,
                    static_cast<mozilla::WidgetInputEvent*>(aResult)) ||
+        !ReadParam(aMsg, aIter, &aResult->mInputSource) ||
+        !ReadParam(aMsg, aIter, &aResult->mButton) ||
+        !ReadParam(aMsg, aIter, &aResult->mButtons) ||
         !ReadParam(aMsg, aIter, &numTouches)) {
       return false;
     }
@@ -357,15 +372,23 @@ struct ParamTraits<mozilla::WidgetTouchEvent> {
       mozilla::LayoutDeviceIntPoint radius;
       float rotationAngle;
       float force;
+      uint32_t tiltX;
+      uint32_t tiltY;
+      uint32_t twist;
       if (!ReadParam(aMsg, aIter, &identifier) ||
           !ReadParam(aMsg, aIter, &refPoint) ||
           !ReadParam(aMsg, aIter, &radius) ||
           !ReadParam(aMsg, aIter, &rotationAngle) ||
-          !ReadParam(aMsg, aIter, &force)) {
+          !ReadParam(aMsg, aIter, &force) || !ReadParam(aMsg, aIter, &tiltX) ||
+          !ReadParam(aMsg, aIter, &tiltY) || !ReadParam(aMsg, aIter, &twist)) {
         return false;
       }
-      aResult->mTouches.AppendElement(new mozilla::dom::Touch(
-          identifier, refPoint, radius, rotationAngle, force));
+      auto* touch = new mozilla::dom::Touch(identifier, refPoint, radius,
+                                            rotationAngle, force);
+      touch->tiltX = tiltX;
+      touch->tiltY = tiltY;
+      touch->twist = twist;
+      aResult->mTouches.AppendElement(touch);
     }
     return true;
   }
@@ -668,42 +691,6 @@ struct ParamTraits<mozilla::widget::NativeIMEContext> {
                    paramType* aResult) {
     return ReadParam(aMsg, aIter, &aResult->mRawNativeIMEContext) &&
            ReadParam(aMsg, aIter, &aResult->mOriginProcessID);
-  }
-};
-
-template <>
-struct ParamTraits<mozilla::widget::IMENotification::Point> {
-  typedef mozilla::widget::IMENotification::Point paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mX);
-    WriteParam(aMsg, aParam.mY);
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return ReadParam(aMsg, aIter, &aResult->mX) &&
-           ReadParam(aMsg, aIter, &aResult->mY);
-  }
-};
-
-template <>
-struct ParamTraits<mozilla::widget::IMENotification::Rect> {
-  typedef mozilla::widget::IMENotification::Rect paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mX);
-    WriteParam(aMsg, aParam.mY);
-    WriteParam(aMsg, aParam.mWidth);
-    WriteParam(aMsg, aParam.mHeight);
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return ReadParam(aMsg, aIter, &aResult->mX) &&
-           ReadParam(aMsg, aIter, &aResult->mY) &&
-           ReadParam(aMsg, aIter, &aResult->mWidth) &&
-           ReadParam(aMsg, aIter, &aResult->mHeight);
   }
 };
 
@@ -1104,7 +1091,7 @@ struct ParamTraits<mozilla::SingleTouchData::HistoricalTouchData> {
 
 template <>
 struct ParamTraits<mozilla::SingleTouchData> {
-  typedef mozilla::SingleTouchData paramType;
+  using paramType = mozilla::SingleTouchData;
 
   static void Write(Message* aMsg, const paramType& aParam) {
     WriteParam(aMsg, aParam.mHistoricalData);
@@ -1114,6 +1101,9 @@ struct ParamTraits<mozilla::SingleTouchData> {
     WriteParam(aMsg, aParam.mRadius);
     WriteParam(aMsg, aParam.mRotationAngle);
     WriteParam(aMsg, aParam.mForce);
+    WriteParam(aMsg, aParam.mTiltX);
+    WriteParam(aMsg, aParam.mTiltY);
+    WriteParam(aMsg, aParam.mTwist);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter,
@@ -1124,7 +1114,10 @@ struct ParamTraits<mozilla::SingleTouchData> {
             ReadParam(aMsg, aIter, &aResult->mLocalScreenPoint) &&
             ReadParam(aMsg, aIter, &aResult->mRadius) &&
             ReadParam(aMsg, aIter, &aResult->mRotationAngle) &&
-            ReadParam(aMsg, aIter, &aResult->mForce));
+            ReadParam(aMsg, aIter, &aResult->mForce) &&
+            ReadParam(aMsg, aIter, &aResult->mTiltX) &&
+            ReadParam(aMsg, aIter, &aResult->mTiltY) &&
+            ReadParam(aMsg, aIter, &aResult->mTwist));
   }
 };
 
@@ -1137,7 +1130,7 @@ struct ParamTraits<mozilla::MultiTouchInput::MultiTouchType>
 
 template <>
 struct ParamTraits<mozilla::MultiTouchInput> {
-  typedef mozilla::MultiTouchInput paramType;
+  using paramType = mozilla::MultiTouchInput;
 
   static void Write(Message* aMsg, const paramType& aParam) {
     WriteParam(aMsg, static_cast<const mozilla::InputData&>(aParam));
@@ -1145,6 +1138,8 @@ struct ParamTraits<mozilla::MultiTouchInput> {
     WriteParam(aMsg, aParam.mTouches);
     WriteParam(aMsg, aParam.mHandledByAPZ);
     WriteParam(aMsg, aParam.mScreenOffset);
+    WriteParam(aMsg, aParam.mButton);
+    WriteParam(aMsg, aParam.mButtons);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter,
@@ -1153,7 +1148,9 @@ struct ParamTraits<mozilla::MultiTouchInput> {
            ReadParam(aMsg, aIter, &aResult->mType) &&
            ReadParam(aMsg, aIter, &aResult->mTouches) &&
            ReadParam(aMsg, aIter, &aResult->mHandledByAPZ) &&
-           ReadParam(aMsg, aIter, &aResult->mScreenOffset);
+           ReadParam(aMsg, aIter, &aResult->mScreenOffset) &&
+           ReadParam(aMsg, aIter, &aResult->mButton) &&
+           ReadParam(aMsg, aIter, &aResult->mButtons);
   }
 };
 
@@ -1184,6 +1181,7 @@ struct ParamTraits<mozilla::MouseInput> {
     WriteParam(aMsg, aParam.mOrigin);
     WriteParam(aMsg, aParam.mLocalOrigin);
     WriteParam(aMsg, aParam.mHandledByAPZ);
+    WriteParam(aMsg, aParam.mPreventClickEvent);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter,
@@ -1195,7 +1193,8 @@ struct ParamTraits<mozilla::MouseInput> {
            ReadParam(aMsg, aIter, &aResult->mButtons) &&
            ReadParam(aMsg, aIter, &aResult->mOrigin) &&
            ReadParam(aMsg, aIter, &aResult->mLocalOrigin) &&
-           ReadParam(aMsg, aIter, &aResult->mHandledByAPZ);
+           ReadParam(aMsg, aIter, &aResult->mHandledByAPZ) &&
+           ReadParam(aMsg, aIter, &aResult->mPreventClickEvent);
   }
 };
 
@@ -1382,6 +1381,8 @@ struct ParamTraits<mozilla::ScrollWheelInput> {
     WriteParam(aMsg, aParam.mHandledByAPZ);
     WriteParam(aMsg, aParam.mDeltaX);
     WriteParam(aMsg, aParam.mDeltaY);
+    WriteParam(aMsg, aParam.mWheelTicksX);
+    WriteParam(aMsg, aParam.mWheelTicksY);
     WriteParam(aMsg, aParam.mLocalOrigin);
     WriteParam(aMsg, aParam.mLineOrPageDeltaX);
     WriteParam(aMsg, aParam.mLineOrPageDeltaY);
@@ -1404,6 +1405,8 @@ struct ParamTraits<mozilla::ScrollWheelInput> {
            ReadParam(aMsg, aIter, &aResult->mHandledByAPZ) &&
            ReadParam(aMsg, aIter, &aResult->mDeltaX) &&
            ReadParam(aMsg, aIter, &aResult->mDeltaY) &&
+           ReadParam(aMsg, aIter, &aResult->mWheelTicksX) &&
+           ReadParam(aMsg, aIter, &aResult->mWheelTicksY) &&
            ReadParam(aMsg, aIter, &aResult->mLocalOrigin) &&
            ReadParam(aMsg, aIter, &aResult->mLineOrPageDeltaX) &&
            ReadParam(aMsg, aIter, &aResult->mLineOrPageDeltaY) &&

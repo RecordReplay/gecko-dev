@@ -61,11 +61,7 @@ add_task(async function() {
       .filter(a => a.debuggable)
       .map(async addonDescriptorFront => {
         const addonFront = await addonDescriptorFront.getTarget();
-        is(
-          addonFront.descriptorFront,
-          addonDescriptorFront,
-          "Got the correct descriptorFront from the addon target."
-        );
+        ok(addonFront, "Got the addon target");
       })
   );
 
@@ -79,15 +75,27 @@ add_task(async function() {
   const mainRoot = client.mainRoot;
 
   const { workers } = await mainRoot.listWorkers();
-  await Promise.all(
-    workers.map(workerTargetFront => {
-      is(
-        workerTargetFront.descriptorFront,
-        null,
-        "For now, worker target don't have descriptor fronts (see bug 1573779)"
-      );
-    })
-  );
+
+  ok(workers.length > 0, "list workers returned a non-empty list of workers");
+
+  for (const workerDescriptorFront of workers) {
+    const targetFront = await workerDescriptorFront.getTarget();
+    is(
+      workerDescriptorFront,
+      targetFront,
+      "For now, worker descriptors and targets are the same object (see bug 1667404)"
+    );
+    // Check that accessing descriptor#name getter doesn't throw (See Bug 1714974).
+    ok(
+      workerDescriptorFront.name.includes(".js"),
+      `worker descriptor front holds the worker file name (${workerDescriptorFront.name})`
+    );
+    is(
+      workerDescriptorFront.isWorkerDescriptor,
+      true,
+      "isWorkerDescriptor is true"
+    );
+  }
 
   await client.close();
 });
@@ -119,11 +127,6 @@ async function testGetTargetWithConcurrentCalls(descriptors, isTargetAttached) {
         }
         promises.push(
           targetPromise.then(target => {
-            is(
-              target.descriptorFront,
-              descriptor,
-              "Got the correct descriptorFront from the frame target."
-            );
             ok(isTargetAttached(target), "The target is attached");
             return target;
           })

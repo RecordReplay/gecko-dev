@@ -109,8 +109,14 @@ mozilla::ipc::IPCResult CacheStreamControlParent::RecvOpenStream(
     const nsID& aStreamId, OpenStreamResolver&& aResolver) {
   NS_ASSERT_OWNINGTHREAD(CacheStreamControlParent);
 
-  OpenStream(aStreamId, [aResolver](nsCOMPtr<nsIInputStream>&& aStream) {
-    aResolver(aStream);
+  OpenStream(aStreamId, [aResolver, self = RefPtr{this}](
+                            nsCOMPtr<nsIInputStream>&& aStream) {
+    AutoIPCStream autoStream;
+    if (self->CanSend() && autoStream.Serialize(aStream, self->Manager())) {
+      aResolver(autoStream.TakeOptionalValue());
+    } else {
+      aResolver(Nothing());
+    }
   });
 
   return IPC_OK();
@@ -139,11 +145,9 @@ void CacheStreamControlParent::CloseAll() {
 
 void CacheStreamControlParent::Shutdown() {
   NS_ASSERT_OWNINGTHREAD(CacheStreamControlParent);
-  if (!Send__delete__(this)) {
-    // child process is gone, allow actor to be destroyed normally
-    NS_WARNING("Cache failed to delete stream actor.");
-    return;
-  }
+
+  // If child process is gone, warn and allow actor to clean up normally
+  QM_WARNONLY_TRY(OkIf(Send__delete__(this)));
 }
 
 void CacheStreamControlParent::NotifyCloseAll() {

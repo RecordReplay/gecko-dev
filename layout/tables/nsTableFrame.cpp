@@ -489,10 +489,10 @@ void nsTableFrame::ResetRowIndices(
   RowGroupArray rowGroups;
   OrderRowGroups(rowGroups);
 
-  nsTHashtable<nsPtrHashKey<nsTableRowGroupFrame> > excludeRowGroups;
+  nsTHashSet<nsTableRowGroupFrame*> excludeRowGroups;
   nsFrameList::Enumerator excludeRowGroupsEnumerator(aRowGroupsToExclude);
   while (!excludeRowGroupsEnumerator.AtEnd()) {
-    excludeRowGroups.PutEntry(
+    excludeRowGroups.Insert(
         static_cast<nsTableRowGroupFrame*>(excludeRowGroupsEnumerator.get()));
 #ifdef DEBUG
     {
@@ -516,7 +516,7 @@ void nsTableFrame::ResetRowIndices(
   int32_t rowIndex = 0;
   for (uint32_t rgIdx = 0; rgIdx < rowGroups.Length(); rgIdx++) {
     nsTableRowGroupFrame* rgFrame = rowGroups[rgIdx];
-    if (!excludeRowGroups.GetEntry(rgFrame)) {
+    if (!excludeRowGroups.Contains(rgFrame)) {
       const nsFrameList& rowFrames = rgFrame->PrincipalChildList();
       for (nsFrameList::Enumerator rows(rowFrames); !rows.AtEnd();
            rows.Next()) {
@@ -1523,15 +1523,21 @@ nsTableFrame::IntrinsicISizeOffsets(nscoord aPercentageBasis) {
 nsIFrame::SizeComputationResult nsTableFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
-  auto result = nsContainerFrame::ComputeSize(aRenderingContext, aWM, aCBSize,
-                                              aAvailableISize, aMargin,
-                                              aBorderPadding, aFlags);
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
+  // Only table wrapper calls this method, and it should use our writing mode.
+  MOZ_ASSERT(aWM == GetWritingMode(),
+             "aWM should be the same as our writing mode!");
 
-  // XXX The code below doesn't make sense if the caller's writing mode
-  // is orthogonal to this frame's. Not sure yet what should happen then;
-  // for now, just bail out.
-  if (aWM.IsVertical() != GetWritingMode().IsVertical()) {
+  auto result = nsContainerFrame::ComputeSize(
+      aRenderingContext, aWM, aCBSize, aAvailableISize, aMargin, aBorderPadding,
+      aSizeOverrides, aFlags);
+
+  // If our containing block wants to override inner table frame's inline-size
+  // (e.g. when resolving flex base size), don't enforce the min inline-size
+  // later in this method.
+  if (aSizeOverrides.mApplyOverridesVerbatim && aSizeOverrides.mStyleISize &&
+      aSizeOverrides.mStyleISize->IsLengthPercentage()) {
     return result;
   }
 
@@ -1580,7 +1586,8 @@ nscoord nsTableFrame::TableShrinkISizeToFit(gfxContext* aRenderingContext,
 LogicalSize nsTableFrame::ComputeAutoSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
   // Tables always shrink-wrap.
   nscoord cbBased =
       aAvailableISize - aMargin.ISize(aWM) - aBorderPadding.ISize(aWM);
@@ -1748,8 +1755,11 @@ void nsTableFrame::Reflow(nsPresContext* aPresContext,
   MOZ_ASSERT(!HasAnyStateBits(NS_FRAME_OUT_OF_FLOW),
              "The nsTableWrapperFrame should be the out-of-flow if needed");
 
+  const WritingMode wm = aReflowInput.GetWritingMode();
+  MOZ_ASSERT(aReflowInput.ComputedLogicalMargin(wm).IsAllZero(),
+             "Only nsTableWrapperFrame can have margins!");
+
   bool isPaginated = aPresContext->IsPaginated();
-  WritingMode wm = aReflowInput.GetWritingMode();
 
   if (!GetPrevInFlow() && !mTableLayoutStrategy) {
     NS_ERROR("strategy should have been created in Init");
@@ -2656,6 +2666,17 @@ static LogicalMargin GetSeparateModelBorderPadding(
     borderPadding += aReflowInput->ComputedLogicalPadding(aWM);
   }
   return borderPadding;
+}
+
+void nsTableFrame::GetCollapsedBorderPadding(
+    Maybe<LogicalMargin>& aBorder, Maybe<LogicalMargin>& aPadding) const {
+  if (IsBorderCollapse()) {
+    // Border-collapsed tables don't use any of their padding, and only part of
+    // their border.
+    const auto wm = GetWritingMode();
+    aBorder.emplace(GetIncludedOuterBCBorder(wm));
+    aPadding.emplace(wm);
+  }
 }
 
 LogicalMargin nsTableFrame::GetChildAreaOffset(
@@ -3620,6 +3641,10 @@ nscoord nsTableFrame::GetLogicalBaseline(WritingMode aWM) const {
 bool nsTableFrame::GetNaturalBaselineBOffset(
     WritingMode aWM, BaselineSharingGroup aBaselineGroup,
     nscoord* aBaseline) const {
+  if (StyleDisplay()->IsContainLayout()) {
+    return false;
+  }
+
   RowGroupArray orderedRowGroups;
   OrderRowGroups(orderedRowGroups);
   // XXX not sure if this should be the size of the containing block instead.
@@ -3728,9 +3753,7 @@ bool nsTableFrame::IsAutoLayout() {
   // auto-layout (at least as long as
   // FixedTableLayoutStrategy::GetPrefISize returns nscoord_MAX)
   const auto& iSize = StylePosition()->ISize(GetWritingMode());
-  return iSize.IsAuto() ||
-         (iSize.IsExtremumLength() &&
-          iSize.AsExtremumLength() == StyleExtremumLength::MaxContent);
+  return iSize.IsAuto() || iSize.IsMaxContent();
 }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -3855,14 +3878,38 @@ void nsTableFrame::Dump(bool aDumpRows, bool aDumpCols, bool aDumpCellMap) {
 #endif
 
 bool nsTableFrame::ColumnHasCellSpacingBefore(int32_t aColIndex) const {
+  if (aColIndex == 0) {
+    return true;
+  }
   // Since fixed-layout tables should not have their column sizes change
   // as they load, we assume that all columns are significant.
-  if (LayoutStrategy()->GetType() == nsITableLayoutStrategy::Fixed) return true;
-  // the first column is always significant
-  if (aColIndex == 0) return true;
-  nsTableCellMap* cellMap = GetCellMap();
-  if (!cellMap) return false;
-  return cellMap->GetNumCellsOriginatingInCol(aColIndex) > 0;
+  auto* fif = static_cast<nsTableFrame*>(FirstInFlow());
+  if (fif->LayoutStrategy()->GetType() == nsITableLayoutStrategy::Fixed) {
+    return true;
+  }
+  nsTableCellMap* cellMap = fif->GetCellMap();
+  if (!cellMap) {
+    return false;
+  }
+  if (cellMap->GetNumCellsOriginatingInCol(aColIndex) > 0) {
+    return true;
+  }
+  // Check if we have a <col> element with a non-zero definite inline size.
+  // Note: percentages and calc(%) are intentionally not considered.
+  if (const auto* col = fif->GetColFrame(aColIndex)) {
+    const auto& iSize = col->StylePosition()->ISize(GetWritingMode());
+    if (iSize.ConvertsToLength() && iSize.ToLength() > 0) {
+      const auto& maxISize = col->StylePosition()->MaxISize(GetWritingMode());
+      if (!maxISize.ConvertsToLength() || maxISize.ToLength() > 0) {
+        return true;
+      }
+    }
+    const auto& minISize = col->StylePosition()->MinISize(GetWritingMode());
+    if (minISize.ConvertsToLength() && minISize.ToLength() > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /********************************************************************************
@@ -6298,7 +6345,6 @@ bool BCPaintBorderIterator::SetDamageArea(const nsRect& aDirtyRect) {
 
   Reset();
   mBlockDirInfo = new BCBlockDirSeg[mDamageArea.ColCount() + 1];
-  if (!mBlockDirInfo) return false;
   return true;
 }
 
@@ -6849,31 +6895,35 @@ static void AdjustAndPushBevel(wr::DisplayListBuilder& aBuilder,
 
   if (horizontal) {
     if (aIsStart) {
-      aRect.origin.x += offset;
+      aRect.min.x += offset;
+      aRect.max.x += offset;
     } else {
-      bevelRect.origin.x += aRect.size.width - offset;
+      bevelRect.min.x += aRect.width() - offset;
+      bevelRect.max.x += aRect.width() - offset;
     }
-    aRect.size.width -= offset;
-    bevelRect.size.height = aRect.size.height;
-    bevelRect.size.width = offset;
+    aRect.max.x -= offset;
+    bevelRect.max.y = bevelRect.min.y + aRect.height();
+    bevelRect.max.x = bevelRect.min.x + offset;
     if (aBevel.mSide == eSideTop) {
-      borderWidths.bottom = aRect.size.height;
+      borderWidths.bottom = aRect.height();
     } else {
-      borderWidths.top = aRect.size.height;
+      borderWidths.top = aRect.height();
     }
   } else {
     if (aIsStart) {
-      aRect.origin.y += offset;
+      aRect.min.y += offset;
+      aRect.max.y += offset;
     } else {
-      bevelRect.origin.y += aRect.size.height - offset;
+      bevelRect.min.y += aRect.height() - offset;
+      bevelRect.max.y += aRect.height() - offset;
     }
-    aRect.size.height -= offset;
-    bevelRect.size.width = aRect.size.width;
-    bevelRect.size.height = offset;
+    aRect.max.y -= offset;
+    bevelRect.max.x = bevelRect.min.x + aRect.width();
+    bevelRect.max.y = bevelRect.min.y + offset;
     if (aBevel.mSide == eSideLeft) {
-      borderWidths.right = aRect.size.width;
+      borderWidths.right = aRect.width();
     } else {
-      borderWidths.left = aRect.size.width;
+      borderWidths.left = aRect.width();
     }
   }
 
@@ -6935,7 +6985,7 @@ static void CreateWRCommandsForBorderSegment(
   }
   const bool horizontal = aBorderParams.mStartBevelSide == eSideTop ||
                           aBorderParams.mStartBevelSide == eSideBottom;
-  auto borderWidth = horizontal ? r.size.height : r.size.width;
+  auto borderWidth = horizontal ? r.height() : r.width();
 
   // All border style is set to none except left side. So setting the widths of
   // each side to width of rect is fine.

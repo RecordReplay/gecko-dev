@@ -2,7 +2,6 @@
 const {
   getLatestReplayRevision,
   sendBuildTestRequest,
-  spawnChecked,
   newTask,
 } = require("../utils");
 
@@ -21,8 +20,10 @@ console.log("DriverRevision", driverRevision);
 
 const clobberInput = process.env.INPUT_CLOBBER;
 console.log("Clobber", clobberInput);
-
 const clobber = clobberInput == "true";
+
+const buildOnly = !!process.env.BUILD_ONLY;
+console.log("BuildOnly", buildOnly);
 
 sendBuildTestRequest({
   name: `Gecko Build/Test Branch ${branchName} ${replayRevision}${driverRevision ? " driver " + driverRevision : ""}`,
@@ -47,19 +48,24 @@ function platformTasks(platform) {
     platform
   );
 
-  const testReplayTask = newTask(
-    `Run Tests ${platform}`,
-    {
-      kind: "StaticLiveTests",
-      runtime: "gecko",
-      revision: replayRevision,
-      driverRevision,
-    },
-    platform,
-    [buildReplayTask]
-  );
+  const tasks = [buildReplayTask];
 
-  return [buildReplayTask, testReplayTask];
+  if (!buildOnly) {
+    const testReplayTask = newTask(
+      `Run Tests ${platform}`,
+      {
+        kind: "StaticLiveTests",
+        runtime: "gecko",
+        revision: replayRevision,
+        driverRevision,
+      },
+      platform,
+      [buildReplayTask]
+    );
+    tasks.push(testReplayTask);
+  }
+
+  return tasks;
 }
 
 function getBranchName(refName) {

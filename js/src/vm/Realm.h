@@ -27,7 +27,6 @@
 #include "vm/NativeObject.h"
 #include "vm/PlainObject.h"    // js::PlainObject
 #include "vm/PromiseLookup.h"  // js::PromiseLookup
-#include "vm/ReceiverGuard.h"
 #include "vm/RegExpShared.h"
 #include "vm/SavedStacks.h"
 #include "vm/Time.h"
@@ -45,8 +44,9 @@ class JitRealm;
 
 class AutoRestoreRealmDebugMode;
 class GlobalObject;
-class LexicalEnvironmentObject;
+class GlobalLexicalEnvironmentObject;
 class MapObject;
+class NonSyntacticLexicalEnvironmentObject;
 class ScriptSourceObject;
 class SetObject;
 struct NativeIterator;
@@ -83,11 +83,10 @@ class DtoaCache {
 };
 
 // Cache to speed up the group/shape lookup in ProxyObject::create. A proxy's
-// group/shape is only determined by the Class + proto, so a small cache for
-// this is very effective in practice.
+// shape is only determined by the Class + proto, so a small cache for this is
+// very effective in practice.
 class NewProxyCache {
   struct Entry {
-    ObjectGroup* group;
     Shape* shape;
   };
   static const size_t NumEntries = 4;
@@ -95,23 +94,22 @@ class NewProxyCache {
 
  public:
   MOZ_ALWAYS_INLINE bool lookup(const JSClass* clasp, TaggedProto proto,
-                                ObjectGroup** group, Shape** shape) const {
+                                Shape** shape) const {
     if (!entries_) {
       return false;
     }
     for (size_t i = 0; i < NumEntries; i++) {
       const Entry& entry = entries_[i];
-      if (entry.group && entry.group->clasp() == clasp &&
-          entry.group->proto() == proto) {
-        *group = entry.group;
+      if (entry.shape && entry.shape->getObjectClass() == clasp &&
+          entry.shape->proto() == proto) {
         *shape = entry.shape;
         return true;
       }
     }
     return false;
   }
-  void add(ObjectGroup* group, Shape* shape) {
-    MOZ_ASSERT(group && shape);
+  void add(Shape* shape) {
+    MOZ_ASSERT(shape);
     if (!entries_) {
       entries_.reset(js_pod_calloc<Entry>(NumEntries));
       if (!entries_) {
@@ -122,7 +120,6 @@ class NewProxyCache {
         entries_[i] = entries_[i - 1];
       }
     }
-    entries_[0].group = group;
     entries_[0].shape = shape;
   }
   void purge() { entries_.reset(); }
@@ -207,16 +204,16 @@ class PropertyIteratorObject;
 
 struct IteratorHashPolicy {
   struct Lookup {
-    ReceiverGuard* guards;
-    size_t numGuards;
-    uint32_t key;
+    Shape** shapes;
+    size_t numShapes;
+    HashNumber shapesHash;
 
-    Lookup(ReceiverGuard* guards, size_t numGuards, uint32_t key)
-        : guards(guards), numGuards(numGuards), key(key) {
-      MOZ_ASSERT(numGuards > 0);
+    Lookup(Shape** shapes, size_t numShapes, HashNumber shapesHash)
+        : shapes(shapes), numShapes(numShapes), shapesHash(shapesHash) {
+      MOZ_ASSERT(numShapes > 0);
     }
   };
-  static HashNumber hash(const Lookup& lookup) { return lookup.key; }
+  static HashNumber hash(const Lookup& lookup) { return lookup.shapesHash; }
   static bool match(PropertyIteratorObject* obj, const Lookup& lookup);
 };
 
@@ -262,7 +259,7 @@ class ObjectRealm {
   explicit ObjectRealm(JS::Zone* zone);
   ~ObjectRealm();
 
-  MOZ_MUST_USE bool init(JSContext* cx);
+  [[nodiscard]] bool init(JSContext* cx);
 
   void finishRoots();
   void trace(JSTracer* trc);
@@ -276,12 +273,15 @@ class ObjectRealm {
 
   MOZ_ALWAYS_INLINE bool objectMaybeInIteration(JSObject* obj);
 
-  js::LexicalEnvironmentObject* getOrCreateNonSyntacticLexicalEnvironment(
-      JSContext* cx, js::HandleObject enclosing);
-  js::LexicalEnvironmentObject* getOrCreateNonSyntacticLexicalEnvironment(
-      JSContext* cx, js::HandleObject enclosing, js::HandleObject key,
-      js::HandleObject thisv);
-  js::LexicalEnvironmentObject* getNonSyntacticLexicalEnvironment(
+  js::NonSyntacticLexicalEnvironmentObject*
+  getOrCreateNonSyntacticLexicalEnvironment(JSContext* cx,
+                                            js::HandleObject enclosing);
+  js::NonSyntacticLexicalEnvironmentObject*
+  getOrCreateNonSyntacticLexicalEnvironment(JSContext* cx,
+                                            js::HandleObject enclosing,
+                                            js::HandleObject key,
+                                            js::HandleObject thisv);
+  js::NonSyntacticLexicalEnvironmentObject* getNonSyntacticLexicalEnvironment(
       JSObject* key) const;
 };
 
@@ -308,17 +308,11 @@ class JS::Realm : public JS::shadow::Realm {
 
   // The global lexical environment. This is stored here instead of in
   // GlobalObject for easier/faster JIT access.
-  js::WeakHeapPtr<js::LexicalEnvironmentObject*> lexicalEnv_;
+  js::WeakHeapPtr<js::GlobalLexicalEnvironmentObject*> lexicalEnv_;
 
   // Note: this is private to enforce use of ObjectRealm::get(obj).
   js::ObjectRealm objects_;
   friend js::ObjectRealm& js::ObjectRealm::get(const JSObject*);
-
-  // Object group tables and other state in the realm. This is private to
-  // enforce use of ObjectGroupRealm::getForNewObject(cx).
-  js::ObjectGroupRealm objectGroups_;
-  friend js::ObjectGroupRealm& js::ObjectGroupRealm::getForNewObject(
-      JSContext* cx);
 
   // The global environment record's [[VarNames]] list that contains all
   // names declared using FunctionDeclaration, GeneratorDeclaration, and
@@ -468,7 +462,7 @@ class JS::Realm : public JS::shadow::Realm {
   Realm(JS::Compartment* comp, const JS::RealmOptions& options);
   ~Realm();
 
-  MOZ_MUST_USE bool init(JSContext* cx, JSPrincipals* principals);
+  [[nodiscard]] bool init(JSContext* cx, JSPrincipals* principals);
   void destroy(JSFreeOp* fop);
   void clearTables();
 
@@ -525,7 +519,8 @@ class JS::Realm : public JS::shadow::Realm {
     return global_.unbarrieredGet();
   }
 
-  inline js::LexicalEnvironmentObject* unbarrieredLexicalEnvironment() const;
+  inline js::GlobalLexicalEnvironmentObject* unbarrieredLexicalEnvironment()
+      const;
 
   /* True if a global object exists, but it's being collected. */
   inline bool globalIsAboutToBeFinalized();
@@ -534,7 +529,7 @@ class JS::Realm : public JS::shadow::Realm {
   inline bool hasLiveGlobal() const;
 
   inline void initGlobal(js::GlobalObject& global,
-                         js::LexicalEnvironmentObject& lexicalEnv);
+                         js::GlobalLexicalEnvironmentObject& lexicalEnv);
 
   /*
    * This method traces data that is live iff we know that this realm's
@@ -570,14 +565,8 @@ class JS::Realm : public JS::shadow::Realm {
 
   void fixupAfterMovingGC(JSTracer* trc);
 
-#ifdef JSGC_HASH_TABLE_CHECKS
-  void checkObjectGroupTablesAfterMovingGC() {
-    objectGroups_.checkTablesAfterMovingGC();
-  }
-#endif
-
   // Add a name to [[VarNames]].  Reports OOM on failure.
-  MOZ_MUST_USE bool addToVarNames(JSContext* cx, JS::Handle<JSAtom*> name);
+  [[nodiscard]] bool addToVarNames(JSContext* cx, JS::Handle<JSAtom*> name);
   void tracekWeakVarNames(JSTracer* trc);
 
   void removeFromVarNames(JS::Handle<JSAtom*> name) { varNames_.remove(name); }

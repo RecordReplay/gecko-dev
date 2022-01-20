@@ -62,7 +62,7 @@ let JSWINDOWACTORS = {
       moduleURI: "resource://gre/modules/AboutCertViewerChild.jsm",
 
       events: {
-        DOMWindowCreated: { capture: true },
+        DOMDocElementInserted: { capture: true },
       },
     },
 
@@ -76,7 +76,7 @@ let JSWINDOWACTORS = {
     child: {
       moduleURI: "resource://gre/actors/AboutHttpsOnlyErrorChild.jsm",
       events: {
-        DOMWindowCreated: {},
+        DOMDocElementInserted: {},
       },
     },
     matches: ["about:httpsonlyerror?*"],
@@ -284,8 +284,10 @@ let JSWINDOWACTORS = {
     child: {
       moduleURI: "resource://gre/modules/LoginManagerChild.jsm",
       events: {
+        DOMDocFetchSuccess: {},
         DOMFormBeforeSubmit: {},
         DOMFormHasPassword: {},
+        DOMFormHasPossibleUsername: {},
         DOMInputPasswordAdded: {},
       },
     },
@@ -348,6 +350,9 @@ let JSWINDOWACTORS = {
       moduleURI: "resource://gre/actors/PopupBlockingChild.jsm",
       events: {
         DOMPopupBlocked: { capture: true },
+        // Only listen for the `pageshow` event after the actor has already been
+        // created for some other reason.
+        pageshow: { createActor: false },
       },
     },
     allFrames: true,

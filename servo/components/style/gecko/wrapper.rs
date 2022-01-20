@@ -414,9 +414,11 @@ impl<'ln> TNode for GeckoNode<'ln> {
     #[inline]
     fn prev_sibling(&self) -> Option<Self> {
         unsafe {
-            bindings::Gecko_GetPreviousSibling(self.0)
-                .as_ref()
-                .map(GeckoNode)
+            let prev_or_last = GeckoNode::from_content(self.0.mPreviousOrLastSibling.as_ref()?);
+            if prev_or_last.0.mNextSibling.raw::<nsIContent>().is_null() {
+                return None;
+            }
+            Some(prev_or_last)
         }
     }
 
@@ -575,9 +577,26 @@ impl<'le> GeckoElement<'le> {
     }
 
     #[inline(always)]
-    fn attrs(&self) -> &[structs::AttrArray_InternalAttr] {
+    fn non_mapped_attrs(&self) -> &[structs::AttrArray_InternalAttr] {
         unsafe {
             let attrs = match self.0.mAttrs.mImpl.mPtr.as_ref() {
+                Some(attrs) => attrs,
+                None => return &[],
+            };
+
+            attrs.mBuffer.as_slice(attrs.mAttrCount as usize)
+        }
+    }
+
+    #[inline(always)]
+    fn mapped_attrs(&self) -> &[structs::AttrArray_InternalAttr] {
+        unsafe {
+            let attrs = match self.0.mAttrs.mImpl.mPtr.as_ref() {
+                Some(attrs) => attrs,
+                None => return &[],
+            };
+
+            let attrs = match attrs.mMappedAttrs.as_ref() {
                 Some(attrs) => attrs,
                 None => return &[],
             };
@@ -591,7 +610,7 @@ impl<'le> GeckoElement<'le> {
         if !self.has_part_attr() {
             return None;
         }
-        snapshot_helpers::find_attr(self.attrs(), &atom!("part"))
+        snapshot_helpers::find_attr(self.non_mapped_attrs(), &atom!("part"))
     }
 
     #[inline(always)]
@@ -607,7 +626,7 @@ impl<'le> GeckoElement<'le> {
             }
         }
 
-        snapshot_helpers::find_attr(self.attrs(), &atom!("class"))
+        snapshot_helpers::find_attr(self.non_mapped_attrs(), &atom!("class"))
     }
 
     #[inline]
@@ -1284,7 +1303,7 @@ impl<'le> TElement for GeckoElement<'le> {
 
     #[inline]
     fn exports_any_part(&self) -> bool {
-        snapshot_helpers::find_attr(self.attrs(), &atom!("exportparts")).is_some()
+        snapshot_helpers::find_attr(self.non_mapped_attrs(), &atom!("exportparts")).is_some()
     }
 
     // FIXME(emilio): we should probably just return a reference to the Atom.
@@ -1294,7 +1313,25 @@ impl<'le> TElement for GeckoElement<'le> {
             return None;
         }
 
-        snapshot_helpers::get_id(self.attrs())
+        snapshot_helpers::get_id(self.non_mapped_attrs())
+    }
+
+    fn each_attr_name<F>(&self, mut callback: F)
+    where
+        F: FnMut(&AtomIdent),
+    {
+        for attr in self.non_mapped_attrs().iter().chain(self.mapped_attrs().iter()) {
+            let is_nodeinfo = attr.mName.mBits & 1 != 0;
+            unsafe {
+                let atom = if is_nodeinfo {
+                    let node_info = &*((attr.mName.mBits & !1) as *const structs::NodeInfo);
+                    node_info.mInner.mName
+                } else {
+                    attr.mName.mBits as *const nsAtom
+                };
+                AtomIdent::with(atom, |a| callback(a))
+            }
+        }
     }
 
     fn each_class<F>(&self, callback: F)
@@ -1314,7 +1351,7 @@ impl<'le> TElement for GeckoElement<'le> {
     where
         F: FnMut(&AtomIdent),
     {
-        snapshot_helpers::each_exported_part(self.attrs(), name, callback)
+        snapshot_helpers::each_exported_part(self.non_mapped_attrs(), name, callback)
     }
 
     fn each_part<F>(&self, callback: F)
@@ -2030,7 +2067,6 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
             NonTSPseudoClass::Target |
             NonTSPseudoClass::Valid |
             NonTSPseudoClass::Invalid |
-            NonTSPseudoClass::MozUIValid |
             NonTSPseudoClass::MozBroken |
             NonTSPseudoClass::MozLoading |
             NonTSPseudoClass::Required |
@@ -2042,14 +2078,13 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
             NonTSPseudoClass::MozDragOver |
             NonTSPseudoClass::MozDevtoolsHighlighted |
             NonTSPseudoClass::MozStyleeditorTransitioning |
-            NonTSPseudoClass::MozFocusRing |
-            NonTSPseudoClass::MozHandlerNoPlugins |
             NonTSPseudoClass::MozMathIncrementScriptLevel |
             NonTSPseudoClass::InRange |
             NonTSPseudoClass::OutOfRange |
             NonTSPseudoClass::Default |
             NonTSPseudoClass::MozSubmitInvalid |
-            NonTSPseudoClass::MozUIInvalid |
+            NonTSPseudoClass::UserValid |
+            NonTSPseudoClass::UserInvalid |
             NonTSPseudoClass::MozMeterOptimum |
             NonTSPseudoClass::MozMeterSubOptimum |
             NonTSPseudoClass::MozMeterSubSubOptimum |
@@ -2177,7 +2212,7 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
             return false;
         }
 
-        let element_id = match snapshot_helpers::get_id(self.attrs()) {
+        let element_id = match snapshot_helpers::get_id(self.non_mapped_attrs()) {
             Some(id) => id,
             None => return false,
         };
@@ -2197,7 +2232,7 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
 
     #[inline]
     fn imported_part(&self, name: &AtomIdent) -> Option<AtomIdent> {
-        snapshot_helpers::imported_part(self.attrs(), name)
+        snapshot_helpers::imported_part(self.non_mapped_attrs(), name)
     }
 
     #[inline(always)]

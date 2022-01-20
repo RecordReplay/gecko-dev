@@ -126,6 +126,7 @@ uint16_t RotorControlRule::Match(const AccessibleOrProxy& aAccOrProxy) {
       case roles::ENTRY:
       case roles::OUTLINE:
       case roles::PASSWORD_TEXT:
+      case roles::BUTTONMENU:
         return result;
 
       case roles::DATE_EDITOR:
@@ -319,9 +320,9 @@ uint16_t RotorHeadingLevelRule::Match(const AccessibleOrProxy& aAccOrProxy) {
   // "unmatch" otherwise, the match persists.
   if ((result & nsIAccessibleTraversalRule::FILTER_MATCH)) {
     int32_t currLevel = 0;
-    if (Accessible* acc = aAccOrProxy.AsAccessible()) {
+    if (LocalAccessible* acc = aAccOrProxy.AsAccessible()) {
       currLevel = acc->GroupPosition().level;
-    } else if (ProxyAccessible* proxy = aAccOrProxy.AsProxy()) {
+    } else if (RemoteAccessible* proxy = aAccOrProxy.AsProxy()) {
       currLevel = proxy->GroupPosition().level;
     }
 

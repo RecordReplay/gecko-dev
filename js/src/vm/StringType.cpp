@@ -8,6 +8,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Casting.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/Latin1.h"
@@ -16,7 +17,6 @@
 #include "mozilla/PodOperations.h"
 #include "mozilla/RangedPtr.h"
 #include "mozilla/TextUtils.h"
-#include "mozilla/Unused.h"
 #include "mozilla/Utf8.h"
 #include "mozilla/Vector.h"
 
@@ -29,7 +29,6 @@
 #include "builtin/Boolean.h"
 #include "frontend/BytecodeCompiler.h"
 #include "frontend/ParserAtom.h"
-#include "gc/Marking.h"
 #include "gc/MaybeRooted.h"
 #include "gc/Nursery.h"
 #include "js/CharacterEncoding.h"
@@ -42,6 +41,7 @@
 #include "vm/GeckoProfiler.h"
 #include "vm/ToSource.h"  // js::ValueToSource
 
+#include "gc/Marking-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/JSContext-inl.h"
 #include "vm/JSObject-inl.h"
@@ -60,7 +60,6 @@ using mozilla::PodCopy;
 using mozilla::RangedPtr;
 using mozilla::RoundUpPow2;
 using mozilla::Span;
-using mozilla::Unused;
 
 using JS::AutoCheckCannotGC;
 using JS::AutoStableStringChars;
@@ -590,10 +589,84 @@ void CopyChars(Latin1Char* dest, const JSLinearString& str) {
 
 } /* namespace js */
 
-template <JSRope::UsingBarrier b, typename CharT>
-JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
+template <typename CharT>
+static constexpr uint32_t StringFlagsForCharType(uint32_t baseFlags) {
+  if constexpr (std::is_same_v<CharT, char16_t>) {
+    return baseFlags;
+  }
+
+  return baseFlags | JSString::LATIN1_CHARS_BIT;
+}
+
+static bool UpdateNurseryBuffersOnTransfer(js::Nursery& nursery, JSString* from,
+                                           JSString* to, void* buffer,
+                                           size_t size) {
+  // Update the list of buffers associated with nursery cells when |buffer| is
+  // moved from string |from| to string |to|, depending on whether those strings
+  // are in the nursery or not.
+
+  if (from->isTenured() && !to->isTenured()) {
+    // Tenured leftmost child is giving its chars buffer to the
+    // nursery-allocated root node.
+    if (!nursery.registerMallocedBuffer(buffer, size)) {
+      return false;
+    }
+  } else if (!from->isTenured() && to->isTenured()) {
+    // Leftmost child is giving its nursery-held chars buffer to a
+    // tenured string.
+    nursery.removeMallocedBuffer(buffer, size);
+  }
+
+  return true;
+}
+
+static bool CanReuseLeftmostBuffer(JSString* leftmostChild, size_t wholeLength,
+                                   bool hasTwoByteChars) {
+  if (!leftmostChild->isExtensible()) {
+    return false;
+  }
+
+  JSExtensibleString& str = leftmostChild->asExtensible();
+  return str.capacity() >= wholeLength &&
+         str.hasTwoByteChars() == hasTwoByteChars;
+}
+
+JSLinearString* JSRope::flatten(JSContext* maybecx) {
+  mozilla::Maybe<AutoGeckoProfilerEntry> entry;
+  if (maybecx && !maybecx->isHelperThreadContext()) {
+    entry.emplace(maybecx, "JSRope::flatten");
+  }
+
+  JSLinearString* str = flattenInternal();
+  if (!str && maybecx) {
+    ReportOutOfMemory(maybecx);
+  }
+
+  return str;
+}
+
+JSLinearString* JSRope::flattenInternal() {
+  if (zone()->needsIncrementalBarrier()) {
+    return flattenInternal<WithIncrementalBarrier>();
+  }
+
+  return flattenInternal<NoBarrier>();
+}
+
+template <JSRope::UsingBarrier usingBarrier>
+JSLinearString* JSRope::flattenInternal() {
+  if (hasTwoByteChars()) {
+    return flattenInternal<usingBarrier, char16_t>(this);
+  }
+
+  return flattenInternal<usingBarrier, Latin1Char>(this);
+}
+
+template <JSRope::UsingBarrier usingBarrier, typename CharT>
+/* static */
+JSLinearString* JSRope::flattenInternal(JSRope* root) {
   /*
-   * Consider the DAG of JSRopes rooted at this JSRope, with non-JSRopes as
+   * Consider the DAG of JSRopes rooted at |root|, with non-JSRopes as
    * its leaves. Mutate the root JSRope into a JSExtensibleString containing
    * the full flattened text that the root represents, and mutate all other
    * JSRopes in the interior of the DAG into JSDependentStrings that refer to
@@ -645,145 +718,88 @@ JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
    * change its address, only its owning JSExtensibleString, so all chars()
    * pointers in the JSDependentStrings are still valid.
    */
-  const size_t wholeLength = length();
+  const size_t wholeLength = root->length();
   size_t wholeCapacity;
   CharT* wholeChars;
-  JSString* str = this;
-  CharT* pos;
-
-  // JSString::setFlattenData() is used to store a tagged pointer to the
-  // parent node. The tag indicates what to do when we return to the parent.
-  static const uintptr_t Tag_Mask = 0x3;
-  static const uintptr_t Tag_FinishNode = 0x0;
-  static const uintptr_t Tag_VisitRightChild = 0x1;
 
   AutoCheckCannotGC nogc;
 
-  gc::StoreBuffer* bufferIfNursery = storeBuffer();
+  Nursery& nursery = root->runtimeFromMainThread()->gc.nursery();
 
   /* Find the left most string, containing the first string. */
-  JSRope* leftMostRope = this;
-  while (leftMostRope->leftChild()->isRope()) {
-    leftMostRope = &leftMostRope->leftChild()->asRope();
+  JSRope* leftmostRope = root;
+  while (leftmostRope->leftChild()->isRope()) {
+    leftmostRope = &leftmostRope->leftChild()->asRope();
   }
+  JSString* leftmostChild = leftmostRope->leftChild();
 
-  if (leftMostRope->leftChild()->isExtensible()) {
-    JSExtensibleString& left = leftMostRope->leftChild()->asExtensible();
-    size_t capacity = left.capacity();
-    if (capacity >= wholeLength &&
-        left.hasTwoByteChars() == std::is_same_v<CharT, char16_t>) {
-      wholeChars = const_cast<CharT*>(left.nonInlineChars<CharT>(nogc));
-      wholeCapacity = capacity;
+  bool reuseLeftmostBuffer = CanReuseLeftmostBuffer(
+      leftmostChild, wholeLength, std::is_same_v<CharT, char16_t>);
 
-      // registerMallocedBuffer is fallible, so attempt it first before doing
-      // anything irreversible.
-      Nursery& nursery = runtimeFromMainThread()->gc.nursery();
-      bool inTenured = !bufferIfNursery;
-      if (!inTenured && left.isTenured()) {
-        // tenured leftmost child is giving its chars buffer to the
-        // nursery-allocated root node.
-        if (!nursery.registerMallocedBuffer(wholeChars,
-                                            wholeCapacity * sizeof(CharT))) {
-          if (maybecx) {
-            ReportOutOfMemory(maybecx);
-          }
-          return nullptr;
-        }
-        // leftmost child -> root is a tenured -> nursery edge.
-        bufferIfNursery->putWholeCell(&left);
-      } else if (inTenured && !left.isTenured()) {
-        // leftmost child is giving its nursery-held chars buffer to a
-        // tenured string.
-        nursery.removeMallocedBuffer(wholeChars, wholeCapacity * sizeof(CharT));
-      }
+  if (reuseLeftmostBuffer) {
+    JSExtensibleString& left = leftmostChild->asExtensible();
+    wholeCapacity = left.capacity();
+    wholeChars = const_cast<CharT*>(left.nonInlineChars<CharT>(nogc));
 
-      /*
-       * Simulate a left-most traversal from the root to leftMost->leftChild()
-       * via first_visit_node
-       */
-      MOZ_ASSERT(str->isRope());
-      while (str != leftMostRope) {
-        if (b == WithIncrementalBarrier) {
-          gc::PreWriteBarrier(str->d.s.u2.left);
-          gc::PreWriteBarrier(str->d.s.u3.right);
-        }
-        JSString* child = str->d.s.u2.left;
-        // 'child' will be post-barriered during the later traversal.
-        MOZ_ASSERT(child->isRope());
-        str->setNonInlineChars(wholeChars);
-        child->setFlattenData(uintptr_t(str) | Tag_VisitRightChild);
-        str = child;
-      }
-      if (b == WithIncrementalBarrier) {
-        gc::PreWriteBarrier(str->d.s.u2.left);
-        gc::PreWriteBarrier(str->d.s.u3.right);
-      }
-      str->setNonInlineChars(wholeChars);
-      uint32_t left_len = left.length();
-      pos = wholeChars + left_len;
-
-      // Remove memory association for left node we're about to make into a
-      // dependent string.
-      if (left.isTenured()) {
-        RemoveCellMemory(&left, left.allocSize(), MemoryUse::StringContents);
-      }
-
-      uint32_t flags = INIT_DEPENDENT_FLAGS;
-      if (left.inStringToAtomCache()) {
-        flags |= IN_STRING_TO_ATOM_CACHE;
-      }
-      if constexpr (std::is_same_v<CharT, Latin1Char>) {
-        flags |= LATIN1_CHARS_BIT;
-      }
-      left.setLengthAndFlags(left_len, flags);
-      left.d.s.u3.base = (JSLinearString*)this; /* will be true on exit */
-      goto visit_right_child;
-    }
-  }
-
-  if (!AllocChars(this, wholeLength, &wholeChars, &wholeCapacity)) {
-    if (maybecx) {
-      ReportOutOfMemory(maybecx);
-    }
-    return nullptr;
-  }
-
-  if (!isTenured()) {
-    Nursery& nursery = runtimeFromMainThread()->gc.nursery();
-    if (!nursery.registerMallocedBuffer(wholeChars,
+    // Nursery::registerMallocedBuffer is fallible, so attempt it first before
+    // doing anything irreversible.
+    if (!UpdateNurseryBuffersOnTransfer(nursery, &left, root, wholeChars,
                                         wholeCapacity * sizeof(CharT))) {
-      js_free(wholeChars);
-      if (maybecx) {
-        ReportOutOfMemory(maybecx);
-      }
       return nullptr;
     }
+  } else {
+    // If we can't reuse the leftmost child's buffer, allocate a new one.
+    if (!AllocChars(root, wholeLength, &wholeChars, &wholeCapacity)) {
+      return nullptr;
+    }
+
+    if (!root->isTenured()) {
+      if (!nursery.registerMallocedBuffer(wholeChars,
+                                          wholeCapacity * sizeof(CharT))) {
+        js_free(wholeChars);
+        return nullptr;
+      }
+    }
   }
 
-  pos = wholeChars;
+  JSRope* str = root;
+  CharT* pos = wholeChars;
+
+  JSRope* parent = nullptr;
+  uint32_t parentFlag = 0;
+
 first_visit_node : {
-  if (b == WithIncrementalBarrier) {
-    gc::PreWriteBarrier(str->d.s.u2.left);
-    gc::PreWriteBarrier(str->d.s.u3.right);
-  }
+  MOZ_ASSERT_IF(str != root, parent && parentFlag);
+  MOZ_ASSERT(!str->asRope().isBeingFlattened());
+
+  ropeBarrierDuringFlattening<usingBarrier>(str);
 
   JSString& left = *str->d.s.u2.left;
-  str->setNonInlineChars(pos);
+  str->d.s.u2.parent = parent;
+  str->setFlagBit(parentFlag);
+  parent = nullptr;
+  parentFlag = 0;
+
   if (left.isRope()) {
     /* Return to this node when 'left' done, then goto visit_right_child. */
-    left.setFlattenData(uintptr_t(str) | Tag_VisitRightChild);
-    str = &left;
+    parent = str;
+    parentFlag = FLATTEN_VISIT_RIGHT;
+    str = &left.asRope();
     goto first_visit_node;
   }
-  CopyChars(pos, left.asLinear());
+  if (!(reuseLeftmostBuffer && &left == leftmostChild)) {
+    CopyChars(pos, left.asLinear());
+  }
   pos += left.length();
 }
+
 visit_right_child : {
   JSString& right = *str->d.s.u3.right;
   if (right.isRope()) {
     /* Return to this node when 'right' done, then goto finish_node. */
-    right.setFlattenData(uintptr_t(str) | Tag_FinishNode);
-    str = &right;
+    parent = str;
+    parentFlag = FLATTEN_FINISH_NODE;
+    str = &right.asRope();
     goto first_visit_node;
   }
   CopyChars(pos, right.asLinear());
@@ -791,32 +807,25 @@ visit_right_child : {
 }
 
 finish_node : {
-  if (str == this) {
-    MOZ_ASSERT(pos == wholeChars + wholeLength);
-    if constexpr (std::is_same_v<CharT, char16_t>) {
-      str->setLengthAndFlags(wholeLength, EXTENSIBLE_FLAGS);
-    } else {
-      str->setLengthAndFlags(wholeLength, EXTENSIBLE_FLAGS | LATIN1_CHARS_BIT);
-    }
-    str->setNonInlineChars(wholeChars);
-    str->d.s.u3.capacity = wholeCapacity;
-
-    if (str->isTenured()) {
-      AddCellMemory(str, str->asLinear().allocSize(),
-                    MemoryUse::StringContents);
-    }
-
-    return &this->asLinear();
+  if (str == root) {
+    goto finish_root;
   }
-  uintptr_t flattenData;
-  uint32_t len = pos - str->nonInlineCharsRaw<CharT>();
-  if constexpr (std::is_same_v<CharT, char16_t>) {
-    flattenData = str->unsetFlattenData(len, INIT_DEPENDENT_FLAGS);
-  } else {
-    flattenData =
-        str->unsetFlattenData(len, INIT_DEPENDENT_FLAGS | LATIN1_CHARS_BIT);
-  }
-  str->d.s.u3.base = (JSLinearString*)this; /* will be true on exit */
+
+  MOZ_ASSERT(pos >= wholeChars);
+  CharT* chars = pos - str->length();
+  JSRope* strParent = str->d.s.u2.parent;
+  str->setNonInlineChars(chars);
+
+  MOZ_ASSERT(str->asRope().isBeingFlattened());
+  mozilla::DebugOnly<bool> visitRight = str->flags() & FLATTEN_VISIT_RIGHT;
+  bool finishNode = str->flags() & FLATTEN_FINISH_NODE;
+  MOZ_ASSERT(visitRight != finishNode);
+
+  // This also clears the flags related to flattening.
+  str->setLengthAndFlags(str->length(),
+                         StringFlagsForCharType<CharT>(INIT_DEPENDENT_FLAGS));
+  str->d.s.u3.base =
+      reinterpret_cast<JSLinearString*>(root); /* will be true on exit */
 
   // Every interior (rope) node in the rope's tree will be visited during
   // the traversal and post-barriered here, so earlier additions of
@@ -826,38 +835,58 @@ finish_node : {
   // the nursery. Note that the root was a rope but will be an extensible
   // string when we return, so it will not point to any strings and need
   // not be barriered.
-  gc::StoreBuffer* bufferIfNursery = storeBuffer();
-  if (bufferIfNursery && str->isTenured()) {
-    bufferIfNursery->putWholeCell(str);
+  if (str->isTenured() && !root->isTenured()) {
+    root->storeBuffer()->putWholeCell(str);
   }
 
-  str = (JSString*)(flattenData & ~Tag_Mask);
-  if ((flattenData & Tag_Mask) == Tag_VisitRightChild) {
-    goto visit_right_child;
+  str = strParent;
+  if (finishNode) {
+    goto finish_node;
   }
-  MOZ_ASSERT((flattenData & Tag_Mask) == Tag_FinishNode);
-  goto finish_node;
-}
+  MOZ_ASSERT(visitRight);
+  goto visit_right_child;
 }
 
-template <JSRope::UsingBarrier b>
-JSLinearString* JSRope::flattenInternal(JSContext* maybecx) {
-  if (hasTwoByteChars()) {
-    return flattenInternal<b, char16_t>(maybecx);
+finish_root:
+  // We traversed all the way back up to the root so we're finished.
+  MOZ_ASSERT(str == root);
+  MOZ_ASSERT(pos == wholeChars + wholeLength);
+
+  root->setLengthAndFlags(wholeLength,
+                          StringFlagsForCharType<CharT>(EXTENSIBLE_FLAGS));
+  root->setNonInlineChars(wholeChars);
+  root->d.s.u3.capacity = wholeCapacity;
+  AddCellMemory(root, root->asLinear().allocSize(), MemoryUse::StringContents);
+
+  if (reuseLeftmostBuffer) {
+    // Remove memory association for left node we're about to make into a
+    // dependent string.
+    JSString& left = *leftmostChild;
+    RemoveCellMemory(&left, left.allocSize(), MemoryUse::StringContents);
+
+    uint32_t flags = INIT_DEPENDENT_FLAGS;
+    if (left.inStringToAtomCache()) {
+      flags |= IN_STRING_TO_ATOM_CACHE;
+    }
+    left.setLengthAndFlags(left.length(), StringFlagsForCharType<CharT>(flags));
+    left.d.s.u3.base = &root->asLinear();
+    if (left.isTenured() && !root->isTenured()) {
+      // leftmost child -> root is a tenured -> nursery edge.
+      root->storeBuffer()->putWholeCell(&left);
+    }
   }
-  return flattenInternal<b, Latin1Char>(maybecx);
+
+  return &root->asLinear();
 }
 
-JSLinearString* JSRope::flatten(JSContext* maybecx) {
-  mozilla::Maybe<AutoGeckoProfilerEntry> entry;
-  if (maybecx && !maybecx->isHelperThreadContext()) {
-    entry.emplace(maybecx, "JSRope::flatten");
+template <JSRope::UsingBarrier usingBarrier>
+/* static */
+inline void JSRope::ropeBarrierDuringFlattening(JSRope* rope) {
+  MOZ_ASSERT(!rope->isBeingFlattened());
+  if constexpr (usingBarrier) {
+    gc::PreWriteBarrierDuringFlattening(rope->leftChild());
+    gc::PreWriteBarrierDuringFlattening(rope->rightChild());
   }
-
-  if (zone()->needsIncrementalBarrier()) {
-    return flattenInternal<WithIncrementalBarrier>(maybecx);
-  }
-  return flattenInternal<NoBarrier>(maybecx);
 }
 
 template <AllowGC allowGC>
@@ -1197,6 +1226,7 @@ bool js::CheckStringIsIndex(const CharT* s, size_t length, uint32_t* indexp) {
   uint32_t c = 0;
 
   if (index != 0) {
+    // Consume remaining characters only if the first character isn't '0'.
     while (cp < end && IsAsciiDigit(*cp)) {
       oldIndex = index;
       c = AsciiDigitToNumber(*cp);
@@ -1205,17 +1235,17 @@ bool js::CheckStringIsIndex(const CharT* s, size_t length, uint32_t* indexp) {
     }
   }
 
-  /* It's not an element if there are characters after the number. */
+  // It's not an integer index if there are characters after the number.
   if (cp != end) {
     return false;
   }
 
-  /*
-   * Look out for "4294967296" and larger-number strings that fit in
-   * UINT32_CHAR_BUFFER_LENGTH: only unsigned 32-bit integers shall pass.
-   */
-  if (oldIndex < UINT32_MAX / 10 ||
-      (oldIndex == UINT32_MAX / 10 && c <= (UINT32_MAX % 10))) {
+  // Look out for "4294967295" and larger-number strings that fit in
+  // UINT32_CHAR_BUFFER_LENGTH: only unsigned 32-bit integers less than or equal
+  // to MAX_ARRAY_INDEX shall pass.
+  if (oldIndex < MAX_ARRAY_INDEX / 10 ||
+      (oldIndex == MAX_ARRAY_INDEX / 10 && c <= (MAX_ARRAY_INDEX % 10))) {
+    MOZ_ASSERT(index <= MAX_ARRAY_INDEX);
     *indexp = index;
     return true;
   }
@@ -1229,28 +1259,52 @@ template bool js::CheckStringIsIndex(const char16_t* s, size_t length,
                                      uint32_t* indexp);
 
 template <typename CharT>
-/* static */
-bool JSLinearString::isIndexSlow(const CharT* s, size_t length,
-                                 uint32_t* indexp) {
-  return js::CheckStringIsIndex(s, length, indexp);
+static uint32_t AtomCharsToIndex(const CharT* s, size_t length) {
+  // Chars are known to be a valid index value (as determined by
+  // CheckStringIsIndex) that didn't fit in the "index value" bits in the
+  // header.
+
+  MOZ_ASSERT(length > 0);
+  MOZ_ASSERT(length <= UINT32_CHAR_BUFFER_LENGTH);
+
+  RangedPtr<const CharT> cp(s, length);
+  const RangedPtr<const CharT> end(s + length, s, length);
+
+  MOZ_ASSERT(IsAsciiDigit(*cp));
+  uint32_t index = AsciiDigitToNumber(*cp++);
+  MOZ_ASSERT(index != 0);
+
+  while (cp < end) {
+    MOZ_ASSERT(IsAsciiDigit(*cp));
+    index = 10 * index + AsciiDigitToNumber(*cp);
+    cp++;
+  }
+
+  MOZ_ASSERT(index <= MAX_ARRAY_INDEX);
+  return index;
 }
 
-template bool JSLinearString::isIndexSlow(const Latin1Char* s, size_t length,
-                                          uint32_t* indexp);
+uint32_t JSAtom::getIndexSlow() const {
+  MOZ_ASSERT(isIndex());
+  MOZ_ASSERT(!hasIndexValue());
 
-template bool JSLinearString::isIndexSlow(const char16_t* s, size_t length,
-                                          uint32_t* indexp);
+  size_t len = length();
 
-constexpr StaticStrings::SmallCharArray StaticStrings::createSmallCharArray() {
-  SmallCharArray array{};
-  for (size_t i = 0; i < SMALL_CHAR_LIMIT; i++) {
+  AutoCheckCannotGC nogc;
+  return hasLatin1Chars() ? AtomCharsToIndex(latin1Chars(nogc), len)
+                          : AtomCharsToIndex(twoByteChars(nogc), len);
+}
+
+constexpr StaticStrings::SmallCharTable StaticStrings::createSmallCharTable() {
+  SmallCharTable array{};
+  for (size_t i = 0; i < SMALL_CHAR_TABLE_SIZE; i++) {
     array[i] = toSmallChar(i);
   }
   return array;
 }
 
-const StaticStrings::SmallCharArray StaticStrings::toSmallCharArray =
-    createSmallCharArray();
+const StaticStrings::SmallCharTable StaticStrings::toSmallCharTable =
+    createSmallCharTable();
 
 bool StaticStrings::init(JSContext* cx) {
   AutoAllocInAtomsZone az(cx);
@@ -1271,8 +1325,8 @@ bool StaticStrings::init(JSContext* cx) {
     unitStaticTable[i] = s->morphAtomizedStringIntoPermanentAtom(hash);
   }
 
-  for (uint32_t i = 0; i < NUM_SMALL_CHARS * NUM_SMALL_CHARS; i++) {
-    Latin1Char buffer[] = {fromSmallChar(i >> 6), fromSmallChar(i & 0x3F)};
+  for (uint32_t i = 0; i < NUM_LENGTH2_ENTRIES; i++) {
+    Latin1Char buffer[] = {firstCharOfLength2(i), secondCharOfLength2(i)};
     JSLinearString* s =
         NewInlineString<NoGC>(cx, Latin1Range(buffer, 2), gc::TenuredHeap);
     if (!s) {
@@ -1286,8 +1340,8 @@ bool StaticStrings::init(JSContext* cx) {
     if (i < 10) {
       intStaticTable[i] = unitStaticTable[i + '0'];
     } else if (i < 100) {
-      size_t index = ((size_t)toSmallChar((i / 10) + '0') << 6) +
-                     toSmallChar((i % 10) + '0');
+      auto index =
+          getLength2IndexStatic(char(i / 10) + '0', char(i % 10) + '0');
       intStaticTable[i] = length2StaticTable[index];
     } else {
       Latin1Char buffer[] = {Latin1Char('0' + (i / 100)),
@@ -1304,7 +1358,7 @@ bool StaticStrings::init(JSContext* cx) {
 
     // Static string initialization can not race, so allow even without the
     // lock.
-    intStaticTable[i]->maybeInitializeIndex(i, true);
+    intStaticTable[i]->setIsIndex(i);
   }
 
   return true;
@@ -1318,17 +1372,17 @@ inline void TraceStaticString(JSTracer* trc, JSAtom* atom, const char* name) {
 void StaticStrings::trace(JSTracer* trc) {
   /* These strings never change, so barriers are not needed. */
 
-  for (uint32_t i = 0; i < UNIT_STATIC_LIMIT; i++) {
-    TraceStaticString(trc, unitStaticTable[i], "unit-static-string");
+  for (auto& s : unitStaticTable) {
+    TraceStaticString(trc, s, "unit-static-string");
   }
 
-  for (uint32_t i = 0; i < NUM_SMALL_CHARS * NUM_SMALL_CHARS; i++) {
-    TraceStaticString(trc, length2StaticTable[i], "length2-static-string");
+  for (auto& s : length2StaticTable) {
+    TraceStaticString(trc, s, "length2-static-string");
   }
 
   /* This may mark some strings more than once, but so be it. */
-  for (uint32_t i = 0; i < INT_STATIC_LIMIT; i++) {
-    TraceStaticString(trc, intStaticTable[i], "int-static-string");
+  for (auto& s : intStaticTable) {
+    TraceStaticString(trc, s, "int-static-string");
   }
 }
 
@@ -1477,14 +1531,6 @@ bool AutoStableStringChars::copyTwoByteChars(JSContext* cx,
   twoByteChars_ = chars;
   s_ = linearString;
   return true;
-}
-
-UniqueChars js::ParserAtomToNewUTF8CharsZ(
-    JSContext* maybecx, const js::frontend::ParserAtom* atom) {
-  return UniqueChars(
-      atom->hasLatin1Chars()
-          ? JS::CharsToNewUTF8CharsZ(maybecx, atom->latin1Range()).c_str()
-          : JS::CharsToNewUTF8CharsZ(maybecx, atom->twoByteRange()).c_str());
 }
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
@@ -1976,7 +2022,7 @@ static bool FillWithRepresentatives(JSContext* cx, HandleArrayObject array,
   auto AppendString = [&check](JSContext* cx, HandleArrayObject array,
                                uint32_t* index, HandleString s) {
     MOZ_ASSERT(check(s));
-    Unused << check;  // silence clang -Wunused-lambda-capture in opt builds
+    (void)check;  // silence clang -Wunused-lambda-capture in opt builds
     RootedValue val(cx, StringValue(s));
     return JS_DefineElement(cx, array, (*index)++, val, 0);
   };
@@ -2190,9 +2236,9 @@ UniqueChars js::IdToPrintableUTF8(JSContext* cx, HandleId id,
                                   IdToPrintableBehavior behavior) {
   // ToString(<symbol>) throws a TypeError, therefore require that callers
   // request source representation when |id| is a property key.
-  MOZ_ASSERT_IF(behavior == IdToPrintableBehavior::IdIsIdentifier,
-                JSID_IS_ATOM(id) &&
-                    frontend::IsIdentifierNameOrPrivateName(JSID_TO_ATOM(id)));
+  MOZ_ASSERT_IF(
+      behavior == IdToPrintableBehavior::IdIsIdentifier,
+      id.isAtom() && frontend::IsIdentifierNameOrPrivateName(id.toAtom()));
 
   RootedValue v(cx, IdToValue(id));
   JSString* str;

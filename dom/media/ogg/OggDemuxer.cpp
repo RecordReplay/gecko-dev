@@ -92,7 +92,7 @@ rlbox_sandbox_ogg* OggDemuxer::CreateSandbox() {
   // fails as the I/O redirection involves querying meta-data of file
   // descriptors. This querying fails in some environments.
   const bool allow_stdio = false;
-  sandbox->create_sandbox(mozilla::ipc::GetSandboxedOggPath().get(),
+  sandbox->create_sandbox(mozilla::ipc::GetSandboxedRLBoxPath().get(),
                           external_loads_exist, allow_stdio);
 #else
   sandbox->create_sandbox();
@@ -171,24 +171,6 @@ OggDemuxer::~OggDemuxer() {
   MOZ_COUNT_DTOR(OggDemuxer);
   Reset(TrackInfo::kAudioTrack);
   Reset(TrackInfo::kVideoTrack);
-  if (HasAudio() || HasVideo()) {
-    // If we were able to initialize our decoders, report whether we encountered
-    // a chained stream or not.
-    bool isChained = mIsChained;
-    void* ptr = this;
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
-        "OggDemuxer::~OggDemuxer", [ptr, isChained]() -> void {
-          // We can't use OGG_DEBUG here because it implicitly refers to `this`,
-          // which we can't capture in this runnable.
-          MOZ_LOG(gMediaDemuxerLog, mozilla::LogLevel::Debug,
-                  ("OggDemuxer(%p)::%s: Reporting telemetry "
-                   "MEDIA_OGG_LOADED_IS_CHAINED=%d",
-                   ptr, __func__, isChained));
-          Telemetry::Accumulate(
-              Telemetry::HistogramID::MEDIA_OGG_LOADED_IS_CHAINED, isChained);
-        });
-    SchedulerGroup::Dispatch(TaskCategory::Other, task.forget());
-  }
 }
 
 void OggDemuxer::SetChainingEvents(TimedMetadataEventProducer* aMetadataEvent,
@@ -457,8 +439,8 @@ void OggDemuxer::FillTags(TrackInfo* aInfo, UniquePtr<MetadataTags>&& aTags) {
     return;
   }
   UniquePtr<MetadataTags> tags(std::move(aTags));
-  for (auto iter = tags->Iter(); !iter.Done(); iter.Next()) {
-    aInfo->mTags.AppendElement(MetadataTag(iter.Key(), iter.Data()));
+  for (const auto& entry : *tags) {
+    aInfo->mTags.AppendElement(MetadataTag(entry.GetKey(), entry.GetData()));
   }
 }
 
@@ -510,9 +492,9 @@ nsresult OggDemuxer::ReadMetadata() {
         // We've not encountered a stream with this serial number before. Create
         // an OggCodecState to demux it, and map that to the OggCodecState
         // in mCodecStates.
-        OggCodecState* codecState =
-            OggCodecState::Create(mSandbox.get(), page.to_opaque(), serial);
-        mCodecStore.Add(serial, codecState);
+        OggCodecState* const codecState = mCodecStore.Add(
+            serial,
+            OggCodecState::Create(mSandbox.get(), page.to_opaque(), serial));
         bitstreams.AppendElement(codecState);
         serials.AppendElement(serial);
       }
@@ -685,7 +667,7 @@ bool OggDemuxer::ReadOggChain(const media::TimeUnit& aLastEndTime) {
 
   OggCodecState* state;
 
-  mCodecStore.Add(serial, codecState.release());
+  mCodecStore.Add(serial, std::move(codecState));
   state = mCodecStore.Get(serial);
 
   NS_ENSURE_TRUE(state != nullptr, false);

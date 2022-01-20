@@ -87,6 +87,11 @@ else:
         "vm/StructuredClone.cpp",
     ]
 
+if CONFIG["FUZZING_JS_FUZZILLI"]:
+    # When building for Fuzzilli, we instrument everything with standard
+    # trace-pc instrumentation.
+    include("/tools/fuzzing/libfuzzer-config.mozbuild")
+
 CONFIGURE_SUBST_FILES += [
     "devtools/rootAnalysis/Makefile",
 ]
@@ -135,6 +140,7 @@ EXPORTS.js += [
     "../public/ComparisonOperators.h",
     "../public/CompilationAndEvaluation.h",
     "../public/CompileOptions.h",
+    "../public/Context.h",
     "../public/ContextOptions.h",
     "../public/Conversions.h",
     "../public/Date.h",
@@ -152,10 +158,12 @@ EXPORTS.js += [
     "../public/GCVector.h",
     "../public/HashTable.h",
     "../public/HeapAPI.h",
+    "../public/HelperThreadAPI.h",
     "../public/Id.h",
     "../public/Initialization.h",
     "../public/JSON.h",
     "../public/LocaleSensitive.h",
+    "../public/MapAndSet.h",
     "../public/MemoryFunctions.h",
     "../public/MemoryMetrics.h",
     "../public/Modules.h",
@@ -172,11 +180,11 @@ EXPORTS.js += [
     "../public/ProtoKey.h",
     "../public/Proxy.h",
     "../public/Realm.h",
+    "../public/RealmIterators.h",
     "../public/RealmOptions.h",
     "../public/RefCounted.h",
     "../public/RegExp.h",
     "../public/RegExpFlags.h",
-    "../public/RequiredDefines.h",
     "../public/Result.h",
     "../public/RootingAPI.h",
     "../public/SavedFrameAPI.h",
@@ -208,9 +216,12 @@ EXPORTS.js += [
     "../public/ValueArray.h",
     "../public/Vector.h",
     "../public/Warnings.h",
+    "../public/WasmFeatures.h",
     "../public/WasmModule.h",
+    "../public/WeakMap.h",
     "../public/WeakMapPtr.h",
     "../public/Wrapper.h",
+    "../public/Zone.h",
 ]
 
 # This lives in mozglue/baseprofiler but we re-publish ourselves to support
@@ -227,6 +238,8 @@ EXPORTS.js.experimental += [
     "../public/experimental/CTypes.h",
     "../public/experimental/Intl.h",
     "../public/experimental/JitInfo.h",
+    "../public/experimental/JSStencil.h",
+    "../public/experimental/PCCountProfiling.h",
     "../public/experimental/SourceHook.h",
     "../public/experimental/TypedData.h",
 ]
@@ -242,6 +255,7 @@ EXPORTS.js.friend += [
     "../public/friend/ErrorMessages.h",
     "../public/friend/ErrorNumbers.msg",
     "../public/friend/JSMEnvironment.h",
+    "../public/friend/PerformanceHint.h",
     "../public/friend/StackLimits.h",
     "../public/friend/UsageStatistics.h",
     "../public/friend/WindowProxy.h",
@@ -265,7 +279,6 @@ EXPORTS.js.friend += [
 EXPORTS.js.shadow += [
     "../public/shadow/Function.h",
     "../public/shadow/Object.h",
-    "../public/shadow/ObjectGroup.h",
     "../public/shadow/Realm.h",
     "../public/shadow/Shape.h",
     "../public/shadow/String.h",
@@ -314,6 +327,7 @@ UNIFIED_SOURCES += [
     "builtin/String.cpp",
     "builtin/Symbol.cpp",
     "builtin/TestingFunctions.cpp",
+    "builtin/TestingUtility.cpp",
     "builtin/WeakMapObject.cpp",
     "builtin/WeakRefObject.cpp",
     "builtin/WeakSetObject.cpp",
@@ -378,11 +392,13 @@ UNIFIED_SOURCES += [
     "vm/FunctionFlags.cpp",
     "vm/GeckoProfiler.cpp",
     "vm/GeneratorObject.cpp",
+    "vm/GetterSetter.cpp",
     "vm/GlobalObject.cpp",
     "vm/HelperThreads.cpp",
     "vm/Id.cpp",
     "vm/Initialization.cpp",
     "vm/Instrumentation.cpp",
+    "vm/InternalThreadPool.cpp",
     "vm/Iteration.cpp",
     "vm/JitActivation.cpp",
     "vm/JSAtom.cpp",
@@ -396,7 +412,6 @@ UNIFIED_SOURCES += [
     "vm/MemoryMetrics.cpp",
     "vm/Modules.cpp",
     "vm/NativeObject.cpp",
-    "vm/ObjectGroup.cpp",
     "vm/OffThreadPromiseRuntimeState.cpp",
     "vm/OffThreadScriptCompilation.cpp",
     "vm/PIC.cpp",
@@ -404,9 +419,9 @@ UNIFIED_SOURCES += [
     "vm/Printer.cpp",
     "vm/Probes.cpp",
     "vm/PromiseLookup.cpp",
+    "vm/PropMap.cpp",
     "vm/ProxyObject.cpp",
     "vm/Realm.cpp",
-    "vm/ReceiverGuard.cpp",
     "vm/RegExpObject.cpp",
     "vm/RegExpStatics.cpp",
     "vm/Runtime.cpp",
@@ -414,10 +429,12 @@ UNIFIED_SOURCES += [
     "vm/Scope.cpp",
     "vm/SelfHosting.cpp",
     "vm/Shape.cpp",
+    "vm/ShapeZone.cpp",
     "vm/SharedArrayObject.cpp",
     "vm/SharedImmutableStringsCache.cpp",
     "vm/SourceHook.cpp",
     "vm/Stack.cpp",
+    "vm/StencilObject.cpp",
     "vm/StringType.cpp",
     "vm/SymbolType.cpp",
     "vm/TaggedProto.cpp",
@@ -431,6 +448,7 @@ UNIFIED_SOURCES += [
     "vm/UsageStatistics.cpp",
     "vm/Value.cpp",
     "vm/Warnings.cpp",
+    "vm/WellKnownAtom.cpp",
     "vm/WindowProxy.cpp",
     "vm/Xdr.cpp",
 ]
@@ -488,6 +506,12 @@ if CONFIG["OS_ARCH"] == "WINNT":
         "threading/windows/CpuCount.cpp",
         "threading/windows/WindowsThread.cpp",
     ]
+# WASI hasn't supported thread yet so noop implementation is used.
+elif CONFIG["OS_ARCH"] == "WASI":
+    UNIFIED_SOURCES += [
+        "threading/noop/CpuCount.cpp",
+        "threading/noop/NoopThread.cpp",
+    ]
 else:
     UNIFIED_SOURCES += [
         "threading/posix/CpuCount.cpp",
@@ -517,6 +541,8 @@ if CONFIG["MOZ_VTUNE"]:
     ]
     if CONFIG["CC_TYPE"] == "gcc":
         SOURCES["vtune/ittnotify_static.c"].flags += ["-Wno-stringop-overflow"]
+        if int(CONFIG["CC_VERSION"].split(".")[0]) >= 8:
+            SOURCES["vtune/ittnotify_static.c"].flags += ["-Wno-stringop-truncation"]
 
 DIRS += ["build", "debugger", "frontend", "gc", "irregexp", "jit", "wasm"]
 
@@ -534,7 +560,6 @@ selfhosted_inputs = [
     "builtin/AsyncFunction.js",
     "builtin/AsyncIteration.js",
     "builtin/BigInt.js",
-    "builtin/Classes.js",
     "builtin/Date.js",
     "builtin/Error.js",
     "builtin/Function.js",
@@ -586,6 +611,13 @@ GeneratedFile(
 if CONFIG["JS_HAS_CTYPES"]:
     if CONFIG["MOZ_SYSTEM_FFI"]:
         CXXFLAGS += CONFIG["MOZ_FFI_CFLAGS"]
+
+if CONFIG["JS_HAS_INTL_API"]:
+    DIRS += [
+        "../../intl/components",
+    ]
+
+    USE_LIBS += ["intlcomponents"]
 
 # Suppress warnings in third-party code.
 if CONFIG["CC_TYPE"] in ("clang", "gcc"):

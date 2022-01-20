@@ -66,6 +66,7 @@ class SingleTestMixin(object):
                 "xpcshell",
             ),
         ]
+        is_fission = "fission.autostart=true" in self.config.get("extra_prefs", [])
         tests_by_path = {}
         all_disabled = []
         for (path, suite) in manifests:
@@ -172,7 +173,7 @@ class SingleTestMixin(object):
                 if file in all_disabled:
                     self.info("'%s' has been skipped on this platform." % file)
                 if os.environ.get("MOZHARNESS_TEST_PATHS", None) is not None:
-                    self.fatal("Per-test run could not find requested test '%s'" % file)
+                    self.info("Per-test run could not find requested test '%s'" % file)
                 continue
 
             if gpu and not self._is_gpu_suite(entry[1]):
@@ -185,6 +186,15 @@ class SingleTestMixin(object):
                 self.info(
                     "Per-test run (non-gpu) discarded gpu test %s (%s)"
                     % (file, entry[1])
+                )
+                continue
+
+            if is_fission and (
+                (entry[0] == "mochitest-a11y") or (entry[0] == "mochitest-chrome")
+            ):
+                self.info(
+                    "Per-test run (fission) discarded non-e10s test %s (%s)"
+                    % (file, entry[0])
                 )
                 continue
 
@@ -283,7 +293,7 @@ class SingleTestMixin(object):
 
         if os.environ.get("MOZHARNESS_TEST_PATHS", None) is not None:
             for file in changed_files:
-                self.fatal(
+                self.info(
                     "Per-test run could not find requested web-platform test '%s'"
                     % file
                 )
@@ -318,31 +328,50 @@ class SingleTestMixin(object):
         if mozinfo.info["buildapp"] == "mobile/android":
             # extra android mozinfo normally comes from device queries, but this
             # code may run before the device is ready, so rely on configuration
-            mozinfo.update({"android_version": self.config.get("android_version", 24)})
+            mozinfo.update(
+                {"android_version": str(self.config.get("android_version", 24))}
+            )
             mozinfo.update({"is_fennec": self.config.get("is_fennec", False)})
             mozinfo.update({"is_emulator": self.config.get("is_emulator", True)})
         mozinfo.update({"verify": True})
         self.info("Per-test run using mozinfo: %s" % str(mozinfo.info))
 
+        # determine which files were changed on this push
         changed_files = set()
+        url = "%s/json-automationrelevance/%s" % (repository.rstrip("/"), revision)
+        contents = self.retry(get_automationrelevance, attempts=2, sleeptime=10)
+        for c in contents["changesets"]:
+            self.info(
+                " {cset} {desc}".format(
+                    cset=c["node"][0:12],
+                    desc=c["desc"].splitlines()[0].encode("ascii", "ignore"),
+                )
+            )
+            changed_files |= set(c["files"])
+        changed_files = list(changed_files)
+
+        # check specified test paths, as from 'mach try ... <path>'
         if os.environ.get("MOZHARNESS_TEST_PATHS", None) is not None:
             suite_to_paths = json.loads(os.environ["MOZHARNESS_TEST_PATHS"])
-            specified_files = itertools.chain.from_iterable(suite_to_paths.values())
-            changed_files.update(specified_files)
+            specified_paths = itertools.chain.from_iterable(suite_to_paths.values())
+            specified_paths = list(specified_paths)
+            # filter the list of changed files to those found under the
+            # specified path(s)
+            changed_and_specified = set()
+            for changed in changed_files:
+                for specified in specified_paths:
+                    if changed.startswith(specified):
+                        changed_and_specified.add(changed)
+                        break
+            if changed_and_specified:
+                changed_files = changed_and_specified
+            else:
+                # if specified paths do not match changed files, assume the
+                # specified paths are explicitly requested tests
+                changed_files = set()
+                changed_files.update(specified_paths)
             self.info("Per-test run found explicit request in MOZHARNESS_TEST_PATHS:")
             self.info(str(changed_files))
-        else:
-            # determine which files were changed on this push
-            url = "%s/json-automationrelevance/%s" % (repository.rstrip("/"), revision)
-            contents = self.retry(get_automationrelevance, attempts=2, sleeptime=10)
-            for c in contents["changesets"]:
-                self.info(
-                    " {cset} {desc}".format(
-                        cset=c["node"][0:12],
-                        desc=c["desc"].splitlines()[0].encode("ascii", "ignore"),
-                    )
-                )
-                changed_files |= set(c["files"])
 
         if self.config.get("per_test_category") == "web-platform":
             self._find_wpt_tests(dirs, changed_files)

@@ -10,12 +10,15 @@ import json
 import logging
 import operator
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
+import mozbuild.settings  # noqa need @SettingsProvider hook to execute
 import mozpack.path as mozpath
 
 from mach.decorators import (
@@ -34,7 +37,6 @@ from mozbuild.base import (
     MachCommandConditions as conditions,
     MozbuildObject,
 )
-from mozbuild.util import MOZBUILD_METRICS_PATH
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -72,7 +74,7 @@ class Watch(MachCommandBase):
     @Command(
         "watch",
         category="post-build",
-        description="Watch and re-build the tree.",
+        description="Watch and re-build (parts of) the tree.",
         conditions=[conditions.is_firefox],
     )
     @CommandArgument(
@@ -81,19 +83,16 @@ class Watch(MachCommandBase):
         action="store_true",
         help="Verbose output for what commands the watcher is running.",
     )
-    def watch(self, verbose=False):
-        """Watch and re-build the source tree."""
-
+    def watch(self, command_context, verbose=False):
+        """Watch and re-build (parts of) the source tree."""
         if not conditions.is_artifact_build(self):
             print(
-                "mach watch requires an artifact build. See "
-                "https://developer.mozilla.org/docs/Mozilla/Developer_guide/Build_Instructions/Simple_Firefox_build"  # noqa
+                "WARNING: mach watch only rebuilds the `mach build faster` parts of the tree!"
             )
-            return 1
 
         if not self.substs.get("WATCHMAN", None):
             print(
-                "mach watch requires watchman to be installed. See "
+                "mach watch requires watchman to be installed and found at configure time. See "
                 "https://developer.mozilla.org/docs/Mozilla/Developer_guide/Build_Instructions/Incremental_builds_with_filesystem_watching"  # noqa
             )
             return 1
@@ -124,7 +123,7 @@ class CargoProvider(MachCommandBase):
     """Invoke cargo in useful ways."""
 
     @Command("cargo", category="build", description="Invoke cargo in useful ways.")
-    def cargo(self):
+    def cargo(self, command_context):
         self._sub_mach(["help", "cargo"])
         return 1
 
@@ -152,13 +151,13 @@ class CargoProvider(MachCommandBase):
         help="Run the tests in parallel using multiple processes.",
     )
     @CommandArgument("-v", "--verbose", action="store_true", help="Verbose output.")
-    def check(self, all_crates=None, crates=None, jobs=0, verbose=False):
+    def check(
+        self, command_context, all_crates=None, crates=None, jobs=0, verbose=False
+    ):
         # XXX duplication with `mach vendor rust`
         crates_and_roots = {
             "gkrust": "toolkit/library/rust",
             "gkrust-gtest": "toolkit/library/gtest/rust",
-            "js": "js/rust",
-            "mozjs_sys": "js/src",
             "baldrdash": "js/src/wasm/cranelift",
             "geckodriver": "testing/geckodriver",
         }
@@ -203,25 +202,39 @@ class CargoProvider(MachCommandBase):
 class Doctor(MachCommandBase):
     """Provide commands for diagnosing common build environment problems"""
 
-    @Command("doctor", category="devenv", description="")
+    @Command(
+        "doctor",
+        category="devenv",
+        description="Diagnose and fix common development environment issues.",
+    )
     @CommandArgument(
         "--fix",
-        default=None,
+        default=False,
         action="store_true",
         help="Attempt to fix found problems.",
     )
-    def doctor(self, fix=None):
+    @CommandArgument(
+        "--verbose",
+        default=False,
+        action="store_true",
+        help="Print verbose information found by checks.",
+    )
+    def doctor(self, command_context, fix=False, verbose=False):
         self.activate_virtualenv()
-        from mozbuild.doctor import Doctor
+        from mozbuild.doctor import run_doctor
 
-        doctor = Doctor(self.topsrcdir, self.topobjdir, fix)
-        return doctor.check_all()
+        return run_doctor(
+            topsrcdir=self.topsrcdir,
+            topobjdir=self.topobjdir,
+            fix=fix,
+            verbose=verbose,
+        )
 
 
-@CommandProvider(metrics_path=MOZBUILD_METRICS_PATH)
+@CommandProvider
 class Clobber(MachCommandBase):
     NO_AUTO_LOG = True
-    CLOBBER_CHOICES = set(["objdir", "python", "gradle"])
+    CLOBBER_CHOICES = {"objdir", "python", "gradle"}
 
     @Command(
         "clobber",
@@ -230,13 +243,13 @@ class Clobber(MachCommandBase):
     )
     @CommandArgument(
         "what",
-        default=["objdir", "python"],
+        default=["objdir"],
         nargs="*",
         help="Target to clobber, must be one of {{{}}} (default "
-        "objdir and python).".format(", ".join(CLOBBER_CHOICES)),
+        "objdir).".format(", ".join(CLOBBER_CHOICES)),
     )
     @CommandArgument("--full", action="store_true", help="Perform a full clobber")
-    def clobber(self, what, full=False):
+    def clobber(self, command_context, what, full=False):
         """Clean up the source and object directories.
 
         Performing builds and running various commands generate various files.
@@ -249,23 +262,22 @@ class Clobber(MachCommandBase):
         files) are not removed by default. If you would like to remove the
         object directory in its entirety, run with `--full`.
 
-        The `python` target will clean up various generated Python files from
-        the source directory and will remove untracked files from well-known
-        directories containing Python packages. Run this to remove .pyc files,
-        compiled C extensions, etc. Note: all files not tracked or ignored by
-        version control in third_party/python will be deleted. Run the `status`
-        command of your VCS to see if any untracked files you haven't committed
-        yet will be deleted.
+        The `python` target will clean up Python's generated files (virtualenvs,
+        ".pyc", "__pycache__", etc).
 
         The `gradle` target will remove the "gradle" subdirectory of the object
         directory.
 
-        By default, the command clobbers the `objdir` and `python` targets.
+        By default, the command clobbers the `objdir` target.
         """
         what = set(what)
         invalid = what - self.CLOBBER_CHOICES
         if invalid:
-            print("Unknown clobber target(s): {}".format(", ".join(invalid)))
+            print(
+                "Unknown clobber target(s): {}. Choose from {{{}}}".format(
+                    ", ".join(invalid), ", ".join(self.CLOBBER_CHOICES)
+                )
+            )
             return 1
 
         ret = 0
@@ -273,9 +285,12 @@ class Clobber(MachCommandBase):
             from mozbuild.controller.clobber import Clobberer
 
             try:
-                Clobberer(self.topsrcdir, self.topobjdir, self.substs).remove_objdir(
-                    full
-                )
+                substs = self.substs
+            except BuildEnvironmentNotFoundException:
+                substs = {}
+
+            try:
+                Clobberer(self.topsrcdir, self.topobjdir, substs).remove_objdir(full)
             except OSError as e:
                 if sys.platform.startswith("win"):
                     if isinstance(e, WindowsError) and e.winerror in (5, 32):
@@ -301,8 +316,6 @@ class Clobber(MachCommandBase):
                     "glob:**.py[cdo]",
                     "-I",
                     "glob:**/__pycache__",
-                    "-I",
-                    "path:third_party/python/",
                 ]
             elif conditions.is_git(self):
                 cmd = [
@@ -313,11 +326,8 @@ class Clobber(MachCommandBase):
                     "-x",
                     "*.py[cdo]",
                     "*/__pycache__/*",
-                    "third_party/python/",
                 ]
             else:
-                # We don't know what is tracked/untracked if we don't have VCS.
-                # So we can't clean python/ and third_party/python/.
                 cmd = ["find", ".", "-type", "f", "-name", "*.py[cdo]", "-delete"]
                 subprocess.call(cmd, cwd=self.topsrcdir)
                 cmd = [
@@ -331,18 +341,14 @@ class Clobber(MachCommandBase):
                     "-delete",
                 ]
             ret = subprocess.call(cmd, cwd=self.topsrcdir)
+            shutil.rmtree(
+                mozpath.join(self.topobjdir, "_virtualenvs"), ignore_errors=True
+            )
 
         if "gradle" in what:
-            shutil.rmtree(mozpath.join(self.topobjdir, "gradle"))
+            shutil.rmtree(mozpath.join(self.topobjdir, "gradle"), ignore_errors=True)
 
         return ret
-
-    @property
-    def substs(self):
-        try:
-            return super(Clobber, self).substs
-        except BuildEnvironmentNotFoundException:
-            return {}
 
 
 @CommandProvider
@@ -359,7 +365,7 @@ class Logs(MachCommandBase):
         help="Filename to read log data from. Defaults to the log of the last "
         "mach command.",
     )
-    def show_log(self, log_file=None):
+    def show_log(self, command_context, log_file=None):
         if not log_file:
             path = self._get_state_filename("last_log.json")
             log_file = open(path, "rb")
@@ -413,15 +419,13 @@ class Logs(MachCommandBase):
 class Warnings(MachCommandBase):
     """Provide commands for inspecting warnings."""
 
-    @property
     def database_path(self):
         return self._get_state_filename("warnings.json")
 
-    @property
     def database(self):
         from mozbuild.compilation.warnings import WarningsDatabase
 
-        path = self.database_path
+        path = self.database_path()
 
         database = WarningsDatabase()
 
@@ -448,8 +452,8 @@ class Warnings(MachCommandBase):
         help="Warnings report to display. If not defined, show the most "
         "recent report.",
     )
-    def summary(self, directory=None, report=None):
-        database = self.database
+    def summary(self, command_context, directory=None, report=None):
+        database = self.database()
 
         if directory:
             dirpath = self.join_ensure_dir(self.topsrcdir, directory)
@@ -489,8 +493,8 @@ class Warnings(MachCommandBase):
         help="Warnings report to display. If not defined, show the most "
         "recent report.",
     )
-    def list(self, directory=None, flags=None, report=None):
-        database = self.database
+    def list(self, command_context, directory=None, flags=None, report=None):
+        database = self.database()
 
         by_name = sorted(database.warnings)
 
@@ -557,7 +561,13 @@ class GTestCommands(MachCommandBase):
         metavar="gtest_filter",
         help="test_filter is a ':'-separated list of wildcard patterns "
         "(called the positive patterns), optionally followed by a '-' "
-        "and another ':'-separated pattern list (called the negative patterns).",
+        "and another ':'-separated pattern list (called the negative patterns)."
+        "Test names are of the format SUITE.NAME. Use --list-tests to see all.",
+    )
+    @CommandArgument(
+        "--list-tests",
+        action="store_true",
+        help="list all available tests",
     )
     @CommandArgument(
         "--jobs",
@@ -647,9 +657,11 @@ class GTestCommands(MachCommandBase):
     )
     def gtest(
         self,
+        command_context,
         shuffle,
         jobs,
         gtest_filter,
+        list_tests,
         tbpl_parser,
         enable_webrender,
         package,
@@ -725,14 +737,17 @@ class GTestCommands(MachCommandBase):
         if sys.platform.startswith("win") and "MOZ_LAUNCHER_PROCESS" in self.defines:
             args.append("--wait-for-browser")
 
+        if list_tests:
+            args.append("--gtest_list_tests")
+
         if debug or debugger or debugger_args:
-            args = self.prepend_debugger_args(args, debugger, debugger_args)
+            args = _prepend_debugger_args(args, debugger, debugger_args)
             if not args:
                 return 1
 
         # Use GTest environment variable to control test execution
         # For details see:
-        # https://code.google.com/p/googletest/wiki/AdvancedGuide#Running_Test_Programs:_Advanced_Options
+        # https://google.github.io/googletest/advanced.html#running-test-programs-advanced-options
         gtest_env = {b"GTEST_FILTER": gtest_filter}
 
         # Note: we must normalize the path here so that gtest on Windows sees
@@ -862,50 +877,6 @@ class GTestCommands(MachCommandBase):
 
         return exit_code
 
-    def prepend_debugger_args(self, args, debugger, debugger_args):
-        """
-        Given an array with program arguments, prepend arguments to run it under a
-        debugger.
-
-        :param args: The executable and arguments used to run the process normally.
-        :param debugger: The debugger to use, or empty to use the default debugger.
-        :param debugger_args: Any additional parameters to pass to the debugger.
-        """
-
-        import mozdebug
-
-        if not debugger:
-            # No debugger name was provided. Look for the default ones on
-            # current OS.
-            debugger = mozdebug.get_default_debugger_name(
-                mozdebug.DebuggerSearch.KeepLooking
-            )
-
-        if debugger:
-            debuggerInfo = mozdebug.get_debugger_info(debugger, debugger_args)
-
-        if not debugger or not debuggerInfo:
-            print("Could not find a suitable debugger in your PATH.")
-            return None
-
-        # Parameters come from the CLI. We need to convert them before
-        # their use.
-        if debugger_args:
-            from mozbuild import shellutil
-
-            try:
-                debugger_args = shellutil.split(debugger_args)
-            except shellutil.MetaCharacterException as e:
-                print(
-                    "The --debugger_args you passed require a real shell to parse them."
-                )
-                print("(We can't handle the %r character.)" % e.char)
-                return None
-
-        # Prepend the debugger args.
-        args = [debuggerInfo.path] + debuggerInfo.args + args
-        return args
-
 
 @CommandProvider
 class Package(MachCommandBase):
@@ -922,7 +893,7 @@ class Package(MachCommandBase):
         action="store_true",
         help="Verbose output for what commands the packaging process is running.",
     )
-    def package(self, verbose=False):
+    def package(self, command_context, verbose=False):
         ret = self._run_make(
             directory=".", target="package", silent=not verbose, ensure_exit_code=False
         )
@@ -965,7 +936,7 @@ class Install(MachCommandBase):
         parser=setup_install_parser,
         description="Install the package on the machine (or device in the case of Android).",
     )
-    def install(self, **kwargs):
+    def install(self, command_context, **kwargs):
         if conditions.is_android(self):
             from mozrunner.devices.android_device import (
                 verify_android_device,
@@ -1000,62 +971,93 @@ single quoted to force them to be strings.
 
 def _get_android_run_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
+    group = parser.add_argument_group("The compiled program")
+    group.add_argument(
         "--app",
         default="org.mozilla.geckoview_example",
         help="Android package to run " "(default: org.mozilla.geckoview_example)",
     )
-    parser.add_argument(
+    group.add_argument(
         "--intent",
         default="android.intent.action.VIEW",
         help="Android intent action to launch with "
         "(default: android.intent.action.VIEW)",
     )
-    parser.add_argument(
+    group.add_argument(
         "--setenv",
         dest="env",
         action="append",
         default=[],
         help="Set target environment variable, like FOO=BAR",
     )
-    parser.add_argument(
+    group.add_argument(
         "--profile",
         "-P",
         default=None,
         help="Path to Gecko profile, like /path/to/host/profile "
         "or /path/to/target/profile",
     )
-    parser.add_argument("--url", default=None, help="URL to open")
-    parser.add_argument(
+    group.add_argument("--url", default=None, help="URL to open")
+    group.add_argument(
         "--no-install",
         action="store_true",
         default=False,
         help="Do not try to install application on device before running "
         "(default: False)",
     )
-    parser.add_argument(
+    group.add_argument(
         "--no-wait",
         action="store_true",
         default=False,
         help="Do not wait for application to start before returning "
         "(default: False)",
     )
-    parser.add_argument(
+    group.add_argument(
         "--enable-fission",
         action="store_true",
         help="Run the program with Fission (site isolation) enabled.",
     )
-    parser.add_argument(
+    group.add_argument(
         "--fail-if-running",
         action="store_true",
         default=False,
         help="Fail if application is already running (default: False)",
     )
-    parser.add_argument(
+    group.add_argument(
         "--restart",
         action="store_true",
         default=False,
         help="Stop the application if it is already running (default: False)",
+    )
+
+    group = parser.add_argument_group("Debugging")
+    group.add_argument("--debug", action="store_true", help="Enable the lldb debugger.")
+    group.add_argument(
+        "--debugger",
+        default=None,
+        type=str,
+        help="Name of lldb compatible debugger to use.",
+    )
+    group.add_argument(
+        "--debugger-args",
+        default=None,
+        metavar="params",
+        type=str,
+        help="Command-line arguments to pass to the debugger itself; "
+        "split as the Bourne shell would.",
+    )
+    group.add_argument(
+        "--no-attach",
+        action="store_true",
+        default=False,
+        help="Start the debugging servers on the device but do not "
+        "attach any debuggers.",
+    )
+    group.add_argument(
+        "--use-existing-process",
+        action="store_true",
+        default=False,
+        help="Select an existing process to debug.",
     )
     return parser
 
@@ -1243,7 +1245,7 @@ class RunProgram(MachCommandBase):
         parser=setup_run_parser,
         description="Run the compiled program, possibly under a debugger or DMD.",
     )
-    def run(self, **kwargs):
+    def run(self, command_context, **kwargs):
         if conditions.is_android(self):
             return self._run_android(**kwargs)
         if conditions.is_jsshell(self):
@@ -1262,6 +1264,11 @@ class RunProgram(MachCommandBase):
         fail_if_running=None,
         restart=None,
         enable_fission=False,
+        debug=False,
+        debugger=None,
+        debugger_args=None,
+        no_attach=False,
+        use_existing_process=False,
     ):
         from mozrunner.devices.android_device import (
             verify_android_device,
@@ -1279,9 +1286,17 @@ class RunProgram(MachCommandBase):
         else:
             raise RuntimeError("Application not recognized: {}".format(app))
 
+        # If we want to debug an existing process, we implicitly do not want
+        # to kill it and pave over its installation with a new one.
+        if debug and use_existing_process:
+            no_install = True
+
         # `verify_android_device` respects `DEVICE_SERIAL` if it is set and sets it otherwise.
         verify_android_device(
-            self, app=app, install=InstallIntent.NO if no_install else InstallIntent.YES
+            self,
+            app=app,
+            debugger=debug,
+            install=InstallIntent.NO if no_install else InstallIntent.YES,
         )
         device_serial = os.environ.get("DEVICE_SERIAL")
         if not device_serial:
@@ -1290,74 +1305,292 @@ class RunProgram(MachCommandBase):
 
         device = _get_device(self.substs, device_serial=device_serial)
 
-        args = []
-        if profile:
-            if os.path.isdir(profile):
-                host_profile = profile
-                # Always /data/local/tmp, rather than `device.test_root`, because GeckoView only
-                # takes its configuration file from /data/local/tmp, and we want to follow suit.
-                target_profile = "/data/local/tmp/{}-profile".format(app)
-                device.rm(target_profile, recursive=True, force=True)
-                device.push(host_profile, target_profile)
+        if debug:
+            # This will terminate any existing processes, so we skip it when we
+            # want to attach to an existing one.
+            if not use_existing_process:
                 self.log(
                     logging.INFO,
                     "run",
-                    {"host_profile": host_profile, "target_profile": target_profile},
-                    'Pushed profile from host "{host_profile}" to target "{target_profile}"',
+                    {"app": app},
+                    "Setting {app} as the device debug app",
                 )
-            else:
-                target_profile = profile
+                device.shell("am set-debug-app -w --persistent %s" % app)
+        else:
+            # Make sure that the app doesn't block waiting for jdb
+            device.shell("am clear-debug-app")
+
+        if not debug or not use_existing_process:
+            args = []
+            if profile:
+                if os.path.isdir(profile):
+                    host_profile = profile
+                    # Always /data/local/tmp, rather than `device.test_root`, because
+                    # GeckoView only takes its configuration file from /data/local/tmp,
+                    # and we want to follow suit.
+                    target_profile = "/data/local/tmp/{}-profile".format(app)
+                    device.rm(target_profile, recursive=True, force=True)
+                    device.push(host_profile, target_profile)
+                    self.log(
+                        logging.INFO,
+                        "run",
+                        {
+                            "host_profile": host_profile,
+                            "target_profile": target_profile,
+                        },
+                        'Pushed profile from host "{host_profile}" to '
+                        'target "{target_profile}"',
+                    )
+                else:
+                    target_profile = profile
+                    self.log(
+                        logging.INFO,
+                        "run",
+                        {"target_profile": target_profile},
+                        'Using profile from target "{target_profile}"',
+                    )
+
+            if enable_fission:
+                env.append("MOZ_FORCE_ENABLE_FISSION=1")
+
+                args = ["--profile", shlex_quote(target_profile)]
+
+            extras = {}
+            for i, e in enumerate(env):
+                extras["env{}".format(i)] = e
+            if args:
+                extras["args"] = " ".join(args)
+
+            if env or args:
+                restart = True
+
+            if restart:
+                fail_if_running = False
                 self.log(
                     logging.INFO,
                     "run",
-                    {"target_profile": target_profile},
-                    'Using profile from target "{target_profile}"',
+                    {"app": app},
+                    "Stopping {app} to ensure clean restart.",
                 )
+                device.stop_application(app)
 
-            args = ["--profile", shlex_quote(target_profile)]
-
-        if enable_fission:
-            env.append("MOZ_FORCE_ENABLE_FISSION=1")
-
-        extras = {}
-        for i, e in enumerate(env):
-            extras["env{}".format(i)] = e
-        if args:
-            extras["args"] = " ".join(args)
-
-        if env or args:
-            restart = True
-
-        if restart:
-            fail_if_running = False
+            # We'd prefer to log the actual `am start ...` command, but it's not trivial
+            # to wire the device's logger to mach's logger.
             self.log(
                 logging.INFO,
                 "run",
-                {"app": app},
-                "Stopping {app} to ensure clean restart.",
+                {"app": app, "activity_name": activity_name},
+                "Starting {app}/{activity_name}.",
             )
-            device.stop_application(app)
 
-        # We'd prefer to log the actual `am start ...` command, but it's not trivial to wire the
-        # device's logger to mach's logger.
+            device.launch_application(
+                app_name=app,
+                activity_name=activity_name,
+                intent=intent,
+                extras=extras,
+                url=url,
+                wait=not no_wait,
+                fail_if_running=fail_if_running,
+            )
+
+        if not debug:
+            return 0
+
+        from mozrunner.devices.android_device import run_lldb_server
+
+        socket_file = run_lldb_server(app, self.substs, device_serial)
+        if not socket_file:
+            self.log(
+                logging.ERROR,
+                "run",
+                {"msg": "Failed to obtain a socket file!"},
+                "{msg}",
+            )
+            return 1
+
+        # Give lldb-server a chance to start
         self.log(
             logging.INFO,
             "run",
-            {"app": app, "activity_name": activity_name},
-            "Starting {app}/{activity_name}.",
+            {"msg": "Pausing to ensure lldb-server has started..."},
+            "{msg}",
         )
+        time.sleep(1)
 
-        device.launch_application(
-            app_name=app,
-            activity_name=activity_name,
-            intent=intent,
-            extras=extras,
-            url=url,
-            wait=not no_wait,
-            fail_if_running=fail_if_running,
-        )
+        if use_existing_process:
 
-        return 0
+            def _is_geckoview_process(proc_name, pkg_name):
+                if not proc_name.startswith(pkg_name):
+                    # Definitely not our package
+                    return False
+                if len(proc_name) == len(pkg_name):
+                    # Parent process from our package
+                    return True
+                if proc_name[len(pkg_name)] == ":":
+                    # Child process from our package
+                    return True
+                # Process name is a prefix of our package name
+                return False
+
+            # If we're going to attach to an existing process, we need to know
+            # who we're attaching to. Obtain a list of all processes associated
+            # with our desired app.
+            proc_list = [
+                proc[:-1]
+                for proc in device.get_process_list()
+                if _is_geckoview_process(proc[1], app)
+            ]
+
+            if not proc_list:
+                self.log(
+                    logging.ERROR,
+                    "run",
+                    {"app": app},
+                    "No existing {app} processes found",
+                )
+                return 1
+            elif len(proc_list) == 1:
+                pid = proc_list[0][0]
+            else:
+                # Prompt the user to determine which process we should use
+                entries = [
+                    "%2d: %6d %s" % (n, p[0], p[1])
+                    for n, p in enumerate(proc_list, start=1)
+                ]
+                prompt = "\n".join(["\nPlease select a process:\n"] + entries) + "\n\n"
+                valid_range = range(1, len(proc_list) + 1)
+
+                while True:
+                    response = int(input(prompt).strip())
+                    if response in valid_range:
+                        break
+                    self.log(logging.ERROR, "run", {"msg": "Invalid response"}, "{msg}")
+                pid = proc_list[response - 1][0]
+        else:
+            # We're not using an existing process, so there should only be our
+            # parent process at this time.
+            pids = device.pidof(app_name=app)
+            if len(pids) != 1:
+                self.log(
+                    logging.ERROR,
+                    "run",
+                    {"msg": "Not sure which pid to attach to!"},
+                    "{msg}",
+                )
+                return 1
+            pid = pids[0]
+
+        self.log(logging.INFO, "run", {"pid": str(pid)}, "Debuggee pid set to {pid}...")
+
+        lldb_connect_url = "unix-abstract-connect://" + socket_file
+        local_jdb_port = device.forward("tcp:0", "jdwp:%d" % pid)
+
+        if no_attach:
+            self.log(
+                logging.INFO,
+                "run",
+                {"pid": str(pid), "url": lldb_connect_url},
+                "To debug native code, connect lldb to {url} and attach to pid {pid}",
+            )
+            self.log(
+                logging.INFO,
+                "run",
+                {"port": str(local_jdb_port)},
+                "To debug Java code, connect jdb using tcp to localhost:{port}",
+            )
+            return 0
+
+        # Beyond this point we want to be able to automatically clean up after ourselves,
+        # so we enter the following try block.
+        try:
+            self.log(logging.INFO, "run", {"msg": "Starting debugger..."}, "{msg}")
+
+            if not use_existing_process:
+                # The app is waiting for jdb to attach and will not continue running
+                # until we do so.
+                def _jdb_ping(local_jdb_port):
+                    jdb_process = subprocess.Popen(
+                        ["jdb", "-attach", "localhost:%d" % local_jdb_port],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        encoding="utf-8",
+                    )
+                    # Wait a bit to provide enough time for jdb and lldb to connect
+                    # to the debuggee
+                    time.sleep(5)
+                    # NOTE: jdb cannot detach while the debuggee is frozen in lldb,
+                    # so its process might not necessarily exit immediately once the
+                    # quit command has been issued.
+                    jdb_process.communicate(input="quit\n")
+
+                # We run this in the background while lldb attaches in the foreground
+                from threading import Thread
+
+                jdb_thread = Thread(target=_jdb_ping, args=[local_jdb_port])
+                jdb_thread.start()
+
+            LLDBINIT = """
+settings set target.inline-breakpoint-strategy always
+settings append target.exec-search-paths {obj_xul}
+settings append target.exec-search-paths {obj_mozglue}
+settings append target.exec-search-paths {obj_nss}
+platform select remote-android
+platform connect {connect_url}
+process attach {continue_flag}-p {pid!s}
+""".lstrip()
+
+            obj_xul = os.path.join(self.topobjdir, "toolkit", "library", "build")
+            obj_mozglue = os.path.join(self.topobjdir, "mozglue", "build")
+            obj_nss = os.path.join(self.topobjdir, "security")
+
+            if use_existing_process:
+                continue_flag = ""
+            else:
+                # Tell lldb to continue after attaching; instead we'll break at
+                # the initial SEGVHandler, similarly to how things work when we
+                # attach using Android Studio. Doing this gives Android a chance
+                # to dismiss the "Waiting for Debugger" dialog.
+                continue_flag = "-c "
+
+            try:
+                # Write out our lldb startup commands to a temp file. We'll pass its
+                # name to lldb on its command line.
+                with tempfile.NamedTemporaryFile(
+                    mode="wt", encoding="utf-8", newline="\n", delete=False
+                ) as tmp:
+                    tmp_lldb_start_script = tmp.name
+                    tmp.write(
+                        LLDBINIT.format(
+                            obj_xul=obj_xul,
+                            obj_mozglue=obj_mozglue,
+                            obj_nss=obj_nss,
+                            connect_url=lldb_connect_url,
+                            continue_flag=continue_flag,
+                            pid=pid,
+                        )
+                    )
+
+                our_debugger_args = "-s %s" % tmp_lldb_start_script
+                if debugger_args:
+                    full_debugger_args = " ".join([debugger_args, our_debugger_args])
+                else:
+                    full_debugger_args = our_debugger_args
+
+                args = _prepend_debugger_args([], debugger, full_debugger_args)
+                if not args:
+                    return 1
+
+                return self.run_process(
+                    args=args, ensure_exit_code=False, pass_thru=True
+                )
+            finally:
+                os.remove(tmp_lldb_start_script)
+        finally:
+            device.remove_forwards("tcp:%d" % local_jdb_port)
+            device.shell("pkill -f lldb-server", enable_run_as=True)
+            if not use_existing_process:
+                device.shell("am clear-debug-app")
 
     def _run_jsshell(self, params, debug, debugger, debugger_args):
         try:
@@ -1395,20 +1628,6 @@ class RunProgram(MachCommandBase):
             if not debugger or not self.debuggerInfo:
                 print("Could not find a suitable debugger in your PATH.")
                 return 1
-
-            # Parameters come from the CLI. We need to convert them before
-            # their use.
-            if debugger_args:
-                from mozbuild import shellutil
-
-                try:
-                    debugger_args = shellutil.split(debugger_args)
-                except shellutil.MetaCharacterException as e:
-                    print(
-                        "The --debugger-args you passed require a real shell to parse them."
-                    )
-                    print("(We can't handle the %r character.)" % e.char)
-                    return 1
 
             # Prepend the debugger args.
             args = [self.debuggerInfo.path] + self.debuggerInfo.args + args
@@ -1527,16 +1746,6 @@ class RunProgram(MachCommandBase):
             print("setpref is only supported if a profile is not specified")
             return 1
 
-            if not no_profile_option_given:
-                # The profile name may be non-ascii, but come from the
-                # commandline as str, so convert here with a better guess at
-                # an encoding than the default.
-                encoding = sys.getfilesystemencoding() or sys.getdefaultencoding()
-                args = [
-                    unicode(a, encoding) if not isinstance(a, unicode) else a
-                    for a in args
-                ]
-
         some_debugging_option = debug or debugger or debugger_args
 
         # By default, because Firefox is a GUI app, on Windows it will not
@@ -1646,7 +1855,7 @@ class Buildsymbols(MachCommandBase):
         category="post-build",
         description="Produce a package of Breakpad-format symbols.",
     )
-    def buildsymbols(self):
+    def buildsymbols(self, command_context):
         return self._run_make(
             directory=".", target="buildsymbols", ensure_exit_code=False
         )
@@ -1669,7 +1878,7 @@ class MachDebug(MachCommandBase):
     @CommandArgument(
         "--verbose", "-v", action="store_true", help="Print verbose output."
     )
-    def environment(self, format, output=None, verbose=False):
+    def environment(self, command_context, format, output=None, verbose=False):
         func = getattr(self, "_environment_%s" % format.replace(".", "_"))
 
         if output:
@@ -1683,7 +1892,6 @@ class MachDebug(MachCommandBase):
 
     def _environment_pretty(self, out, verbose):
         state_dir = self._mach_context.state_dir
-        import platform
 
         print("platform:\n\t%s" % platform.platform(), file=out)
         print("python version:\n\t%s" % sys.version, file=out)
@@ -1769,7 +1977,7 @@ class Repackage(MachCommandBase):
         category="misc",
         description="Repackage artifacts into different formats.",
     )
-    def repackage(self):
+    def repackage(self, command_context):
         print("Usage: ./mach repackage [dmg|installer|mar] [args...]")
 
     @SubCommand(
@@ -1777,7 +1985,7 @@ class Repackage(MachCommandBase):
     )
     @CommandArgument("--input", "-i", type=str, required=True, help="Input filename")
     @CommandArgument("--output", "-o", type=str, required=True, help="Output filename")
-    def repackage_dmg(self, input, output):
+    def repackage_dmg(self, command_context, input, output):
         if not os.path.exists(input):
             print("Input file does not exist: %s" % input)
             return 1
@@ -1831,7 +2039,15 @@ class Repackage(MachCommandBase):
         help="Run UPX on the self-extraction stub.",
     )
     def repackage_installer(
-        self, tag, setupexe, package, output, package_name, sfx_stub, use_upx
+        self,
+        command_context,
+        tag,
+        setupexe,
+        package,
+        output,
+        package_name,
+        sfx_stub,
+        use_upx,
     ):
         from mozbuild.repackaging.installer import repackage_installer
 
@@ -1874,7 +2090,16 @@ class Repackage(MachCommandBase):
     )
     @CommandArgument("--output", "-o", type=str, required=True, help="Output filename")
     def repackage_msi(
-        self, wsx, version, locale, arch, setupexe, candle, light, output
+        self,
+        command_context,
+        wsx,
+        version,
+        locale,
+        arch,
+        setupexe,
+        candle,
+        light,
+        output,
     ):
         from mozbuild.repackaging.msi import repackage_msi
 
@@ -1898,7 +2123,7 @@ class Repackage(MachCommandBase):
         "--arch", type=str, required=True, help="The archtecture you are building."
     )
     @CommandArgument("--mar-channel-id", type=str, help="Mar channel id")
-    def repackage_mar(self, input, mar, output, arch, mar_channel_id):
+    def repackage_mar(self, command_context, input, mar, output, arch, mar_channel_id):
         from mozbuild.repackaging.mar import repackage_mar
 
         repackage_mar(
@@ -1909,20 +2134,6 @@ class Repackage(MachCommandBase):
             arch=arch,
             mar_channel_id=mar_channel_id,
         )
-
-
-@SettingsProvider
-class TelemetrySettings:
-    config_settings = [
-        (
-            "build.telemetry",
-            "boolean",
-            """
-Enable submission of build system telemetry.
-        """.strip(),
-            False,
-        ),
-    ]
 
 
 @CommandProvider
@@ -1943,7 +2154,7 @@ class L10NCommands(MachCommandBase):
     @CommandArgument(
         "--verbose", action="store_true", help="Log informative status messages."
     )
-    def package_l10n(self, verbose=False, locales=[]):
+    def package_l10n(self, command_context, verbose=False, locales=[]):
         if "RecursiveMake" not in self.substs["BUILD_BACKENDS"]:
             print(
                 "Artifact builds do not support localization. "
@@ -2073,12 +2284,7 @@ class CreateMachEnvironment(MachCommandBase):
     @Command(
         "create-mach-environment",
         category="devenv",
-        description=(
-            "Create the `mach` virtualenvs. If executed with python3 (the "
-            "default when entering from `mach`), create both a python3 "
-            "and python2.7 virtualenv. If executed with python2, only "
-            "create the python2.7 virtualenv."
-        ),
+        description="Create the `mach` virtualenv.",
     )
     @CommandArgument(
         "-f",
@@ -2086,13 +2292,33 @@ class CreateMachEnvironment(MachCommandBase):
         action="store_true",
         help=("Force re-creating the virtualenv even if it is already " "up-to-date."),
     )
-    def create_mach_environment(self, force=False):
+    def create_mach_environment(self, command_context, force=False):
         from mozboot.util import get_mach_virtualenv_root
-        from mozbuild.pythonutil import find_python2_executable
         from mozbuild.virtualenv import VirtualenvManager
-        from six import PY2
 
-        virtualenv_path = get_mach_virtualenv_root(py2=PY2)
+        if sys.platform.startswith("darwin") and not os.environ.get(
+            "MACH_I_DO_WANT_TO_USE_ROSETTA"
+        ):
+            # If running on arm64 mac, check whether we're running under
+            # Rosetta and advise against it.
+            proc = subprocess.run(
+                ["sysctl", "-n", "sysctl.proc_translated"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            if (
+                proc.returncode == 0
+                and proc.stdout.decode("ascii", "replace").strip() == "1"
+            ):
+                print(
+                    "Python is being emulated under Rosetta. Please use a native "
+                    "Python instead. If you still really want to go ahead, set "
+                    "the MACH_I_DO_WANT_TO_USE_ROSETTA environment variable.",
+                    file=sys.stderr,
+                )
+                return 1
+
+        virtualenv_path = get_mach_virtualenv_root()
         if sys.executable.startswith(virtualenv_path):
             print(
                 "You can only create a mach environment with the system "
@@ -2114,10 +2340,6 @@ class CreateMachEnvironment(MachCommandBase):
         else:
             manager.build(sys.executable)
 
-        manager.install_pip_requirements(
-            os.path.join(self.topsrcdir, "build", "zstandard_requirements.txt")
-        )
-
         try:
             # `mach` can handle it perfectly fine if `psutil` is missing, so
             # there's no reason to freak out in this case.
@@ -2130,39 +2352,62 @@ class CreateMachEnvironment(MachCommandBase):
                 "data. Continuing."
             )
 
-        if not PY2:
-            # This can fail on some platforms. See
-            # https://bugzilla.mozilla.org/show_bug.cgi?id=1660120
-            try:
-                manager.install_pip_requirements(
-                    os.path.join(self.topsrcdir, "build", "glean_requirements.txt")
-                )
-            except subprocess.CalledProcessError:
-                print(
-                    "Could not install glean_sdk, so telemetry will not be "
-                    "collected. Continuing."
-                )
-            print("Python 3 mach environment created.")
-            python2, _ = find_python2_executable()
-            if not python2:
-                print(
-                    "WARNING! Could not find a Python 2 executable to create "
-                    "a Python 2 virtualenv",
-                    file=sys.stderr,
-                )
-                return 0
-            args = [
-                python2,
-                os.path.join(self.topsrcdir, "mach"),
-                "create-mach-environment",
-            ]
-            if force:
-                args.append("-f")
-            ret = subprocess.call(args)
-            if ret:
-                print(
-                    "WARNING! Failed to create a Python 2 mach environment.",
-                    file=sys.stderr,
-                )
-        else:
-            print("Python 2 mach environment created.")
+        manager.install_pip_requirements(
+            os.path.join(self.topsrcdir, "build", "zstandard_requirements.txt")
+        )
+
+        # This can fail on some platforms. See
+        # https://bugzilla.mozilla.org/show_bug.cgi?id=1660120
+        try:
+            manager.install_pip_requirements(
+                os.path.join(self.topsrcdir, "build", "glean_requirements.txt")
+            )
+        except subprocess.CalledProcessError:
+            print(
+                "Could not install glean_sdk, so telemetry will not be "
+                "collected. Continuing."
+            )
+        print("Mach environment created.")
+
+
+def _prepend_debugger_args(args, debugger, debugger_args):
+    """
+    Given an array with program arguments, prepend arguments to run it under a
+    debugger.
+
+    :param args: The executable and arguments used to run the process normally.
+    :param debugger: The debugger to use, or empty to use the default debugger.
+    :param debugger_args: Any additional parameters to pass to the debugger.
+    """
+
+    import mozdebug
+
+    if not debugger:
+        # No debugger name was provided. Look for the default ones on
+        # current OS.
+        debugger = mozdebug.get_default_debugger_name(
+            mozdebug.DebuggerSearch.KeepLooking
+        )
+
+    if debugger:
+        debuggerInfo = mozdebug.get_debugger_info(debugger, debugger_args)
+
+    if not debugger or not debuggerInfo:
+        print("Could not find a suitable debugger in your PATH.")
+        return None
+
+    # Parameters come from the CLI. We need to convert them before
+    # their use.
+    if debugger_args:
+        from mozbuild import shellutil
+
+        try:
+            debugger_args = shellutil.split(debugger_args)
+        except shellutil.MetaCharacterException as e:
+            print("The --debugger_args you passed require a real shell to parse them.")
+            print("(We can't handle the %r character.)" % e.char)
+            return None
+
+    # Prepend the debugger args.
+    args = [debuggerInfo.path] + debuggerInfo.args + args
+    return args

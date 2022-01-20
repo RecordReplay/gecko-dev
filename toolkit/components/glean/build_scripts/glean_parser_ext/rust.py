@@ -81,17 +81,35 @@ def type_name(obj):
     """
 
     if getattr(obj, "labeled", False):
-        return "LabeledMetric<{}>".format(class_name(obj.type))
+        return "LabeledMetric<Labeled{}>".format(class_name(obj.type))
     generate_enums = getattr(obj, "_generate_enums", [])  # Extra Keys? Reasons?
     if len(generate_enums):
         for name, suffix in generate_enums:
             if not len(getattr(obj, name)) and suffix == "Keys":
                 return class_name(obj.type) + "<NoExtraKeys>"
             else:
+                # we always use the `extra` suffix,
+                # because we only expose the new event API
+                suffix = "Extra"
                 return "{}<{}>".format(
                     class_name(obj.type), util.Camelize(obj.name) + suffix
                 )
     return class_name(obj.type)
+
+
+def extra_type_name(typ: str) -> str:
+    """
+    Returns the corresponding Rust type for event's extra key types.
+    """
+
+    if typ == "boolean":
+        return "bool"
+    elif typ == "string":
+        return "String"
+    elif typ == "quantity":
+        return "u32"
+    else:
+        return "UNSUPPORTED"
 
 
 def class_name(obj_type):
@@ -196,6 +214,7 @@ def output_rust(objs, output_fd, options={}):
             ("rust", rust_datatypes_filter),
             ("snake_case", util.snake_case),
             ("type_name", type_name),
+            ("extra_type_name", extra_type_name),
             ("ctor", ctor),
             ("extra_keys", extra_keys),
             ("metric_id", get_metric_id),
@@ -222,6 +241,7 @@ def output_rust(objs, output_fd, options={}):
             metric_by_type=objs_by_type,
             extra_args=util.extra_args,
             events_by_id=events_by_id,
+            min_submetric_id=2 ** 27 + 1,  # One more than 2**ID_BITS from js.py
         )
     )
     output_fd.write("\n")

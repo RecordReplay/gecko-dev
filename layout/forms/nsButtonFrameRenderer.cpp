@@ -141,15 +141,11 @@ bool nsDisplayButtonBoxShadowOuter::CreateWebRenderCommands(
   wr::BorderRadius borderRadius =
       wr::ToBorderRadius(zeroSize, zeroSize, zeroSize, zeroSize);
   if (hasBorderRadius) {
-    mozilla::gfx::RectCornerRadii borderRadii;
+    gfx::RectCornerRadii borderRadii;
     hasBorderRadius = nsCSSRendering::GetBorderRadii(shadowRect, shadowRect,
                                                      mFrame, borderRadii);
     if (hasBorderRadius) {
-      borderRadius = wr::ToBorderRadius(
-          LayoutDeviceSize::FromUnknownSize(borderRadii.TopLeft()),
-          LayoutDeviceSize::FromUnknownSize(borderRadii.TopRight()),
-          LayoutDeviceSize::FromUnknownSize(borderRadii.BottomLeft()),
-          LayoutDeviceSize::FromUnknownSize(borderRadii.BottomRight()));
+      borderRadius = wr::ToBorderRadius(borderRadii);
     }
   }
 
@@ -385,8 +381,12 @@ nsresult nsButtonFrameRenderer::DisplayButton(nsDisplayListBuilder* aBuilder,
   nsRect buttonRect =
       mFrame->GetRectRelativeToSelf() + aBuilder->ToReferenceFrame(mFrame);
 
-  nsDisplayBackgroundImage::AppendBackgroundItemsToTop(aBuilder, mFrame,
-                                                       buttonRect, aBackground);
+  const AppendedBackgroundType result =
+      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
+          aBuilder, mFrame, buttonRect, aBackground);
+  if (result == AppendedBackgroundType::None) {
+    aBuilder->BuildCompositorHitTestInfoIfNeeded(GetFrame(), aBackground);
+  }
 
   aBackground->AppendNewToTop<nsDisplayButtonBorder>(aBuilder, GetFrame(),
                                                      this);

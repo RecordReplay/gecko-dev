@@ -153,21 +153,6 @@ def debug_defines(debug, labels):
 
 set_config("MOZ_DEBUG_DEFINES", debug_defines)
 
-option(
-    "--enable-rust-debug",
-    default=depends(when="--enable-debug")(lambda: True),
-    help="{Build|Do not build} Rust code with debug assertions turned " "on.",
-)
-
-
-@depends(when="--enable-rust-debug")
-def debug_rust():
-    return True
-
-
-set_config("MOZ_DEBUG_RUST", debug_rust)
-set_define("MOZ_DEBUG_RUST", debug_rust)
-
 option(env="MOZ_PGO", help="Build with profile guided optimizations")
 
 set_config("MOZ_PGO", depends("MOZ_PGO")(lambda x: bool(x)))
@@ -208,10 +193,33 @@ def moz_fetches_dir(value):
         return value[0]
 
 
-@depends(developer_options, moz_fetches_dir)
-def bootstrap_search_path_order(developer_options, moz_fetches_dir):
+@depends(vcs_checkout_type, milestone.is_nightly, "MOZ_AUTOMATION")
+def bootstrap_default(vcs_checkout_type, is_nightly, automation):
+    if automation:
+        return False
+    # We only enable if building off a VCS checkout of central.
+    if is_nightly and vcs_checkout_type:
+        return True
+
+
+option(
+    "--enable-bootstrap",
+    default=bootstrap_default,
+    help="{Automatically bootstrap or update some toolchains|Disable bootstrap or update of toolchains}",
+)
+
+
+@depends(developer_options, "--enable-bootstrap", moz_fetches_dir)
+def bootstrap_search_path_order(developer_options, bootstrap, moz_fetches_dir):
     if moz_fetches_dir:
         log.debug("Prioritizing MOZ_FETCHES_DIR in toolchain path.")
+        return "prepend"
+
+    if bootstrap:
+        log.debug(
+            "Prioritizing mozbuild state dir in toolchain paths because "
+            "bootstrap mode is enabled."
+        )
         return "prepend"
 
     if developer_options:
@@ -239,46 +247,51 @@ def original_path():
     return environ["PATH"].split(os.pathsep)
 
 
-option(
-    "--enable-bootstrap",
-    when=developer_options,
-    help="Automatically update/bootstrap some toolchains when they are present but out of date",
-)
+@template
+def bootstrap_toolchain_tasks(host_or_target):
+    @depends(host_or_target, when="--enable-bootstrap")
+    @imports("os")
+    @imports(_from="mozbuild.toolchains", _import="toolchain_task_definitions")
+    @imports(_from="__builtin__", _import="Exception")
+    def bootstrap_toolchain_tasks(host_or_target):
+        prefix = {
+            ("x86", "GNU", "Linux"): "linux32",
+            ("x86_64", "GNU", "Linux"): "linux64",
+            ("aarch64", "GNU", "Linux"): "linux64-aarch64",
+            ("x86_64", "OSX", "Darwin"): "macosx64",
+            ("aarch64", "OSX", "Darwin"): "macosx64-aarch64",
+            ("x86_64", "WINNT", "WINNT"): "win64",
+        }.get((host_or_target.cpu, host_or_target.os, host_or_target.kernel))
+        if prefix:
+            try:
+                return namespace(prefix=prefix, tasks=toolchain_task_definitions())
+            except Exception:
+                return None
+
+    return bootstrap_toolchain_tasks
 
 
-@depends("--enable-bootstrap", when=developer_options)
-def bootstrap(value):
-    if value:
-        return True
-
-
-@depends(host, when=bootstrap)
-@imports("os")
-@imports(_from="mozbuild.toolchains", _import="toolchain_task_definitions")
-@imports(_from="__builtin__", _import="Exception")
-def bootstrap_toolchain_tasks(host):
-    prefix = {
-        ("x86_64", "GNU", "Linux"): "linux64",
-        ("x86_64", "OSX", "Darwin"): "macosx64",
-        ("x86_64", "WINNT", "WINNT"): "win64",
-    }.get((host.cpu, host.os, host.kernel))
-    if prefix:
-        try:
-            return namespace(prefix=prefix, tasks=toolchain_task_definitions())
-        except Exception:
-            return None
+host_bootstrap_toolchain_tasks = bootstrap_toolchain_tasks(host)
+target_bootstrap_toolchain_tasks = bootstrap_toolchain_tasks(target)
 
 
 @template
-def bootstrap_search_path(*path_parts, **kwargs):
+def bootstrap_path(path, **kwargs):
     when = kwargs.pop("when", None)
+    context = kwargs.pop("context", host)
     if kwargs:
-        configure_error("bootstrap_search_path only takes `when` as keyword argument")
+        configure_error(
+            "bootstrap_path only takes `when` or `context` as keyword arguments"
+        )
+
+    path_parts = path.split("/")
+    bootstrap_toolchain_tasks = {
+        host: host_bootstrap_toolchain_tasks,
+        target: target_bootstrap_toolchain_tasks,
+    }[context]
 
     @depends(
-        bootstrap,
-        bootstrap_search_path_order,
-        original_path,
+        "--enable-bootstrap",
         toolchains_base_dir,
         bootstrap_toolchain_tasks,
         shell,
@@ -290,35 +303,36 @@ def bootstrap_search_path(*path_parts, **kwargs):
     @imports(_from="mozbuild.util", _import="ensureParentDir")
     @imports(_from="__builtin__", _import="open")
     @imports(_from="__builtin__", _import="Exception")
-    def bootstrap_search_path(
-        bootstrap, order, original_path, toolchains_base_dir, tasks, shell, build_env
-    ):
-        def try_bootstrap():
+    def bootstrap_path(bootstrap, toolchains_base_dir, tasks, shell, build_env):
+        def try_bootstrap(exists):
+            if not tasks:
+                return False
             label = "toolchain-{}-{}".format(
                 tasks.prefix, path_parts[0].replace("_", "-")
             )
             task = tasks.tasks.get(label)
             if not task:
-                return
+                return False
             task_index = task.optimization.get("index-search")
             if not task_index:
-                return
+                return False
             task_index = task_index[0].split(".")[-1]
             artifact = task.attributes["toolchain-artifact"]
             # `mach artifact toolchain` doesn't support authentication for
             # private artifacts.
             if not artifact.startswith("public/"):
-                return
+                return False
             index_file = os.path.join(toolchains_base_dir, "indices", path_parts[0])
             try:
                 with open(index_file) as fh:
                     index = fh.read().strip()
             except Exception:
                 index = None
-            if index == task_index:
-                return
+            if index == task_index and exists:
+                return True
             log.info(
-                "Updating bootstrapped toolchain in %s",
+                "%s bootstrapped toolchain in %s",
+                "Updating" if exists else "Installing",
                 os.path.join(toolchains_base_dir, path_parts[0]),
             )
             subprocess.run(
@@ -337,20 +351,55 @@ def bootstrap_search_path(*path_parts, **kwargs):
             ensureParentDir(index_file)
             with open(index_file, "w") as fh:
                 fh.write(task_index)
+            return True
 
         path = os.path.join(toolchains_base_dir, *path_parts)
-        # Only bootstrap toolchains that have been bootstrapped at least once.
-        if bootstrap and tasks and os.path.exists(path):
+        if bootstrap:
             try:
-                try_bootstrap()
+                if not try_bootstrap(os.path.exists(path)):
+                    # If there aren't toolchain artifacts to use for this build,
+                    # don't return a path.
+                    return None
             except Exception as e:
                 log.error("%s", e)
                 die("If you can't fix the above, retry with --disable-bootstrap.")
+        # We re-test whether the path exists because it may have been created by
+        # try_bootstrap. Automation will not have gone through the bootstrap
+        # process, but we want to return the path if it exists.
+        if os.path.exists(path):
+            return path
+
+    return bootstrap_path
+
+
+@template
+def bootstrap_search_path(path, paths=original_path, **kwargs):
+    @depends(
+        bootstrap_path(path, **kwargs),
+        bootstrap_search_path_order,
+        paths,
+        original_path,
+    )
+    def bootstrap_search_path(path, order, paths, original_path):
+        if paths is None:
+            paths = original_path
+        if not path:
+            return paths
         if order == "prepend":
-            return [path] + original_path
-        return original_path + [path]
+            return [path] + paths
+        return paths + [path]
 
     return bootstrap_search_path
+
+
+# The execution model of the configure sandbox doesn't allow for
+# check_prog to use bootstrap_search_path directly because check_prog
+# comes first, so we use a trick to allow it. No use of check_prog
+# happening before here won't allow bootstrap.
+@template
+def check_prog(*args, **kwargs):
+    kwargs["bootstrap_search_path"] = bootstrap_search_path
+    return check_prog(*args, **kwargs)
 
 
 @depends(target, host)
@@ -363,7 +412,7 @@ wine = check_prog(
     ["wine64", "wine"],
     allow_missing=True,
     when=want_wine,
-    paths=bootstrap_search_path("wine", "bin", when=want_wine),
+    bootstrap="wine/bin",
 )
 check_prog("WGET", ("wget",), allow_missing=True)
 
@@ -543,7 +592,11 @@ def build_backend_defaults(
     # Normally, we'd use target.os == 'WINNT', but a dependency on target
     # would require target to depend on --help, as well as host and shell,
     # and this is not a can of worms we can open at the moment.
-    if sys.platform == "win32" and compile_environment and project != "mobile/android":
+    if (
+        sys.platform == "win32"
+        and compile_environment
+        and project not in ("mobile/android", "memory", "tools/update-programs")
+    ):
         all_backends.append("VisualStudio")
     return tuple(all_backends) or None
 
@@ -596,6 +649,8 @@ option(
 # on Android and Desktop platforms with the exception of:
 #  - Windows PGO, where linking xul-gtest.dll takes too long;
 #  - Android other than x86_64, where gtest is not required.
+
+
 @depends(
     "MOZ_PGO",
     build_project,
@@ -633,6 +688,8 @@ set_config("MOZ_UI_LOCALE", depends("--enable-ui-locale")(lambda x: x))
 
 # clang-plugin location
 # ==============================================================
+
+
 @depends(host_library_name_info, check_build_environment, when="--enable-clang-plugin")
 def clang_plugin_path(library_name_info, build_env):
     topobjdir = build_env.topobjdir
@@ -649,6 +706,7 @@ def clang_plugin_path(library_name_info, build_env):
     )
 
 
+set_config("CLANG_PLUGIN", clang_plugin_path)
 add_old_configure_assignment("CLANG_PLUGIN", clang_plugin_path)
 
 
@@ -657,6 +715,8 @@ add_old_configure_assignment("CLANG_PLUGIN", clang_plugin_path)
 awk = check_prog("AWK", ("gawk", "mawk", "nawk", "awk"))
 
 # Until the AWK variable is not necessary in old-configure
+
+
 @depends(awk)
 def awk_for_old_configure(value):
     return value
@@ -670,6 +730,8 @@ add_old_configure_assignment("AWK", awk_for_old_configure)
 perl = check_prog("PERL", ("perl5", "perl"))
 
 # Until the PERL variable is not necessary in old-configure
+
+
 @depends(perl)
 def perl_for_old_configure(value):
     return value
@@ -729,13 +791,13 @@ def possible_makes(make, host):
     if make:
         candidates.append(make[0])
     if host.kernel == "WINNT":
-        candidates.extend(("make", "gmake"))
+        candidates.extend(("mozmake", "make", "gmake"))
     else:
         candidates.extend(("gmake", "make"))
     return candidates
 
 
-check_prog("GMAKE", possible_makes)
+check_prog("GMAKE", possible_makes, bootstrap="mozmake")
 
 # watchman detection
 # ==============================================================
@@ -849,6 +911,8 @@ def makensis_progs(target):
 nsis = check_prog("MAKENSISU", makensis_progs, allow_missing=True)
 
 # Make sure the version of makensis is up to date.
+
+
 @depends(nsis, wine)
 @checking("for NSIS version")
 @imports("re")
@@ -856,7 +920,10 @@ def nsis_version(nsis, wine):
     if not nsis:
         return None
     nsis_min_version = "3.0b1"
-    onerror = lambda: die("Failed to get nsis version.")
+
+    def onerror():
+        return die("Failed to get nsis version.")
+
     if wine and nsis.lower().endswith(".exe"):
         out = check_cmd_output(wine, nsis, "-version", onerror=onerror)
     else:
@@ -965,6 +1032,8 @@ option(
 )
 
 # This should be handled as a `when` once bug 1617793 is fixed.
+
+
 @depends("--enable-strip", c_compiler, when=compile_environment)
 def enable_strip(strip, c_compiler):
     if strip and c_compiler.type != "clang-cl":
@@ -980,6 +1049,8 @@ option(
 )
 
 # This should be handled as a `when` once bug 1617793 is fixed.
+
+
 @depends("--enable-install-strip", c_compiler, when=compile_environment)
 def enable_install_strip(strip, c_compiler):
     if strip and c_compiler.type != "clang-cl":
@@ -1093,7 +1164,6 @@ def config_status_deps(build_env, build_project):
             os.path.join(topsrcdir, "build", "common_virtualenv_packages.txt"),
             os.path.join(topsrcdir, "build", "mach_virtualenv_packages.txt"),
             os.path.join(topsrcdir, "python", "mozbuild", "mozbuild", "virtualenv.py"),
-            os.path.join(topsrcdir, "testing", "mozbase", "packages.txt"),
             os.path.join(topsrcdir, "aclocal.m4"),
             os.path.join(topsrcdir, "old-configure.in"),
             os.path.join(topsrcdir, "js", "src", "aclocal.m4"),

@@ -11,6 +11,7 @@
 #include "nsLeafFrame.h"
 
 class nsFontMetrics;
+class nsPageContentFrame;
 class nsSharedPageData;
 
 namespace mozilla {
@@ -56,11 +57,6 @@ class nsPageFrame final : public nsContainerFrame {
   void PaintHeaderFooter(gfxContext& aRenderingContext, nsPoint aPt,
                          bool aSubpixelAA);
 
-  /**
-   * Return our page content frame.
-   */
-  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
-
   const nsMargin& GetUsedPageContentMargin() const {
     return mPageContentMargin;
   }
@@ -69,6 +65,12 @@ class nsPageFrame final : public nsContainerFrame {
   void SetIndexOnSheet(uint32_t aIndexOnSheet) {
     mIndexOnSheet = aIndexOnSheet;
   }
+
+  ComputeTransformFunction GetTransformGetter() const override;
+
+  nsPageContentFrame* PageContentFrame() const;
+
+  nsSize ComputePageSize() const;
 
  protected:
   explicit nsPageFrame(ComputedStyle* aStyle, nsPresContext* aPresContext);

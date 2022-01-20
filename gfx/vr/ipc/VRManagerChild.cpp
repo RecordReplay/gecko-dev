@@ -603,8 +603,8 @@ void VRManagerChild::HandleFatalError(const char* aMsg) const {
 }
 
 void VRManagerChild::AddPromise(const uint32_t& aID, dom::Promise* aPromise) {
-  MOZ_ASSERT(!mGamepadPromiseList.Get(aID, nullptr));
-  mGamepadPromiseList.Put(aID, RefPtr{aPromise});
+  MOZ_ASSERT(!mGamepadPromiseList.Contains(aID));
+  mGamepadPromiseList.InsertOrUpdate(aID, RefPtr{aPromise});
 }
 
 gfx::VRAPIMode VRManagerChild::GetVRAPIMode(uint32_t aDisplayID) const {

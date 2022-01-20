@@ -14,7 +14,7 @@
 <hbox style="padding-left: 10px;">
   <spacer width="5"/>
   <richlistbox id="list" context="themenu" style="padding: 0;" oncontextmenu="checkContextMenu(event)">
-    <richlistitem id="item1" style="padding-top: 3px; margin: 0;"><button label="One"/></richlistitem>
+    <richlistitem id="item1" style="padding-top: 4px; margin: 0;"><button label="One"/></richlistitem>
     <richlistitem id="item2" height="22"><checkbox label="Checkbox"/></richlistitem>
     <richlistitem id="item3"><button label="Three"/></richlistitem>
     <richlistitem id="item4"><checkbox label="Four"/></richlistitem>
@@ -80,8 +80,13 @@ var gTestElement = "list";
 var gSelectionStep = 0;
 var gContextMenuFired = false;
 
-function startTest()
+async function startTest()
 {
+  // These tests check behavior of non-native menus, and use anchored and non-anchored popups
+  // somewhat interchangibly. So disable native context menus for this test.
+  // We will have separate tests for native context menu behavior, see bug 1700727.
+  await SpecialPowers.pushPrefEnv({ set: [["widget.macos.native-context-menus", false]] });
+
   // first, check if the richlistbox selection changes on a contextmenu mouse event
   var element = $("list");
   synthesizeMouse(element.getItemAtIndex(3), 7, 1, { type : "mousedown", button: 2, ctrlKey: true });

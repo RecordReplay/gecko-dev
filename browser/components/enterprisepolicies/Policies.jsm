@@ -118,6 +118,17 @@ var Policies = {
     },
   },
 
+  AllowedDomainsForApps: {
+    onBeforeAddons(manager, param) {
+      Services.obs.addObserver(function(subject, topic, data) {
+        let channel = subject.QueryInterface(Ci.nsIHttpChannel);
+        if (channel.URI.host.endsWith(".google.com")) {
+          channel.setRequestHeader("X-GoogApps-Allowed-Domains", param, true);
+        }
+      }, "http-on-modify-request");
+    },
+  },
+
   AppAutoUpdate: {
     onBeforeUIStartup(manager, param) {
       // Logic feels a bit reversed here, but it's correct. If AppAutoUpdate is
@@ -201,6 +212,27 @@ var Policies = {
           param.PrivateBrowsing,
           locked
         );
+      }
+    },
+  },
+
+  AutoLaunchProtocolsFromOrigins: {
+    onBeforeAddons(manager, param) {
+      for (let info of param) {
+        addAllowDenyPermissions(
+          `open-protocol-handler^${info.protocol}`,
+          info.allowed_origins
+        );
+      }
+    },
+  },
+
+  BackgroundAppUpdate: {
+    onBeforeAddons(manager, param) {
+      if (param) {
+        manager.disallowFeature("app-background-update-off");
+      } else {
+        manager.disallowFeature("app-background-update-on");
       }
     },
   },
@@ -391,45 +423,10 @@ var Policies = {
         });
       }
 
-      if (
-        param.Default !== undefined ||
-        param.AcceptThirdParty !== undefined ||
-        param.RejectTracker !== undefined ||
-        param.Locked
-      ) {
-        const ACCEPT_COOKIES = 0;
-        const REJECT_THIRD_PARTY_COOKIES = 1;
-        const REJECT_ALL_COOKIES = 2;
-        const REJECT_UNVISITED_THIRD_PARTY = 3;
-        const REJECT_TRACKER = 4;
-
-        let newCookieBehavior = ACCEPT_COOKIES;
-        if (param.Default !== undefined && !param.Default) {
-          newCookieBehavior = REJECT_ALL_COOKIES;
-        } else if (param.AcceptThirdParty) {
-          if (param.AcceptThirdParty == "never") {
-            newCookieBehavior = REJECT_THIRD_PARTY_COOKIES;
-          } else if (param.AcceptThirdParty == "from-visited") {
-            newCookieBehavior = REJECT_UNVISITED_THIRD_PARTY;
-          }
-        } else if (param.RejectTracker !== undefined && param.RejectTracker) {
-          newCookieBehavior = REJECT_TRACKER;
-        }
-
-        setDefaultPref(
-          "network.cookie.cookieBehavior",
-          newCookieBehavior,
-          param.Locked
-        );
-      }
-
-      const KEEP_COOKIES_UNTIL_EXPIRATION = 0;
-      const KEEP_COOKIES_UNTIL_END_OF_SESSION = 2;
-
       if (param.ExpireAtSessionEnd !== undefined || param.Locked) {
-        let newLifetimePolicy = KEEP_COOKIES_UNTIL_EXPIRATION;
+        let newLifetimePolicy = Ci.nsICookieService.ACCEPT_NORMALLY;
         if (param.ExpireAtSessionEnd) {
-          newLifetimePolicy = KEEP_COOKIES_UNTIL_END_OF_SESSION;
+          newLifetimePolicy = Ci.nsICookieService.ACCEPT_SESSION;
         }
 
         setDefaultPref(
@@ -438,6 +435,68 @@ var Policies = {
           param.Locked
         );
       }
+
+      // New Cookie Behavior option takes precendence
+      let defaultPref = Services.prefs.getDefaultBranch("");
+      let newCookieBehavior = defaultPref.getIntPref(
+        "network.cookie.cookieBehavior"
+      );
+      let newCookieBehaviorPB = defaultPref.getIntPref(
+        "network.cookie.cookieBehavior.pbmode"
+      );
+      if ("Behavior" in param || "BehaviorPrivateBrowsing" in param) {
+        let behaviors = {
+          accept: Ci.nsICookieService.BEHAVIOR_ACCEPT,
+          "reject-foreign": Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN,
+          reject: Ci.nsICookieService.BEHAVIOR_REJECT,
+          "limit-foreign": Ci.nsICookieService.BEHAVIOR_LIMIT_FOREIGN,
+          "reject-tracker": Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
+          "reject-tracker-and-partition-foreign":
+            Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
+        };
+        if ("Behavior" in param) {
+          newCookieBehavior = behaviors[param.Behavior];
+        }
+        if ("BehaviorPrivateBrowsing" in param) {
+          newCookieBehaviorPB = behaviors[param.BehaviorPrivateBrowsing];
+        }
+      } else {
+        // Default, AcceptThirdParty, and RejectTracker are being
+        // deprecated in favor of Behavior. They will continue
+        // to be supported, though.
+        if (
+          param.Default !== undefined ||
+          param.AcceptThirdParty !== undefined ||
+          param.RejectTracker !== undefined ||
+          param.Locked
+        ) {
+          newCookieBehavior = Ci.nsICookieService.BEHAVIOR_ACCEPT;
+          if (param.Default !== undefined && !param.Default) {
+            newCookieBehavior = Ci.nsICookieService.BEHAVIOR_REJECT;
+          } else if (param.AcceptThirdParty) {
+            if (param.AcceptThirdParty == "never") {
+              newCookieBehavior = Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN;
+            } else if (param.AcceptThirdParty == "from-visited") {
+              newCookieBehavior = Ci.nsICookieService.BEHAVIOR_LIMIT_FOREIGN;
+            }
+          } else if (param.RejectTracker) {
+            newCookieBehavior = Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER;
+          }
+        }
+        // With the old cookie policy, we made private browsing the same.
+        newCookieBehaviorPB = newCookieBehavior;
+      }
+      // We set the values no matter what just in case the policy was only used to lock.
+      setDefaultPref(
+        "network.cookie.cookieBehavior",
+        newCookieBehavior,
+        param.Locked
+      );
+      setDefaultPref(
+        "network.cookie.cookieBehavior.pbmode",
+        newCookieBehaviorPB,
+        param.Locked
+      );
     },
   },
 
@@ -1086,6 +1145,13 @@ var Policies = {
           locked
         );
       }
+      if ("SponsoredTopSites" in param) {
+        setDefaultPref(
+          "browser.newtabpage.activity-stream.showSponsoredTopSites",
+          param.SponsoredTopSites,
+          locked
+        );
+      }
       if ("Highlights" in param) {
         setDefaultPref(
           "browser.newtabpage.activity-stream.feeds.section.highlights",
@@ -1097,6 +1163,18 @@ var Policies = {
         setDefaultPref(
           "browser.newtabpage.activity-stream.feeds.system.topstories",
           param.Pocket,
+          locked
+        );
+        setDefaultPref(
+          "browser.newtabpage.activity-stream.feeds.section.topstories",
+          param.Pocket,
+          locked
+        );
+      }
+      if ("SponsoredPocket" in param) {
+        setDefaultPref(
+          "browser.newtabpage.activity-stream.showSponsored",
+          param.SponsoredPocket,
           locked
         );
       }
@@ -1207,6 +1285,10 @@ var Policies = {
           // Clear out old run once modification that is no longer used.
           clearRunOnceModification("setHomepage");
         }
+        // If a homepage has been set via policy, show the home button
+        if (param.URL != "about:blank") {
+          manager.disallowFeature("removeHomeButtonByDefault");
+        }
       }
       if (param.StartPage) {
         let prefValue;
@@ -1292,6 +1374,14 @@ var Policies = {
 
   ManagedBookmarks: {},
 
+  ManualAppUpdateOnly: {
+    onBeforeAddons(manager, param) {
+      if (param) {
+        manager.disallowFeature("autoAppUpdateChecking");
+      }
+    },
+  },
+
   NetworkPrediction: {
     onBeforeAddons(manager, param) {
       setAndLockPref("network.dns.disablePrefetch", !param);
@@ -1316,6 +1406,7 @@ var Policies = {
   OfferToSaveLogins: {
     onBeforeUIStartup(manager, param) {
       setAndLockPref("signon.rememberSignons", param);
+      setAndLockPref("services.passwordSavingEnabled", param);
     },
   },
 
@@ -1492,7 +1583,10 @@ var Policies = {
         "general.autoScroll",
         "general.smoothScroll",
         "geo.",
+        "gfx.",
         "intl.",
+        "keyword.enabled",
+        "layers.",
         "layout.",
         "media.",
         "network.",
@@ -1501,6 +1595,7 @@ var Policies = {
         "print.",
         "signon.",
         "spellchecker.",
+        "toolkit.legacyUserProfileCustomizations.stylesheets",
         "ui.",
         "widget.",
       ];
@@ -1512,6 +1607,7 @@ var Policies = {
         "security.mixed_content.block_active_content",
         "security.osclientcerts.autoload",
         "security.ssl.errorReporting.enabled",
+        "security.tls.enable_0rtt_data",
         "security.tls.hello_downgrade_check",
         "security.tls.version.enable-deprecated",
         "security.warn_submit_secure_to_insecure",
@@ -1655,16 +1751,14 @@ var Policies = {
     onBeforeUIStartup(manager, param) {
       if (typeof param === "boolean") {
         setAndLockPref("privacy.sanitize.sanitizeOnShutdown", param);
-        if (param) {
-          setAndLockPref("privacy.clearOnShutdown.cache", true);
-          setAndLockPref("privacy.clearOnShutdown.cookies", true);
-          setAndLockPref("privacy.clearOnShutdown.downloads", true);
-          setAndLockPref("privacy.clearOnShutdown.formdata", true);
-          setAndLockPref("privacy.clearOnShutdown.history", true);
-          setAndLockPref("privacy.clearOnShutdown.sessions", true);
-          setAndLockPref("privacy.clearOnShutdown.siteSettings", true);
-          setAndLockPref("privacy.clearOnShutdown.offlineApps", true);
-        }
+        setAndLockPref("privacy.clearOnShutdown.cache", param);
+        setAndLockPref("privacy.clearOnShutdown.cookies", param);
+        setAndLockPref("privacy.clearOnShutdown.downloads", param);
+        setAndLockPref("privacy.clearOnShutdown.formdata", param);
+        setAndLockPref("privacy.clearOnShutdown.history", param);
+        setAndLockPref("privacy.clearOnShutdown.sessions", param);
+        setAndLockPref("privacy.clearOnShutdown.siteSettings", param);
+        setAndLockPref("privacy.clearOnShutdown.offlineApps", param);
       } else {
         let locked = true;
         // Needed to preserve original behavior in perpetuity.
@@ -1950,6 +2044,31 @@ var Policies = {
     },
   },
 
+  ShowHomeButton: {
+    onBeforeAddons(manager, param) {
+      if (param) {
+        manager.disallowFeature("removeHomeButtonByDefault");
+      }
+    },
+    onAllWindowsRestored(manager, param) {
+      if (param) {
+        let homeButtonPlacement = CustomizableUI.getPlacementOfWidget(
+          "home-button"
+        );
+        if (!homeButtonPlacement) {
+          let placement = CustomizableUI.getPlacementOfWidget("forward-button");
+          CustomizableUI.addWidgetToArea(
+            "home-button",
+            CustomizableUI.AREA_NAVBAR,
+            placement.position + 2
+          );
+        }
+      } else {
+        CustomizableUI.removeWidgetFromArea("home-button");
+      }
+    },
+  },
+
   SSLVersionMax: {
     onBeforeAddons(manager, param) {
       let tlsVersion;
@@ -2029,7 +2148,11 @@ var Policies = {
         manager.disallowFeature("urlbarinterventions");
       }
       if ("SkipOnboarding") {
-        setAndLockPref("browser.aboutwelcome.enabled", false);
+        setDefaultPref(
+          "browser.aboutwelcome.enabled",
+          !param.SkipOnboarding,
+          locked
+        );
       }
     },
   },
@@ -2037,6 +2160,12 @@ var Policies = {
   WebsiteFilter: {
     onBeforeUIStartup(manager, param) {
       WebsiteFilter.init(param.Block || [], param.Exceptions || []);
+    },
+  },
+
+  WindowsSSO: {
+    onBeforeAddons(manager, param) {
+      setAndLockPref("network.http.windows-sso.enabled", param);
     },
   },
 };
@@ -2336,6 +2465,14 @@ function installAddonFromURL(url, extensionID, addon) {
         log.debug(`Installation succeeded - ${url}`);
       },
     };
+    // If it's a local file install, onDownloadEnded is never called.
+    // So we call it manually, to handle some error cases.
+    if (url.startsWith("file:")) {
+      listener.onDownloadEnded(install);
+      if (install.state == AddonManager.STATE_CANCELLED) {
+        return;
+      }
+    }
     install.addListener(listener);
     install.install();
   });
@@ -2359,11 +2496,6 @@ function blockAboutPage(manager, feature, neededOnContentProcess = false) {
     gBlockedAboutPages.push(chromeURL);
   } catch (e) {
     // Some about pages don't have chrome URLS (compat)
-  }
-
-  if (feature == "about:config") {
-    // Hide old page until it is removed
-    gBlockedAboutPages.push("chrome://global/content/config.xhtml");
   }
 }
 

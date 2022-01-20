@@ -5,6 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/JSActorManager.h"
+
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/JSActorService.h"
 #include "mozilla/dom/PWindowGlobal.h"
 #include "mozilla/ipc/ProtocolUtils.h"
@@ -97,8 +99,16 @@ already_AddRefed<JSActor> JSActorManager::GetActor(JSContext* aCx,
   if (aRv.Failed()) {
     return nullptr;
   }
-  mJSActors.Put(aName, RefPtr{actor});
+  mJSActors.InsertOrUpdate(aName, RefPtr{actor});
   return actor.forget();
+}
+
+already_AddRefed<JSActor> JSActorManager::GetExistingActor(
+    const nsACString& aName) {
+  if (!AsNativeActor()->CanSend()) {
+    return nullptr;
+  }
+  return mJSActors.Get(aName);
 }
 
 #define CHILD_DIAGNOSTIC_ASSERT(test, msg) \
@@ -192,8 +202,8 @@ void JSActorManager::ReceiveRawMessage(
 }
 
 void JSActorManager::JSActorWillDestroy() {
-  for (auto& entry : mJSActors) {
-    entry.GetData()->StartDestroy();
+  for (const auto& entry : mJSActors.Values()) {
+    entry->StartDestroy();
   }
 }
 
@@ -204,12 +214,12 @@ void JSActorManager::JSActorDidDestroy() {
 
   // Swap the table with `mJSActors` so that we don't invalidate it while
   // iterating.
-  nsRefPtrHashtable<nsCStringHashKey, JSActor> actors;
-  mJSActors.SwapElements(actors);
-  for (auto& entry : actors) {
+  const nsRefPtrHashtable<nsCStringHashKey, JSActor> actors =
+      std::move(mJSActors);
+  for (const auto& entry : actors.Values()) {
     CrashReporter::AutoAnnotateCrashReport autoActorName(
-        CrashReporter::Annotation::JSActorName, entry.GetData()->Name());
-    entry.GetData()->AfterDestroy();
+        CrashReporter::Annotation::JSActorName, entry->Name());
+    entry->AfterDestroy();
   }
 }
 

@@ -18,7 +18,6 @@
 #include "nsIChannelEventSink.h"
 #include "nsIRedirectResultListener.h"
 #include "nsHttpChannel.h"
-#include "nsIAuthPromptProvider.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "nsIDeprecationWarner.h"
 #include "nsIMultiPartChannel.h"
@@ -52,7 +51,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
                                 public PHttpChannelParent,
                                 public nsIParentRedirectingChannel,
                                 public nsIProgressEventSink,
-                                public nsIAuthPromptProvider,
                                 public nsIDeprecationWarner,
                                 public HttpChannelSecurityWarningReporter,
                                 public nsIAsyncVerifyRedirectReadyCallback,
@@ -69,7 +67,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   NS_DECL_NSIPARENTREDIRECTINGCHANNEL
   NS_DECL_NSIPROGRESSEVENTSINK
   NS_DECL_NSIINTERFACEREQUESTOR
-  NS_DECL_NSIAUTHPROMPTPROVIDER
   NS_DECL_NSIDEPRECATIONWARNER
   NS_DECL_NSIASYNCVERIFYREDIRECTREADYCALLBACK
   NS_DECL_NSICHANNELEVENTSINK
@@ -79,9 +76,10 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   NS_DECLARE_STATIC_IID_ACCESSOR(HTTP_CHANNEL_PARENT_IID)
 
   HttpChannelParent(dom::BrowserParent* iframeEmbedding,
-                    nsILoadContext* aLoadContext, PBOverrideStatus aStatus);
+                    nsILoadContext* aLoadContext,
+                    PBOverrideStatus aOverrideStatus);
 
-  [[nodiscard]] bool Init(const HttpChannelCreationArgs& aOpenArgs);
+  [[nodiscard]] bool Init(const HttpChannelCreationArgs& aArgs);
 
   // Forwarded to nsHttpChannel::SetApplyConversion.
   void SetApplyConversion(bool aApplyConversion) {
@@ -134,12 +132,12 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
  protected:
   // used to connect redirected-to channel in parent with just created
   // ChildChannel.  Used during redirects.
-  [[nodiscard]] bool ConnectChannel(const uint32_t& channelId);
+  [[nodiscard]] bool ConnectChannel(const uint32_t& registrarId);
 
   [[nodiscard]] bool DoAsyncOpen(
       const URIParams& uri, const Maybe<URIParams>& originalUri,
       const Maybe<URIParams>& docUri, nsIReferrerInfo* aReferrerInfo,
-      const Maybe<URIParams>& internalRedirectUri,
+      const Maybe<URIParams>& aAPIRedirectToURI,
       const Maybe<URIParams>& topWindowUri, const uint32_t& loadFlags,
       const RequestHeaderTuples& requestHeaders, const nsCString& requestMethod,
       const Maybe<IPCStream>& uploadStream, const bool& uploadStreamHasHeaders,
@@ -147,7 +145,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
       const uint8_t& redirectionLimit, const bool& allowSTS,
       const uint32_t& thirdPartyFlags, const bool& doResumeAt,
       const uint64_t& startPos, const nsCString& entityID,
-      const bool& chooseApplicationCache, const nsCString& appCacheClientID,
       const bool& allowSpdy, const bool& allowHttp3, const bool& allowAltSvc,
       const bool& beConservative, const uint32_t& tlsFlags,
       const Maybe<LoadInfoArgs>& aLoadInfoArgs, const uint32_t& aCacheKey,
@@ -161,7 +158,7 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
       const uint64_t& aContentWindowId,
       const nsTArray<PreferredAlternativeDataTypeParams>&
           aPreferredAlternativeTypes,
-      const uint64_t& aTopLevelOuterContentWindowId,
+      const uint64_t& aTopBrowsingContextId,
       const TimeStamp& aLaunchServiceWorkerStart,
       const TimeStamp& aLaunchServiceWorkerEnd,
       const TimeStamp& aDispatchFetchEventStart,
@@ -169,8 +166,7 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
       const TimeStamp& aHandleFetchEventStart,
       const TimeStamp& aHandleFetchEventEnd,
       const bool& aForceMainDocumentChannel,
-      const TimeStamp& aNavigationStartTimeStamp,
-      const bool& hasNonEmptySandboxingFlag);
+      const TimeStamp& aNavigationStartTimeStamp);
 
   virtual mozilla::ipc::IPCResult RecvSetPriority(
       const int16_t& priority) override;
@@ -186,11 +182,9 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
       const Maybe<ChildLoadInfoForwarderArgs>& aTargetLoadInfoForwarder,
       const uint32_t& loadFlags, nsIReferrerInfo* aReferrerInfo,
       const Maybe<URIParams>& apiRedirectUri,
-      const Maybe<CorsPreflightArgs>& aCorsPreflightArgs,
-      const bool& aChooseAppcache) override;
+      const Maybe<CorsPreflightArgs>& aCorsPreflightArgs) override;
   virtual mozilla::ipc::IPCResult RecvDocumentChannelCleanup(
       const bool& clearCacheEntry) override;
-  virtual mozilla::ipc::IPCResult RecvMarkOfflineCacheEntryAsForeign() override;
   virtual mozilla::ipc::IPCResult RecvRemoveCorsPreflightCacheEntry(
       const URIParams& uri,
       const mozilla::ipc::PrincipalInfo& requestingPrincipal,
@@ -254,8 +248,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   nsCOMPtr<nsIChannel> mRedirectChannel;
   nsCOMPtr<nsIAsyncVerifyRedirectCallback> mRedirectCallback;
 
-  UniquePtr<class nsHttpChannel::OfflineCacheEntryAsForeignMarker>
-      mOfflineForeignMarker;
   nsCOMPtr<nsILoadContext> mLoadContext;
   RefPtr<nsHttpHandler> mHttpHandler;
 

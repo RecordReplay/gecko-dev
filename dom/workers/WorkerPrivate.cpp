@@ -15,11 +15,11 @@
 #include "js/LocaleSensitive.h"
 #include "js/MemoryMetrics.h"
 #include "js/SourceText.h"
-#include "GeckoProfiler.h"
 #include "MessageEventRunnable.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/CycleCollectedJSContext.h"
-#include "mozilla/HoldDropJSObjects.h"
+#include "mozilla/ExtensionPolicyService.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/Result.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_browser.h"
@@ -51,6 +51,7 @@
 #include "mozilla/dom/WorkerBinding.h"
 #include "mozilla/dom/JSExecutionManager.h"
 #include "mozilla/dom/WindowContext.h"
+#include "mozilla/extensions/WebExtensionPolicy.h"
 #include "mozilla/StorageAccess.h"
 #include "mozilla/StoragePrincipalHelper.h"
 #include "mozilla/Telemetry.h"
@@ -136,6 +137,9 @@ const nsIID kDEBUGWorkerEventTargetIID = {
     {0xba, 0x87, 0x3b, 0x3b, 0x5b, 0x1d, 0x5, 0xfb}};
 
 #endif
+
+// The number of nested timeouts before we start clamping. HTML says 5.
+const uint32_t kClampTimeoutNestingLevel = 5u;
 
 template <class T>
 class UniquePtrComparator {
@@ -963,7 +967,12 @@ class WorkerPrivate::EventTarget final : public nsISerialEventTarget {
 };
 
 struct WorkerPrivate::TimeoutInfo {
-  TimeoutInfo() : mId(0), mIsInterval(false), mCanceled(false) {
+  TimeoutInfo()
+      : mId(0),
+        mNestingLevel(0),
+        mIsInterval(false),
+        mCanceled(false),
+        mOnChromeWorker(false) {
     MOZ_COUNT_CTOR(mozilla::dom::WorkerPrivate::TimeoutInfo);
   }
 
@@ -977,12 +986,33 @@ struct WorkerPrivate::TimeoutInfo {
     return mTargetTime < aOther.mTargetTime;
   }
 
+  void AccumulateNestingLevel(const uint32_t& aBaseLevel) {
+    if (aBaseLevel < kClampTimeoutNestingLevel) {
+      mNestingLevel = aBaseLevel + 1;
+      return;
+    }
+    mNestingLevel = kClampTimeoutNestingLevel;
+  }
+
+  void CalculateTargetTime() {
+    auto target = mInterval;
+    // Don't clamp timeout for chrome workers
+    if (mNestingLevel >= kClampTimeoutNestingLevel && !mOnChromeWorker) {
+      target = TimeDuration::Max(
+          mInterval,
+          TimeDuration::FromMilliseconds(StaticPrefs::dom_min_timeout_value()));
+    }
+    mTargetTime = TimeStamp::Now() + target;
+  }
+
   RefPtr<TimeoutHandler> mHandler;
   mozilla::TimeStamp mTargetTime;
   mozilla::TimeDuration mInterval;
   int32_t mId;
+  uint32_t mNestingLevel;
   bool mIsInterval;
   bool mCanceled;
+  bool mOnChromeWorker;
 };
 
 class WorkerJSContextStats final : public JS::RuntimeStats {
@@ -2104,6 +2134,7 @@ WorkerPrivate::WorkerThreadAccessible::WorkerThreadAccessible(
       mDebuggerEventLoopLevel(0),
       mErrorHandlerRecursionCount(0),
       mNextTimeoutId(1),
+      mCurrentTimerNestingLevel(0),
       mFrozen(false),
       mTimerRunning(false),
       mRunningExpiredTimeouts(false),
@@ -2116,7 +2147,7 @@ WorkerPrivate::WorkerThreadAccessible::WorkerThreadAccessible(
 namespace {
 
 bool IsNewWorkerSecureContext(const WorkerPrivate* const aParent,
-                              const WorkerType aWorkerType,
+                              const WorkerKind aWorkerKind,
                               const WorkerLoadInfo& aLoadInfo) {
   if (aParent) {
     return aParent->IsSecureContext();
@@ -2128,7 +2159,7 @@ bool IsNewWorkerSecureContext(const WorkerPrivate* const aParent,
     return true;
   }
 
-  if (aWorkerType == WorkerTypeService) {
+  if (aWorkerKind == WorkerKindService) {
     return true;
   }
 
@@ -2147,7 +2178,7 @@ bool IsNewWorkerSecureContext(const WorkerPrivate* const aParent,
 
 WorkerPrivate::WorkerPrivate(
     WorkerPrivate* aParent, const nsAString& aScriptURL, bool aIsChromeWorker,
-    WorkerType aWorkerType, const nsAString& aWorkerName,
+    WorkerKind aWorkerKind, const nsAString& aWorkerName,
     const nsACString& aServiceWorkerScope, WorkerLoadInfo& aLoadInfo,
     nsString&& aId, const nsID& aAgentClusterId,
     const nsILoadInfo::CrossOriginOpenerPolicy aAgentClusterOpenerPolicy)
@@ -2156,7 +2187,7 @@ WorkerPrivate::WorkerPrivate(
       mParent(aParent),
       mScriptURL(aScriptURL),
       mWorkerName(aWorkerName),
-      mWorkerType(aWorkerType),
+      mWorkerKind(aWorkerKind),
       mLoadInfo(std::move(aLoadInfo)),
       mDebugger(nullptr),
       mJSContext(nullptr),
@@ -2183,12 +2214,14 @@ WorkerPrivate::WorkerPrivate(
       mIsChromeWorker(aIsChromeWorker),
       mParentFrozen(false),
       mIsSecureContext(
-          IsNewWorkerSecureContext(mParent, mWorkerType, mLoadInfo)),
+          IsNewWorkerSecureContext(mParent, mWorkerKind, mLoadInfo)),
       mDebuggerRegistered(false),
       mDebuggerReady(true),
+      mExtensionAPIAllowed(false),
       mIsInAutomation(false),
       mId(std::move(aId)),
-      mAgentClusterOpenerPolicy(aAgentClusterOpenerPolicy) {
+      mAgentClusterOpenerPolicy(aAgentClusterOpenerPolicy),
+      mIsPrivilegedAddonGlobal(false) {
   MOZ_ASSERT_IF(!IsDedicatedWorker(), NS_IsMainThread());
 
   if (aParent) {
@@ -2206,6 +2239,8 @@ WorkerPrivate::WorkerPrivate(
     if (aParent->mParentFrozen) {
       Freeze(nullptr);
     }
+
+    mIsPrivilegedAddonGlobal = aParent->mIsPrivilegedAddonGlobal;
   } else {
     AssertIsOnMainThread();
 
@@ -2240,6 +2275,31 @@ WorkerPrivate::WorkerPrivate(
       if (mIsSecureContext) {
         chromeCreationOptions.setSecureContext(true);
         contentCreationOptions.setSecureContext(true);
+      }
+
+      // Check if it's a privileged addon executing in order to allow access
+      // to SharedArrayBuffer
+      if (mLoadInfo.mPrincipal) {
+        if (auto* policy =
+                BasePrincipal::Cast(mLoadInfo.mPrincipal)->AddonPolicy()) {
+          if (policy->IsPrivileged() &&
+              ExtensionPolicyService::GetSingleton().IsExtensionProcess()) {
+            // Privileged extensions are allowed to use SharedArrayBuffer in
+            // their extension process, but never in content scripts in
+            // content processes.
+            mIsPrivilegedAddonGlobal = true;
+          }
+
+          if (StaticPrefs::
+                  extensions_backgroundServiceWorker_enabled_AtStartup() &&
+              mWorkerKind == WorkerKindService &&
+              policy->IsManifestBackgroundWorker(mScriptURL)) {
+            // Only allows ExtensionAPI for extension service workers
+            // that are declared in the extension manifest json as
+            // the background service worker.
+            mExtensionAPIAllowed = true;
+          }
+        }
       }
 
       // The SharedArrayBuffer global constructor property should not be present
@@ -2309,8 +2369,6 @@ WorkerPrivate::WorkerPrivate(
 }
 
 WorkerPrivate::~WorkerPrivate() {
-  DropJSObjects(this);
-
   mWorkerControlEventTarget->ForgetWorkerPrivate(this);
 
   // We force the hybrid event target to forget the thread when we
@@ -2323,7 +2381,7 @@ WorkerPrivate::~WorkerPrivate() {
 // static
 already_AddRefed<WorkerPrivate> WorkerPrivate::Constructor(
     JSContext* aCx, const nsAString& aScriptURL, bool aIsChromeWorker,
-    WorkerType aWorkerType, const nsAString& aWorkerName,
+    WorkerKind aWorkerKind, const nsAString& aWorkerName,
     const nsACString& aServiceWorkerScope, WorkerLoadInfo* aLoadInfo,
     ErrorResult& aRv, nsString aId) {
   WorkerPrivate* parent =
@@ -2350,7 +2408,7 @@ already_AddRefed<WorkerPrivate> WorkerPrivate::Constructor(
 
     nsresult rv =
         GetLoadInfo(aCx, nullptr, parent, aScriptURL, aIsChromeWorker,
-                    InheritLoadGroup, aWorkerType, stackLoadInfo.ptr());
+                    InheritLoadGroup, aWorkerKind, stackLoadInfo.ptr());
     aRv.MightThrowJSException();
     if (NS_FAILED(rv)) {
       workerinternals::ReportLoadError(aRv, rv, aScriptURL);
@@ -2377,19 +2435,25 @@ already_AddRefed<WorkerPrivate> WorkerPrivate::Constructor(
 
   MOZ_ASSERT(runtimeService);
 
+  // Don't create a worker with the shutting down RuntimeService.
+  if (runtimeService->IsShuttingDown()) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
+
   nsILoadInfo::CrossOriginOpenerPolicy agentClusterCoop =
       nsILoadInfo::OPENER_POLICY_UNSAFE_NONE;
   nsID agentClusterId;
   if (parent) {
-    MOZ_ASSERT(aWorkerType == WorkerType::WorkerTypeDedicated);
+    MOZ_ASSERT(aWorkerKind == WorkerKind::WorkerKindDedicated);
 
     agentClusterId = parent->AgentClusterId();
     agentClusterCoop = parent->mAgentClusterOpenerPolicy;
   } else {
     AssertIsOnMainThread();
 
-    if (aWorkerType == WorkerType::WorkerTypeService ||
-        aWorkerType == WorkerType::WorkerTypeShared) {
+    if (aWorkerKind == WorkerKind::WorkerKindService ||
+        aWorkerKind == WorkerKind::WorkerKindShared) {
       agentClusterId = aLoadInfo->mAgentClusterId;
     } else if (aLoadInfo->mWindow) {
       Document* doc = aLoadInfo->mWindow->GetExtantDoc();
@@ -2410,7 +2474,7 @@ already_AddRefed<WorkerPrivate> WorkerPrivate::Constructor(
   }
 
   RefPtr<WorkerPrivate> worker =
-      new WorkerPrivate(parent, aScriptURL, aIsChromeWorker, aWorkerType,
+      new WorkerPrivate(parent, aScriptURL, aIsChromeWorker, aWorkerKind,
                         aWorkerName, aServiceWorkerScope, *aLoadInfo,
                         std::move(aId), agentClusterId, agentClusterCoop);
 
@@ -2431,6 +2495,11 @@ already_AddRefed<WorkerPrivate> WorkerPrivate::Constructor(
     return nullptr;
   }
 
+  // From this point on (worker thread has been started) we
+  // must keep ourself alive. We can now only be cleared by
+  // ClearSelfAndParentEventTargetRef().
+  worker->mSelfRef = worker;
+
   worker->EnableDebugger();
 
   MOZ_DIAGNOSTIC_ASSERT(worker->PrincipalIsValid());
@@ -2446,8 +2515,6 @@ already_AddRefed<WorkerPrivate> WorkerPrivate::Constructor(
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
-
-  worker->mSelfRef = worker;
 
   return worker.forget();
 }
@@ -2489,7 +2556,7 @@ nsresult WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
                                     const nsAString& aScriptURL,
                                     bool aIsChromeWorker,
                                     LoadGroupBehavior aLoadGroupBehavior,
-                                    WorkerType aWorkerType,
+                                    WorkerKind aWorkerKind,
                                     WorkerLoadInfo* aLoadInfo) {
   using namespace mozilla::dom::workerinternals;
 
@@ -2593,11 +2660,15 @@ nsresult WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
       // access it.
       if (nsPIDOMWindowOuter* outerWindow = globalWindow->GetOuterWindow()) {
         loadInfo.mWindow = outerWindow->GetCurrentInnerWindow();
-        // TODO: fix this for SharedWorkers with multiple documents (bug
-        // 1177935)
-        loadInfo.mServiceWorkersTestingInWindow =
-            outerWindow->GetServiceWorkersTestingEnabled();
       }
+
+      BrowsingContext* browsingContext = globalWindow->GetBrowsingContext();
+
+      // TODO: fix this for SharedWorkers with multiple documents (bug
+      // 1177935)
+      loadInfo.mServiceWorkersTestingInWindow =
+          browsingContext &&
+          browsingContext->Top()->ServiceWorkersTestingEnabled();
 
       if (!loadInfo.mWindow ||
           (globalWindow != loadInfo.mWindow &&
@@ -2671,9 +2742,8 @@ nsresult WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
 
       loadInfo.mXHRParamsAllowed = perm == nsIPermissionManager::ALLOW_ACTION;
 
-      BrowsingContext* browsingContext = globalWindow->GetBrowsingContext();
       loadInfo.mWatchedByDevTools =
-          browsingContext ? browsingContext->WatchedByDevTools() : false;
+          browsingContext && browsingContext->WatchedByDevTools();
 
       loadInfo.mReferrerInfo =
           ReferrerInfo::CreateForFetch(loadInfo.mLoadingPrincipal, document);
@@ -2738,7 +2808,8 @@ nsresult WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
       loadInfo.mStorageAccess = StorageAccess::eAllow;
       loadInfo.mUseRegularPrincipal = true;
       loadInfo.mHasStorageAccessPermissionGranted = false;
-      loadInfo.mCookieJarSettings = mozilla::net::CookieJarSettings::Create();
+      loadInfo.mCookieJarSettings =
+          mozilla::net::CookieJarSettings::Create(loadInfo.mLoadingPrincipal);
       MOZ_ASSERT(loadInfo.mCookieJarSettings);
 
       loadInfo.mOriginAttributes = OriginAttributes();
@@ -2762,7 +2833,7 @@ nsresult WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
 
     rv = ChannelFromScriptURLMainThread(
         loadInfo.mLoadingPrincipal, document, loadInfo.mLoadGroup, url,
-        clientInfo, ContentPolicyType(aWorkerType), loadInfo.mCookieJarSettings,
+        clientInfo, ContentPolicyType(aWorkerKind), loadInfo.mCookieJarSettings,
         loadInfo.mReferrerInfo, getter_AddRefs(loadInfo.mChannel));
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -2922,6 +2993,9 @@ void WorkerPrivate::DoRunLoop(JSContext* aCx) {
 
       // If we're supposed to die then we should exit the loop.
       if (currentStatus == Killing) {
+        // We are about to destroy worker, report all use counters.
+        ReportUseCounters();
+
         // Flush uncaught rejections immediately, without
         // waiting for a next tick.
         PromiseDebugging::FlushUncaughtRejections();
@@ -3114,12 +3188,12 @@ nsISerialEventTarget* WorkerPrivate::HybridEventTarget() {
 }
 
 ClientType WorkerPrivate::GetClientType() const {
-  switch (Type()) {
-    case WorkerTypeDedicated:
+  switch (Kind()) {
+    case WorkerKindDedicated:
       return ClientType::Worker;
-    case WorkerTypeShared:
+    case WorkerKindShared:
       return ClientType::Sharedworker;
-    case WorkerTypeService:
+    case WorkerKindService:
       return ClientType::Serviceworker;
     default:
       MOZ_CRASH("unknown worker type!");
@@ -3159,7 +3233,7 @@ UniquePtr<ClientSource> WorkerPrivate::CreateClientSource() {
   // Note, we only have to do this for workers that can be controlled by a
   // service worker.  So avoid the sync overhead here if we are starting a
   // service worker or a chrome worker.
-  if (Type() != WorkerTypeService && !IsChromeWorker()) {
+  if (Kind() != WorkerKindService && !IsChromeWorker()) {
     clientSource->WorkerSyncPing(this);
   }
 
@@ -3580,9 +3654,6 @@ void WorkerPrivate::ClearMainEventQueue(WorkerRanOrNot aRanOrNot) {
     MOZ_ASSERT(currentThread);
 
     NS_ProcessPendingEvents(currentThread);
-
-    // We are about to destroy worker, report all use counters.
-    ReportUseCounters();
   }
 
   if (globalScope) {
@@ -4034,19 +4105,19 @@ void WorkerPrivate::ReportUseCounters() {
     return;
   }
 
-  const size_t type = Type();
-  switch (type) {
-    case WorkerTypeDedicated:
+  const size_t kind = Kind();
+  switch (kind) {
+    case WorkerKindDedicated:
       Telemetry::Accumulate(Telemetry::DEDICATED_WORKER_DESTROYED, 1);
       break;
-    case WorkerTypeShared:
+    case WorkerKindShared:
       Telemetry::Accumulate(Telemetry::SHARED_WORKER_DESTROYED, 1);
       break;
-    case WorkerTypeService:
+    case WorkerKindService:
       Telemetry::Accumulate(Telemetry::SERVICE_WORKER_DESTROYED, 1);
       break;
     default:
-      MOZ_ASSERT(false, "Unknown worker type");
+      MOZ_ASSERT(false, "Unknown worker kind");
       return;
   }
 
@@ -4067,13 +4138,13 @@ void WorkerPrivate::ReportUseCounters() {
   const size_t count = static_cast<size_t>(UseCounterWorker::Count);
   const size_t factor =
       static_cast<size_t>(Telemetry::HistogramUseCounterWorkerCount) / count;
-  MOZ_ASSERT(factor > type);
+  MOZ_ASSERT(factor > kind);
 
   for (size_t c = 0; c < count; ++c) {
-    // Histograms for worker use counters use the same order as the worker types
-    // , so we can use the worker type to index to corresponding histogram.
+    // Histograms for worker use counters use the same order as the worker kinds
+    // , so we can use the worker kind to index to corresponding histogram.
     Telemetry::HistogramID id = static_cast<Telemetry::HistogramID>(
-        Telemetry::HistogramFirstUseCounterWorker + c * factor + type);
+        Telemetry::HistogramFirstUseCounterWorker + c * factor + kind);
     MOZ_ASSERT(id <= Telemetry::HistogramLastUseCounterWorker);
 
     if (bool value = GetUseCounter(static_cast<UseCounterWorker>(c))) {
@@ -4242,7 +4313,7 @@ void WorkerPrivate::EnterDebuggerEventLoop() {
     {
       MutexAutoLock lock(mMutex);
 
-      std::queue<RefPtr<MicroTaskRunnable>>& debuggerMtQueue =
+      std::deque<RefPtr<MicroTaskRunnable>>& debuggerMtQueue =
           ccjscx->GetDebuggerMicroTaskQueue();
       while (mControlQueue.IsEmpty() &&
              !(debuggerRunnablesPending = !mDebuggerQueue.IsEmpty()) &&
@@ -4530,8 +4601,10 @@ int32_t WorkerPrivate::SetTimeout(JSContext* aCx, TimeoutHandler* aHandler,
   }
 
   auto newInfo = MakeUnique<TimeoutInfo>();
+  newInfo->mOnChromeWorker = mIsChromeWorker;
   newInfo->mIsInterval = aIsInterval;
   newInfo->mId = timerId;
+  newInfo->AccumulateNestingLevel(data->mCurrentTimerNestingLevel);
 
   if (MOZ_UNLIKELY(timerId == INT32_MAX)) {
     NS_WARNING("Timeout ids overflowed!");
@@ -4543,8 +4616,7 @@ int32_t WorkerPrivate::SetTimeout(JSContext* aCx, TimeoutHandler* aHandler,
   // See if any of the optional arguments were passed.
   aTimeout = std::max(0, aTimeout);
   newInfo->mInterval = TimeDuration::FromMilliseconds(aTimeout);
-
-  newInfo->mTargetTime = TimeStamp::Now() + newInfo->mInterval;
+  newInfo->CalculateTargetTime();
 
   const auto& insertedInfo = data->mTimeouts.InsertElementSorted(
       std::move(newInfo), GetUniquePtrComparator(data->mTimeouts));
@@ -4639,13 +4711,20 @@ bool WorkerPrivate::RunExpiredTimeouts(JSContext* aCx) {
   // Guard against recursion.
   data->mRunningExpiredTimeouts = true;
 
+  MOZ_DIAGNOSTIC_ASSERT(data->mCurrentTimerNestingLevel == 0);
+
   // Run expired timeouts.
   for (uint32_t index = 0; index < expiredTimeouts.Length(); index++) {
     TimeoutInfo*& info = expiredTimeouts[index];
+    AutoRestore<uint32_t> nestingLevel(data->mCurrentTimerNestingLevel);
 
     if (info->mCanceled) {
       continue;
     }
+
+    // Set current timer nesting level to current running timer handler's
+    // nesting level
+    data->mCurrentTimerNestingLevel = info->mNestingLevel;
 
     LOG(TimeoutsLog(),
         ("Worker %p executing timeout with original delay %f ms.\n", this,
@@ -4695,7 +4774,9 @@ bool WorkerPrivate::RunExpiredTimeouts(JSContext* aCx) {
         info->mCanceled) {
       if (info->mIsInterval && !info->mCanceled) {
         // Reschedule intervals.
-        info->mTargetTime = info->mTargetTime + info->mInterval;
+        // Reschedule a timeout, if needed, increase the nesting level.
+        info->AccumulateNestingLevel(info->mNestingLevel);
+        info->CalculateTargetTime();
         // Don't resort the list here, we'll do that at the end.
         ++index;
       } else {
@@ -4886,19 +4967,22 @@ void WorkerPrivate::GarbageCollectInternal(JSContext* aCx, bool aShrinking,
     JS::PrepareForFullGC(aCx);
 
     if (aShrinking && mSyncLoopStack.IsEmpty()) {
-      JS::NonIncrementalGC(aCx, GC_SHRINK, JS::GCReason::DOM_WORKER);
+      JS::NonIncrementalGC(aCx, JS::GCOptions::Shrink,
+                           JS::GCReason::DOM_WORKER);
 
       // Check whether the CC collected anything and if so GC again. This is
       // necessary to collect all garbage.
       if (data->mCCCollectedAnything) {
-        JS::NonIncrementalGC(aCx, GC_NORMAL, JS::GCReason::DOM_WORKER);
+        JS::NonIncrementalGC(aCx, JS::GCOptions::Normal,
+                             JS::GCReason::DOM_WORKER);
       }
 
       if (!aCollectChildren) {
         LOG(WorkerLog(), ("Worker %p collected idle garbage\n", this));
       }
     } else {
-      JS::NonIncrementalGC(aCx, GC_NORMAL, JS::GCReason::DOM_WORKER);
+      JS::NonIncrementalGC(aCx, JS::GCOptions::Normal,
+                           JS::GCReason::DOM_WORKER);
       LOG(WorkerLog(), ("Worker %p collected garbage\n", this));
     }
   } else {
@@ -5249,6 +5333,10 @@ const nsAString& WorkerPrivate::Id() {
 bool WorkerPrivate::IsSharedMemoryAllowed() const {
   if (StaticPrefs::
           dom_postMessage_sharedArrayBuffer_bypassCOOP_COEP_insecure_enabled()) {
+    return true;
+  }
+
+  if (mIsPrivilegedAddonGlobal) {
     return true;
   }
 

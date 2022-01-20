@@ -19,9 +19,11 @@ MOCHITEST_MANIFESTS += [
     "cors/mochitest.ini",
     "csp/mochitest.ini",
     "general/mochitest.ini",
+    "https-first/mochitest.ini",
     "https-only/mochitest.ini",
     "mixedcontentblocker/mochitest.ini",
     "referrer-policy/mochitest.ini",
+    "sec-fetch/mochitest.ini",
     "sri/mochitest.ini",
 ]
 
@@ -33,6 +35,8 @@ BROWSER_CHROME_MANIFESTS += [
     "cors/browser.ini",
     "csp/browser.ini",
     "general/browser.ini",
+    "https-first/browser.ini",
     "https-only/browser.ini",
     "mixedcontentblocker/browser.ini",
+    "sec-fetch/browser.ini",
 ]

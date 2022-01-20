@@ -533,8 +533,6 @@ class SyncedBookmarksMirror {
    *         The current local time, in seconds.
    * @param  {Number} [options.remoteTimeSeconds]
    *         The current server time, in seconds.
-   * @param  {String[]} [options.weakUpload]
-   *         GUIDs of bookmarks to weakly upload.
    * @param  {Number} [options.maxFrecenciesToRecalculate]
    *         The maximum number of bookmark URL frecencies to recalculate after
    *         this merge. Frecency calculation blocks other Places writes, so we
@@ -559,7 +557,6 @@ class SyncedBookmarksMirror {
   async apply({
     localTimeSeconds,
     remoteTimeSeconds,
-    weakUpload,
     maxFrecenciesToRecalculate,
     notifyInStableOrder,
     signal = null,
@@ -580,7 +577,6 @@ class SyncedBookmarksMirror {
         finalizeOrInterruptSignal,
         localTimeSeconds,
         remoteTimeSeconds,
-        weakUpload,
         maxFrecenciesToRecalculate,
         notifyInStableOrder
       );
@@ -595,12 +591,11 @@ class SyncedBookmarksMirror {
     signal,
     localTimeSeconds,
     remoteTimeSeconds,
-    weakUpload,
     maxFrecenciesToRecalculate = DEFAULT_MAX_FRECENCIES_TO_RECALCULATE,
     notifyInStableOrder = false
   ) {
     let wasMerged = await withTiming("Merging bookmarks in Rust", () =>
-      this.merge(signal, localTimeSeconds, remoteTimeSeconds, weakUpload)
+      this.merge(signal, localTimeSeconds, remoteTimeSeconds)
     );
 
     if (!wasMerged) {
@@ -672,12 +667,7 @@ class SyncedBookmarksMirror {
     return changeRecords;
   }
 
-  merge(
-    signal,
-    localTimeSeconds = Date.now() / 1000,
-    remoteTimeSeconds = 0,
-    weakUpload = []
-  ) {
+  merge(signal, localTimeSeconds = Date.now() / 1000, remoteTimeSeconds = 0) {
     return new Promise((resolve, reject) => {
       let op = null;
       function onAbort() {
@@ -775,12 +765,7 @@ class SyncedBookmarksMirror {
           }
         },
       };
-      op = this.merger.merge(
-        localTimeSeconds,
-        remoteTimeSeconds,
-        weakUpload,
-        callback
-      );
+      op = this.merger.merge(localTimeSeconds, remoteTimeSeconds, callback);
       if (signal.aborted) {
         op.cancel();
       } else {
@@ -2076,7 +2061,6 @@ class BookmarkObserverRecorder {
     this.signal = signal;
     this.placesEvents = [];
     this.guidChangedArgs = [];
-    this.itemMovedArgs = [];
     this.itemChangedArgs = [];
     this.shouldInvalidateKeywords = false;
   }
@@ -2219,13 +2203,14 @@ class BookmarkObserverRecorder {
 
     MirrorLog.trace("Recording observer notifications for moved items");
     await this.db.execute(
-      `SELECT b.id, b.guid, b.type, p.id AS newParentId, c.oldParentId,
-              p.guid AS newParentGuid, c.oldParentGuid,
+      `SELECT b.id, b.guid, b.type, p.guid AS newParentGuid, c.oldParentGuid,
               b.position AS newPosition, c.oldPosition,
+              gp.guid AS grandParentGuid,
               (SELECT h.url FROM moz_places h WHERE h.id = b.fk) AS url
        FROM itemsMoved c
        JOIN moz_bookmarks b ON b.id = c.itemId
        JOIN moz_bookmarks p ON p.id = b.parent
+       LEFT JOIN moz_bookmarks gp ON gp.id = p.parent
        ${this.orderBy("c.level", "b.parent", "b.position")}`,
       null,
       (row, cancel) => {
@@ -2237,13 +2222,12 @@ class BookmarkObserverRecorder {
           id: row.getResultByName("id"),
           guid: row.getResultByName("guid"),
           type: row.getResultByName("type"),
-          newParentId: row.getResultByName("newParentId"),
-          oldParentId: row.getResultByName("oldParentId"),
           newParentGuid: row.getResultByName("newParentGuid"),
           oldParentGuid: row.getResultByName("oldParentGuid"),
           newPosition: row.getResultByName("newPosition"),
           oldPosition: row.getResultByName("oldPosition"),
           urlHref: row.getResultByName("url"),
+          grandParentGuid: row.getResultByName("grandParentGuid"),
         };
         this.noteItemMoved(info);
       }
@@ -2339,19 +2323,22 @@ class BookmarkObserverRecorder {
   }
 
   noteItemMoved(info) {
-    this.itemMovedArgs.push([
-      info.id,
-      info.oldParentId,
-      info.oldPosition,
-      info.newParentId,
-      info.newPosition,
-      info.type,
-      info.guid,
-      info.oldParentGuid,
-      info.newParentGuid,
-      PlacesUtils.bookmarks.SOURCES.SYNC,
-      info.urlHref,
-    ]);
+    this.placesEvents.push(
+      new PlacesBookmarkMoved({
+        id: info.id,
+        itemType: info.type,
+        url: info.urlHref,
+        guid: info.guid,
+        parentGuid: info.newParentGuid,
+        source: PlacesUtils.bookmarks.SOURCES.SYNC,
+        index: info.newPosition,
+        oldParentGuid: info.oldParentGuid,
+        oldIndex: info.oldPosition,
+        isTagging:
+          info.newParentGuid === PlacesUtils.bookmarks.tagsGuid ||
+          info.grandParentGuid === PlacesUtils.bookmarks.tagsGuid,
+      })
+    );
   }
 
   noteItemChanged(info) {
@@ -2407,9 +2394,6 @@ class BookmarkObserverRecorder {
   async notifyBookmarkObservers() {
     MirrorLog.trace("Notifying bookmark observers");
     let observers = PlacesUtils.bookmarks.getObservers();
-    // ideally we'd send `onBeginUpdateBatch` here (and `onEndUpdateBatch` at
-    // the end) to all observers, but batching is somewhat broken currently.
-    // See bug 1605881 for all the gory details...
     await Async.yieldingForEach(
       this.guidChangedArgs,
       args => {
@@ -2430,22 +2414,11 @@ class BookmarkObserverRecorder {
         "Interrupted before notifying observers for new items"
       );
     }
-    PlacesObservers.notifyListeners(this.placesEvents);
-    await Async.yieldingForEach(
-      this.itemMovedArgs,
-      args => {
-        if (this.signal.aborted) {
-          throw new SyncedBookmarksMirror.InterruptedError(
-            "Interrupted before notifying observers for moved items"
-          );
-        }
-        this.notifyObserversWithInfo(observers, "onItemMoved", {
-          isTagging: false,
-          args,
-        });
-      },
-      yieldState
-    );
+
+    if (this.placesEvents.length) {
+      PlacesObservers.notifyListeners(this.placesEvents);
+    }
+
     await Async.yieldingForEach(
       this.itemChangedArgs,
       args => {

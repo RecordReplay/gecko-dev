@@ -139,7 +139,6 @@ pub enum DisplayItem {
     RectClip(RectClipDisplayItem),
     RoundedRectClip(RoundedRectClipDisplayItem),
     ImageMaskClip(ImageMaskClipDisplayItem),
-    Clip(ClipDisplayItem),
     ClipChain(ClipChainItem),
 
     // Spaces and Frames that content can be scoped under.
@@ -155,6 +154,7 @@ pub enum DisplayItem {
     SetFilterOps,
     SetFilterData,
     SetFilterPrimitives,
+    SetPoints,
 
     // These marker items terminate a scope introduced by a previous item.
     PopReferenceFrame,
@@ -190,7 +190,6 @@ pub enum DebugDisplayItem {
     ImageMaskClip(ImageMaskClipDisplayItem),
     RoundedRectClip(RoundedRectClipDisplayItem),
     RectClip(RectClipDisplayItem),
-    Clip(ClipDisplayItem, Vec<ComplexClipRegion>),
     ClipChain(ClipChainItem, Vec<ClipId>),
 
     ScrollFrame(ScrollFrameDisplayItem),
@@ -203,6 +202,7 @@ pub enum DebugDisplayItem {
     SetFilterOps(Vec<FilterOp>),
     SetFilterData(FilterData),
     SetFilterPrimitives(Vec<FilterPrimitive>),
+    SetPoints(Vec<LayoutPoint>),
 
     PopReferenceFrame,
     PopStackingContext,
@@ -214,7 +214,8 @@ pub struct ImageMaskClipDisplayItem {
     pub id: ClipId,
     pub parent_space_and_clip: SpaceAndClipInfo,
     pub image_mask: ImageMask,
-}
+    pub fill_rule: FillRule,
+} // IMPLICIT points: Vec<LayoutPoint>
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub struct RectClipDisplayItem {
@@ -624,6 +625,15 @@ pub struct Gradient {
     pub extend_mode: ExtendMode,
 } // IMPLICIT: stops: Vec<GradientStop>
 
+impl Gradient {
+    pub fn is_valid(&self) -> bool {
+        self.start_point.x.is_finite() &&
+            self.start_point.y.is_finite() &&
+            self.end_point.x.is_finite() &&
+            self.end_point.y.is_finite()
+    }
+}
+
 /// The area
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub struct GradientDisplayItem {
@@ -656,6 +666,15 @@ pub struct RadialGradient {
     pub extend_mode: ExtendMode,
 } // IMPLICIT stops: Vec<GradientStop>
 
+impl RadialGradient {
+    pub fn is_valid(&self) -> bool {
+        self.center.x.is_finite() &&
+            self.center.y.is_finite() &&
+            self.start_offset.is_finite() &&
+            self.end_offset.is_finite()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub struct ConicGradient {
     pub center: LayoutPoint,
@@ -664,6 +683,16 @@ pub struct ConicGradient {
     pub end_offset: f32,
     pub extend_mode: ExtendMode,
 } // IMPLICIT stops: Vec<GradientStop>
+
+impl ConicGradient {
+    pub fn is_valid(&self) -> bool {
+        self.center.x.is_finite() &&
+            self.center.y.is_finite() &&
+            self.angle.is_finite() &&
+            self.start_offset.is_finite() &&
+            self.end_offset.is_finite()
+    }
+}
 
 /// Just an abstraction for bundling up a bunch of clips into a "super clip".
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
@@ -712,10 +741,15 @@ pub struct ReferenceFrameDisplayListItem {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub enum ReferenceFrameKind {
-    /// Zoom reference frames must be a scale + translation only
-    Zoom,
     /// A normal transform matrix, may contain perspective (the CSS transform property)
-    Transform,
+    Transform {
+        /// Optionally marks the transform as only ever having a simple 2D scale or translation,
+        /// allowing for optimizations.
+        is_2d_scale_translation: bool,
+        /// Marks that the transform should be snapped. Used for transforms which animate in
+        /// response to scrolling, eg for zooming or dynamic toolbar fixed-positioning.
+        should_snap: bool,
+    },
     /// A perspective transform, that optionally scrolls relative to a specific scroll node
     Perspective {
         scrolling_relative_to: Option<ExternalScrollId>,
@@ -1308,7 +1342,7 @@ pub enum YuvColorSpace {
     Rec601 = 0,
     Rec709 = 1,
     Rec2020 = 2,
-    Identity = 3, // aka RGB as per ISO/IEC 23091-2:2019
+    Identity = 3, // aka GBR as per ISO/IEC 23091-2:2019
 }
 
 #[repr(u8)]
@@ -1316,6 +1350,44 @@ pub enum YuvColorSpace {
 pub enum ColorRange {
     Limited = 0,
     Full = 1,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, PeekPoke)]
+pub enum YuvRangedColorSpace {
+    Rec601Narrow = 0,
+    Rec601Full = 1,
+    Rec709Narrow = 2,
+    Rec709Full = 3,
+    Rec2020Narrow = 4,
+    Rec2020Full = 5,
+    GbrIdentity = 6,
+}
+
+impl YuvColorSpace {
+    pub fn with_range(self, range: ColorRange) -> YuvRangedColorSpace {
+        match self {
+            YuvColorSpace::Identity => YuvRangedColorSpace::GbrIdentity,
+            YuvColorSpace::Rec601 => {
+                match range {
+                    ColorRange::Limited => YuvRangedColorSpace::Rec601Narrow,
+                    ColorRange::Full => YuvRangedColorSpace::Rec601Full,
+                }
+            }
+            YuvColorSpace::Rec709 => {
+                match range {
+                    ColorRange::Limited => YuvRangedColorSpace::Rec709Narrow,
+                    ColorRange::Full => YuvRangedColorSpace::Rec709Full,
+                }
+            }
+            YuvColorSpace::Rec2020 => {
+                match range {
+                    ColorRange::Limited => YuvRangedColorSpace::Rec2020Narrow,
+                    ColorRange::Full => YuvRangedColorSpace::Rec2020Full,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, PeekPoke)]
@@ -1483,6 +1555,34 @@ impl ComplexClipRegion {
     }
 }
 
+pub const POLYGON_CLIP_VERTEX_MAX: usize = 16;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize, Eq, Hash, PeekPoke)]
+pub enum FillRule {
+    Nonzero = 0x1, // Behaves as the SVG fill-rule definition for nonzero.
+    Evenodd = 0x2, // Behaves as the SVG fill-rule definition for evenodd.
+}
+
+impl From<u8> for FillRule {
+    fn from(fill_rule: u8) -> Self {
+        match fill_rule {
+            0x1 => FillRule::Nonzero,
+            0x2 => FillRule::Evenodd,
+            _ => panic!("Unexpected FillRule value."),
+        }
+    }
+}
+
+impl From<FillRule> for u8 {
+    fn from(fill_rule: FillRule) -> Self {
+        match fill_rule {
+            FillRule::Nonzero => 0x1,
+            FillRule::Evenodd => 0x2,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize, PeekPoke)]
 pub struct ClipChainId(pub u64, pub PipelineId);
 
@@ -1593,7 +1693,6 @@ impl DisplayItem {
             DisplayItem::RectClip(..) => "rect_clip",
             DisplayItem::RoundedRectClip(..) => "rounded_rect_clip",
             DisplayItem::ImageMaskClip(..) => "image_mask_clip",
-            DisplayItem::Clip(..) => "clip",
             DisplayItem::ClipChain(..) => "clip_chain",
             DisplayItem::ConicGradient(..) => "conic_gradient",
             DisplayItem::Gradient(..) => "gradient",
@@ -1610,6 +1709,7 @@ impl DisplayItem {
             DisplayItem::SetFilterOps => "set_filter_ops",
             DisplayItem::SetFilterData => "set_filter_data",
             DisplayItem::SetFilterPrimitives => "set_filter_primitives",
+            DisplayItem::SetPoints => "set_points",
             DisplayItem::RadialGradient(..) => "radial_gradient",
             DisplayItem::Rectangle(..) => "rectangle",
             DisplayItem::ScrollFrame(..) => "scroll_frame",
@@ -1651,8 +1751,12 @@ impl_default_for_enums! {
     FilterOp => Identity,
     ComponentTransferFuncType => Identity,
     ClipMode => Clip,
+    FillRule => Nonzero,
     ClipId => ClipId::invalid(),
-    ReferenceFrameKind => Transform,
+    ReferenceFrameKind => Transform {
+        is_2d_scale_translation: false,
+        should_snap: false,
+    },
     Rotation => Degree0,
     TransformStyle => Flat,
     RasterSpace => Local(f32::default()),
@@ -1660,6 +1764,7 @@ impl_default_for_enums! {
     ImageRendering => Auto,
     AlphaType => Alpha,
     YuvColorSpace => Rec601,
+    YuvRangedColorSpace => Rec601Narrow,
     ColorRange => Limited,
     YuvData => NV12(ImageKey::default(), ImageKey::default()),
     YuvFormat => NV12,

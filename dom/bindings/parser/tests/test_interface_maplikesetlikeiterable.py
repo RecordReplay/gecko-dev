@@ -317,7 +317,7 @@ def WebIDLTest(parser, harness):
         numProductions=2,
     )
 
-    shouldPass(
+    shouldFail(
         "JS Implemented maplike interface",
         """
                [JSImplementation="@mozilla.org/dom/test-interface-js-maplike;1"]
@@ -326,10 +326,9 @@ def WebIDLTest(parser, harness):
                setlike<long>;
                };
                """,
-        setRWChromeMembers,
     )
 
-    shouldPass(
+    shouldFail(
         "JS Implemented maplike interface",
         """
                [JSImplementation="@mozilla.org/dom/test-interface-js-maplike;1"]
@@ -338,7 +337,6 @@ def WebIDLTest(parser, harness):
                maplike<long, long>;
                };
                """,
-        mapRWChromeMembers,
     )
 
     #
@@ -711,7 +709,7 @@ def WebIDLTest(parser, harness):
         "Inheritance of unforgeable attribute collision with child maplike/setlike",
         """
                interface Foo1 {
-               [Unforgeable]
+               [LegacyUnforgeable]
                attribute double size;
                };
                interface Foo2 : Foo1 {
@@ -724,7 +722,7 @@ def WebIDLTest(parser, harness):
         "Inheritance of multi-level unforgeable attribute collision with child maplike/setlike",
         """
                interface Foo1 {
-               [Unforgeable]
+               [LegacyUnforgeable]
                attribute double size;
                };
                interface Foo2 : Foo1 {
@@ -744,31 +742,6 @@ def WebIDLTest(parser, harness):
                };
                """,
         setROMembers + [("clear", WebIDL.IDLAttribute)],
-    )
-
-    shouldPass(
-        "JS Implemented read-only interface with readonly allowable overrides",
-        """
-               [JSImplementation="@mozilla.org/dom/test-interface-js-maplike;1"]
-               interface Foo1 {
-               constructor();
-               readonly setlike<long>;
-               readonly attribute boolean clear;
-               };
-               """,
-        setROChromeMembers + [("clear", WebIDL.IDLAttribute)],
-    )
-
-    shouldFail(
-        "JS Implemented read-write interface with non-readwrite allowable overrides",
-        """
-               [JSImplementation="@mozilla.org/dom/test-interface-js-maplike;1"]
-               interface Foo1 {
-               constructor();
-               setlike<long>;
-               readonly attribute boolean clear;
-               };
-               """,
     )
 
     r = shouldPass(

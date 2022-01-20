@@ -238,15 +238,20 @@ impl SendMessage {
         };
 
         if let SendMessageState::SendingInitialMessage { ref mut buf, fin } = self.state {
-            let sent =
-                Error::map_error(conn.stream_send(self.stream_id, &buf), Error::HttpInternal)?;
+            let sent = Error::map_error(
+                conn.stream_send(self.stream_id, &buf),
+                Error::HttpInternal(5),
+            )?;
             qlog::h3_data_moved_down(&mut conn.qlog_mut(), self.stream_id, sent);
 
             qtrace!([label], "{} bytes sent", sent);
 
             if sent == buf.len() {
                 if fin {
-                    Error::map_error(conn.stream_close_send(self.stream_id), Error::HttpInternal)?;
+                    Error::map_error(
+                        conn.stream_close_send(self.stream_id),
+                        Error::HttpInternal(6),
+                    )?;
                     self.state = SendMessageState::Closed;
                     qtrace!([label], "done sending request");
                 } else {
@@ -266,7 +271,10 @@ impl SendMessage {
     // This method returns if they're still being sent. Request body (if any) is sent by
     // http client afterwards using `send_request_body` after receiving DataWritable event.
     pub fn has_data_to_send(&self) -> bool {
-        matches!(self.state, SendMessageState::Initialized {..} | SendMessageState::SendingInitialMessage { .. } )
+        matches!(
+            self.state,
+            SendMessageState::Initialized { .. } | SendMessageState::SendingInitialMessage { .. }
+        )
     }
 
     pub fn close(&mut self, conn: &mut Connection) -> Res<()> {

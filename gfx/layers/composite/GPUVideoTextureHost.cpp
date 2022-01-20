@@ -147,7 +147,7 @@ void GPUVideoTextureHost::SetTextureSourceProvider(
 gfx::YUVColorSpace GPUVideoTextureHost::GetYUVColorSpace() const {
   MOZ_ASSERT(mWrappedTextureHost, "Image isn't valid yet");
   if (!mWrappedTextureHost) {
-    return gfx::YUVColorSpace::UNKNOWN;
+    return TextureHost::GetYUVColorSpace();
   }
   return mWrappedTextureHost->GetYUVColorSpace();
 }
@@ -269,11 +269,12 @@ void GPUVideoTextureHost::PushDisplayItems(
                                                aFilter, aImageKeys, aFlags);
 }
 
-bool GPUVideoTextureHost::SupportsExternalCompositing() {
+bool GPUVideoTextureHost::SupportsExternalCompositing(
+    WebRenderBackend aBackend) {
   if (!EnsureWrappedTextureHost()) {
     return false;
   }
-  return EnsureWrappedTextureHost()->SupportsExternalCompositing();
+  return EnsureWrappedTextureHost()->SupportsExternalCompositing(aBackend);
 }
 
 void GPUVideoTextureHost::UnbindTextureSource() {

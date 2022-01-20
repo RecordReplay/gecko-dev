@@ -18,12 +18,12 @@ import org.mozilla.gecko.GeckoEditableChild;
 import org.mozilla.gecko.IGeckoEditableChild;
 import org.mozilla.gecko.IGeckoEditableParent;
 import org.mozilla.gecko.InputMethods;
-import org.mozilla.gecko.util.GamepadUtils;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.ThreadUtils.AssertBehavior;
 
 import android.graphics.RectF;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -45,6 +45,7 @@ import android.text.method.KeyListener;
 import android.text.method.TextKeyListener;
 import android.text.style.CharacterStyle;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.View;
@@ -654,13 +655,13 @@ import android.view.inputmethod.EditorInfo;
             if (mKeyMap == null) {
                 mKeyMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
             }
-        } catch (Exception e) {
+        } catch (final Exception e) {
             // KeyCharacterMap.UnavailableException is not found on Gingerbread;
             // besides, it seems like HC and ICS will throw something other than
             // KeyCharacterMap.UnavailableException; so use a generic Exception here
             return null;
         }
-        KeyEvent [] keyEvents = mKeyMap.getEvents(cs.toString().toCharArray());
+        final KeyEvent [] keyEvents = mKeyMap.getEvents(cs.toString().toCharArray());
         if (keyEvents == null || keyEvents.length == 0) {
             return null;
         }
@@ -676,11 +677,11 @@ import android.view.inputmethod.EditorInfo;
             // so we need the sequence to not have any spans
             return;
         }
-        KeyEvent [] keyEvents = synthesizeKeyEvents(action.mSequence);
+        final KeyEvent [] keyEvents = synthesizeKeyEvents(action.mSequence);
         if (keyEvents == null) {
             return;
         }
-        for (KeyEvent event : keyEvents) {
+        for (final KeyEvent event : keyEvents) {
             if (KeyEvent.isModifierKey(event.getKeyCode())) {
                 continue;
             }
@@ -751,7 +752,7 @@ import android.view.inputmethod.EditorInfo;
     private Object getField(final Object obj, final String field, final Object def) {
         try {
             return obj.getClass().getField(field).get(obj);
-        } catch (Exception e) {
+        } catch (final Exception e) {
             return def;
         }
     }
@@ -800,7 +801,7 @@ import android.view.inputmethod.EditorInfo;
 
             // Find existence and range of any composing spans (spans with the
             // SPAN_COMPOSING flag set).
-            for (Object span : spans) {
+            for (final Object span : spans) {
                 if ((text.getSpanFlags(span) & Spanned.SPAN_COMPOSING) == 0) {
                     continue;
                 }
@@ -869,13 +870,15 @@ import android.view.inputmethod.EditorInfo;
         }
 
         int rangeStart = composingStart;
-        TextPaint tp = new TextPaint();
-        TextPaint emptyTp = new TextPaint();
+        final TextPaint tp = new TextPaint();
+        final TextPaint emptyTp = new TextPaint();
         // set initial foreground color to 0, because we check for tp.getColor() == 0
         // below to decide whether to pass a foreground color to Gecko
         emptyTp.setColor(0);
         do {
-            int rangeType, rangeStyles = 0, rangeLineStyle = IME_RANGE_LINE_NONE;
+            final int rangeType;
+            int rangeStyles = 0;
+            int rangeLineStyle = IME_RANGE_LINE_NONE;
             boolean rangeBoldLine = false;
             int rangeForeColor = 0, rangeBackColor = 0, rangeLineColor = 0;
             int rangeEnd = text.nextSpanTransition(rangeStart, composingEnd, Object.class);
@@ -885,7 +888,7 @@ import android.view.inputmethod.EditorInfo;
             } else if (selEnd > rangeStart && selEnd < rangeEnd) {
                 rangeEnd = selEnd;
             }
-            CharacterStyle[] styleSpans =
+            final CharacterStyle[] styleSpans =
                     text.getSpans(rangeStart, rangeEnd, CharacterStyle.class);
 
             if (DEBUG) {
@@ -902,7 +905,7 @@ import android.view.inputmethod.EditorInfo;
                             ? IME_RANGE_SELECTEDCONVERTEDTEXT
                             : IME_RANGE_CONVERTEDTEXT;
                 tp.set(emptyTp);
-                for (CharacterStyle span : styleSpans) {
+                for (final CharacterStyle span : styleSpans) {
                     span.updateDrawState(tp);
                 }
                 int tpUnderlineColor = 0;
@@ -956,7 +959,7 @@ import android.view.inputmethod.EditorInfo;
                              final @NonNull KeyEvent event) {
         final Editable editable = mProxy;
         final KeyListener keyListener = TextKeyListener.getInstance();
-        KeyEvent translatedEvent = translateKey(event.getKeyCode(), event);
+        final KeyEvent translatedEvent = translateKey(event.getKeyCode(), event);
 
         // We only let TextKeyListener do UI things on the UI thread.
         final View v = ThreadUtils.isOnUiThread() ? view : null;
@@ -1088,9 +1091,63 @@ import android.view.inputmethod.EditorInfo;
         return false;
     }
 
+    private static KeyEvent translateSonyXperiaGamepadKeys(final int keyCode, final KeyEvent event) {
+        // The cross and circle button mappings may be swapped in the different regions so
+        // determine if they are swapped so the proper key codes can be mapped to the keys
+        final boolean areKeysSwapped = areSonyXperiaGamepadKeysSwapped();
+
+        int translatedKeyCode = keyCode;
+        // If a Sony Xperia, remap the cross and circle buttons to buttons
+        // A and B for the gamepad API
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_BACK:
+                translatedKeyCode = (areKeysSwapped ? KeyEvent.KEYCODE_BUTTON_A
+                        : KeyEvent.KEYCODE_BUTTON_B);
+                break;
+
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+                translatedKeyCode = (areKeysSwapped ? KeyEvent.KEYCODE_BUTTON_B
+                        : KeyEvent.KEYCODE_BUTTON_A);
+                break;
+
+            default:
+                return event;
+        }
+
+        return new KeyEvent(event.getAction(), translatedKeyCode);
+    }
+
+    private static final int SONY_XPERIA_GAMEPAD_DEVICE_ID = 196611;
+
+    private static boolean isSonyXperiaGamepadKeyEvent(final KeyEvent event) {
+        return (event.getDeviceId() == SONY_XPERIA_GAMEPAD_DEVICE_ID &&
+                "Sony Ericsson".equals(Build.MANUFACTURER) &&
+                ("R800".equals(Build.MODEL) || "R800i".equals(Build.MODEL)));
+    }
+
+    private static boolean areSonyXperiaGamepadKeysSwapped() {
+        // The cross and circle buttons on Sony Xperia phones are swapped
+        // in different regions
+        // http://developer.sonymobile.com/2011/02/13/xperia-play-game-keys/
+        final char DEFAULT_O_BUTTON_LABEL = 0x25CB;
+
+        boolean swapped = false;
+        final int[] deviceIds = InputDevice.getDeviceIds();
+
+        for (int i = 0; deviceIds != null && i < deviceIds.length; i++) {
+            final KeyCharacterMap keyCharacterMap = KeyCharacterMap.load(deviceIds[i]);
+            if (keyCharacterMap != null && DEFAULT_O_BUTTON_LABEL ==
+                    keyCharacterMap.getDisplayLabel(KeyEvent.KEYCODE_DPAD_CENTER)) {
+                swapped = true;
+                break;
+            }
+        }
+        return swapped;
+    }
+
     private KeyEvent translateKey(final int keyCode, final @NonNull KeyEvent event) {
-        if (GamepadUtils.isSonyXperiaGamepadKeyEvent(event)) {
-            return GamepadUtils.translateSonyXperiaGamepadKeys(keyCode, event);
+        if (isSonyXperiaGamepadKeyEvent(event)) {
+            return translateSonyXperiaGamepadKeys(keyCode, event);
         }
         return event;
     }
@@ -1514,7 +1571,7 @@ import android.view.inputmethod.EditorInfo;
         // For some input type we will use a widget to display the ui, for those we must not
         // display the ime. We can display a widget for date and time types and, if the sdk version
         // is 11 or greater, for datetime/month/week as well.
-        int state;
+        final int state;
         if ((typeHint != null && (typeHint.equalsIgnoreCase("date") ||
                                   typeHint.equalsIgnoreCase("time") ||
                                   typeHint.equalsIgnoreCase("month") ||
@@ -1666,8 +1723,11 @@ import android.view.inputmethod.EditorInfo;
             outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
         } else if (autocapitalize.equals("words")) {
             outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_WORDS;
-        } else if (!typeHint.equalsIgnoreCase("text") && modeHint.length() == 0) {
+        } else if (modeHint.length() == 0 &&
+                   (outAttrs.inputType & InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE) != 0 &&
+                   !typeHint.equalsIgnoreCase("text")) {
             // auto-capitalized mode is the default for types other than text (bug 871884)
+            // except to password, url and email.
             outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
         }
 
@@ -1694,6 +1754,13 @@ import android.view.inputmethod.EditorInfo;
 
         if ((flags & SessionTextInput.EditableListener.IME_FLAG_PRIVATE_BROWSING) != 0) {
             outAttrs.imeOptions |= InputMethods.IME_FLAG_NO_PERSONALIZED_LEARNING;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            final Spanned currentText = mText.getCurrentText();
+            outAttrs.initialSelStart =  Selection.getSelectionStart(currentText);
+            outAttrs.initialSelEnd = Selection.getSelectionEnd(currentText);
+            outAttrs.setInitialSurroundingText(currentText);
         }
 
         toggleSoftInput(/* force */ false, state);
@@ -1772,10 +1839,13 @@ import android.view.inputmethod.EditorInfo;
 
     @Override // IGeckoEditableParent
     public void onSelectionChange(final IBinder token,
-                                  final int start, final int end) {
+                                  final int start, final int end, final boolean causedOnlyByComposition) {
         // On Gecko or binder thread.
         if (DEBUG) {
-            Log.d(LOGTAG, "onSelectionChange(" + start + ", " + end + ")");
+            final StringBuilder sb = new StringBuilder("onSelectionChange(");
+            sb.append(start).append(", ").append(end).append(", ")
+                .append(causedOnlyByComposition).append(")");
+            Log.d(LOGTAG, sb.toString());
         }
 
         if (!binderCheckToken(token, /* allowNull */ false)) {
@@ -1795,6 +1865,14 @@ import android.view.inputmethod.EditorInfo;
         mLastTextChangeNewEnd = -1;
         mLastTextChangeReplacedSelection = false;
 
+        if (causedOnlyByComposition) {
+            // It is unnecessary to sync shadow text since this change is by composition from Java
+            // side.
+            return;
+        }
+
+        // It is ready to synchronize Java text with Gecko text when no more input events is
+        // dispatched.
         mIcPostHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -1813,7 +1891,7 @@ import android.view.inputmethod.EditorInfo;
                              final int start, final int unboundedOldEnd) {
         // On Gecko or binder thread.
         if (DEBUG) {
-            StringBuilder sb = new StringBuilder("onTextChange(");
+            final StringBuilder sb = new StringBuilder("onTextChange(");
             debugAppend(sb, text).append(", ").append(start).append(", ")
                                  .append(unboundedOldEnd).append(")");
             Log.d(LOGTAG, sb.toString());
@@ -1821,6 +1899,13 @@ import android.view.inputmethod.EditorInfo;
 
         if (!binderCheckToken(token, /* allowNull */ false)) {
             return;
+        }
+
+        if (unboundedOldEnd >= Integer.MAX_VALUE / 2) {
+            // Integer.MAX_VALUE / 2 is a magic number to synchronize all.
+            // (See GeckoEditableSupport::FlushIMEText.)
+            // Previous text transactions are unnecessary now, so we have to ignore it.
+            mActions.clear();
         }
 
         final int currentLength = mText.getCurrentText().length();
@@ -1886,7 +1971,7 @@ import android.view.inputmethod.EditorInfo;
     public void onDefaultKeyEvent(final IBinder token, final KeyEvent event) {
         // On Gecko or binder thread.
         if (DEBUG) {
-            StringBuilder sb = new StringBuilder("onDefaultKeyEvent(");
+            final StringBuilder sb = new StringBuilder("onDefaultKeyEvent(");
             sb.append("action=").append(event.getAction()).append(", ")
                 .append("keyCode=").append(event.getKeyCode()).append(", ")
                 .append("metaState=").append(event.getMetaState()).append(", ")
@@ -1936,13 +2021,13 @@ import android.view.inputmethod.EditorInfo;
     // InvocationHandler interface
 
     static String getConstantName(final Class<?> cls, final String prefix, final Object value) {
-        for (Field fld : cls.getDeclaredFields()) {
+        for (final Field fld : cls.getDeclaredFields()) {
             try {
                 if (fld.getName().startsWith(prefix) &&
                     fld.get(null).equals(value)) {
                     return fld.getName();
                 }
-            } catch (IllegalAccessException e) {
+            } catch (final IllegalAccessException e) {
             }
         }
         return String.valueOf(value);
@@ -1992,7 +2077,7 @@ import android.view.inputmethod.EditorInfo;
     @Override
     public Object invoke(final Object proxy, final Method method, final Object[] args)
             throws Throwable {
-        Object target;
+        final Object target;
         final Class<?> methodInterface = method.getDeclaringClass();
         if (DEBUG) {
             // Editable methods should all be called from the IC thread
@@ -2009,10 +2094,10 @@ import android.view.inputmethod.EditorInfo;
 
         final Object ret = method.invoke(target, args);
         if (DEBUG) {
-            StringBuilder log = new StringBuilder(method.getName());
+            final StringBuilder log = new StringBuilder(method.getName());
             log.append("(");
             if (args != null) {
-                for (Object arg : args) {
+                for (final Object arg : args) {
                     debugAppend(log, arg).append(", ");
                 }
                 if (args.length > 0) {

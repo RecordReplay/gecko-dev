@@ -53,9 +53,6 @@
   scale: inherit;
   translate: inherit;
   /* When the table wrapper is a Flex/Grid item we need these: */
-  flex-grow: inherit;
-  flex-shrink: inherit;
-  flex-basis: inherit;
   align-self: inherit;
   justify-self: inherit;
   grid-column-start: inherit;
@@ -134,11 +131,12 @@
 }
 
 /* https://drafts.csswg.org/css-lists-3/#ua-stylesheet */
-*|*::marker {
+::marker {
   text-align: end;
   text-transform: none;
   unicode-bidi: isolate;
   font-variant-numeric: tabular-nums;
+  white-space: pre;
 }
 
 /* SVG documents don't always load this file but they do have links.
@@ -146,19 +144,19 @@
  * the same changes to svg.css.
  */
 
-/* Links */
+/* Links and focusable content */
 
-*|*:any-link {
+:any-link {
   cursor: pointer;
 }
 
-*|*:any-link:-moz-focusring {
+:focus-visible {
   /* Don't specify the outline-color, we should always use initial value. */
   outline: 1px dotted;
 }
 
 /* Inert subtrees */
-*|*:-moz-inert {
+:-moz-inert {
   -moz-inert: inert;
 }
 
@@ -203,8 +201,7 @@
   overflow-clip-box: inherit;
 }
 
-*|*::-moz-scrolled-content, *|*::-moz-scrolled-canvas,
-*|*::-moz-scrolled-page-sequence {
+*|*::-moz-scrolled-content, *|*::-moz-scrolled-canvas {
   /* e.g., text inputs, select boxes */
   padding: inherit;
   /* The display doesn't affect the kind of frame constructed here.  This just
@@ -214,8 +211,9 @@
      blocks with overflow: scroll; */
   unicode-bidi: inherit;
   text-overflow: inherit;
-  /* Please keep the Multicol/Flex/Grid/Align sections below in sync with
-     ::-moz-fieldset-content/::-moz-button-content in forms.css */
+  /* Please keep the declarations below in sync with ::-moz-fieldset-content /
+     ::-moz-button-content in forms.css */
+  content: inherit;
   /* Multicol container */
   column-count: inherit;
   column-width: inherit;
@@ -294,12 +292,14 @@
   display: block;
 }
 
-*|*::-moz-page-sequence, *|*::-moz-scrolled-page-sequence {
+*|*::-moz-page-sequence {
   /* Collection of pages in print/print preview. Visual styles may only appear
    * in print preview. */
   display: block;
   background: linear-gradient(#606060, #8a8a8a) fixed;
+  /* We always fill the available space in both directions */
   height: 100%;
+  width: 100%;
 }
 
 *|*::-moz-printed-sheet {
@@ -319,12 +319,12 @@
   }
 }
 
-*|*::-moz-pagecontent {
+*|*::-moz-page-content {
   display: block;
   margin: auto;
 }
 
-*|*::-moz-pagebreak {
+*|*::-moz-page-break {
   display: block;
 }
 

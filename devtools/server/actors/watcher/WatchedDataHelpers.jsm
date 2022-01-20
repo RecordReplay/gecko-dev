@@ -11,46 +11,53 @@
 
 var EXPORTED_SYMBOLS = ["WatchedDataHelpers"];
 
+// Allow this JSM to also be loaded as a CommonJS module
+// Because this module is used from the worker thread,
+// (via target-actor-mixin), and workers can't load JSMs via ChromeUtils.import.
+const { validateBreakpointLocation } =
+  typeof module == "object"
+    ? require("devtools/shared/validate-breakpoint.jsm")
+    : ChromeUtils.import("resource://devtools/shared/validate-breakpoint.jsm");
+
 // List of all arrays stored in `watchedData`, which are replicated across processes and threads
 const SUPPORTED_DATA = {
   BREAKPOINTS: "breakpoints",
+  XHR_BREAKPOINTS: "xhr-breakpoints",
   RESOURCES: "resources",
+  TARGET_CONFIGURATION: "target-configuration",
+  THREAD_CONFIGURATION: "thread-configuration",
   TARGETS: "targets",
 };
 
 // Optional function, if data isn't a primitive data type in order to produce a key
 // for the given data entry
 const DATA_KEY_FUNCTION = {
-  [SUPPORTED_DATA.BREAKPOINTS]: function({
-    location: { sourceUrl, sourceId, line, column },
-  }) {
-    if (!sourceUrl && !sourceId) {
-      throw new Error(
-        `Breakpoints expect to have either a sourceUrl or a sourceId.`
-      );
-    }
-    if (sourceUrl && typeof sourceUrl != "string") {
-      throw new Error(
-        `Breakpoints expect to have sourceUrl string, got ${typeof sourceUrl} instead.`
-      );
-    }
-    // sourceId may be undefined for some sources keyed by URL
-    if (sourceId && typeof sourceId != "string") {
-      throw new Error(
-        `Breakpoints expect to have sourceId string, got ${typeof sourceId} instead.`
-      );
-    }
-    if (typeof line != "number") {
-      throw new Error(
-        `Breakpoints expect to have line number, got ${typeof line} instead.`
-      );
-    }
-    if (typeof column != "number") {
-      throw new Error(
-        `Breakpoints expect to have column number, got ${typeof column} instead.`
-      );
-    }
+  [SUPPORTED_DATA.BREAKPOINTS]: function({ location }) {
+    validateBreakpointLocation(location);
+    const { sourceUrl, sourceId, line, column } = location;
     return `${sourceUrl}:${sourceId}:${line}:${column}`;
+  },
+  [SUPPORTED_DATA.TARGET_CONFIGURATION]: function({ key }) {
+    // Configuration data entries are { key, value } objects, `key` can be used
+    // as the unique identifier for the entry.
+    return key;
+  },
+  [SUPPORTED_DATA.THREAD_CONFIGURATION]: function({ key }) {
+    // See target configuration comment
+    return key;
+  },
+  [SUPPORTED_DATA.XHR_BREAKPOINTS]: function({ path, method }) {
+    if (typeof path != "string") {
+      throw new Error(
+        `XHR Breakpoints expect to have path string, got ${typeof path} instead.`
+      );
+    }
+    if (typeof method != "string") {
+      throw new Error(
+        `XHR Breakpoints expect to have method string, got ${typeof method} instead.`
+      );
+    }
+    return `${path}:${method}`;
   },
 };
 
@@ -80,11 +87,17 @@ const WatchedDataHelpers = {
     const toBeAdded = [];
     const keyFunction = DATA_KEY_FUNCTION[type] || idFunction;
     for (const entry of entries) {
-      const alreadyExists = watchedData[type].some(existingEntry => {
+      const existingIndex = watchedData[type].findIndex(existingEntry => {
         return keyFunction(existingEntry) === keyFunction(entry);
       });
-      if (!alreadyExists) {
+      if (existingIndex === -1) {
+        // New entry.
         toBeAdded.push(entry);
+      } else {
+        // Existing entry, update the value. This is relevant if the data-entry
+        // is not a primitive data-type, and the value can change for the same
+        // key.
+        watchedData[type][existingIndex] = entry;
       }
     }
     watchedData[type].push(...toBeAdded);
@@ -122,3 +135,10 @@ const WatchedDataHelpers = {
     return true;
   },
 };
+
+// Allow this JSM to also be loaded as a CommonJS module
+// Because this module is used from the worker thread,
+// (via target-actor-mixin), and workers can't load JSMs.
+if (typeof module == "object") {
+  module.exports.WatchedDataHelpers = WatchedDataHelpers;
+}

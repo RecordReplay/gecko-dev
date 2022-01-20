@@ -30,9 +30,10 @@ add_task(async function setup() {
   // Note that the result domain is subdomain.example.ca. We still expect to
   // match with example.com results because we ignore subdomains and the public
   // suffix in this check.
-  let engine = await Services.search.addEngineWithDetails("Test", {
-    template: `http://subdomain.example.ca/?search={searchTerms}`,
+  await SearchTestUtils.installSearchExtension({
+    search_url: "https://subdomain.example.ca/",
   });
+  let engine = Services.search.getEngineByName("Example");
   await Services.search.setDefault(engine);
   await Services.search.moveEngine(engine, 0);
 
@@ -46,18 +47,18 @@ add_task(async function setup() {
       {
         type: "tab",
         title: "Test Remote",
-        url: "http://example.com",
+        url: "https://example.com",
         icon: UrlbarUtils.ICON.DEFAULT,
         client: "7cqCr77ptzX3",
-        lastUsed: 1452124677,
+        lastUsed: Math.floor(Date.now() / 1000),
       },
       {
         type: "tab",
         title: "Test Remote 2",
-        url: "http://example-2.com",
+        url: "https://example-2.com",
         icon: UrlbarUtils.ICON.DEFAULT,
         client: "7cqCr77ptzX3",
-        lastUsed: 1452124677,
+        lastUsed: Math.floor(Date.now() / 1000),
       },
     ],
   };
@@ -87,7 +88,7 @@ add_task(async function setup() {
     .stub(SyncedTabs._internal, "getTabClients")
     .callsFake(() => Promise.resolve(Cu.cloneInto([REMOTE_TAB], {})));
 
-  // Reset internal cache in PlacesRemoteTabsAutocompleteProvider.
+  // Reset internal cache in UrlbarProviderRemoteTabs.
   Services.obs.notifyObservers(null, "weave:engine:sync:finish", "tabs");
 
   registerCleanupFunction(async function() {
@@ -95,7 +96,6 @@ add_task(async function setup() {
     weaveXPCService.ready = oldWeaveServiceReady;
     SyncedTabs._internal = originalSyncedTabsInternal;
     await Services.search.setDefault(oldDefaultEngine);
-    await Services.search.removeEngine(engine);
     await PlacesUtils.history.clear();
   });
 });
@@ -155,9 +155,11 @@ add_task(async function basic() {
 
 // For engines with an invalid TLD, we filter on the entire domain.
 add_task(async function malformedEngine() {
-  let badEngine = await Services.search.addEngineWithDetails("TestMalformed", {
-    template: `http://example.foobar/?search={searchTerms}`,
+  await SearchTestUtils.installSearchExtension({
+    name: "TestMalformed",
+    search_url: "https://example.foobar/",
   });
+  let badEngine = Services.search.getEngineByName("TestMalformed");
 
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     window,
@@ -165,8 +167,8 @@ add_task(async function malformedEngine() {
   });
   Assert.equal(
     UrlbarTestUtils.getResultCount(window),
-    3,
-    "We have three results"
+    4,
+    "We have four results"
   );
   let firstResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
   Assert.equal(
@@ -177,14 +179,20 @@ add_task(async function malformedEngine() {
   let secondResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(
     secondResult.type,
-    UrlbarUtils.RESULT_TYPE.REMOTE_TAB,
-    "The second result is a remote tab."
+    UrlbarUtils.RESULT_TYPE.DYNAMIC,
+    "The second result is the tab-to-search onboarding result for our malformed engine."
   );
-  let thirdResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  let thirdResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(
     thirdResult.type,
     UrlbarUtils.RESULT_TYPE.REMOTE_TAB,
     "The third result is a remote tab."
+  );
+  let fourthResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 3);
+  Assert.equal(
+    fourthResult.type,
+    UrlbarUtils.RESULT_TYPE.REMOTE_TAB,
+    "The fourth result is a remote tab."
   );
 
   await UrlbarTestUtils.enterSearchMode(window, {
@@ -206,5 +214,4 @@ add_task(async function malformedEngine() {
 
   await UrlbarTestUtils.exitSearchMode(window);
   await UrlbarTestUtils.promisePopupClose(window);
-  await Services.search.removeEngine(badEngine);
 });

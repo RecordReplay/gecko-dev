@@ -7,7 +7,7 @@
 // Functions that handle capturing QLOG traces.
 
 use std::convert::TryFrom;
-use std::ops::RangeInclusive;
+use std::ops::{Deref, RangeInclusive};
 use std::string::String;
 use std::time::Duration;
 
@@ -16,9 +16,10 @@ use qlog::{self, event::Event, PacketHeader, QuicFrame};
 use neqo_common::{hex, qinfo, qlog::NeqoQlog, Decoder};
 
 use crate::connection::State;
-use crate::frame::{self, Frame};
+use crate::frame::{CloseError, Frame};
 use crate::packet::{DecryptedPacket, PacketNumber, PacketType, PublicPacket};
-use crate::path::Path;
+use crate::path::PathRef;
+use crate::stream_id::StreamType as NeqoStreamType;
 use crate::tparams::{self, TransportParametersHandler};
 use crate::tracking::SentPacket;
 use crate::QuicVersion;
@@ -33,18 +34,10 @@ pub fn connection_tparams_set(qlog: &mut NeqoQlog, tph: &TransportParametersHand
             None,
             None,
             None,
-            if let Some(ocid) = remote.get_bytes(tparams::ORIGINAL_DESTINATION_CONNECTION_ID) {
-                // Cannot use packet::ConnectionId's Display trait implementation
-                // because it does not include the 0x prefix.
-                Some(hex(ocid))
-            } else {
-                None
-            },
-            if let Some(srt) = remote.get_bytes(tparams::STATELESS_RESET_TOKEN) {
-                Some(hex(srt))
-            } else {
-                None
-            },
+            remote
+                .get_bytes(tparams::ORIGINAL_DESTINATION_CONNECTION_ID)
+                .map(hex),
+            remote.get_bytes(tparams::STATELESS_RESET_TOKEN).map(hex),
             if remote.get_empty(tparams::DISABLE_MIGRATION) {
                 Some(true)
             } else {
@@ -83,30 +76,31 @@ pub fn connection_tparams_set(qlog: &mut NeqoQlog, tph: &TransportParametersHand
     })
 }
 
-pub fn server_connection_started(qlog: &mut NeqoQlog, path: &Path) {
+pub fn server_connection_started(qlog: &mut NeqoQlog, path: &PathRef) {
     connection_started(qlog, path)
 }
 
-pub fn client_connection_started(qlog: &mut NeqoQlog, path: &Path) {
+pub fn client_connection_started(qlog: &mut NeqoQlog, path: &PathRef) {
     connection_started(qlog, path)
 }
 
-fn connection_started(qlog: &mut NeqoQlog, path: &Path) {
+fn connection_started(qlog: &mut NeqoQlog, path: &PathRef) {
     qlog.add_event(|| {
+        let p = path.deref().borrow();
         Some(Event::connection_started(
-            if path.local_address().ip().is_ipv4() {
+            if p.local_address().ip().is_ipv4() {
                 "ipv4".into()
             } else {
                 "ipv6".into()
             },
-            format!("{}", path.local_address().ip()),
-            format!("{}", path.remote_address().ip()),
+            format!("{}", p.local_address().ip()),
+            format!("{}", p.remote_address().ip()),
             Some("QUIC".into()),
-            path.local_address().port().into(),
-            path.remote_address().port().into(),
+            p.local_address().port().into(),
+            p.remote_address().port().into(),
             Some(format!("{:x}", QuicVersion::default().as_u32())),
-            Some(format!("{}", path.local_cid())),
-            Some(format!("{}", path.remote_cid())),
+            Some(format!("{}", p.local_cid())),
+            Some(format!("{}", p.remote_cid())),
         ))
     })
 }
@@ -371,10 +365,10 @@ fn frame_to_qlogframe(frame: &Frame) -> QuicFrame {
             maximum_streams,
         } => QuicFrame::max_streams(
             match stream_type {
-                frame::StreamType::BiDi => qlog::StreamType::Bidirectional,
-                frame::StreamType::UniDi => qlog::StreamType::Unidirectional,
+                NeqoStreamType::BiDi => qlog::StreamType::Bidirectional,
+                NeqoStreamType::UniDi => qlog::StreamType::Unidirectional,
             },
-            maximum_streams.as_u64().to_string(),
+            maximum_streams.to_string(),
         ),
         Frame::DataBlocked { data_limit } => QuicFrame::data_blocked(data_limit.to_string()),
         Frame::StreamDataBlocked {
@@ -389,10 +383,10 @@ fn frame_to_qlogframe(frame: &Frame) -> QuicFrame {
             stream_limit,
         } => QuicFrame::streams_blocked(
             match stream_type {
-                frame::StreamType::BiDi => qlog::StreamType::Bidirectional,
-                frame::StreamType::UniDi => qlog::StreamType::Unidirectional,
+                NeqoStreamType::BiDi => qlog::StreamType::Bidirectional,
+                NeqoStreamType::UniDi => qlog::StreamType::Unidirectional,
             },
-            stream_limit.as_u64().to_string(),
+            stream_limit.to_string(),
         ),
         Frame::NewConnectionId {
             sequence_number,
@@ -417,8 +411,8 @@ fn frame_to_qlogframe(frame: &Frame) -> QuicFrame {
             reason_phrase,
         } => QuicFrame::connection_close(
             match error_code {
-                frame::CloseError::Transport(_) => qlog::ErrorSpace::TransportError,
-                frame::CloseError::Application(_) => qlog::ErrorSpace::ApplicationError,
+                CloseError::Transport(_) => qlog::ErrorSpace::TransportError,
+                CloseError::Application(_) => qlog::ErrorSpace::ApplicationError,
             },
             error_code.code(),
             0,
@@ -426,6 +420,7 @@ fn frame_to_qlogframe(frame: &Frame) -> QuicFrame {
             Some(frame_type.to_string()),
         ),
         Frame::HandshakeDone => QuicFrame::handshake_done(),
+        Frame::AckFrequency { .. } => QuicFrame::unknown(frame.get_type()),
     }
 }
 

@@ -9,8 +9,14 @@
 #define _ACCESSIBLE_TEXT_H
 
 #include "AccessibleText.h"
+#include "nsIAccessibleText.h"
 
 namespace mozilla {
+template <class T>
+class StaticAutoPtr;
+template <class T>
+class StaticRefPtr;
+
 namespace a11y {
 class HyperTextAccessibleWrap;
 
@@ -126,6 +132,7 @@ class ia2AccessibleText : public IAccessibleText {
   HRESULT GetModifiedText(bool aGetInsertedText, IA2TextSegment* aNewText);
   AccessibleTextBoundary GetGeckoTextBoundary(
       enum IA2TextBoundaryType coordinateType);
+  HyperTextAccessibleWrap* TextAcc();
 };
 
 }  // namespace a11y

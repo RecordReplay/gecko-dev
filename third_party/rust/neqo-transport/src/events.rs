@@ -11,8 +11,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::connection::State;
-use crate::frame::StreamType;
-use crate::stream_id::StreamId;
+use crate::stream_id::{StreamId, StreamType};
 use crate::AppError;
 use neqo_common::event::Provider as EventProvider;
 use neqo_crypto::ResumptionToken;
@@ -21,6 +20,11 @@ use neqo_crypto::ResumptionToken;
 pub enum ConnectionEvent {
     /// Cert authentication needed
     AuthenticationNeeded,
+    /// Encrypted client hello fallback occurred.  The certificate for the
+    /// public name needs to be authenticated.
+    EchFallbackAuthenticationNeeded {
+        public_name: String,
+    },
     /// A new uni (read) or bidi stream has been opened by the peer.
     NewStream {
         stream_id: StreamId,
@@ -69,6 +73,10 @@ pub struct ConnectionEvents {
 impl ConnectionEvents {
     pub fn authentication_needed(&self) {
         self.insert(ConnectionEvent::AuthenticationNeeded);
+    }
+
+    pub fn ech_fallback_authentication_needed(&self, public_name: String) {
+        self.insert(ConnectionEvent::EchFallbackAuthenticationNeeded { public_name });
     }
 
     pub fn new_stream(&self, stream_id: StreamId) {

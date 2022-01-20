@@ -8,27 +8,20 @@
 
 "use strict";
 
-const DEFAULT_ENGINE_NAME = "Test";
-
 add_task(async function setup() {
   for (let i = 0; i < 5; i++) {
     await PlacesTestUtils.addVisits([{ uri: "http://example.com/" }]);
   }
 
   let oldDefaultEngine = await Services.search.getDefault();
-  let defaultEngine = await Services.search.addEngineWithDetails(
-    DEFAULT_ENGINE_NAME,
-    {
-      template: "http://example.com/?search={searchTerms}",
-    }
-  );
+  await SearchTestUtils.installSearchExtension();
+  let defaultEngine = Services.search.getEngineByName("Example");
   await Services.search.setDefault(defaultEngine);
   await Services.search.moveEngine(defaultEngine, 0);
 
   registerCleanupFunction(async () => {
     await PlacesUtils.history.clear();
     await Services.search.setDefault(oldDefaultEngine);
-    await Services.search.removeEngine(defaultEngine);
   });
 });
 
@@ -77,6 +70,7 @@ add_task(async function remote() {
     "example.com/",
     "Urlbar contains the typed string."
   );
+  await UrlbarTestUtils.promisePopupClose(window, () => gURLBar.blur());
 });
 
 // Tests that autofill works as normal when entering and when in a local search
@@ -134,4 +128,5 @@ add_task(async function local() {
     "example.com/",
     "Urlbar contains the typed string."
   );
+  await UrlbarTestUtils.promisePopupClose(window, () => gURLBar.blur());
 });

@@ -12,9 +12,12 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   DEFAULT_SITES: "resource://activity-stream/lib/DefaultSites.jsm",
-  ExperimentAPI: "resource://messaging-system/experiments/ExperimentAPI.jsm",
+  ExperimentAPI: "resource://nimbus/ExperimentAPI.jsm",
   shortURL: "resource://activity-stream/lib/ShortURL.jsm",
   TippyTopProvider: "resource://activity-stream/lib/TippyTopProvider.jsm",
+  AboutWelcomeDefaults:
+    "resource://activity-stream/aboutwelcome/lib/AboutWelcomeDefaults.jsm",
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
 });
 
 XPCOMUtils.defineLazyGetter(this, "log", () => {
@@ -30,25 +33,6 @@ XPCOMUtils.defineLazyGetter(this, "tippyTopProvider", () =>
     await provider.init();
     return provider;
   })()
-);
-
-function _parseOverrideContent(value) {
-  let result = {};
-  try {
-    result = value ? JSON.parse(value) : {};
-  } catch (e) {
-    Cu.reportError(e);
-  }
-  return result;
-}
-
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "multiStageAboutWelcomeContent",
-  "browser.aboutwelcome.overrideContent",
-  "",
-  null,
-  _parseOverrideContent
 );
 
 const SEARCH_REGION_PREF = "browser.search.region";
@@ -114,35 +98,6 @@ async function getSelectedTheme(child) {
 class AboutWelcomeChild extends JSWindowActorChild {
   actorCreated() {
     this.exportFunctions();
-    this.initWebProgressListener();
-  }
-
-  initWebProgressListener() {
-    const webProgress = this.manager.browsingContext.top.docShell
-      .QueryInterface(Ci.nsIInterfaceRequestor)
-      .getInterface(Ci.nsIWebProgress);
-
-    const listener = {
-      QueryInterface: ChromeUtils.generateQI([
-        "nsIWebProgressListener",
-        "nsISupportsWeakReference",
-      ]),
-    };
-
-    listener.onLocationChange = (aWebProgress, aRequest, aLocation, aFlags) => {
-      // Exit if actor 'AboutWelcome' has already been destroyed or
-      // content window doesn't exist
-      if (!this.manager || !this.contentWindow) {
-        return;
-      }
-      log.debug(`onLocationChange handled: ${aWebProgress.DOMWindow}`);
-      this.AWSendToParent("LOCATION_CHANGED");
-    };
-
-    webProgress.addProgressListener(
-      listener,
-      Ci.nsIWebProgress.NOTIFY_LOCATION
-    );
   }
 
   /**
@@ -164,18 +119,8 @@ class AboutWelcomeChild extends JSWindowActorChild {
   exportFunctions() {
     let window = this.contentWindow;
 
-    Cu.exportFunction(this.AWGetExperimentData.bind(this), window, {
-      defineAs: "AWGetExperimentData",
-    });
-
-    Cu.exportFunction(this.AWGetAttributionData.bind(this), window, {
-      defineAs: "AWGetAttributionData",
-    });
-
-    // For local dev, checks for JSON content inside pref browser.aboutwelcome.overrideContent
-    // that is used to override default welcome UI
-    Cu.exportFunction(this.AWGetWelcomeOverrideContent.bind(this), window, {
-      defineAs: "AWGetWelcomeOverrideContent",
+    Cu.exportFunction(this.AWGetFeatureConfig.bind(this), window, {
+      defineAs: "AWGetFeatureConfig",
     });
 
     Cu.exportFunction(this.AWGetFxAMetricsFlowURI.bind(this), window, {
@@ -196,6 +141,10 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
     Cu.exportFunction(this.AWGetRegion.bind(this), window, {
       defineAs: "AWGetRegion",
+    });
+
+    Cu.exportFunction(this.AWIsDefaultBrowser.bind(this), window, {
+      defineAs: "AWIsDefaultBrowser",
     });
 
     Cu.exportFunction(this.AWSelectTheme.bind(this), window, {
@@ -224,109 +173,57 @@ class AboutWelcomeChild extends JSWindowActorChild {
     );
   }
 
-  /**
-   * Send multistage welcome JSON data read from aboutwelcome.overrideConetent pref to page
-   */
-  AWGetWelcomeOverrideContent() {
-    return Cu.cloneInto(
-      multiStageAboutWelcomeContent || {},
-      this.contentWindow
-    );
-  }
-
   AWSelectTheme(data) {
     return this.wrapPromise(
       this.sendQuery("AWPage:SELECT_THEME", data.toUpperCase())
     );
   }
 
-  async getAddonInfo(attrbObj) {
-    let { content, source } = attrbObj;
-    try {
-      if (!content || source !== "addons.mozilla.org") {
-        return null;
-      }
-      // Attribution data can be double encoded
-      while (content.includes("%")) {
-        try {
-          const result = decodeURIComponent(content);
-          if (result === content) {
-            break;
-          }
-          content = result;
-        } catch (e) {
-          break;
-        }
-      }
-      return await this.sendQuery("AWPage:GET_ADDON_FROM_REPOSITORY", content);
-    } catch (e) {
-      Cu.reportError(
-        "Failed to get the latest add-on version for Return to AMO"
-      );
-      return null;
-    }
-  }
+  /**
+   * Send initial data to page including experiment information
+   */
+  async getAWContent() {
+    let attributionData = await this.sendQuery("AWPage:GET_ATTRIBUTION_DATA");
 
-  hasAMOAttribution(attributionData) {
-    return (
-      attributionData &&
-      attributionData.campaign === "non-fx-button" &&
-      attributionData.source === "addons.mozilla.org"
+    // Return to AMO gets returned early.
+    if (attributionData?.template) {
+      log.debug("Loading about:welcome with RTAMO attribution data");
+      return Cu.cloneInto(attributionData, this.contentWindow);
+    } else if (attributionData?.ua) {
+      log.debug("Loading about:welcome with UA attribution");
+    }
+
+    let experimentMetadata =
+      ExperimentAPI.getExperimentMetaData({
+        featureId: "aboutwelcome",
+      }) || {};
+
+    log.debug(
+      `Loading about:welcome with ${experimentMetadata?.slug ??
+        "no"} experiment`
     );
-  }
 
-  async formatAttributionData(attribution) {
-    let result = {};
-    if (this.hasAMOAttribution(attribution)) {
-      let extraProps = await this.getAddonInfo(attribution);
-      if (extraProps) {
-        result = {
-          template: "return_to_amo",
-          extraProps,
-        };
-      }
-    }
-    return result;
-  }
-
-  async getAttributionData() {
+    let featureConfig = NimbusFeatures.aboutwelcome.getValue();
+    featureConfig.needDefault = await this.sendQuery("AWPage:NEED_DEFAULT");
+    featureConfig.needPin = await this.sendQuery("AWPage:DOES_APP_NEED_PIN");
+    let defaults = AboutWelcomeDefaults.getDefaults(featureConfig);
+    // FeatureConfig (from prefs or experiments) has higher precendence
+    // to defaults. But the `screens` property isn't defined we shouldn't
+    // override the default with `null`
     return Cu.cloneInto(
-      await this.formatAttributionData(
-        await this.sendQuery("AWPage:GET_ATTRIBUTION_DATA")
-      ),
+      await AboutWelcomeDefaults.prepareContentForReact({
+        ...attributionData,
+        ...experimentMetadata,
+        ...defaults,
+        ...featureConfig,
+        screens: featureConfig.screens ?? defaults.screens,
+      }),
       this.contentWindow
     );
   }
 
-  AWGetAttributionData() {
-    return this.wrapPromise(this.getAttributionData());
-  }
-
-  /**
-   * Send initial data to page including experiment information
-   */
-  AWGetExperimentData() {
-    let experimentData;
-    try {
-      // Note that we specifically don't wait for experiments to be loaded from disk so if
-      // about:welcome loads outside of the "FirstStartup" scenario this will likely not be ready
-      experimentData = ExperimentAPI.getExperiment({
-        featureId: "aboutwelcome",
-        // Telemetry handled in AboutNewTabService.jsm
-        sendExposurePing: false,
-      });
-    } catch (e) {
-      Cu.reportError(e);
-    }
-
-    if (experimentData?.slug) {
-      log.debug(
-        `Loading about:welcome with experiment: ${experimentData.slug}`
-      );
-    } else {
-      log.debug("Loading about:welcome without experiment");
-    }
-    return Cu.cloneInto(experimentData || {}, this.contentWindow);
+  AWGetFeatureConfig() {
+    return this.wrapPromise(this.getAWContent());
   }
 
   AWGetFxAMetricsFlowURI() {
@@ -343,6 +240,10 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
   AWGetSelectedTheme() {
     return this.wrapPromise(getSelectedTheme(this));
+  }
+
+  AWIsDefaultBrowser() {
+    return this.wrapPromise(this.sendQuery("AWPage:IS_DEFAULT_BROWSER"));
   }
 
   /**

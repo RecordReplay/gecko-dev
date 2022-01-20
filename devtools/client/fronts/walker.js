@@ -41,7 +41,7 @@ class WalkerFront extends FrontClassWithSpec(walkerSpec) {
     this.before("new-mutations", this.onMutations.bind(this));
 
     // Those events will be emitted if watchRootNode was called on the
-    // corresponding WalkerActor, which should be handled by the ResourceWatcher
+    // corresponding WalkerActor, which should be handled by the ResourceCommand
     // as long as a consumer is watching for root-node resources.
     // This should be fixed by using watchResources directly from the walker
     // front, either with the ROOT_NODE resource, or with the DOCUMENT_EVENT
@@ -166,53 +166,6 @@ class WalkerFront extends FrontClassWithSpec(walkerSpec) {
   async getNodeFromActor(actorID, path) {
     const response = await super.getNodeFromActor(actorID, path);
     return response ? response.node : null;
-  }
-
-  /*
-   * Incrementally search the document for a given string.
-   * For modern servers, results will be searched with using the WalkerActor
-   * `search` function (includes tag names, attributes, and text contents).
-   * Only 1 result is sent back, and calling the method again with the same
-   * query will send the next result. When there are no more results to be sent
-   * back, null is sent.
-   * @param {String} query
-   * @param {Object} options
-   *    - "reverse": search backwards
-   */
-  async search(query, options = {}) {
-    const searchData = (this.searchData = this.searchData || {});
-    const result = await super.search(query, options);
-    const nodeList = result.list;
-
-    // If this is a new search, start at the beginning.
-    if (searchData.query !== query) {
-      searchData.query = query;
-      searchData.index = -1;
-    }
-
-    if (!nodeList.length) {
-      return null;
-    }
-
-    // Move search result cursor and cycle if necessary.
-    searchData.index = options.reverse
-      ? searchData.index - 1
-      : searchData.index + 1;
-    if (searchData.index >= nodeList.length) {
-      searchData.index = 0;
-    }
-    if (searchData.index < 0) {
-      searchData.index = nodeList.length - 1;
-    }
-
-    // Send back the single node, along with any relevant search data
-    const node = await nodeList.item(searchData.index);
-    return {
-      type: "search",
-      node: node,
-      resultsLength: nodeList.length,
-      resultsIndex: searchData.index,
-    };
   }
 
   _releaseFront(node, force) {

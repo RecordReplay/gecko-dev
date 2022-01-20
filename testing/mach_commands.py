@@ -170,6 +170,7 @@ class AddTest(MachCommandBase):
     )
     def addtest(
         self,
+        command_context,
         suite=None,
         test=None,
         doc=None,
@@ -351,7 +352,7 @@ class Test(MachCommandBase):
         description="Run tests (detects the kind of test and runs it).",
         parser=get_test_parser,
     )
-    def test(self, what, extra_args, **log_args):
+    def test(self, command_context, what, extra_args, **log_args):
         """Run tests from names or paths.
 
         mach test accepts arguments specifying which tests to run. Each argument
@@ -404,7 +405,7 @@ class Test(MachCommandBase):
                 sys.exit(1)
             extra_args_debugger_notation = "=".join(
                 ["--debugger", log_args.get("debugger")]
-            ).encode("ascii")
+            )
             if extra_args:
                 extra_args.append(extra_args_debugger_notation)
             else:
@@ -489,7 +490,7 @@ class MachCommands(MachCommandBase):
         "directories, or omitted. If omitted, the entire test suite is "
         "executed.",
     )
-    def run_cppunit_test(self, **params):
+    def run_cppunit_test(self, command_context, **params):
         from mozlog import commandline
 
         log = params.get("log")
@@ -595,7 +596,7 @@ class SpiderMonkeyTests(MachCommandBase):
         nargs=argparse.REMAINDER,
         help="Extra arguments to pass down to the test harness.",
     )
-    def run_jstests(self, shell, params):
+    def run_jstests(self, command_context, shell, params):
         import subprocess
 
         self.virtualenv_manager.ensure()
@@ -618,11 +619,17 @@ class SpiderMonkeyTests(MachCommandBase):
     )
     @CommandArgument("--shell", help="The shell to be used")
     @CommandArgument(
+        "--cgc",
+        action="store_true",
+        default=False,
+        help="Run with the SM(cgc) job's env vars",
+    )
+    @CommandArgument(
         "params",
         nargs=argparse.REMAINDER,
         help="Extra arguments to pass down to the test harness.",
     )
-    def run_jittests(self, shell, params):
+    def run_jittests(self, command_context, shell, cgc, params):
         import subprocess
 
         self.virtualenv_manager.ensure()
@@ -635,7 +642,11 @@ class SpiderMonkeyTests(MachCommandBase):
             js,
         ] + params
 
-        return subprocess.call(jittest_cmd)
+        env = os.environ.copy()
+        if cgc:
+            env["JS_GC_ZEAL"] = "IncrementalMultipleSlices"
+
+        return subprocess.call(jittest_cmd, env=env)
 
     @Command(
         "jsapi-tests", category="testing", description="Run SpiderMonkey JSAPI tests."
@@ -647,7 +658,7 @@ class SpiderMonkeyTests(MachCommandBase):
         help="Test to run. Can be a prefix or omitted. If "
         "omitted, the entire test suite is executed.",
     )
-    def run_jsapitests(self, test_name=None):
+    def run_jsapitests(self, command_context, test_name=None):
         import subprocess
 
         jsapi_tests_cmd = [os.path.join(self.bindir, executable_name("jsapi-tests"))]
@@ -687,7 +698,7 @@ class JsShellTests(MachCommandBase):
         parser=get_jsshell_parser,
         description="Run benchmarks in the SpiderMonkey JS shell.",
     )
-    def run_jsshelltests(self, **kwargs):
+    def run_jsshelltests(self, command_context, **kwargs):
         self.activate_virtualenv()
         from jsshell import benchmark
 
@@ -714,7 +725,9 @@ class CramTest(MachCommandBase):
         help="Extra arguments to pass down to the cram binary. See "
         "'./mach python -m cram -- -h' for a list of available options.",
     )
-    def cramtest(self, cram_args=None, test_paths=None, test_objects=None):
+    def cramtest(
+        self, command_context, cram_args=None, test_paths=None, test_objects=None
+    ):
         self.activate_virtualenv()
         import mozinfo
         from manifestparser import TestManifest
@@ -751,7 +764,7 @@ class TestInfoCommand(MachCommandBase):
     @Command(
         "test-info", category="testing", description="Display historical test results."
     )
-    def test_info(self):
+    def test_info(self, command_context):
         """
         All functions implemented as subcommands.
         """
@@ -763,11 +776,6 @@ class TestInfoCommand(MachCommandBase):
     )
     @CommandArgument(
         "test_names", nargs=argparse.REMAINDER, help="Test(s) of interest."
-    )
-    @CommandArgument(
-        "--branches",
-        default="mozilla-central,autoland",
-        help="Report for named branches " "(default: mozilla-central,autoland)",
     )
     @CommandArgument(
         "--start",
@@ -783,21 +791,6 @@ class TestInfoCommand(MachCommandBase):
         help="Retrieve and display general test information.",
     )
     @CommandArgument(
-        "--show-results",
-        action="store_true",
-        help="Retrieve and display ActiveData test result summary.",
-    )
-    @CommandArgument(
-        "--show-durations",
-        action="store_true",
-        help="Retrieve and display ActiveData test duration summary.",
-    )
-    @CommandArgument(
-        "--show-tasks",
-        action="store_true",
-        help="Retrieve and display ActiveData test task names.",
-    )
-    @CommandArgument(
         "--show-bugs",
         action="store_true",
         help="Retrieve and display related Bugzilla bugs.",
@@ -805,14 +798,11 @@ class TestInfoCommand(MachCommandBase):
     @CommandArgument("--verbose", action="store_true", help="Enable debug logging.")
     def test_info_tests(
         self,
+        command_context,
         test_names,
-        branches,
         start,
         end,
         show_info,
-        show_results,
-        show_durations,
-        show_tasks,
         show_bugs,
         verbose,
     ):
@@ -821,55 +811,11 @@ class TestInfoCommand(MachCommandBase):
         ti = testinfo.TestInfoTests(verbose)
         ti.report(
             test_names,
-            branches,
             start,
             end,
             show_info,
-            show_results,
-            show_durations,
-            show_tasks,
             show_bugs,
         )
-
-    @SubCommand(
-        "test-info",
-        "long-tasks",
-        description="Find tasks approaching their taskcluster max-run-time.",
-    )
-    @CommandArgument(
-        "--branches",
-        default="mozilla-central,autoland",
-        help="Report for named branches " "(default: mozilla-central,autoland)",
-    )
-    @CommandArgument(
-        "--start",
-        default=(date.today() - timedelta(7)).strftime("%Y-%m-%d"),
-        help="Start date (YYYY-MM-DD)",
-    )
-    @CommandArgument(
-        "--end", default=date.today().strftime("%Y-%m-%d"), help="End date (YYYY-MM-DD)"
-    )
-    @CommandArgument(
-        "--max-threshold-pct",
-        default=90.0,
-        help="Count tasks exceeding this percentage of max-run-time.",
-    )
-    @CommandArgument(
-        "--filter-threshold-pct",
-        default=0.5,
-        help="Report tasks exceeding this percentage of long tasks.",
-    )
-    @CommandArgument("--verbose", action="store_true", help="Enable debug logging.")
-    def report_long_running_tasks(
-        self, branches, start, end, max_threshold_pct, filter_threshold_pct, verbose
-    ):
-        import testinfo
-
-        max_threshold_pct = float(max_threshold_pct)
-        filter_threshold_pct = float(filter_threshold_pct)
-
-        ti = testinfo.TestInfoLongRunningTasks(verbose)
-        ti.report(branches, start, end, max_threshold_pct, filter_threshold_pct)
 
     @SubCommand(
         "test-info",
@@ -912,11 +858,6 @@ class TestInfoCommand(MachCommandBase):
         help="Include list of manifest annotation conditions in report.",
     )
     @CommandArgument(
-        "--show-activedata",
-        action="store_true",
-        help="Include additional data from ActiveData, like run times and counts.",
-    )
-    @CommandArgument(
         "--filter-values",
         help="Comma-separated list of value regular expressions to filter on; "
         "displayed tests contain all specified values.",
@@ -935,21 +876,10 @@ class TestInfoCommand(MachCommandBase):
         help="Do not categorize by bugzilla component.",
     )
     @CommandArgument("--output-file", help="Path to report file.")
-    @CommandArgument(
-        "--branches",
-        default="mozilla-central,autoland",
-        help="Query ActiveData for named branches "
-        "(default: mozilla-central,autoland)",
-    )
-    @CommandArgument(
-        "--days",
-        type=int,
-        default=7,
-        help="Query ActiveData for specified number of days",
-    )
     @CommandArgument("--verbose", action="store_true", help="Enable debug logging.")
     def test_report(
         self,
+        command_context,
         components,
         flavor,
         subsuite,
@@ -958,13 +888,10 @@ class TestInfoCommand(MachCommandBase):
         show_tests,
         show_summary,
         show_annotations,
-        show_activedata,
         filter_values,
         filter_keys,
         show_components,
         output_file,
-        branches,
-        days,
         verbose,
     ):
         import testinfo
@@ -975,7 +902,7 @@ class TestInfoCommand(MachCommandBase):
         except BuildEnvironmentNotFoundException:
             print("Looks like configure has not run yet, running it now...")
             builder = Build(self._mach_context, None)
-            builder.configure()
+            builder.configure(command_context)
 
         ti = testinfo.TestInfoReport(verbose)
         ti.report(
@@ -987,13 +914,10 @@ class TestInfoCommand(MachCommandBase):
             show_tests,
             show_summary,
             show_annotations,
-            show_activedata,
             filter_values,
             filter_keys,
             show_components,
             output_file,
-            branches,
-            days,
         )
 
     @SubCommand(
@@ -1015,7 +939,7 @@ class TestInfoCommand(MachCommandBase):
         "will be written to standard output.",
     )
     @CommandArgument("--verbose", action="store_true", help="Enable debug logging.")
-    def test_report_diff(self, before, after, output_file, verbose):
+    def test_report_diff(self, command_context, before, after, output_file, verbose):
         import testinfo
 
         ti = testinfo.TestInfoReport(verbose)
@@ -1030,7 +954,7 @@ class RustTests(MachCommandBase):
         conditions=[conditions.is_non_artifact_build],
         description="Run rust unit tests (via cargo test).",
     )
-    def run_rusttests(self, **kwargs):
+    def run_rusttests(self, command_context, **kwargs):
         return self._mach_context.commands.dispatch(
             "build",
             self._mach_context,
@@ -1046,7 +970,7 @@ class TestFluentMigration(MachCommandBase):
         description="Test Fluent migration recipes.",
     )
     @CommandArgument("test_paths", nargs="*", metavar="N", help="Recipe paths to test.")
-    def run_migration_tests(self, test_paths=None, **kwargs):
+    def run_migration_tests(self, command_context, test_paths=None, **kwargs):
         if not test_paths:
             test_paths = []
         self.activate_virtualenv()

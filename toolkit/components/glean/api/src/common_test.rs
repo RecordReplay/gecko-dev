@@ -27,7 +27,7 @@ fn setup_glean(tempdir: Option<tempfile::TempDir>) -> tempfile::TempDir {
         Some(tempdir) => tempdir,
         None => tempfile::tempdir().unwrap(),
     };
-    let tmpname = dir.path().display().to_string();
+    let tmpname = dir.path().to_path_buf();
 
     let cfg = glean::Configuration {
         upload_enabled: true,
@@ -38,6 +38,7 @@ fn setup_glean(tempdir: Option<tempfile::TempDir>) -> tempfile::TempDir {
         channel: None,
         server_endpoint: None,
         uploader: None,
+        use_core_mps: false,
     };
 
     let client_info = glean::ClientInfoMetrics {

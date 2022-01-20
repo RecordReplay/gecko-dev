@@ -157,21 +157,31 @@ static_assert(JIT_ARGS_LENGTH_MAX <= ARGS_LENGTH_MAX,
  *     mapped arguments objects, see hasOverriddenCallee.
  */
 class ArgumentsObject : public NativeObject {
- protected:
+ public:
   static const uint32_t INITIAL_LENGTH_SLOT = 0;
   static const uint32_t DATA_SLOT = 1;
   static const uint32_t MAYBE_CALL_SLOT = 2;
   static const uint32_t CALLEE_SLOT = 3;
 
- public:
   static const uint32_t LENGTH_OVERRIDDEN_BIT = 0x1;
   static const uint32_t ITERATOR_OVERRIDDEN_BIT = 0x2;
   static const uint32_t ELEMENT_OVERRIDDEN_BIT = 0x4;
   static const uint32_t CALLEE_OVERRIDDEN_BIT = 0x8;
-  static const uint32_t PACKED_BITS_COUNT = 4;
+  static const uint32_t FORWARDED_ARGUMENTS_BIT = 0x10;
+  static const uint32_t PACKED_BITS_COUNT = 5;
+  static const uint32_t PACKED_BITS_MASK = (1 << PACKED_BITS_COUNT) - 1;
 
   static_assert(ARGS_LENGTH_MAX <= (UINT32_MAX >> PACKED_BITS_COUNT),
                 "Max arguments length must fit in available bits");
+
+// Our ability to inline functions that use |arguments| is limited by
+// the number of registers available to represent Value operands to
+// CreateInlinedArgumentsObject.
+#if defined(JS_CODEGEN_X86)
+  static const uint32_t MaxInlinedArgs = 1;
+#else
+  static const uint32_t MaxInlinedArgs = 3;
+#endif
 
  protected:
   template <typename CopyArgs>
@@ -185,7 +195,7 @@ class ArgumentsObject : public NativeObject {
 
   RareArgumentsData* maybeRareData() const { return data()->rareData; }
 
-  MOZ_MUST_USE bool createRareData(JSContext* cx);
+  [[nodiscard]] bool createRareData(JSContext* cx);
 
   RareArgumentsData* getOrCreateRareData(JSContext* cx) {
     if (!data()->rareData && !createRareData(cx)) {
@@ -216,9 +226,19 @@ class ArgumentsObject : public NativeObject {
                                            ScriptFrameIter& iter);
   static ArgumentsObject* createUnexpected(JSContext* cx,
                                            AbstractFramePtr frame);
+
   static ArgumentsObject* createForIon(JSContext* cx,
                                        jit::JitFrameLayout* frame,
                                        HandleObject scopeChain);
+  static ArgumentsObject* createForInlinedIon(JSContext* cx, Value* args,
+                                              HandleFunction callee,
+                                              HandleObject scopeChain,
+                                              uint32_t numActuals);
+  static ArgumentsObject* createFromValueArray(JSContext* cx,
+                                               HandleValueArray argsArray,
+                                               HandleFunction callee,
+                                               HandleObject scopeChain,
+                                               uint32_t numActuals);
 
   /*
    * Allocate ArgumentsData and fill reserved slots after allocating an
@@ -242,7 +262,7 @@ class ArgumentsObject : public NativeObject {
     return argc;
   }
 
-  /* True iff arguments.length has been assigned or its attributes changed. */
+  // True iff arguments.length has been assigned or deleted.
   bool hasOverriddenLength() const {
     const Value& v = getFixedSlot(INITIAL_LENGTH_SLOT);
     return v.toInt32() & LENGTH_OVERRIDDEN_BIT;
@@ -259,8 +279,7 @@ class ArgumentsObject : public NativeObject {
    */
   static bool reifyLength(JSContext* cx, Handle<ArgumentsObject*> obj);
 
-  /* True iff arguments[@@iterator] has been assigned or its attributes
-   * changed. */
+  // True iff arguments[@@iterator] has been assigned or deleted.
   bool hasOverriddenIterator() const {
     const Value& v = getFixedSlot(INITIAL_LENGTH_SLOT);
     return v.toInt32() & ITERATOR_OVERRIDDEN_BIT;
@@ -282,8 +301,7 @@ class ArgumentsObject : public NativeObject {
    */
   static bool getArgumentsIterator(JSContext* cx, MutableHandleValue val);
 
-  /* True iff any element has been assigned or its attributes
-   * changed. */
+  // True iff any element has been assigned or deleted.
   bool hasOverriddenElement() const {
     const Value& v = getFixedSlot(INITIAL_LENGTH_SLOT);
     return v.toInt32() & ELEMENT_OVERRIDDEN_BIT;
@@ -314,13 +332,17 @@ class ArgumentsObject : public NativeObject {
     if (i >= initialLength()) {
       return false;
     }
-    return maybeRareData() &&
-           maybeRareData()->isElementDeleted(initialLength(), i);
+    bool result = maybeRareData() &&
+                  maybeRareData()->isElementDeleted(initialLength(), i);
+    MOZ_ASSERT_IF(result, hasOverriddenElement());
+    return result;
   }
 
   bool isAnyElementDeleted() const {
-    return maybeRareData() &&
-           maybeRareData()->isAnyElementDeleted(initialLength());
+    bool result = maybeRareData() &&
+                  maybeRareData()->isAnyElementDeleted(initialLength());
+    MOZ_ASSERT_IF(result, hasOverriddenElement());
+    return result;
   }
 
   bool markElementDeleted(JSContext* cx, uint32_t i);
@@ -365,7 +387,19 @@ class ArgumentsObject : public NativeObject {
   bool argIsForwarded(unsigned i) const {
     MOZ_ASSERT(i < data()->numArgs);
     const Value& v = data()->args[i];
+    MOZ_ASSERT_IF(IsMagicScopeSlotValue(v), anyArgIsForwarded());
     return IsMagicScopeSlotValue(v);
+  }
+
+  bool anyArgIsForwarded() const {
+    const Value& v = getFixedSlot(INITIAL_LENGTH_SLOT);
+    return v.toInt32() & FORWARDED_ARGUMENTS_BIT;
+  }
+
+  void markArgumentForwarded() {
+    uint32_t v =
+        getFixedSlot(INITIAL_LENGTH_SLOT).toInt32() | FORWARDED_ARGUMENTS_BIT;
+    setFixedSlot(INITIAL_LENGTH_SLOT, Int32Value(v));
   }
 
   /*
@@ -435,8 +469,7 @@ class ArgumentsObject : public NativeObject {
   static void MaybeForwardToCallObject(AbstractFramePtr frame,
                                        ArgumentsObject* obj,
                                        ArgumentsData* data);
-  static void MaybeForwardToCallObject(jit::JitFrameLayout* frame,
-                                       HandleObject callObj,
+  static void MaybeForwardToCallObject(JSFunction* callee, JSObject* callObj,
                                        ArgumentsObject* obj,
                                        ArgumentsData* data);
 };
@@ -464,6 +497,10 @@ class MappedArgumentsObject : public ArgumentsObject {
     setFixedSlot(INITIAL_LENGTH_SLOT, Int32Value(v));
   }
 
+  static size_t getCalleeSlotOffset() {
+    return getFixedSlotOffset(CALLEE_SLOT);
+  }
+
  private:
   static bool obj_enumerate(JSContext* cx, HandleObject obj);
   static bool obj_resolve(JSContext* cx, HandleObject obj, HandleId id,
@@ -485,6 +522,18 @@ class UnmappedArgumentsObject : public ArgumentsObject {
   static bool obj_resolve(JSContext* cx, HandleObject obj, HandleId id,
                           bool* resolvedp);
 };
+
+extern bool MappedArgGetter(JSContext* cx, HandleObject obj, HandleId id,
+                            MutableHandleValue vp);
+
+extern bool MappedArgSetter(JSContext* cx, HandleObject obj, HandleId id,
+                            HandleValue v, ObjectOpResult& result);
+
+extern bool UnmappedArgGetter(JSContext* cx, HandleObject obj, HandleId id,
+                              MutableHandleValue vp);
+
+extern bool UnmappedArgSetter(JSContext* cx, HandleObject obj, HandleId id,
+                              HandleValue v, ObjectOpResult& result);
 
 }  // namespace js
 

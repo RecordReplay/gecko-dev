@@ -32,7 +32,6 @@ class SolusBootstrapper(LinuxBootstrapper, BaseBootstrapper):
     BROWSER_PACKAGES = [
         "alsa-lib",
         "dbus",
-        "libgtk-2",
         "libgtk-3",
         "libevent",
         "libvpx",
@@ -43,7 +42,6 @@ class SolusBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         "gst-plugins-good",
         "pulseaudio",
         "xorg-server-xvfb",
-        "yasm",
     ]
 
     MOBILE_ANDROID_COMMON_PACKAGES = [

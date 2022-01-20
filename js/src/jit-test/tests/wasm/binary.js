@@ -220,17 +220,13 @@ for (var bad of [0xff, 1, 0x3f])
     assertErrorMessage(() => wasmEval(moduleWithSections([sigSection([v2vSig]), declSection([0]), bodySection([funcBody({locals:[], body:[BlockCode, bad, EndCode]})])])), CompileError, /(invalid .*block type)|(unknown type)/);
 
 const multiValueModule = moduleWithSections([sigSection([v2vSig]), declSection([0]), bodySection([funcBody({locals:[], body:[BlockCode, 0, EndCode]})])]);
-if (wasmMultiValueEnabled()) {
-    // In this test module, 0 denotes a void-to-void block type.
-    assertEq(WebAssembly.validate(multiValueModule), true);
-} else {
-    assertErrorMessage(() => wasmEval(multiValueModule), CompileError, /(invalid .*block type)|(unknown type)/);
-}
+// In this test module, 0 denotes a void-to-void block type.
+assertEq(WebAssembly.validate(multiValueModule), true);
 
 // Ensure all invalid opcodes rejected
 for (let op of undefinedOpcodes) {
     let binary = moduleWithSections([v2vSigSection, declSection([0]), bodySection([funcBody({locals:[], body:[op]})])]);
-    assertErrorMessage(() => wasmEval(binary), CompileError, /((unrecognized|Unknown) opcode)|(tail calls support is not enabled)|(Unexpected EOF)/);
+    assertErrorMessage(() => wasmEval(binary), CompileError, /((unrecognized|Unknown) opcode)|(tail calls support is not enabled)|(Exceptions support is not enabled)|(Unexpected EOF)/);
     assertEq(WebAssembly.validate(binary), false);
 }
 
@@ -303,19 +299,11 @@ if (!wasmSimdEnabled()) {
     }
 } else {
     let reservedSimd = [
-        0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e,
-        0x5f, 0x67, 0x68, 0x69, 0x6a, 0x74, 0x75, 0x7a, 0x7c, 0x7d, 0x7e,
-        0x7f, 0x94, 0x9a, 0x9c, 0x9d, 0x9e, 0x9f, 0xa5, 0xa6, 0xaf,
-        0xb0, 0xb2, 0xb3, 0xb4, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc2,
-        0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcf, 0xd0, 0xd2, 0xd3,
-        0xd4, 0xd6, 0xd7,
-        0xee, 0xfe, 0xff,
-        // These are experimental opcodes, currently we support them but they
-        // may disappear again.
-        // 0xba, ; dot product
-        // 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf, ; rounding
-        // 0xea, 0xeb, 0xf6, 0xf7, ; pseudo min/max
-        // 0xfc, 0xfd, ; load+zero
+        0x9a, 0xa2, 0xa5, 0xa6, 0xaf,
+        0xb0, 0xb2, 0xb3, 0xb4, 0xbb,
+        0xc2, 0xc5, 0xc6, 0xcf,
+        0xd0, 0xd2, 0xd3, 0xd4,
+        0xe2, 0xee,
     ];
     for (let i of reservedSimd) {
         checkIllegalPrefixed(SimdPrefix, i);

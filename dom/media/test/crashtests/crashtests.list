@@ -107,17 +107,19 @@ load buffer-source-slow-resampling-1.html
 load convolver-memory-report-1.html
 load copyFromChannel-2.html
 load empty-buffer-source.html
+test-pref(media.devices.insecure.enabled,true) load enumerateDevices-after-discard-1.html
 skip-if(verify&&isDebugBuild&&gtkWidget) HTTP load media-element-source-seek-1.html
 skip-if(verify&&isDebugBuild&&gtkWidget) load offline-buffer-source-ended-1.html
 load oscillator-ended-1.html
 load oscillator-ended-2.html
 skip-if(Android&&AndroidVersion=='22') load video-replay-after-audio-end.html # bug 1315125, bug 1358876
 # This needs to run at the end to avoid leaking busted state into other tests.
-skip-if(Android) load 691096-1.html # Bug 1365451
+skip-if(Android||ThreadSanitizer) load 691096-1.html # Bug 1365451
 load 1236639.html
 test-pref(media.navigator.permission.disabled,true) test-pref(media.devices.insecure.enabled,true) test-pref(media.getusermedia.insecure.enabled,true) load 1388372.html
 load 1494073.html
 skip-if(Android) load 1526044.html # Bug 1528391
+load 1530897.webm
 skip-if(Android&&AndroidVersion<21) load encrypted-track-with-bad-sample-description-index.mp4 # Bug 1533211, unkip after bug 1550912
 load encrypted-track-without-tenc.mp4 # Bug 1533215
 asserts-if(Android,0-1) load encrypted-track-with-sample-missing-cenc-aux.mp4 # Bug 1533625, bug 1588967
@@ -140,3 +142,10 @@ pref(media.autoplay.default,0) load 1673525.html
 skip-if(!winWidget) load 1608286.html
 load channel-count-in-metadata-different-than-in-content.mp4 # Bug 1584959
 load mp4_box_emptyrange.mp4 # Bug 1667480
+load 1673526-1.html
+load 1673526-2.html
+load 1693043.html
+load 1697521.html
+load 1708790.html
+skip-if(cocoaWidget) load 1709130.html # video failed decoding on MacOS, 1709684
+load 1517199.html

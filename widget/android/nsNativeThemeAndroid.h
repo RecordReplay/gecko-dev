@@ -19,8 +19,8 @@ class nsNativeThemeAndroid : private nsNativeTheme, public nsITheme {
   // The nsITheme interface.
   NS_IMETHOD DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                   StyleAppearance aAppearance,
-                                  const nsRect& aRect,
-                                  const nsRect& aDirtyRect) override;
+                                  const nsRect& aRect, const nsRect& aDirtyRect,
+                                  DrawOverflow) override;
   /*bool CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBuilder&
      aBuilder, mozilla::wr::IpcResourceUpdateQueue& aResources, const
      mozilla::layers::StackingContextHelper& aSc,
@@ -58,6 +58,8 @@ class nsNativeThemeAndroid : private nsNativeTheme, public nsITheme {
   bool WidgetIsContainer(StyleAppearance aAppearance) override;
   bool ThemeDrawsFocusForWidget(StyleAppearance aAppearance) override;
   bool ThemeNeedsComboboxDropmarker() override;
+  ScrollbarSizes GetScrollbarSizes(nsPresContext*, StyleScrollbarWidth,
+                                   Overlay) override;
 
  protected:
   virtual ~nsNativeThemeAndroid() = default;

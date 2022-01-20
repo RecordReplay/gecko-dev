@@ -66,6 +66,7 @@ class MacroAssemblerARM : public Assembler {
     return Operand(Register::FromCode(base.base()), base.disp());
   }
   Address ToPayload(const Address& base) const { return base; }
+  BaseIndex ToPayload(const BaseIndex& base) const { return base; }
 
  protected:
   Operand ToType(Operand base) const {
@@ -74,6 +75,10 @@ class MacroAssemblerARM : public Assembler {
   }
   Address ToType(const Address& base) const {
     return ToType(Operand(base)).toAddress();
+  }
+  BaseIndex ToType(const BaseIndex& base) const {
+    return BaseIndex(base.base, base.index, base.scale,
+                     base.offset + sizeof(void*));
   }
 
   Address ToPayloadAfterStackPush(const Address& base) const {
@@ -179,6 +184,8 @@ class MacroAssemblerARM : public Assembler {
   // Negate (dest <- -src) implemented as rsb dest, src, 0
   void ma_neg(Register src, Register dest, SBit s = LeaveCC,
               Condition c = Always);
+
+  void ma_neg(Register64 src, Register64 dest);
 
   // And
   void ma_and(Register src, Register dest, SBit s = LeaveCC,
@@ -551,44 +558,7 @@ class MacroAssemblerARM : public Assembler {
                      Register64 val64, Register memoryBase, Register ptr,
                      Register ptrScratch);
 
- protected:
-  // `outAny` is valid if and only if `out64` == Register64::Invalid().
-  void wasmUnalignedLoadImpl(const wasm::MemoryAccessDesc& access,
-                             Register memoryBase, Register ptr,
-                             Register ptrScratch, AnyRegister outAny,
-                             Register64 out64, Register tmp1, Register tmp2,
-                             Register tmp3);
-
-  // The value to be stored is in `floatValue` (if not invalid), `val64` (if not
-  // invalid), or in `valOrTmp` (if `floatValue` and `val64` are both invalid).
-  // Note `valOrTmp` must always be valid.
-  void wasmUnalignedStoreImpl(const wasm::MemoryAccessDesc& access,
-                              FloatRegister floatValue, Register64 val64,
-                              Register memoryBase, Register ptr,
-                              Register ptrScratch, Register valOrTmp);
-
  private:
-  // Loads `byteSize` bytes, byte by byte, by reading from ptr[offset],
-  // applying the indicated signedness (defined by isSigned).
-  // - all three registers must be different.
-  // - tmp and dest will get clobbered, ptr will remain intact.
-  // - byteSize can be up to 4 bytes and no more (GPR are 32 bits on ARM).
-  // - offset can be 0 or 4
-  // If `access` is not null then emit the appropriate access metadata.
-  void emitUnalignedLoad(const wasm::MemoryAccessDesc* access, bool isSigned,
-                         unsigned byteSize, Register ptr, Register tmp,
-                         Register dest, unsigned offset = 0);
-
-  // Ditto, for a store. Note stores don't care about signedness.
-  // - the two registers must be different.
-  // - val will get clobbered, ptr will remain intact.
-  // - byteSize can be up to 4 bytes and no more (GPR are 32 bits on ARM).
-  // - offset can be 0 or 4
-  // If `access` is not null then emit the appropriate access metadata.
-  void emitUnalignedStore(const wasm::MemoryAccessDesc* access,
-                          unsigned byteSize, Register ptr, Register val,
-                          unsigned offset = 0);
-
   // Implementation for transferMultipleByRuns so we can use different
   // iterators for forward/backward traversals. The sign argument should be 1
   // if we traverse forwards, -1 if we traverse backwards.

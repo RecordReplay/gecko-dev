@@ -22,12 +22,11 @@ class nsChildView;
 namespace mozilla {
 
 enum class VibrancyType {
-  LIGHT,
-  DARK,
+  TITLEBAR_LIGHT,
+  TITLEBAR_DARK,
   TOOLTIP,
   MENU,
   HIGHLIGHTED_MENUITEM,
-  SHEET,
   SOURCE_LIST,
   SOURCE_LIST_SELECTION,
   ACTIVE_SOURCE_LIST_SELECTION

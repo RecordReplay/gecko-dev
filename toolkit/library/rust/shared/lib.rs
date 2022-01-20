@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-#![cfg_attr(feature = "oom_with_hook", feature(alloc_error_hook))]
+// Avoid build break on windows.
+//#![cfg_attr(feature = "oom_with_hook", feature(alloc_error_hook))]
 
 extern crate geckoservo;
 
@@ -25,10 +26,8 @@ extern crate cubeb_coreaudio;
 #[cfg(feature = "cubeb_pulse_rust")]
 extern crate cubeb_pulse;
 extern crate encoding_glue;
-#[cfg(feature = "rust_fxa_client")]
-extern crate firefox_accounts_bridge;
-#[cfg(feature = "glean")]
 extern crate fog_control;
+extern crate gecko_profiler;
 extern crate gkrust_utils;
 extern crate http_sfv;
 extern crate jsrust_shared;
@@ -45,7 +44,6 @@ extern crate processtools;
 #[cfg(feature = "gecko_profiler")]
 extern crate profiler_helper;
 extern crate rsdparsa_capi;
-extern crate shift_or_euc_c;
 extern crate static_prefs;
 extern crate storage;
 #[cfg(feature = "quantum_render")]
@@ -121,29 +119,10 @@ pub extern "C" fn debug_log(target: *const c_char, message: *const c_char) {
     }
 }
 
-#[cfg(feature = "oom_with_hook")]
-mod oom_hook {
-    use std::alloc::{set_alloc_error_hook, Layout};
-
-    extern "C" {
-        fn GeckoHandleOOM(size: usize) -> !;
-    }
-
-    pub fn hook(layout: Layout) {
-        unsafe {
-            GeckoHandleOOM(layout.size());
-        }
-    }
-
-    pub fn install() {
-        set_alloc_error_hook(hook);
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn install_rust_oom_hook() {
-    #[cfg(feature = "oom_with_hook")]
-    oom_hook::install();
+    //#[cfg(feature = "oom_with_hook")]
+    //oom_hook::install();
 }
 
 #[cfg(feature = "moz_memory")]

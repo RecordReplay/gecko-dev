@@ -18,6 +18,8 @@
 #include "mozilla/EventQueue.h"
 #include "mozilla/ThreadEventQueue.h"
 #include "js/Exception.h"
+#include "js/Initialization.h"
+#include "XPCSelfHostedShmem.h"
 
 namespace mozilla {
 namespace dom {
@@ -157,7 +159,7 @@ class WorkletJSContext final : public CycleCollectedJSContext {
 #endif
 
     JS::JobQueueMayNotBeEmpty(cx);
-    GetMicroTaskQueue().push(std::move(runnable));
+    GetMicroTaskQueue().push_back(std::move(runnable));
   }
 
   bool IsSystemCaller() const override {
@@ -369,7 +371,12 @@ void WorkletThread::EnsureCycleCollectedJSContext(JSRuntime* aParentRuntime) {
   JS_SetNativeStackQuota(context->Context(),
                          WORKLET_CONTEXT_NATIVE_STACK_LIMIT);
 
-  if (!JS::InitSelfHostedCode(context->Context())) {
+  // When available, set the self-hosted shared memory to be read, so that we
+  // can decode the self-hosted content instead of parsing it.
+  auto& shm = xpc::SelfHostedShmem::GetSingleton();
+  JS::SelfHostedCache selfHostedContent = shm.Content();
+
+  if (!JS::InitSelfHostedCode(context->Context(), selfHostedContent)) {
     // TODO: error propagation
     return;
   }

@@ -28,6 +28,7 @@ class nsIDocShellTreeItem;
 class nsILayoutHistoryState;
 class nsIPrincipal;
 class nsDocShellEditorData;
+class nsFrameLoader;
 class nsIMutableArray;
 class nsSHistory;
 
@@ -96,7 +97,13 @@ class SHEntrySharedParentState : public SHEntrySharedState {
   uint64_t GetId() const { return mId; }
   void ChangeId(uint64_t aId);
 
+  void SetFrameLoader(nsFrameLoader* aFrameLoader);
+
+  nsFrameLoader* GetFrameLoader();
+
   void NotifyListenersContentViewerEvicted();
+
+  nsExpirationState* GetExpirationState() { return &mExpirationState; }
 
   SHEntrySharedParentState();
   SHEntrySharedParentState(nsIPrincipal* aTriggeringPrincipal,
@@ -130,6 +137,10 @@ class SHEntrySharedParentState : public SHEntrySharedState {
   // they're specific to a particular content viewer.
   nsWeakPtr mSHistory;
 
+  RefPtr<nsFrameLoader> mFrameLoader;
+
+  nsExpirationState mExpirationState;
+
   bool mSticky = true;
   bool mDynamicallyCreated = false;
 
@@ -159,7 +170,6 @@ class SHEntrySharedChildState {
   nsCOMPtr<nsISupports> mWindowState;
   // FIXME Move to parent?
   nsCOMPtr<nsIMutableArray> mRefreshURIList;
-  nsExpirationState mExpirationState;
   UniquePtr<nsDocShellEditorData> mEditorData;
 };
 
@@ -194,8 +204,6 @@ class nsSHEntryShared final : public nsIBFCacheEntry,
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
-
-  nsExpirationState* GetExpirationState() { return &mExpirationState; }
 
  private:
   ~nsSHEntryShared();

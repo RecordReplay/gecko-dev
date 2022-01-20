@@ -16,7 +16,8 @@
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/gfx/BaseSize.h"  // for BaseSize
 #include "mozilla/gfx/gfxVars.h"
-#include "mozilla/gfx/Rect.h"  // for Rect, RectTyped
+#include "mozilla/gfx/Rect.h"         // for Rect, RectTyped
+#include "mozilla/layers/APZUtils.h"  // for ShouldUseProgressivePaint
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/LayerMetricsWrapper.h"  // for LayerMetricsWrapper
 #include "mozilla/layers/LayersMessages.h"
@@ -189,7 +190,7 @@ void ClientTiledPaintedLayer::BeginPaint() {
   }
   TILING_LOG("TILING %p: Critical displayport %s\n", this,
              mPaintData.mCriticalDisplayPort
-                 ? Stringify(*mPaintData.mCriticalDisplayPort).c_str()
+                 ? ToString(*mPaintData.mCriticalDisplayPort).c_str()
                  : "not set");
 
   // Store the resolution from the displayport ancestor layer. Because this is
@@ -197,7 +198,7 @@ void ClientTiledPaintedLayer::BeginPaint() {
   // for this.
   mPaintData.mResolution = displayportMetrics.GetZoom();
   TILING_LOG("TILING %p: Resolution %s\n", this,
-             Stringify(mPaintData.mResolution).c_str());
+             ToString(mPaintData.mResolution).c_str());
 
   // Store the applicable composition bounds in this layer's Layer units.
   mPaintData.mTransformToCompBounds =
@@ -213,13 +214,13 @@ void ClientTiledPaintedLayer::BeginPaint() {
     mPaintData.mCompositionBounds.SetEmpty();
   }
   TILING_LOG("TILING %p: Composition bounds %s\n", this,
-             Stringify(mPaintData.mCompositionBounds).c_str());
+             ToString(mPaintData.mCompositionBounds).c_str());
 
   // Calculate the scroll offset since the last transaction
   mPaintData.mScrollOffset =
       displayportMetrics.GetLayoutScrollOffset() * displayportMetrics.GetZoom();
   TILING_LOG("TILING %p: Scroll offset %s\n", this,
-             Stringify(mPaintData.mScrollOffset).c_str());
+             ToString(mPaintData.mScrollOffset).c_str());
 }
 
 bool ClientTiledPaintedLayer::IsScrollingOnCompositor(
@@ -252,8 +253,9 @@ bool ClientTiledPaintedLayer::IsScrollingOnCompositor(
 }
 
 bool ClientTiledPaintedLayer::UseProgressiveDraw() {
-  if (!StaticPrefs::layers_progressive_paint()) {
-    // pref is disabled, so never do progressive
+  if (!apz::ShouldUseProgressivePaint()) {
+    // pref is disabled or platform does not support progressive, so never do
+    // progressive
     return false;
   }
 
@@ -284,8 +286,6 @@ bool ClientTiledPaintedLayer::UseProgressiveDraw() {
   if (ClientManager()->AsyncPanZoomEnabled()) {
     LayerMetricsWrapper scrollAncestor;
     GetAncestorLayers(&scrollAncestor, nullptr, nullptr);
-    MOZ_ASSERT(
-        scrollAncestor);  // because mPaintData.mCriticalDisplayPort is set
     if (!scrollAncestor) {
       return false;
     }
@@ -324,7 +324,7 @@ bool ClientTiledPaintedLayer::RenderHighPrecision(
     }
 
     TILING_LOG("TILING %p: Progressive update with old valid region %s\n", this,
-               Stringify(oldValidRegion).c_str());
+               ToString(oldValidRegion).c_str());
 
     nsIntRegion drawnRegion;
     bool updatedBuffer = mContentClient->GetTiledBuffer()->ProgressiveUpdate(
@@ -344,9 +344,9 @@ bool ClientTiledPaintedLayer::RenderHighPrecision(
   SetValidRegion(validRegion);
 
   TILING_LOG("TILING %p: Non-progressive paint invalid region %s\n", this,
-             Stringify(aInvalidRegion).c_str());
+             ToString(aInvalidRegion).c_str());
   TILING_LOG("TILING %p: Non-progressive paint new valid region %s\n", this,
-             Stringify(GetValidRegion()).c_str());
+             ToString(GetValidRegion()).c_str());
 
   TilePaintFlags flags =
       PaintThread::Get() ? TilePaintFlags::Async : TilePaintFlags::None;
@@ -402,10 +402,10 @@ bool ClientTiledPaintedLayer::RenderLowPrecision(
 
     TILING_LOG(
         "TILING %p: Progressive paint: low-precision invalid region is %s\n",
-        this, Stringify(invalidRegion).c_str());
+        this, ToString(invalidRegion).c_str());
     TILING_LOG(
         "TILING %p: Progressive paint: low-precision old valid region is %s\n",
-        this, Stringify(oldValidRegion).c_str());
+        this, ToString(oldValidRegion).c_str());
 
     if (!invalidRegion.IsEmpty()) {
       nsIntRegion drawnRegion;
@@ -418,7 +418,7 @@ bool ClientTiledPaintedLayer::RenderLowPrecision(
 
     TILING_LOG(
         "TILING %p: Progressive paint: low-precision new valid region is %s\n",
-        this, Stringify(mLowPrecisionValidRegion).c_str());
+        this, ToString(mLowPrecisionValidRegion).c_str());
     return updatedBuffer;
   }
   if (!mLowPrecisionValidRegion.IsEmpty()) {
@@ -492,11 +492,11 @@ void ClientTiledPaintedLayer::RenderLayer() {
   }
 
   TILING_LOG("TILING %p: Initial visible region %s\n", this,
-             Stringify(mVisibleRegion).c_str());
+             ToString(mVisibleRegion).c_str());
   TILING_LOG("TILING %p: Initial valid region %s\n", this,
-             Stringify(GetValidRegion()).c_str());
+             ToString(GetValidRegion()).c_str());
   TILING_LOG("TILING %p: Initial low-precision valid region %s\n", this,
-             Stringify(mLowPrecisionValidRegion).c_str());
+             ToString(mLowPrecisionValidRegion).c_str());
 
   nsIntRegion neededRegion = mVisibleRegion.ToUnknownRegion();
 #ifndef MOZ_IGNORE_PAINT_WILL_RESAMPLE
@@ -551,16 +551,16 @@ void ClientTiledPaintedLayer::RenderLayer() {
     SetValidRegion(validRegion);
 
     TILING_LOG("TILING %p: First-transaction valid region %s\n", this,
-               Stringify(validRegion).c_str());
+               ToString(validRegion).c_str());
     TILING_LOG("TILING %p: First-transaction invalid region %s\n", this,
-               Stringify(invalidRegion).c_str());
+               ToString(invalidRegion).c_str());
   } else {
     if (mPaintData.mCriticalDisplayPort) {
       invalidRegion.And(invalidRegion,
                         mPaintData.mCriticalDisplayPort->ToUnknownRect());
     }
     TILING_LOG("TILING %p: Repeat-transaction invalid region %s\n", this,
-               Stringify(invalidRegion).c_str());
+               ToString(invalidRegion).c_str());
   }
 
   nsIntRegion lowPrecisionInvalidRegion;
@@ -571,7 +571,7 @@ void ClientTiledPaintedLayer::RenderLayer() {
     lowPrecisionInvalidRegion.Sub(lowPrecisionInvalidRegion, GetValidRegion());
   }
   TILING_LOG("TILING %p: Low-precision invalid region %s\n", this,
-             Stringify(lowPrecisionInvalidRegion).c_str());
+             ToString(lowPrecisionInvalidRegion).c_str());
 
   bool updatedHighPrecision =
       RenderHighPrecision(invalidRegion, neededRegion, callback, data);

@@ -47,10 +47,8 @@ static bool AsyncFunctionClassFinish(JSContext* cx, HandleObject asyncFunction,
   // Change the "constructor" property to non-writable before adding any other
   // properties, so it's still the last property and can be modified without a
   // dictionary-mode transition.
-  MOZ_ASSERT(StringEqualsAscii(
-      JSID_TO_LINEAR_STRING(
-          asyncFunctionProto->as<NativeObject>().lastProperty()->propid()),
-      "constructor"));
+  MOZ_ASSERT(asyncFunctionProto->as<NativeObject>().getLastProperty().key() ==
+             NameToId(cx->names().constructor));
   MOZ_ASSERT(!asyncFunctionProto->as<NativeObject>().inDictionaryMode());
 
   RootedValue asyncFunctionVal(cx, ObjectValue(*asyncFunction));
@@ -154,7 +152,7 @@ static bool AsyncFunctionResume(JSContext* cx,
 
 // ES2020 draft rev a09fc232c137800dbf51b6204f37fdede4ba1646
 // 6.2.3.1.1 Await Fulfilled Functions
-MOZ_MUST_USE bool js::AsyncFunctionAwaitedFulfilled(
+[[nodiscard]] bool js::AsyncFunctionAwaitedFulfilled(
     JSContext* cx, Handle<AsyncFunctionGeneratorObject*> generator,
     HandleValue value) {
   return AsyncFunctionResume(cx, generator, ResumeKind::Normal, value);
@@ -162,7 +160,7 @@ MOZ_MUST_USE bool js::AsyncFunctionAwaitedFulfilled(
 
 // ES2020 draft rev a09fc232c137800dbf51b6204f37fdede4ba1646
 // 6.2.3.1.2 Await Rejected Functions
-MOZ_MUST_USE bool js::AsyncFunctionAwaitedRejected(
+[[nodiscard]] bool js::AsyncFunctionAwaitedRejected(
     JSContext* cx, Handle<AsyncFunctionGeneratorObject*> generator,
     HandleValue reason) {
   return AsyncFunctionResume(cx, generator, ResumeKind::Throw, reason);

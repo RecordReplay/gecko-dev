@@ -39,6 +39,7 @@ class Browsertime(Perftest):
         pass
 
     def __init__(self, app, binary, process_handler=None, **kwargs):
+        self.browsertime = True
         self.browsertime_failure = ""
         self.process_handler = process_handler or mozprocess.ProcessHandler
         for key in list(kwargs):
@@ -187,14 +188,25 @@ class Browsertime(Perftest):
                 "--browsertime.background_app",
                 test.get("background_app", "false"),
             ]
-        else:
+        elif test.get("type", "") == "benchmark":
             browsertime_script = [
                 os.path.join(
                     os.path.dirname(__file__),
                     "..",
                     "..",
                     "browsertime",
-                    "browsertime_pageload.js",
+                    "browsertime_benchmark.js",
+                )
+            ]
+        else:
+            # Custom scripts are treated as pageload tests for now
+            browsertime_script = [
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "..",
+                    "browsertime",
+                    test.get("test_script", "browsertime_pageload.js"),
                 )
             ]
 
@@ -289,7 +301,7 @@ class Browsertime(Perftest):
             browsertime_options.extend(["--video", "false", "--visualMetrics", "false"])
 
         # have browsertime use our newly-created conditioned-profile path
-        if self.using_condprof:
+        if self.config.get("conditioned_profile"):
             self.profile.profile = self.conditioned_profile_dir
 
         if self.config["gecko_profile"]:
@@ -298,16 +310,59 @@ class Browsertime(Perftest):
             ] = self.results_handler.result_dir_for_test(test)
             self._init_gecko_profiling(test)
             browsertime_options.append("--firefox.geckoProfiler")
-
-            for option, browser_time_option in (
-                ("gecko_profile_interval", "--firefox.geckoProfilerParams.interval"),
-                ("gecko_profile_entries", "--firefox.geckoProfilerParams.bufferSize"),
+            for option, browser_time_option, default in (
+                (
+                    "gecko_profile_features",
+                    "--firefox.geckoProfilerParams.features",
+                    "js,leaf,stackwalk,cpu,threads",
+                ),
+                (
+                    "gecko_profile_threads",
+                    "--firefox.geckoProfilerParams.threads",
+                    "GeckoMain,Compositor",
+                ),
+                (
+                    "gecko_profile_interval",
+                    "--firefox.geckoProfilerParams.interval",
+                    None,
+                ),
+                (
+                    "gecko_profile_entries",
+                    "--firefox.geckoProfilerParams.bufferSize",
+                    None,
+                ),
             ):
+                # 0 is a valid value. The setting may be present but set to None.
                 value = self.config.get(option)
                 if value is None:
                     value = test.get(option)
+                if value is None:
+                    value = default
+                if option == "gecko_profile_threads":
+                    extra = self.config.get("gecko_profile_extra_threads", [])
+                    value = ",".join(value.split(",") + extra)
                 if value is not None:
                     browsertime_options.extend([browser_time_option, str(value)])
+
+        # Add custom test-specific options and allow them to
+        # overwrite our presets.
+        if test.get("browsertime_args", None):
+            split_args = test.get("browsertime_args").strip().split()
+            for split_arg in split_args:
+                pairing = split_arg.split("=")
+                if len(pairing) not in (1, 2):
+                    raise Exception(
+                        "One of the browsertime_args from the test was not split properly. "
+                        f"Expecting a --flag, or a --option=value pairing. Found: {split_arg}"
+                    )
+
+                if pairing[0] in browsertime_options:
+                    # If it's a flag, don't re-add it
+                    if len(pairing) > 1:
+                        ind = browsertime_options.index(pairing[0])
+                        browsertime_options[ind + 1] = pairing[1]
+                else:
+                    browsertime_options.extend(pairing)
 
         return (
             [self.browsertime_node, self.browsertime_browsertimejs]
@@ -353,20 +408,6 @@ class Browsertime(Perftest):
         # this will be used for btime --timeouts.pageLoad
         cmd = self._compose_cmd(test, timeout)
 
-        if test.get("type", "") == "benchmark":
-            cmd.extend(
-                [
-                    "--script",
-                    os.path.join(
-                        os.path.dirname(__file__),
-                        "..",
-                        "..",
-                        "browsertime",
-                        "browsertime_benchmark.js",
-                    ),
-                ]
-            )
-
         if test.get("type", "") == "scenario":
             # Change the timeout for scenarios since they
             # don't output much for a long period of time
@@ -406,7 +447,7 @@ class Browsertime(Perftest):
                 if self.browsertime_failure, and raise an Exception if necessary
                 to stop Raptor execution (preventing the results processing).
                 """
-                match = line_matcher.match(line)
+                match = line_matcher.match(line.decode("utf-8"))
                 if not match:
                     LOG.info(line)
                     return
@@ -415,8 +456,8 @@ class Browsertime(Perftest):
                 level = level.lower()
                 if "error" in level:
                     self.browsertime_failure = msg
-                    # Raising this kills mozprocess
-                    raise Exception("Browsertime failed to run")
+                    LOG.error("Browsertime failed to run")
+                    proc.kill()
                 elif "warning" in level:
                     LOG.warning(msg)
                 else:
@@ -427,6 +468,7 @@ class Browsertime(Perftest):
                 self.vismet_failed = False
 
                 def _vismet_line_handler(line):
+                    line = line.decode("utf-8")
                     LOG.info(line)
                     if "FAIL" in line:
                         self.vismet_failed = True
@@ -442,7 +484,9 @@ class Browsertime(Perftest):
                 if self.vismet_failed:
                     raise Exception(
                         "Browsertime visual metrics dependencies were not "
-                        "installed correctly."
+                        "installed correctly. Try removing the virtual environment at "
+                        "%s before running your command again."
+                        % os.environ["VIRTUAL_ENV"]
                     )
 
             proc = self.process_handler(cmd, processOutputLine=_line_handler, env=env)

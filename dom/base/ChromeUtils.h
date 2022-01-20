@@ -11,6 +11,7 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/ChromeUtilsBinding.h"
 #include "mozilla/dom/Exceptions.h"
+#include "mozilla/dom/Record.h"
 #include "nsDOMNavigationTiming.h"  // for DOMHighResTimeStamp
 #include "nsIDOMProcessChild.h"
 #include "nsIDOMProcessParent.h"
@@ -87,6 +88,8 @@ class ChromeUtils {
                                 const ProfilerMarkerOptionsOrDouble& aOptions,
                                 const Optional<nsACString>& text);
 
+  static bool IsRecordingOrReplaying(GlobalObject& aGlobal);
+
   static void OriginAttributesToSuffix(
       GlobalObject& aGlobal, const dom::OriginAttributesDictionary& aAttrs,
       nsCString& aSuffix);
@@ -97,6 +100,10 @@ class ChromeUtils {
 
   static void CreateOriginAttributesFromOrigin(
       dom::GlobalObject& aGlobal, const nsAString& aOrigin,
+      dom::OriginAttributesDictionary& aAttrs, ErrorResult& aRv);
+
+  static void CreateOriginAttributesFromOriginSuffix(
+      dom::GlobalObject& aGlobal, const nsAString& aSuffix,
       dom::OriginAttributesDictionary& aAttrs, ErrorResult& aRv);
 
   static void FillNonDefaultOriginAttributes(
@@ -118,6 +125,11 @@ class ChromeUtils {
            aA.mUserContextId == aB.mUserContextId &&
            aA.mPrivateBrowsingId == aB.mPrivateBrowsingId;
   }
+
+  static void GetBaseDomainFromPartitionKey(dom::GlobalObject& aGlobal,
+                                            const nsAString& aPartitionKey,
+                                            nsAString& aBaseDomain,
+                                            ErrorResult& aRv);
 
   // Implemented in js/xpconnect/loader/ChromeScriptLoader.cpp
   static already_AddRefed<Promise> CompileScript(
@@ -151,7 +163,13 @@ class ChromeUtils {
 
   static void ClearRecentJSDevError(GlobalObject& aGlobal);
 
-  static void ClearStyleSheetCache(GlobalObject&, nsIPrincipal* aForPrincipal);
+  static void ClearStyleSheetCacheByPrincipal(GlobalObject&,
+                                              nsIPrincipal* aForPrincipal);
+
+  static void ClearStyleSheetCacheByBaseDomain(GlobalObject& aGlobal,
+                                               const nsACString& aBaseDomain);
+
+  static void ClearStyleSheetCache(GlobalObject& aGlobal);
 
   static already_AddRefed<Promise> RequestPerformanceMetrics(
       GlobalObject& aGlobal, ErrorResult& aRv);
@@ -222,6 +240,10 @@ class ChromeUtils {
 
   static void GetAllDOMProcesses(
       GlobalObject& aGlobal, nsTArray<RefPtr<nsIDOMProcessParent>>& aParents,
+      ErrorResult& aRv);
+
+  static void ConsumeInteractionData(
+      GlobalObject& aGlobal, Record<nsString, InteractionData>& aInteractions,
       ErrorResult& aRv);
 };
 

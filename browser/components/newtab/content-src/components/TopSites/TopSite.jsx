@@ -18,7 +18,9 @@ import React from "react";
 import { ScreenshotUtils } from "content-src/lib/screenshot-utils";
 import { TOP_SITES_MAX_SITES_PER_ROW } from "common/Reducers.jsm";
 import { ContextMenuButton } from "content-src/components/ContextMenu/ContextMenuButton";
+import { TopSiteImpressionWrapper } from "./TopSiteImpressionWrapper";
 const SPOC_TYPE = "SPOC";
+const NEWTAB_SOURCE = "newtab";
 
 export class TopSiteLink extends React.PureComponent {
   constructor(props) {
@@ -49,10 +51,14 @@ export class TopSiteLink extends React.PureComponent {
         }
         break;
       case "dragstart":
+        event.target.blur();
+        if (this.props.link.sponsored_position) {
+          event.preventDefault();
+          break;
+        }
         this.dragged = true;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/topsite-index", this.props.index);
-        event.target.blur();
         this.props.onDragEvent(
           event,
           this.props.index,
@@ -352,7 +358,7 @@ export class TopSiteLink extends React.PureComponent {
             )}
             <div
               className={`title${link.isPinned ? " has-icon pinned" : ""}${
-                link.type === SPOC_TYPE || link.sponsored_position
+                link.type === SPOC_TYPE || link.show_sponsored_label
                   ? " sponsored"
                   : ""
               }`}
@@ -391,6 +397,19 @@ export class TopSiteLink extends React.PureComponent {
               ]}
               dispatch={this.props.dispatch}
               source={TOP_SITES_SOURCE}
+            />
+          ) : null}
+          {/* Set up an impression wrapper for the sponsored TopSite */}
+          {link.sponsored_position ? (
+            <TopSiteImpressionWrapper
+              tile={{
+                position: this.props.index + 1,
+                tile_id: link.sponsored_tile_id || -1,
+                reporting_url: link.sponsored_impression_url,
+                advertiser: title.toLocaleLowerCase(),
+                source: NEWTAB_SOURCE,
+              }}
+              dispatch={this.props.dispatch}
             />
           ) : null}
         </div>
@@ -490,6 +509,22 @@ export class TopSite extends React.PureComponent {
             data: {
               targetURL: this.props.link.url,
               source: "newtab",
+            },
+          })
+        );
+      }
+      if (this.props.link.sponsored_position) {
+        const title = this.props.link.label || this.props.link.hostname;
+        this.props.dispatch(
+          ac.OnlyToMain({
+            type: at.TOP_SITES_IMPRESSION_STATS,
+            data: {
+              type: "click",
+              position: this.props.index + 1,
+              tile_id: this.props.link.sponsored_tile_id || -1,
+              reporting_url: this.props.link.sponsored_click_url,
+              advertiser: title.toLocaleLowerCase(),
+              source: NEWTAB_SOURCE,
             },
           })
         );

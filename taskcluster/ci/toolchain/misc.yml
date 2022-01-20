@@ -41,8 +41,6 @@ linux64-binutils:
     description: "Binutils toolchain build"
     treeherder:
         symbol: TL(binutil)
-    worker:
-        max-run-time: 3600
     run:
         script: build-binutils-linux.sh
         resources:
@@ -51,6 +49,12 @@ linux64-binutils:
     fetches:
         fetch:
             - binutils-2.31.1
+        toolchain:
+            # Work around https://bugs.debian.org/786883 by using toolchain
+            # gcc. We can remove this workaround when we upgrade the toolchain
+            # docker image to Debian bullseye.
+            - linux64-gcc-7
+            - linux64-toolchain-sysroot
 
 linux64-hfsplus:
     description: "hfsplus toolchain build"
@@ -77,6 +81,9 @@ linux64-libdmg:
     fetches:
         fetch:
             - libdmg-hfsplus
+        toolchain:
+            - linux64-clang-11
+            - linux64-toolchain-sysroot
 
 linux64-mar-tools:
     description: "mar-tools toolchain build"
@@ -150,11 +157,30 @@ wasi-sysroot-11:
     run:
         script: build-wasi-sysroot.sh
         sparse-profile: null
-        toolchain-alias: wasi-sysroot
         toolchain-artifact: public/build/wasi-sysroot.tar.xz
     fetches:
         fetch:
             - clang-11
+            - wasi-sdk
+        toolchain:
+            - linux64-binutils
+            - linux64-gcc-7
+
+wasi-sysroot-12:
+    description: "wasi sysroot build using clang-12"
+    attributes:
+        local-toolchain: true
+    treeherder:
+        symbol: TL(wasi-sysroot-12)
+    run-on-projects: [trunk]
+    run:
+        script: build-wasi-sysroot.sh
+        sparse-profile: null
+        toolchain-alias: wasi-sysroot
+        toolchain-artifact: public/build/wasi-sysroot.tar.xz
+    fetches:
+        fetch:
+            - clang-12
             - wasi-sdk
         toolchain:
             - linux64-binutils
@@ -215,6 +241,7 @@ linux64-lucetc:
             - linux64-binutils
             - linux64-clang
             - linux64-rust
+            - linux64-sysroot
 
 linux64-liblowercase:
     description: "liblowercase"
@@ -236,14 +263,13 @@ linux64-wine:
         symbol: TL(wine)
         tier: 1
     worker:
-        docker-image: {in-tree: deb10-toolchain-build}
         max-run-time: 10800
     run:
         script: build-wine.sh
         toolchain-artifact: public/build/wine.tar.xz
     fetches:
         fetch:
-            - wine-5.0
+            - wine
 
 win32-pdbstr:
     description: "pdbstr for 32-bits Windows"
@@ -279,8 +305,6 @@ linux64-winchecksec:
     description: "winchecksec"
     treeherder:
         symbol: TL(winchecksec)
-    worker:
-        docker-image: {in-tree: deb10-toolchain-build}
     run:
         script: build-winchecksec.sh
         toolchain-artifact: public/build/winchecksec.tar.bz2
@@ -294,9 +318,8 @@ win64-winchecksec:
     treeherder:
         symbol: TW64(winchecksec)
     worker:
-        docker-image: {in-tree: deb10-toolchain-build}
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/vs2017.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         script: build-winchecksec.sh
         toolchain-artifact: public/build/winchecksec.tar.bz2
@@ -321,66 +344,18 @@ linux64-makecab:
         toolchain:
             - linux64-rust-1.47
 
-macosx64-sdk-11.0:
-    description: "MacOSX11.0 SDK"
-    attributes:
-        artifact_prefix: project/gecko/mac-sdk
+win64-mozmake:
+    description: "mozmake for Windows"
     treeherder:
-        symbol: TM(sdk11)
-    worker-type: b-osx-1015
-    worker:
-        max-run-time: 3600
-        env:
-            PATH: "/usr/local/bin:/bin:/sbin:/usr/bin:/usr/sbin"
-    run:
-        script: pack.sh
-        arguments:
-            - /Applications/Xcode-12.2.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX11.0.sdk
-        toolchain-artifact: project/gecko/mac-sdk/MacOSX11.0.sdk.tar.zst
-    # Expiry similar to that of fetches
-    expires-after: 1000 years
-
-macosx64-x64-compiler-rt-11:
-    description: "macOS x64 Compiler-rt for Clang 11 toolchain build"
-    treeherder:
-        symbol: TM(x64-crt)
+        symbol: TW64(mozmake)
     worker:
         env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/macosx64/cross-releng.manifest"
+            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
+    worker-type: b-win2012
     run:
-        using: toolchain-script
-        script: build-compiler-rt.sh
-        arguments:
-            - x86_64-apple-darwin
-            - 'build/build-clang/rename_gcov_flush_clang_11.patch'
-        resources:
-            - 'build/build-clang/rename_gcov_flush_clang_11.patch'
-        toolchain-artifact: public/build/compiler-rt.tar.zst
+        script: build-mozmake.sh
+        toolchain-artifact: public/build/mozmake.tar.bz2
         tooltool-downloads: internal
     fetches:
         fetch:
-            - clang-11
-        toolchain:
-            - linux64-cctools-port-clang-11
-            - linux64-clang-11
-
-macosx64-aarch64-compiler-rt-11:
-    description: "macOS aarch64 Compiler-rt for Clang 11 toolchain build"
-    treeherder:
-        symbol: TM(aarch64-crt)
-    run:
-        using: toolchain-script
-        script: build-compiler-rt.sh
-        arguments:
-            - aarch64-apple-darwin
-            - 'build/build-clang/rename_gcov_flush_clang_11.patch'
-        resources:
-            - 'build/build-clang/rename_gcov_flush_clang_11.patch'
-        toolchain-artifact: public/build/compiler-rt.tar.zst
-    fetches:
-        fetch:
-            - clang-11
-        toolchain:
-            - linux64-cctools-port-clang-11
-            - linux64-clang-11
-            - macosx64-sdk-11.0
+            - gnumake

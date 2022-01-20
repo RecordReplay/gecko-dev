@@ -24,7 +24,12 @@ NS_IMPL_ISUPPORTS(NetworkConnectivityService, nsIDNSListener, nsIObserver,
 static StaticRefPtr<NetworkConnectivityService> gConnService;
 
 NetworkConnectivityService::NetworkConnectivityService()
-    : mNAT64(UNKNOWN), mLock("nat64prefixes") {}
+    : mDNSv4(UNKNOWN),
+      mDNSv6(UNKNOWN),
+      mIPv4(UNKNOWN),
+      mIPv6(UNKNOWN),
+      mNAT64(UNKNOWN),
+      mLock("nat64prefixes") {}
 
 // static
 already_AddRefed<NetworkConnectivityService>
@@ -128,18 +133,12 @@ already_AddRefed<AddrInfo> NetworkConnectivityService::MapNAT64IPs(
 // Returns true if a prefix was read and saved to the argument
 static inline bool NAT64PrefixFromPref(NetAddr* prefix) {
   nsAutoCString nat64PrefixPref;
-  PRNetAddr prAddr{};
 
   nsresult rv = Preferences::GetCString(
       "network.connectivity-service.nat64-prefix", nat64PrefixPref);
-  if (NS_FAILED(rv) || nat64PrefixPref.IsEmpty() ||
-      PR_StringToNetAddr(nat64PrefixPref.get(), &prAddr) != PR_SUCCESS ||
-      prAddr.raw.family != PR_AF_INET6) {
-    return false;
-  }
-
-  PRNetAddrToNetAddr(&prAddr, prefix);
-  return true;
+  return !(NS_FAILED(rv) || nat64PrefixPref.IsEmpty() ||
+           NS_FAILED(prefix->InitFromString(nat64PrefixPref)) ||
+           prefix->raw.family != PR_AF_INET6);
 }
 
 static inline bool NAT64PrefixCompare(const NetAddr& prefix1,

@@ -91,8 +91,6 @@ class ContentCompositorBridgeParent final : public CompositorBridgeParentBase {
   mozilla::ipc::IPCResult RecvCheckContentOnlyTDR(
       const uint32_t& sequenceNum, bool* isContentOnlyTDR) override;
 
-  mozilla::ipc::IPCResult RecvAllPluginsCaptured() override { return IPC_OK(); }
-
   mozilla::ipc::IPCResult RecvBeginRecording(
       const TimeStamp& aRecordingStart,
       BeginRecordingResolver&& aResolve) override {
@@ -151,9 +149,6 @@ class ContentCompositorBridgeParent final : public CompositorBridgeParentBase {
 
   AsyncCompositionManager* GetCompositionManager(
       LayerTransactionParent* aParent) override;
-  mozilla::ipc::IPCResult RecvRemotePluginsReady() override {
-    return IPC_FAIL_NO_REASON(this);
-  }
 
   already_AddRefed<dom::PWebGLParent> AllocPWebGLParent() override;
 
@@ -216,10 +211,6 @@ class ContentCompositorBridgeParent final : public CompositorBridgeParentBase {
 
   UniquePtr<SurfaceDescriptor> LookupSurfaceDescriptorForClientTexture(
       const int64_t aTextureId) final;
-
-  mozilla::ipc::IPCResult RecvSupportsAsyncDXGISurface(bool* value) override;
-  mozilla::ipc::IPCResult RecvPreferredDXGIAdapter(
-      DxgiAdapterDesc* desc) override;
 
  private:
   // Private destructor, to discourage deletion outside of Release():

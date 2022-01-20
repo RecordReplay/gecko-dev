@@ -199,10 +199,13 @@ struct nsCSSRendering {
       const nsStyleBorder& aBorderStyle, mozilla::ComputedStyle* aStyle,
       bool* aOutBorderIsEmpty, Sides aSkipSides = Sides());
 
-  static mozilla::Maybe<nsCSSBorderRenderer> CreateBorderRendererForOutline(
-      nsPresContext* aPresContext, gfxContext* aRenderingContext,
-      nsIFrame* aForFrame, const nsRect& aDirtyRect, const nsRect& aBorderArea,
-      mozilla::ComputedStyle* aStyle);
+  static mozilla::Maybe<nsCSSBorderRenderer>
+  CreateBorderRendererForNonThemedOutline(nsPresContext* aPresContext,
+                                          DrawTarget* aDrawTarget,
+                                          nsIFrame* aForFrame,
+                                          const nsRect& aDirtyRect,
+                                          const nsRect& aInnerRect,
+                                          mozilla::ComputedStyle* aStyle);
 
   static ImgDrawResult CreateWebRenderCommandsForBorder(
       nsDisplayItem* aItem, nsIFrame* aForFrame, const nsRect& aBorderArea,
@@ -229,13 +232,14 @@ struct nsCSSRendering {
       const nsStyleBorder& aStyleBorder);
 
   /**
-   * Render the outline for an element using css rendering rules
-   * for borders.
+   * Render the outline for an element using css rendering rules for borders.
    */
-  static void PaintOutline(nsPresContext* aPresContext,
-                           gfxContext& aRenderingContext, nsIFrame* aForFrame,
-                           const nsRect& aDirtyRect, const nsRect& aBorderArea,
-                           mozilla::ComputedStyle* aStyle);
+  static void PaintNonThemedOutline(nsPresContext* aPresContext,
+                                    gfxContext& aRenderingContext,
+                                    nsIFrame* aForFrame,
+                                    const nsRect& aDirtyRect,
+                                    const nsRect& aInnerRect,
+                                    mozilla::ComputedStyle* aStyle);
 
   /**
    * Render keyboard focus on an element.
@@ -327,16 +331,18 @@ struct nsCSSRendering {
   }
 
   /**
-   * Find a frame which draws a non-transparent background,
-   * for various table-related and HR-related backwards-compatibility hacks.
-   * This function will also stop if it finds themed frame which might draw
-   * background.
-   *
-   * Be very hesitant if you're considering calling this function -- it's
-   * usually not what you want.
+   * Find a frame which draws a non-transparent background, for various contrast
+   * checks. Note that this only accounts for background-color and might stop at
+   * themed frames (depending on the argument), so it might not be what you
+   * want.
    */
-  static nsIFrame* FindNonTransparentBackgroundFrame(
-      nsIFrame* aFrame, bool aStartAtParent = false);
+  struct NonTransparentBackgroundFrame {
+    nsIFrame* mFrame = nullptr;
+    bool mIsThemed = false;
+    bool mIsForCanvas = false;
+  };
+  static NonTransparentBackgroundFrame FindNonTransparentBackgroundFrame(
+      nsIFrame* aFrame, bool aStopAtThemed = true);
 
   /**
    * Determine the background color to draw taking into account print settings.

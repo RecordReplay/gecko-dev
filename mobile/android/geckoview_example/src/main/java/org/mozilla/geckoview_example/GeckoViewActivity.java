@@ -43,6 +43,7 @@ import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
@@ -123,7 +124,7 @@ class WebExtensionManager implements WebExtension.ActionDelegate,
     @Nullable
     @Override
     public GeckoResult<AllowOrDeny> onInstallPrompt(final @NonNull WebExtension extension) {
-        return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+        return GeckoResult.allow();
     }
 
     @Nullable
@@ -132,7 +133,7 @@ class WebExtensionManager implements WebExtension.ActionDelegate,
                                                    @NonNull WebExtension updatedExtension,
                                                    @NonNull String[] newPermissions,
                                                    @NonNull String[] newOrigins) {
-        return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+        return GeckoResult.allow();
     }
 
     @Override
@@ -184,7 +185,7 @@ class WebExtensionManager implements WebExtension.ActionDelegate,
     public GeckoResult<AllowOrDeny> onCloseTab(WebExtension extension, GeckoSession session) {
         final WebExtensionDelegate delegate = mExtensionDelegate.get();
         if (delegate == null) {
-            return GeckoResult.fromValue(AllowOrDeny.DENY);
+            return GeckoResult.deny();
         }
 
         final TabSession tabSession = mTabManager.getSession(session);
@@ -192,7 +193,7 @@ class WebExtensionManager implements WebExtension.ActionDelegate,
             delegate.closeTab(tabSession);
         }
 
-        return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+        return GeckoResult.allow();
     }
 
     @Override
@@ -201,7 +202,7 @@ class WebExtensionManager implements WebExtension.ActionDelegate,
                                                 WebExtension.UpdateTabDetails updateDetails) {
         final WebExtensionDelegate delegate = mExtensionDelegate.get();
         if (delegate == null) {
-            return GeckoResult.fromValue(AllowOrDeny.DENY);
+            return GeckoResult.deny();
         }
 
         final TabSession tabSession = mTabManager.getSession(session);
@@ -209,7 +210,7 @@ class WebExtensionManager implements WebExtension.ActionDelegate,
             delegate.updateTab(tabSession, updateDetails);
         }
 
-        return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+        return GeckoResult.allow();
     }
 
     @Override
@@ -389,6 +390,7 @@ public class GeckoViewActivity
     private GeckoView mGeckoView;
     private boolean mFullAccessibilityTree;
     private boolean mUsePrivateBrowsing;
+    private boolean mCollapsed;
     private boolean mKillProcessOnDestroy;
     private boolean mDesktopMode;
     private boolean mTrackingProtectionException;
@@ -730,6 +732,7 @@ public class GeckoViewActivity
                                       ContentBlocking.AntiTracking.STP)
                         .safeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
                         .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_NON_TRACKERS)
+                        .cookieBehaviorPrivateMode(ContentBlocking.CookieBehavior.ACCEPT_NON_TRACKERS)
                         .enhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.DEFAULT)
                         .build())
                     .crashHandler(ExampleCrashHandler.class)
@@ -875,27 +878,27 @@ public class GeckoViewActivity
 
         ViewGroup.LayoutParams params = mPopupView.getLayoutParams();
         boolean shouldShow = force || params.width == 0;
-        setPopupVisibility(shouldShow);
+        setViewVisibility(mPopupView, shouldShow);
 
         return shouldShow ? mPopupSession : null;
     }
 
-    private void setPopupVisibility(boolean visible) {
-        if (mPopupView == null) {
+    private static void setViewVisibility(final View view, final boolean visible) {
+        if (view == null) {
             return;
         }
 
-        ViewGroup.LayoutParams params = mPopupView.getLayoutParams();
+        ViewGroup.LayoutParams params = view.getLayoutParams();
 
         if (visible) {
-            params.height = 1100;
-            params.width = 1200;
+            params.height = ViewGroup.LayoutParams.MATCH_PARENT;
+            params.width = ViewGroup.LayoutParams.MATCH_PARENT;
         } else {
             params.height = 0;
             params.width = 0;
         }
 
-        mPopupView.setLayoutParams(params);
+        view.setLayoutParams(params);
     }
 
     @Override
@@ -906,8 +909,8 @@ public class GeckoViewActivity
     private class PopupSessionContentDelegate implements GeckoSession.ContentDelegate {
         @Override
         public void onCloseRequest(final GeckoSession session) {
-          setPopupVisibility(false);
-          if (mPopupSession != null) {
+            setViewVisibility(mPopupView, false);
+            if (mPopupSession != null) {
               mPopupSession.close();
           }
           mPopupSession = null;
@@ -1097,9 +1100,19 @@ public class GeckoViewActivity
     @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
         menu.findItem(R.id.action_pb).setChecked(mUsePrivateBrowsing);
+        menu.findItem(R.id.collapse).setChecked(mCollapsed);
         menu.findItem(R.id.desktop_mode).setChecked(mDesktopMode);
         menu.findItem(R.id.action_tpe).setChecked(mTrackingProtectionException);
         menu.findItem(R.id.action_forward).setEnabled(mCanGoForward);
+
+        final boolean hasSession = mTabSessionManager.getCurrentSession() != null;
+        menu.findItem(R.id.action_reload).setEnabled(hasSession);
+        menu.findItem(R.id.action_forward).setEnabled(hasSession);
+        menu.findItem(R.id.action_close_tab).setEnabled(hasSession);
+        menu.findItem(R.id.action_tpe).setEnabled(hasSession);
+        menu.findItem(R.id.action_pb).setEnabled(hasSession);
+        menu.findItem(R.id.desktop_mode).setEnabled(hasSession);
+
         return true;
     }
 
@@ -1131,6 +1144,10 @@ public class GeckoViewActivity
             case R.id.action_pb:
                 mUsePrivateBrowsing = !mUsePrivateBrowsing;
                 recreateSession();
+                break;
+            case R.id.collapse:
+                mCollapsed = !mCollapsed;
+                setViewVisibility(mGeckoView, !mCollapsed);
                 break;
             case R.id.install_addon:
                 installAddon();
@@ -1168,7 +1185,7 @@ public class GeckoViewActivity
 
             // We only suopport one extension at a time, so remove the currently installed
             // extension if there is one
-            setPopupVisibility(false);
+            setViewVisibility(mPopupView, false);
             mPopupView = null;
             mPopupSession = null;
             sExtensionManager.unregisterExtension().then(unused -> {
@@ -1216,15 +1233,13 @@ public class GeckoViewActivity
 
     @Override
     public void closeTab(TabSession session) {
-        if (mTabSessionManager.sessionCount() > 1) {
-            mTabSessionManager.closeSession(session);
-            TabSession tabSession = mTabSessionManager.getCurrentSession();
-            setGeckoViewSession(tabSession);
+        mTabSessionManager.closeSession(session);
+        TabSession tabSession = mTabSessionManager.getCurrentSession();
+        setGeckoViewSession(tabSession);
+        if (tabSession != null) {
             tabSession.reload();
-            mToolbarView.updateTabCount();
-        } else {
-            recreateSession(session);
         }
+        mToolbarView.updateTabCount();
     }
 
     @Override
@@ -1267,11 +1282,22 @@ public class GeckoViewActivity
         if (previousSession != null) {
             controller.setTabActive(previousSession, false);
         }
-        mGeckoView.setSession(session);
-        if (activateTab) {
-            controller.setTabActive(session, true);
+
+        final boolean hasSession = session != null;
+        final LocationView view = mToolbarView.getLocationView();
+        // No point having the URL bar enabled if there's no session to navigate to
+        view.setEnabled(hasSession);
+
+        if (hasSession) {
+            mGeckoView.setSession(session);
+            if (activateTab) {
+                controller.setTabActive(session, true);
+            }
+            mTabSessionManager.setCurrentSession(session);
+        } else {
+            mGeckoView.coverUntilFirstPaint(Color.WHITE);
+            view.setText("");
         }
-        mTabSessionManager.setCurrentSession(session);
     }
 
     @Override
@@ -1532,8 +1558,9 @@ public class GeckoViewActivity
 
         @Override
         public void onCloseRequest(final GeckoSession session) {
-            if (session == mTabSessionManager.getCurrentSession()) {
-                finish();
+            final TabSession currentSession = mTabSessionManager.getCurrentSession();
+            if (session == currentSession) {
+                closeTab(currentSession);
             }
         }
 
@@ -1752,51 +1779,39 @@ public class GeckoViewActivity
         }
 
         @Override
-        public void onContentPermissionRequest(final GeckoSession session, final String uri,
-                                             final int type, final Callback callback) {
+        public GeckoResult<Integer> onContentPermissionRequest(final GeckoSession session, final ContentPermission perm) {
             final int resId;
-            Callback contentPermissionCallback = callback;
-            if (PERMISSION_GEOLOCATION == type) {
-                resId = R.string.request_geolocation;
-            } else if (PERMISSION_DESKTOP_NOTIFICATION == type) {
-                if (mShowNotificationsRejected) {
-                    Log.w(LOGTAG, "Desktop notifications already denied by user.");
-                    callback.reject();
-                    return;
-                }
-                resId = R.string.request_notification;
-                contentPermissionCallback = new ExampleNotificationCallback(callback);
-            } else if (PERMISSION_PERSISTENT_STORAGE == type) {
-                if (mAcceptedPersistentStorage.contains(uri)) {
-                    Log.w(LOGTAG, "Persistent Storage for " + uri + " already granted by user.");
-                    callback.grant();
-                    return;
-                }
-                resId = R.string.request_storage;
-                contentPermissionCallback = new ExamplePersistentStorageCallback(callback, uri);
-            } else if (PERMISSION_XR == type) {
-                resId = R.string.request_xr;
-            } else if (PERMISSION_AUTOPLAY_AUDIBLE == type || PERMISSION_AUTOPLAY_INAUDIBLE == type) {
-                if (!mAllowAutoplay.value()) {
-                    Log.d(LOGTAG, "Rejecting autoplay request");
-                    callback.reject();
-                } else {
-                    Log.d(LOGTAG, "Granting autoplay request");
-                    callback.grant();
-                }
-                return;
-            } else if (PERMISSION_MEDIA_KEY_SYSTEM_ACCESS == type) {
-                resId = R.string.request_media_key_system_access;
-            } else {
-                Log.w(LOGTAG, "Unknown permission: " + type);
-                callback.reject();
-                return;
+            switch (perm.permission) {
+                case PERMISSION_GEOLOCATION:
+                    resId = R.string.request_geolocation;
+                    break;
+                case PERMISSION_DESKTOP_NOTIFICATION:
+                    resId = R.string.request_notification;
+                    break;
+                case PERMISSION_PERSISTENT_STORAGE:
+                    resId = R.string.request_storage;
+                    break;
+                case PERMISSION_XR:
+                    resId = R.string.request_xr;
+                    break;
+                case PERMISSION_AUTOPLAY_AUDIBLE:
+                case PERMISSION_AUTOPLAY_INAUDIBLE:
+                    if (!mAllowAutoplay.value()) {
+                        return GeckoResult.fromValue(ContentPermission.VALUE_DENY);
+                    } else {
+                        return GeckoResult.fromValue(ContentPermission.VALUE_ALLOW);
+                    }
+                case PERMISSION_MEDIA_KEY_SYSTEM_ACCESS:
+                    resId = R.string.request_media_key_system_access;
+                    break;
+                default:
+                    return GeckoResult.fromValue(ContentPermission.VALUE_DENY);
             }
 
-            final String title = getString(resId, Uri.parse(uri).getAuthority());
+            final String title = getString(resId, Uri.parse(perm.uri).getAuthority());
             final BasicGeckoViewPrompt prompt = (BasicGeckoViewPrompt)
                     mTabSessionManager.getCurrentSession().getPromptDelegate();
-            prompt.onPermissionPrompt(session, title, contentPermissionCallback);
+            return prompt.onPermissionPrompt(session, title, perm);
         }
 
         private String[] normalizeMediaName(final MediaSource[] sources) {
@@ -1865,7 +1880,7 @@ public class GeckoViewActivity
 
     private class ExampleNavigationDelegate implements GeckoSession.NavigationDelegate {
         @Override
-        public void onLocationChange(GeckoSession session, final String url) {
+        public void onLocationChange(GeckoSession session, final String url, final List<GeckoSession.PermissionDelegate.ContentPermission> perms) {
             mToolbarView.getLocationView().setText(url);
             TabSession tabSession = mTabSessionManager.getSession(session);
             if (tabSession != null) {
@@ -1894,7 +1909,7 @@ public class GeckoViewActivity
                   " isRedirect=" + request.isRedirect +
                   " isDirectNavigation=" + request.isDirectNavigation);
 
-            return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+            return GeckoResult.allow();
         }
 
         @Override
@@ -1905,7 +1920,7 @@ public class GeckoViewActivity
                   " isRedirect=" + request.isRedirect +
                   "isDirectNavigation=" + request.isDirectNavigation);
 
-            return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+            return GeckoResult.allow();
         }
 
         @Override

@@ -32,6 +32,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/SVGImageContext.h"
 #include "mozilla/Unused.h"
 #include "mozilla/ViewportUtils.h"
@@ -46,7 +47,6 @@
 #include "mozilla/gfx/2D.h"
 #include "nsFrameLoader.h"
 #include "BrowserParent.h"
-#include "GeckoProfiler.h"
 #include "nsIMutableArray.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
@@ -264,7 +264,7 @@ nsBaseDragService::InvokeDragSession(
   // capture. However, this gets in the way of determining drag
   // feedback for things like trees because the event coordinates
   // are in the wrong coord system, so turn off mouse capture.
-  PresShell::ClearMouseCapture(nullptr);
+  PresShell::ClearMouseCapture();
 
   if (mSessionIsSynthesizedForTests) {
     mDoingDrag = true;
@@ -724,9 +724,8 @@ nsresult nsBaseDragService::DrawDrag(nsINode* aDOMNode,
       // otherwise, there was no region so just set the rectangle to
       // the size of the primary frame of the content.
       nsCOMPtr<nsIContent> content = do_QueryInterface(dragNode);
-      nsIFrame* frame = content->GetPrimaryFrame();
-      if (frame) {
-        presLayoutRect = frame->GetRect();
+      if (nsIFrame* frame = content->GetPrimaryFrame()) {
+        presLayoutRect = frame->GetBoundingClientRect();
       }
     }
 

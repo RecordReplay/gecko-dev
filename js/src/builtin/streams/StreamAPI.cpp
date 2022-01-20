@@ -7,7 +7,6 @@
 /* Public and friend stream APIs for external use. */
 
 #include "mozilla/Assertions.h"  // MOZ_ASSERT{,_IF}
-#include "mozilla/Attributes.h"  // MOZ_MUST_USE
 
 #include <stdint.h>  // uint32_t, uintptr_t
 
@@ -70,7 +69,7 @@ using js::StreamController;
 using js::UnwrapAndDowncastObject;
 using js::UnwrapStreamFromReader;
 
-JS_FRIEND_API JSObject* js::UnwrapReadableStream(JSObject* obj) {
+JS_PUBLIC_API JSObject* js::UnwrapReadableStream(JSObject* obj) {
   return obj->maybeUnwrapIf<ReadableStream>();
 }
 
@@ -140,7 +139,7 @@ JS_PUBLIC_API bool JS::IsReadableStreamDefaultReader(JSObject* obj) {
 }
 
 template <class T>
-static MOZ_MUST_USE T* APIUnwrapAndDowncast(JSContext* cx, JSObject* obj) {
+[[nodiscard]] static T* APIUnwrapAndDowncast(JSContext* cx, JSObject* obj) {
   cx->check(obj);
   return UnwrapAndDowncastObject<T>(cx, obj);
 }

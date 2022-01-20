@@ -6,7 +6,7 @@ from __future__ import absolute_import, division, unicode_literals
 
 import os
 import sys
-import mock
+from unittest import mock
 import mozunit
 
 # need this so the raptor unit tests can find output & filter classes
@@ -23,7 +23,6 @@ def test_no_device():
         "geckoview",
         "org.mozilla.org.mozilla.geckoview_example",
         cpu_test=True,
-        no_conditioned_profile=True,
     )
     raptor.device = None
     resp = cpu.start_android_cpu_profiler(raptor)

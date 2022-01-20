@@ -13,7 +13,12 @@
 
 namespace mozilla {
 namespace webgpu {
+class ErrorBuffer;
 class PresentationData;
+
+struct ErrorScopeStack {
+  nsTArray<MaybeScopedError> mStack;
+};
 
 class WebGPUParent final : public PWebGPUParent {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(WebGPUParent)
@@ -26,7 +31,7 @@ class WebGPUParent final : public PWebGPUParent {
       const nsTArray<RawId>& aTargetIds,
       InstanceRequestAdapterResolver&& resolver);
   ipc::IPCResult RecvAdapterRequestDevice(RawId aSelfId,
-                                          const dom::GPUDeviceDescriptor& aDesc,
+                                          const ipc::ByteBuf& aByteBuf,
                                           RawId aNewId);
   ipc::IPCResult RecvAdapterDestroy(RawId aSelfId);
   ipc::IPCResult RecvDeviceDestroy(RawId aSelfId);
@@ -34,7 +39,8 @@ class WebGPUParent final : public PWebGPUParent {
   ipc::IPCResult RecvBufferMap(RawId aSelfId, ffi::WGPUHostMap aHostMap,
                                uint64_t aOffset, uint64_t size,
                                BufferMapResolver&& aResolver);
-  ipc::IPCResult RecvBufferUnmap(RawId aSelfId, Shmem&& aShmem, bool aFlush);
+  ipc::IPCResult RecvBufferUnmap(RawId aSelfId, Shmem&& aShmem, bool aFlush,
+                                 bool aKeepShmem);
   ipc::IPCResult RecvBufferDestroy(RawId aSelfId);
   ipc::IPCResult RecvTextureDestroy(RawId aSelfId);
   ipc::IPCResult RecvTextureViewDestroy(RawId aSelfId);
@@ -44,20 +50,20 @@ class WebGPUParent final : public PWebGPUParent {
       const dom::GPUCommandBufferDescriptor& aDesc);
   ipc::IPCResult RecvCommandEncoderDestroy(RawId aSelfId);
   ipc::IPCResult RecvCommandBufferDestroy(RawId aSelfId);
-  ipc::IPCResult RecvQueueSubmit(RawId aSelfId,
+  ipc::IPCResult RecvRenderBundleDestroy(RawId aSelfId);
+  ipc::IPCResult RecvQueueSubmit(RawId aSelfId, RawId aDeviceId,
                                  const nsTArray<RawId>& aCommandBuffers);
-  ipc::IPCResult RecvQueueWriteBuffer(RawId aSelfId, RawId aBufferId,
-                                      uint64_t aBufferOffset, Shmem&& aShmem);
-  ipc::IPCResult RecvQueueWriteTexture(
-      RawId aSelfId, const ffi::WGPUTextureCopyView& aDestination,
-      Shmem&& aShmem, const ffi::WGPUTextureDataLayout& aDataLayout,
-      const ffi::WGPUExtent3d& aExtent);
+  ipc::IPCResult RecvQueueWriteAction(RawId aSelfId, RawId aDeviceId,
+                                      const ipc::ByteBuf& aByteBuf,
+                                      Shmem&& aShmem);
   ipc::IPCResult RecvBindGroupLayoutDestroy(RawId aSelfId);
   ipc::IPCResult RecvPipelineLayoutDestroy(RawId aSelfId);
   ipc::IPCResult RecvBindGroupDestroy(RawId aSelfId);
   ipc::IPCResult RecvShaderModuleDestroy(RawId aSelfId);
   ipc::IPCResult RecvComputePipelineDestroy(RawId aSelfId);
   ipc::IPCResult RecvRenderPipelineDestroy(RawId aSelfId);
+  ipc::IPCResult RecvImplicitLayoutDestroy(
+      RawId aImplicitPlId, const nsTArray<RawId>& aImplicitBglIds);
   ipc::IPCResult RecvDeviceCreateSwapChain(RawId aSelfId, RawId aQueueId,
                                            const layers::RGBDescriptor& aDesc,
                                            const nsTArray<RawId>& aBufferIds,
@@ -77,11 +83,16 @@ class WebGPUParent final : public PWebGPUParent {
                                                  uint32_t aIndex,
                                                  RawId aAssignId);
 
+  ipc::IPCResult RecvDevicePushErrorScope(RawId aSelfId);
+  ipc::IPCResult RecvDevicePopErrorScope(
+      RawId aSelfId, DevicePopErrorScopeResolver&& aResolver);
+
   ipc::IPCResult RecvShutdown();
 
  private:
   virtual ~WebGPUParent();
   void MaintainDevices();
+  bool ForwardError(RawId aDeviceID, ErrorBuffer& aError);
 
   const ffi::WGPUGlobal* const mContext;
   base::RepeatingTimer<WebGPUParent> mTimer;
@@ -91,6 +102,8 @@ class WebGPUParent final : public PWebGPUParent {
   std::unordered_map<uint64_t, Shmem> mSharedMemoryMap;
   /// Associated presentation data for each swapchain.
   std::unordered_map<uint64_t, RefPtr<PresentationData>> mCanvasMap;
+  /// Associated stack of error scopes for each device.
+  std::unordered_map<uint64_t, ErrorScopeStack> mErrorScopeMap;
 };
 
 }  // namespace webgpu

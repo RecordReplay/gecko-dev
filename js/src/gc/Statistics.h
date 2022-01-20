@@ -19,6 +19,7 @@
 
 #include "gc/GCEnum.h"
 #include "js/AllocPolicy.h"
+#include "js/GCAPI.h"
 #include "js/SliceBudget.h"
 #include "js/UniquePtr.h"
 #include "js/Vector.h"
@@ -119,7 +120,6 @@ struct Trigger {
   _(Barriers, "brrier", PhaseKind::BARRIER)
 
 const char* ExplainAbortReason(GCAbortReason reason);
-const char* ExplainInvocationKind(JSGCInvocationKind gckind);
 
 /*
  * Struct for collecting timing statistics on a "phase tree". The tree is
@@ -145,10 +145,12 @@ struct Statistics {
   using TimeDuration = mozilla::TimeDuration;
   using TimeStamp = mozilla::TimeStamp;
 
-  // Create a convenient type for referring to tables of phase times.
-  using PhaseTimeTable = EnumeratedArray<Phase, Phase::LIMIT, TimeDuration>;
+  // Create types for tables of times, by phase and phase kind.
+  using PhaseTimes = EnumeratedArray<Phase, Phase::LIMIT, TimeDuration>;
+  using PhaseKindTimes =
+      EnumeratedArray<PhaseKind, PhaseKind::LIMIT, TimeDuration>;
 
-  static MOZ_MUST_USE bool initialize();
+  [[nodiscard]] static bool initialize();
 
   explicit Statistics(gc::GCRuntime* gc);
   ~Statistics();
@@ -175,12 +177,12 @@ struct Statistics {
   // Resume a suspended stack of phases.
   void resumePhases();
 
-  void beginSlice(const ZoneGCStats& zoneStats, JSGCInvocationKind gckind,
-                  SliceBudget budget, JS::GCReason reason);
+  void beginSlice(const ZoneGCStats& zoneStats, JS::GCOptions options,
+                  const SliceBudget& budget, JS::GCReason reason);
   void endSlice();
 
-  MOZ_MUST_USE bool startTimingMutator();
-  MOZ_MUST_USE bool stopTimingMutator(double& mutator_ms, double& gc_ms);
+  [[nodiscard]] bool startTimingMutator();
+  [[nodiscard]] bool stopTimingMutator(double& mutator_ms, double& gc_ms);
 
   // Note when we sweep a zone or compartment.
   void sweptZone() { ++zoneStats.sweptZoneCount; }
@@ -260,7 +262,7 @@ struct Statistics {
   static const size_t MAX_SUSPENDED_PHASES = MAX_PHASE_NESTING * 3;
 
   struct SliceData {
-    SliceData(SliceBudget budget, mozilla::Maybe<Trigger> trigger,
+    SliceData(const SliceBudget& budget, mozilla::Maybe<Trigger> trigger,
               JS::GCReason reason, TimeStamp start, size_t startFaults,
               gc::State initialState);
 
@@ -274,8 +276,8 @@ struct Statistics {
     TimeStamp end;
     size_t startFaults = 0;
     size_t endFaults = 0;
-    PhaseTimeTable phaseTimes;
-    PhaseTimeTable maxParallelTimes;
+    PhaseTimes phaseTimes;
+    PhaseKindTimes maxParallelTimes;
 
     TimeDuration duration() const { return end - start; }
     bool wasReset() const { return resetReason != GCAbortReason::None; }
@@ -330,7 +332,7 @@ struct Statistics {
 
   ZoneGCStats zoneStats;
 
-  JSGCInvocationKind gckind;
+  JS::GCOptions gcOptions;
 
   GCAbortReason nonincrementalReason_;
 
@@ -351,7 +353,7 @@ struct Statistics {
   TimeDuration timedGCTime;
 
   /* Total time in a given phase for this GC. */
-  PhaseTimeTable phaseTimes;
+  PhaseTimes phaseTimes;
 
   /* Number of events of this type for this GC. */
   EnumeratedArray<Count, COUNT_LIMIT,
@@ -431,8 +433,9 @@ struct Statistics {
   using ProfileDurations =
       EnumeratedArray<ProfileKey, ProfileKey::KeyCount, TimeDuration>;
 
-  TimeDuration profileThreshold_;
   bool enableProfiling_;
+  bool profileWorkers_;
+  TimeDuration profileThreshold_;
   ProfileDurations totalTimes_;
   uint64_t sliceCount_;
 
@@ -441,7 +444,7 @@ struct Statistics {
   Phase currentPhase() const;
   Phase lookupChildPhase(PhaseKind phaseKind) const;
 
-  void beginGC(JSGCInvocationKind kind, const TimeStamp& currentTime);
+  void beginGC(JS::GCOptions options, const TimeStamp& currentTime);
   void endGC();
 
   void sendGCTelemetry();
@@ -456,20 +459,18 @@ struct Statistics {
 
   void reportLongestPhaseInMajorGC(PhaseKind longest, int telemetryId);
 
-  UniqueChars formatCompactSlicePhaseTimes(
-      const PhaseTimeTable& phaseTimes) const;
+  UniqueChars formatCompactSlicePhaseTimes(const PhaseTimes& phaseTimes) const;
 
   UniqueChars formatDetailedDescription() const;
   UniqueChars formatDetailedSliceDescription(unsigned i,
                                              const SliceData& slice) const;
-  UniqueChars formatDetailedPhaseTimes(const PhaseTimeTable& phaseTimes) const;
+  UniqueChars formatDetailedPhaseTimes(const PhaseTimes& phaseTimes) const;
   UniqueChars formatDetailedTotals() const;
 
   void formatJsonDescription(JSONPrinter&) const;
   void formatJsonSliceDescription(unsigned i, const SliceData& slice,
                                   JSONPrinter&) const;
-  void formatJsonPhaseTimes(const PhaseTimeTable& phaseTimes,
-                            JSONPrinter&) const;
+  void formatJsonPhaseTimes(const PhaseTimes& phaseTimes, JSONPrinter&) const;
   void formatJsonSlice(size_t sliceNum, JSONPrinter&) const;
 
   double computeMMU(TimeDuration resolution) const;
@@ -480,10 +481,10 @@ struct Statistics {
 
 struct MOZ_RAII AutoGCSlice {
   AutoGCSlice(Statistics& stats, const ZoneGCStats& zoneStats,
-              JSGCInvocationKind gckind, SliceBudget budget,
+              JS::GCOptions options, const SliceBudget& budget,
               JS::GCReason reason)
       : stats(stats) {
-    stats.beginSlice(zoneStats, gckind, budget, reason);
+    stats.beginSlice(zoneStats, options, budget, reason);
   }
   ~AutoGCSlice() { stats.endSlice(); }
 
@@ -524,6 +525,9 @@ struct MOZ_RAII AutoSCC {
   unsigned scc;
   mozilla::TimeStamp start;
 };
+
+void ReadProfileEnv(const char* envName, const char* helpText, bool* enableOut,
+                    bool* workersOut, mozilla::TimeDuration* thresholdOut);
 
 } /* namespace gcstats */
 

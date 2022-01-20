@@ -94,12 +94,13 @@ class ActorReadyGeckoProfilerInterface {
       features: options.features || [
         "js",
         "stackwalk",
+        "cpu",
         "responsiveness",
         "threads",
         "leaf",
       ],
       threads: options.threads || ["GeckoMain", "Compositor"],
-      activeBrowsingContextID: RecordingUtils.getActiveBrowsingContextID(),
+      activeTabID: RecordingUtils.getActiveBrowserID(),
     };
 
     try {
@@ -109,7 +110,7 @@ class ActorReadyGeckoProfilerInterface {
         settings.interval,
         settings.features,
         settings.threads,
-        settings.activeBrowsingContextID,
+        settings.activeTabID,
         settings.duration
       );
     } catch (e) {
@@ -229,7 +230,7 @@ class ActorReadyGeckoProfilerInterface {
           param.interval,
           param.features,
           param.duration,
-          param.activeBrowsingContextID
+          param.activeTabID
         );
         break;
       case "profiler-stopped":

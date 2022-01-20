@@ -23,7 +23,7 @@
 #include "mozilla/dom/PBackgroundLSDatabase.h"
 #include "nsBaseHashtable.h"
 #include "nsCOMPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsDebug.h"
 #include "nsError.h"
 #include "nsHashKeys.h"
@@ -39,7 +39,7 @@ namespace {
 
 #define XPCOM_SHUTDOWN_OBSERVER_TOPIC "xpcom-shutdown"
 
-typedef nsDataHashtable<nsCStringHashKey, LSDatabase*> LSDatabaseHashtable;
+typedef nsTHashMap<nsCStringHashKey, LSDatabase*> LSDatabaseHashtable;
 
 StaticAutoPtr<LSDatabaseHashtable> gLSDatabases;
 
@@ -85,8 +85,8 @@ LSDatabase::LSDatabase(const nsACString& aOrigin)
         obsSvc->AddObserver(sObserver, XPCOM_SHUTDOWN_OBSERVER_TOPIC, false));
   }
 
-  MOZ_ASSERT(!gLSDatabases->Get(mOrigin));
-  gLSDatabases->Put(mOrigin, this);
+  MOZ_ASSERT(!gLSDatabases->Contains(mOrigin));
+  gLSDatabases->InsertOrUpdate(mOrigin, this);
 }
 
 LSDatabase::~LSDatabase() {
@@ -410,16 +410,8 @@ LSDatabase::Observer::Observe(nsISupports* aSubject, const char* aTopic,
 
   MOZ_ASSERT(gLSDatabases);
 
-  nsTArray<RefPtr<LSDatabase>> databases;
-
-  for (auto iter = gLSDatabases->ConstIter(); !iter.Done(); iter.Next()) {
-    LSDatabase* database = iter.Data();
-    MOZ_ASSERT(database);
-
-    databases.AppendElement(database);
-  }
-
-  for (RefPtr<LSDatabase>& database : databases) {
+  for (const RefPtr<LSDatabase>& database :
+       ToTArray<nsTArray<RefPtr<LSDatabase>>>(gLSDatabases->Values())) {
     database->RequestAllowToClose();
   }
 

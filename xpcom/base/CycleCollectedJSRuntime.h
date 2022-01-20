@@ -19,10 +19,10 @@
 #include "js/TypeDecls.h"
 
 #include "nsCycleCollectionParticipant.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
 #include "nsStringFwd.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 
 class nsCycleCollectionNoteRootCallback;
 class nsIException;
@@ -98,7 +98,7 @@ class JSHolderMap {
 
   bool Has(void* aHolder) const;
   nsScriptObjectTracer* Get(void* aHolder) const;
-  nsScriptObjectTracer* GetAndRemove(void* aHolder);
+  nsScriptObjectTracer* Extract(void* aHolder);
   void Put(void* aHolder, nsScriptObjectTracer* aTracer, JS::Zone* aZone);
 
   size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const;
@@ -333,7 +333,7 @@ class CycleCollectedJSRuntime {
 
   // Add aZone to the set of zones waiting for a GC.
   void AddZoneWaitingForGC(JS::Zone* aZone) {
-    mZonesWaitingForGC.PutEntry(aZone);
+    mZonesWaitingForGC.Insert(aZone);
   }
 
   static void OnZoneDestroyed(JSFreeOp* aFop, JS::Zone* aZone);
@@ -373,7 +373,7 @@ class CycleCollectedJSRuntime {
 
   JSHolderMap mJSHolders;
 
-  typedef nsDataHashtable<nsFuncPtrHashKey<DeferredFinalizeFunction>, void*>
+  typedef nsTHashMap<nsFuncPtrHashKey<DeferredFinalizeFunction>, void*>
       DeferredFinalizerTable;
   DeferredFinalizerTable mDeferredFinalizerTable;
 
@@ -389,7 +389,7 @@ class CycleCollectedJSRuntime {
                   InfallibleAllocPolicy>
       mPreservedNurseryObjects;
 
-  nsTHashtable<nsPtrHashKey<JS::Zone>> mZonesWaitingForGC;
+  nsTHashSet<JS::Zone*> mZonesWaitingForGC;
 
   struct EnvironmentPreparer : public js::ScriptEnvironmentPreparer {
     void invoke(JS::HandleObject global, Closure& closure) override;

@@ -438,9 +438,6 @@ GMPWrapper.prototype = {
     return this._updateTask;
   },
 
-  get pluginMimeTypes() {
-    return [];
-  },
   get pluginLibraries() {
     if (this.isInstalled) {
       let path = this.version;
@@ -875,8 +872,7 @@ var GMPProvider = {
           URI_EXTENSION_STRINGS,
           "type.plugin.name",
           AddonManager.VIEW_TYPE_LIST,
-          6000,
-          AddonManager.TYPE_SUPPORTS_ASK_TO_ACTIVATE
+          6000
         ),
       ]);
       Services.obs.removeObserver(this, FIRST_CONTENT_PROCESS_TOPIC);

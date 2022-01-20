@@ -21,6 +21,7 @@ import sys
 import tarfile
 from contextlib import contextmanager
 from distutils.dir_util import copy_tree
+from distutils.file_util import copy_file
 
 from shutil import which
 
@@ -63,9 +64,10 @@ def check_run(args):
             error_match = find_first_match(cmake_error_re)
 
             def dump_file(log):
-                with open(log, "rb") as f:
+                with open(log, "r", errors="replace") as f:
                     print("\nContents of", log, "follow\n", file=sys.stderr)
-                    print(f.read(), file=sys.stderr)
+                    for line in f:
+                        print(line, file=sys.stderr)
 
             if output_match:
                 dump_file(output_match.group(1))
@@ -168,19 +170,6 @@ def delete(path):
 def install_libgcc(gcc_dir, clang_dir, is_final_stage):
     gcc_bin_dir = os.path.join(gcc_dir, "bin")
 
-    # Copy over gcc toolchain bits that clang looks for, to ensure that
-    # clang is using a consistent version of ld, since the system ld may
-    # be incompatible with the output clang produces.  But copy it to a
-    # target-specific directory so a cross-compiler to Mac doesn't pick
-    # up the (Linux-specific) ld with disastrous results.
-    #
-    # Only install this for the bootstrap process; we expect any consumers of
-    # the newly-built toolchain to provide an appropriate ld themselves.
-    if not is_final_stage:
-        x64_bin_dir = os.path.join(clang_dir, "x86_64-unknown-linux-gnu", "bin")
-        mkdir_p(x64_bin_dir)
-        shutil.copy2(os.path.join(gcc_bin_dir, "ld"), x64_bin_dir)
-
     out = subprocess.check_output(
         [os.path.join(gcc_bin_dir, "gcc"), "-print-libgcc-file-name"]
     )
@@ -196,10 +185,13 @@ def install_libgcc(gcc_dir, clang_dir, is_final_stage):
     mkdir_p(clang_lib_dir)
     copy_tree(libgcc_dir, clang_lib_dir, preserve_symlinks=True)
     libgcc_dir = os.path.join(gcc_dir, "lib64")
-    clang_lib_dir = os.path.join(clang_dir, "lib")
+    # This is necessary as long as CI runs on debian8 docker images.
+    copy_file(
+        os.path.join(libgcc_dir, "libstdc++.so.6"), os.path.join(clang_dir, "lib")
+    )
     copy_tree(libgcc_dir, clang_lib_dir, preserve_symlinks=True)
     libgcc_dir = os.path.join(gcc_dir, "lib32")
-    clang_lib_dir = os.path.join(clang_dir, "lib32")
+    clang_lib_dir = os.path.join(clang_lib_dir, "32")
     copy_tree(libgcc_dir, clang_lib_dir, preserve_symlinks=True)
     include_dir = os.path.join(gcc_dir, "include")
     clang_include_dir = os.path.join(clang_dir, "include")
@@ -316,9 +308,12 @@ def build_one_stage(
             cmake_args += ["-DLLVM_ENABLE_PROJECTS=clang;compiler-rt"]
         if build_wasm:
             cmake_args += ["-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=WebAssembly"]
-        if is_linux():
-            cmake_args += ["-DLLVM_BINUTILS_INCDIR=%s/include" % gcc_dir]
+        if is_linux() and not osx_cross_compile:
+            cmake_args += ["-DLLVM_BINUTILS_INCDIR=/usr/include"]
             cmake_args += ["-DLLVM_ENABLE_LIBXML2=FORCE_ON"]
+            sysroot = os.path.join(os.environ.get("MOZ_FETCHES_DIR", ""), "sysroot")
+            if os.path.exists(sysroot):
+                cmake_args += ["-DCMAKE_SYSROOT=%s" % sysroot]
         if is_windows():
             cmake_args.insert(-1, "-DLLVM_EXPORT_SYMBOLS_FOR_PLUGINS=ON")
             cmake_args.insert(-1, "-DLLVM_USE_CRT_RELEASE=MT")
@@ -330,11 +325,13 @@ def build_one_stage(
         if libtool is not None:
             cmake_args += ["-DCMAKE_LIBTOOL=%s" % slashify_path(libtool)]
         if osx_cross_compile:
+            arch = "arm64" if os.environ.get("OSX_ARCH") == "arm64" else "x86_64"
+            target_cpu = (
+                "aarch64" if os.environ.get("OSX_ARCH") == "arm64" else "x86_64"
+            )
             cmake_args += [
                 "-DCMAKE_SYSTEM_NAME=Darwin",
-                "-DCMAKE_SYSTEM_VERSION=10.10",
-                # Xray requires a OSX 10.12 SDK (https://bugs.llvm.org/show_bug.cgi?id=38959)
-                "-DCOMPILER_RT_BUILD_XRAY=OFF",
+                "-DCMAKE_SYSTEM_VERSION=%s" % os.environ["MACOSX_DEPLOYMENT_TARGET"],
                 "-DLIBCXXABI_LIBCXX_INCLUDES=%s" % libcxx_include_dir,
                 "-DCMAKE_OSX_SYSROOT=%s" % slashify_path(os.getenv("CROSS_SYSROOT")),
                 "-DCMAKE_FIND_ROOT_PATH=%s" % slashify_path(os.getenv("CROSS_SYSROOT")),
@@ -342,18 +339,22 @@ def build_one_stage(
                 "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY",
                 "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY",
                 "-DCMAKE_MACOSX_RPATH=ON",
-                "-DCMAKE_OSX_ARCHITECTURES=x86_64",
-                "-DDARWIN_osx_ARCHS=x86_64",
+                "-DCMAKE_OSX_ARCHITECTURES=%s" % arch,
+                "-DDARWIN_osx_ARCHS=%s" % arch,
                 "-DDARWIN_osx_SYSROOT=%s" % slashify_path(os.getenv("CROSS_SYSROOT")),
-                "-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-apple-darwin",
+                "-DLLVM_DEFAULT_TARGET_TRIPLE=%s-apple-darwin" % target_cpu,
             ]
+            if os.environ.get("OSX_ARCH") == "arm64":
+                cmake_args += [
+                    "-DDARWIN_osx_BUILTIN_ARCHS=arm64",
+                ]
             # Starting in LLVM 11 (which requires SDK 10.12) the build tries to
             # detect the SDK version by calling xcrun. Cross-compiles don't have
             # an xcrun, so we have to set the version explicitly.
-            if "MacOSX10.12.sdk" in os.getenv("CROSS_SYSROOT"):
-                cmake_args += [
-                    "-DDARWIN_macosx_OVERRIDE_SDK_VERSION=10.12",
-                ]
+            cmake_args += [
+                "-DDARWIN_macosx_OVERRIDE_SDK_VERSION=%s"
+                % os.environ["MACOSX_DEPLOYMENT_TARGET"],
+            ]
         if pgo_phase == "gen":
             # Per https://releases.llvm.org/10.0.0/docs/HowToBuildWithPGO.html
             cmake_args += [
@@ -562,7 +563,13 @@ def prune_final_dir_for_clang_tidy(final_dir, osx_cross_compile):
         if not os.path.isdir(f):
             raise Exception("Expected %s to be a directory" % f)
 
-    kept_binaries = ["clang-apply-replacements", "clang-format", "clang-tidy", "clangd"]
+    kept_binaries = [
+        "clang-apply-replacements",
+        "clang-format",
+        "clang-tidy",
+        "clangd",
+        "clang-query",
+    ]
     re_clang_tidy = re.compile(r"^(" + "|".join(kept_binaries) + r")(\.exe)?$", re.I)
     for f in glob.glob("%s/bin/*" % final_dir):
         if re_clang_tidy.search(os.path.basename(f)) is None:
@@ -632,10 +639,10 @@ if __name__ == "__main__":
         help="Skip tar packaging stage",
     )
     parser.add_argument(
-        "--skip-checkout",
+        "--skip-patch",
         required=False,
         action="store_true",
-        help="Do not checkout/revert source",
+        help="Do not patch source",
     )
 
     args = parser.parse_args()
@@ -767,7 +774,9 @@ if __name__ == "__main__":
         raise ValueError("Config file needs to set gcc_dir")
 
     if is_darwin() or osx_cross_compile:
-        os.environ["MACOSX_DEPLOYMENT_TARGET"] = "10.12"
+        os.environ["MACOSX_DEPLOYMENT_TARGET"] = (
+            "11.0" if os.environ.get("OSX_ARCH") == "arm64" else "10.12"
+        )
 
     cc = get_tool(config, "cc")
     cxx = get_tool(config, "cxx")
@@ -782,8 +791,9 @@ if __name__ == "__main__":
     if not os.path.exists(source_dir):
         os.makedirs(source_dir)
 
-    for p in config.get("patches", []):
-        patch(os.path.join(config_dir, p), source_dir)
+    if not args.skip_patch:
+        for p in config.get("patches", []):
+            patch(os.path.join(config_dir, p), source_dir)
 
     compiler_rt_source_link = llvm_source_dir + "/projects/compiler-rt"
 
@@ -806,7 +816,10 @@ if __name__ == "__main__":
     package_name = "clang"
     if build_clang_tidy:
         package_name = "clang-tidy"
-        import_clang_tidy(source_dir, build_clang_tidy_alpha, build_clang_tidy_external)
+        if not args.skip_patch:
+            import_clang_tidy(
+                source_dir, build_clang_tidy_alpha, build_clang_tidy_external
+            )
 
     if not os.path.exists(build_dir):
         os.makedirs(build_dir)
@@ -829,17 +842,11 @@ if __name__ == "__main__":
     elif is_linux():
         extra_cflags = []
         extra_cxxflags = []
-        # When building stage2 and stage3, we want the newly-built clang to pick
-        # up whatever headers were installed from the gcc we used to build stage1,
-        # always, rather than the system headers.  Providing -gcc-toolchain
-        # encourages clang to do that.
-        extra_cflags2 = ["-fPIC", "-gcc-toolchain", stage1_inst_dir]
+        extra_cflags2 = ["-fPIC"]
         # Silence clang's warnings about arguments not being used in compilation.
         extra_cxxflags2 = [
             "-fPIC",
             "-Qunused-arguments",
-            "-gcc-toolchain",
-            stage1_inst_dir,
         ]
         extra_asmflags = []
         # Avoid libLLVM internal function calls going through the PLT.
@@ -850,14 +857,6 @@ if __name__ == "__main__":
         # here.  LLVM's build system is also picky about turning on ICF, so
         # we do that explicitly here, too.
         extra_ldflags += ["-fuse-ld=gold", "-Wl,--gc-sections", "-Wl,--icf=safe"]
-
-        if "LD_LIBRARY_PATH" in os.environ:
-            os.environ["LD_LIBRARY_PATH"] = "%s/lib64/:%s" % (
-                gcc_dir,
-                os.environ["LD_LIBRARY_PATH"],
-            )
-        else:
-            os.environ["LD_LIBRARY_PATH"] = "%s/lib64/" % gcc_dir
     elif is_windows():
         extra_cflags = []
         extra_cxxflags = []

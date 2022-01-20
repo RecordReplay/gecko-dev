@@ -10,35 +10,25 @@
 
 class nsLookAndFeel final : public nsXPLookAndFeel {
  public:
-  explicit nsLookAndFeel(const LookAndFeelCache* aCache);
+  explicit nsLookAndFeel();
   virtual ~nsLookAndFeel();
 
   void NativeInit() final;
   virtual void RefreshImpl() override;
-  nsresult NativeGetInt(IntID aID, int32_t& aResult) override;
-  nsresult NativeGetFloat(FloatID aID, float& aResult) override;
-  nsresult NativeGetColor(ColorID aID, nscolor& aResult) override;
+  nsresult NativeGetInt(IntID, int32_t& aResult) override;
+  nsresult NativeGetFloat(FloatID, float& aResult) override;
+  nsresult NativeGetColor(ColorID, ColorScheme, nscolor& aResult) override;
   bool NativeGetFont(FontID aID, nsString& aName,
                      gfxFontStyle& aStyle) override;
   virtual bool GetEchoPasswordImpl() override;
   virtual uint32_t GetPasswordMaskDelayImpl() override;
   virtual char16_t GetPasswordCharacterImpl() override;
-  LookAndFeelCache GetCacheImpl() override;
-  void SetCacheImpl(const LookAndFeelCache& aCache) override;
 
  protected:
-  void DoSetCache(const LookAndFeelCache& aCache);
-
   bool mInitializedSystemColors = false;
   mozilla::AndroidSystemColors mSystemColors;
   bool mInitializedShowPassword = false;
   bool mShowPassword = false;
-
-  bool mSystemUsesDarkTheme = false;
-  bool mSystemUsesDarkThemeCached = false;
-
-  bool mPrefersReducedMotion = false;
-  bool mPrefersReducedMotionCached = false;
 
   nsresult GetSystemColors();
 

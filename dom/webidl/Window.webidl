@@ -205,13 +205,13 @@ typedef OfflineResourceList ApplicationCache;
                     WritableStream)]
 /*sealed*/ interface Window : EventTarget {
   // the current browsing context
-  [Unforgeable, Constant, StoreInSlot,
+  [LegacyUnforgeable, Constant, StoreInSlot,
    CrossOriginReadable] readonly attribute WindowProxy window;
   [Replaceable, Constant, StoreInSlot,
    CrossOriginReadable] readonly attribute WindowProxy self;
-  [Unforgeable, StoreInSlot, Pure] readonly attribute Document? document;
+  [LegacyUnforgeable, StoreInSlot, Pure] readonly attribute Document? document;
   [Throws] attribute DOMString name;
-  [PutForwards=href, Unforgeable, CrossOriginReadable,
+  [PutForwards=href, LegacyUnforgeable, CrossOriginReadable,
    CrossOriginWritable] readonly attribute Location location;
   [Throws] readonly attribute History history;
   readonly attribute CustomElementRegistry customElements;
@@ -226,27 +226,28 @@ typedef OfflineResourceList ApplicationCache;
   [Throws, CrossOriginReadable] readonly attribute boolean closed;
   [Throws] void stop();
   [Throws, CrossOriginCallable, NeedsCallerType] void focus();
-  [Throws, CrossOriginCallable] void blur();
+  [Throws, CrossOriginCallable, NeedsCallerType] void blur();
   [Replaceable, Pref="dom.window.event.enabled"] readonly attribute any event;
 
   // other browsing contexts
   [Replaceable, Throws, CrossOriginReadable] readonly attribute WindowProxy frames;
   [Replaceable, CrossOriginReadable] readonly attribute unsigned long length;
   //[Unforgeable, Throws, CrossOriginReadable] readonly attribute WindowProxy top;
-  [Unforgeable, Throws, CrossOriginReadable] readonly attribute WindowProxy? top;
+  [LegacyUnforgeable, Throws, CrossOriginReadable] readonly attribute WindowProxy? top;
   [Throws, CrossOriginReadable] attribute any opener;
   //[Throws] readonly attribute WindowProxy parent;
   [Replaceable, Throws, CrossOriginReadable] readonly attribute WindowProxy? parent;
   [Throws, NeedsSubjectPrincipal] readonly attribute Element? frameElement;
   //[Throws] WindowProxy? open(optional USVString url = "about:blank", optional DOMString target = "_blank", [TreatNullAs=EmptyString] optional DOMString features = "");
-  [Throws] WindowProxy? open(optional USVString url = "", optional DOMString target = "", optional [TreatNullAs=EmptyString] DOMString features = "");
+  [Throws] WindowProxy? open(optional USVString url = "", optional DOMString target = "", optional [LegacyNullToEmptyString] DOMString features = "");
   getter object (DOMString name);
 
   // the user agent
   readonly attribute Navigator navigator;
-#ifdef HAVE_SIDEBAR
+  [Pref="dom.window.clientinformation.enabled", BinaryName="Navigator"]
+  readonly attribute Navigator clientInformation;
+
   [Replaceable, Throws] readonly attribute External external;
-#endif
   [Throws, SecureContext, Pref="browser.cache.offline.enable"] readonly attribute ApplicationCache applicationCache;
 
   // user prompts
@@ -492,8 +493,9 @@ partial interface Window {
            attribute EventHandler ondevicemotion;
            attribute EventHandler ondeviceorientation;
            attribute EventHandler onabsolutedeviceorientation;
-           attribute EventHandler ondeviceproximity;
+           [Pref="device.sensors.proximity.enabled"]
            attribute EventHandler onuserproximity;
+           [Pref="device.sensors.ambientLight.enabled"]
            attribute EventHandler ondevicelight;
 
   void                      dump(DOMString str);
@@ -565,14 +567,12 @@ partial interface Window {
 };
 #endif
 
-#ifdef HAVE_SIDEBAR
 // Mozilla extension
 // Sidebar is deprecated and it will be removed in the next cycles. See bug 1640138.
 partial interface Window {
-  [Replaceable, Throws, UseCounter]
+  [Replaceable, Throws, UseCounter, Pref="dom.window.sidebar.enabled"]
   readonly attribute (External or WindowProxy) sidebar;
 };
-#endif
 
 [MOZ_CAN_RUN_SCRIPT_BOUNDARY]
 callback PromiseDocumentFlushedCallback = any ();
@@ -704,12 +704,10 @@ partial interface Window {
   [ChromeOnly]
   readonly attribute boolean isChromeWindow;
 
-#ifdef MOZ_GLEAN
   [ChromeOnly]
   readonly attribute GleanImpl Glean;
   [ChromeOnly]
   readonly attribute GleanPingsImpl GleanPings;
-#endif
 };
 
 partial interface Window {
@@ -794,7 +792,14 @@ partial interface Window {
 partial interface Window {
   [SameObject, Pref="dom.visualviewport.enabled", Replaceable]
   readonly attribute VisualViewport visualViewport;
+};
 
+// Used to assign marks to appear on the scrollbar when
+// finding on a page.
+partial interface Window {
+  // The marks are values between 0 and scrollMaxY.
+  [ChromeOnly]
+  void setScrollMarks(sequence<unsigned long> marks);
 };
 
 dictionary WindowPostMessageOptions : PostMessageOptions {

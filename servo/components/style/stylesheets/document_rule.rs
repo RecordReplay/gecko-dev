@@ -206,8 +206,12 @@ impl DocumentMatchingFunction {
             DocumentMatchingFunction::MediaDocument(_) => {
                 GeckoDocumentMatchingFunction::MediaDocument
             },
-            DocumentMatchingFunction::PlainTextDocument(..) => GeckoDocumentMatchingFunction::PlainTextDocument,
-            DocumentMatchingFunction::UnobservableDocument(..) => GeckoDocumentMatchingFunction::UnobservableDocument,
+            DocumentMatchingFunction::PlainTextDocument(..) => {
+                GeckoDocumentMatchingFunction::PlainTextDocument
+            },
+            DocumentMatchingFunction::UnobservableDocument(..) => {
+                GeckoDocumentMatchingFunction::UnobservableDocument
+            },
         };
 
         let pattern = nsCStr::from(match *self {
@@ -241,8 +245,8 @@ impl DocumentMatchingFunction {
 /// The `@document` rule's condition is written as a comma-separated list of
 /// URL matching functions, and the condition evaluates to true whenever any
 /// one of those functions evaluates to true.
-#[css(comma)]
 #[derive(Clone, Debug, ToCss, ToShmem)]
+#[css(comma)]
 pub struct DocumentCondition(#[css(iterable)] Vec<DocumentMatchingFunction>);
 
 impl DocumentCondition {

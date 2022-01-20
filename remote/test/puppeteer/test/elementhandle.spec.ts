@@ -20,6 +20,8 @@ import {
   getTestState,
   setupTestBrowserHooks,
   setupTestPageAndContextHooks,
+  describeFailsFirefox,
+  itFailsFirefox,
 } from './mocha-utils'; // eslint-disable-line import/extensions
 
 import utils from './utils.js';
@@ -169,6 +171,7 @@ describe('ElementHandle specs', function () {
   });
 
   describe('ElementHandle.click', function () {
+    // See https://github.com/puppeteer/puppeteer/issues/7175
     it('should work', async () => {
       const { page, server } = getTestState();
 
@@ -317,7 +320,8 @@ describe('ElementHandle specs', function () {
           )
         );
       }
-      const handlerNamesAfterUnregistering = puppeteer.customQueryHandlerNames();
+      const handlerNamesAfterUnregistering =
+        puppeteer.customQueryHandlerNames();
       expect(handlerNamesAfterUnregistering.includes('getById')).toBeFalsy();
     });
     it('should throw with invalid query names', () => {

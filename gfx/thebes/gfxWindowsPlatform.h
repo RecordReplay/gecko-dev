@@ -23,7 +23,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Atomics.h"
 #include "nsTArray.h"
-#include "nsDataHashtable.h"
 
 #include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
@@ -108,7 +107,7 @@ class gfxWindowsPlatform final : public gfxPlatform {
   void EnsureDevicesInitialized() override;
   bool DevicesInitialized() override;
 
-  gfxPlatformFontList* CreatePlatformFontList() override;
+  bool CreatePlatformFontList() override;
 
   virtual already_AddRefed<gfxASurface> CreateOffscreenSurface(
       const IntSize& aSize, gfxImageFormat aFormat) override;
@@ -256,7 +255,6 @@ class gfxWindowsPlatform final : public gfxPlatform {
   void InitializeD3D11Config();
   void InitializeD2DConfig();
   void InitializeDirectDrawConfig();
-  void InitializeAdvancedLayersConfig();
 
   void RecordStartupTelemetry();
 

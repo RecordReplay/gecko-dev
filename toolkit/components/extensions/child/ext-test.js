@@ -23,7 +23,6 @@ XPCOMUtils.defineLazyGetter(this, "isXpcshell", function() {
  *        - a regular expression, it must match the error message.
  *        - a function, it is called with the error object and its
  *          return value is returned.
- *        - null, the function always returns true.
  * @param {BaseContext} context
  *
  * @returns {boolean}
@@ -37,9 +36,6 @@ const errorMatches = (error, expectedError, context) => {
   ) {
     Cu.reportError("Error object belongs to the wrong scope.");
     return false;
-  }
-  if (expectedError === null) {
-    return true;
   }
 
   if (typeof expectedError === "function") {
@@ -193,13 +189,9 @@ this.test = class extends ExtensionAPI {
           // Wrap in a native promise for consistency.
           promise = Promise.resolve(promise);
 
-          if (msg) {
-            msg = `: ${msg}`;
-          }
-
           return promise.then(
             result => {
-              assertTrue(false, `Promise resolved, expected rejection${msg}`);
+              assertTrue(false, `Promise resolved, expected rejection: ${msg}`);
             },
             error => {
               let errorMessage = toSource(error && error.message);
@@ -208,21 +200,17 @@ this.test = class extends ExtensionAPI {
                 errorMatches(error, expectedError, context),
                 `Promise rejected, expecting rejection to match ${toSource(
                   expectedError
-                )}, got ${errorMessage}${msg}`
+                )}, got ${errorMessage}: ${msg}`
               );
             }
           );
         },
 
         assertThrows(func, expectedError, msg) {
-          if (msg) {
-            msg = `: ${msg}`;
-          }
-
           try {
             func();
 
-            assertTrue(false, `Function did not throw, expected error${msg}`);
+            assertTrue(false, `Function did not throw, expected error: ${msg}`);
           } catch (error) {
             let errorMessage = toSource(error && error.message);
 
@@ -230,7 +218,7 @@ this.test = class extends ExtensionAPI {
               errorMatches(error, expectedError, context),
               `Function threw, expecting error to match ${toSource(
                 expectedError
-              )}, got ${errorMessage}${msg}`
+              )}, got ${errorMessage}: ${msg}`
             );
           }
         },

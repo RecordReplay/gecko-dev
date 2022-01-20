@@ -21,9 +21,10 @@ import expect from 'expect';
 import sinon from 'sinon';
 import {
   getTestState,
-  itFailsFirefox,
   setupTestBrowserHooks,
   setupTestPageAndContextHooks,
+  itFailsFirefox,
+  describeFailsFirefox,
 } from './mocha-utils'; // eslint-disable-line import/extensions
 import { Page, Metrics } from '../lib/cjs/puppeteer/common/Page.js';
 import { JSHandle } from '../lib/cjs/puppeteer/common/JSHandle.js';
@@ -66,10 +67,7 @@ describe('Page', function () {
       expect(dialog.type()).toBe('beforeunload');
       expect(dialog.defaultValue()).toBe('');
       if (isChrome) expect(dialog.message()).toBe('');
-      else
-        expect(dialog.message()).toBe(
-          'This page is asking you to confirm that you want to leave - data you have entered may not be saved.'
-        );
+      else expect(dialog.message()).toBeTruthy();
       await dialog.accept();
       await pageClosingPromise;
     });
@@ -175,11 +173,25 @@ describe('Page', function () {
       expect(await page.evaluate(() => !!window.opener)).toBe(false);
       expect(await popup.evaluate(() => !!window.opener)).toBe(false);
     });
-    it('should work with clicking target=_blank', async () => {
+    it('should work with clicking target=_blank and without rel=opener', async () => {
       const { page, server } = getTestState();
 
       await page.goto(server.EMPTY_PAGE);
       await page.setContent('<a target=_blank href="/one-style.html">yo</a>');
+      const [popup] = await Promise.all([
+        new Promise<Page>((x) => page.once('popup', x)),
+        page.click('a'),
+      ]);
+      expect(await page.evaluate(() => !!window.opener)).toBe(false);
+      expect(await popup.evaluate(() => !!window.opener)).toBe(false);
+    });
+    it('should work with clicking target=_blank and with rel=opener', async () => {
+      const { page, server } = getTestState();
+
+      await page.goto(server.EMPTY_PAGE);
+      await page.setContent(
+        '<a target=_blank rel=opener href="/one-style.html">yo</a>'
+      );
       const [popup] = await Promise.all([
         new Promise<Page>((x) => page.once('popup', x)),
         page.click('a'),
@@ -245,6 +257,7 @@ describe('Page', function () {
       await page.goto(server.EMPTY_PAGE);
       let error = null;
       await context
+        // @ts-expect-error purposeful bad input for test
         .overridePermissions(server.EMPTY_PAGE, ['foo'])
         .catch((error_) => (error = error_));
       expect(error.message).toBe('Unknown permission: foo');
@@ -301,7 +314,7 @@ describe('Page', function () {
       ]);
     });
     it(
-      'should isolate permissions between browser contexs',
+      'should isolate permissions between browser contexts',
       async () => {
         const { page, server, context, browser } = getTestState();
 
@@ -710,6 +723,21 @@ describe('Page', function () {
         .waitForRequest(() => false)
         .catch((error_) => (error = error_));
       expect(error).toBeInstanceOf(puppeteer.errors.TimeoutError);
+    });
+    it('should work with async predicate', async () => {
+      const { page, server } = getTestState();
+      await page.goto(server.EMPTY_PAGE);
+      const [response] = await Promise.all([
+        page.waitForResponse(async (response) => {
+          return response.url() === server.PREFIX + '/digits/2.png';
+        }),
+        page.evaluate(() => {
+          fetch('/digits/1.png');
+          fetch('/digits/2.png');
+          fetch('/digits/3.png');
+        }),
+      ]);
+      expect(response.url()).toBe(server.PREFIX + '/digits/2.png');
     });
     it('should work with no timeout', async () => {
       const { page, server } = getTestState();
@@ -1711,7 +1739,7 @@ describe('Page', function () {
   });
 
   describe('Page.browserContext', function () {
-    it('should return the correct browser instance', async () => {
+    it('should return the correct browser context instance', async () => {
       const { page, context } = getTestState();
 
       expect(page.browserContext()).toBe(context);

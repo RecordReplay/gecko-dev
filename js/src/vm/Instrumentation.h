@@ -71,9 +71,7 @@ class RealmInstrumentation {
   static uint32_t getInstrumentationKinds(GlobalObject* global);
 
   // Get the string name of an instrumentation kind.
-  static const frontend::ParserAtom* getInstrumentationKindName(
-      JSContext* cx, frontend::ParserAtomsTable& parserAtoms,
-      InstrumentationKind kind);
+  static const char* getInstrumentationKindName(InstrumentationKind kind);
 
   static bool getScriptId(JSContext* cx, Handle<GlobalObject*> global,
                           HandleScript script, int32_t* id);

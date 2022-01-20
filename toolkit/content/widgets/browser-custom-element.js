@@ -49,6 +49,41 @@
     "dom.beforeunload_timeout_ms"
   );
 
+  Object.defineProperty(LazyModules, "ProcessHangMonitor", {
+    configurable: true,
+    get() {
+      // Import if we can - this is a browser/ module so it may not be
+      // available, in which case we return null. We replace this getter
+      // when the module becomes available (should be on delayed startup
+      // when the first browser window loads, via BrowserGlue.jsm ).
+      const kURL = "resource:///modules/ProcessHangMonitor.jsm";
+      if (Cu.isModuleLoaded(kURL)) {
+        let { ProcessHangMonitor } = ChromeUtils.import(kURL);
+        Object.defineProperty(LazyModules, "ProcessHangMonitor", {
+          value: ProcessHangMonitor,
+        });
+        return ProcessHangMonitor;
+      }
+      return null;
+    },
+  });
+
+  // Get SessionStore module in the same as ProcessHangMonitor above.
+  Object.defineProperty(LazyModules, "SessionStore", {
+    configurable: true,
+    get() {
+      const kURL = "resource:///modules/sessionstore/SessionStore.jsm";
+      if (Cu.isModuleLoaded(kURL)) {
+        let { SessionStore } = ChromeUtils.import(kURL);
+        Object.defineProperty(LazyModules, "SessionStore", {
+          value: SessionStore,
+        });
+        return SessionStore;
+      }
+      return null;
+    },
+  });
+
   const elementsToDestroyOnUnload = new Set();
 
   window.addEventListener(
@@ -220,8 +255,6 @@
 
       this._mayEnableCharacterEncodingMenu = null;
 
-      this._charsetAutodetected = false;
-
       this._contentPrincipal = null;
 
       this._contentPartitionedPrincipal = null;
@@ -321,7 +354,7 @@
     get documentURI() {
       return this.isRemoteBrowser
         ? this._documentURI
-        : this.contentDocument.documentURIObject;
+        : this.contentDocument?.documentURIObject;
     }
 
     get documentContentType() {
@@ -360,30 +393,6 @@
 
     get dateTimePicker() {
       return document.getElementById(this.getAttribute("datetimepicker"));
-    }
-
-    /**
-     * Provides a node to hang popups (such as the datetimepicker) from.
-     * If this <browser> isn't the descendant of a <stack>, null is returned
-     * instead and popup code must handle this case.
-     */
-    get popupAnchor() {
-      let stack = this.closest("stack");
-      if (!stack) {
-        return null;
-      }
-
-      let popupAnchor = stack.querySelector(".popup-anchor");
-      if (popupAnchor) {
-        return popupAnchor;
-      }
-
-      // Create an anchor for the popup
-      popupAnchor = document.createElement("div");
-      popupAnchor.className = "popup-anchor";
-      popupAnchor.hidden = true;
-      stack.appendChild(popupAnchor);
-      return popupAnchor;
     }
 
     set suspendMediaWhenInactive(val) {
@@ -550,17 +559,11 @@
         : this.contentDocument.title;
     }
 
-    set characterSet(val) {
+    forceEncodingDetection() {
       if (this.isRemoteBrowser) {
-        this.sendMessageToActor(
-          "UpdateCharacterSet",
-          { value: val },
-          "BrowserTab"
-        );
-        this._characterSet = val;
+        this.sendMessageToActor("ForceEncodingDetection", {}, "BrowserTab");
       } else {
-        this.docShell.charset = val;
-        this.docShell.gatherCharsetMenuTelemetry();
+        this.docShell.forceEncodingDetection();
       }
     }
 
@@ -577,18 +580,6 @@
     set mayEnableCharacterEncodingMenu(aMayEnable) {
       if (this.isRemoteBrowser) {
         this._mayEnableCharacterEncodingMenu = aMayEnable;
-      }
-    }
-
-    get charsetAutodetected() {
-      return this.isRemoteBrowser
-        ? this._charsetAutodetected
-        : this.docShell.charsetAutodetected;
-    }
-
-    set charsetAutodetected(aAutodetected) {
-      if (this.isRemoteBrowser) {
-        this._charsetAutodetected = aAutodetected;
       }
     }
 
@@ -865,6 +856,10 @@
     }
 
     onPageHide(aEvent) {
+      // If we're browsing from the tab crashed UI to a URI that keeps
+      // this browser non-remote, we'll handle that here.
+      LazyModules.SessionStore?.maybeExitCrashedState(this);
+
       if (!this.docShell || !this.fastFind) {
         return;
       }
@@ -985,14 +980,10 @@
           aboutBlank,
           this.loadContext
         );
+        this._contentPartitionedPrincipal = this._contentPrincipal;
         // CSP for about:blank is null; if we ever change _contentPrincipal above,
         // we should re-evaluate the CSP here.
         this._csp = null;
-
-        this.messageManager.loadFrameScript(
-          "chrome://global/content/browser-child.js",
-          true
-        );
 
         if (!this.hasAttribute("disablehistory")) {
           Services.obs.addObserver(
@@ -1047,6 +1038,13 @@
      */
     destroy() {
       elementsToDestroyOnUnload.delete(this);
+
+      // If we're browsing from the tab crashed UI to a URI that causes the tab
+      // to go remote again, we catch this here, because swapping out the
+      // non-remote browser for a remote one doesn't cause the pagehide event
+      // to be fired. Previously, we used to do this in the frame script's
+      // unload handler.
+      LazyModules.SessionStore?.maybeExitCrashedState(this);
 
       // Make sure that any open select is closed.
       if (this.hasAttribute("selectmenulist")) {
@@ -1105,7 +1103,6 @@
       aLocation,
       aCharset,
       aMayEnableCharacterEncodingMenu,
-      aCharsetAutodetected,
       aDocumentURI,
       aTitle,
       aContentPrincipal,
@@ -1121,7 +1118,6 @@
         if (aCharset != null) {
           this._characterSet = aCharset;
           this._mayEnableCharacterEncodingMenu = aMayEnableCharacterEncodingMenu;
-          this._charsetAutodetected = aCharsetAutodetected;
         }
 
         if (aContentType != null) {
@@ -1192,35 +1188,6 @@
     }
 
     createAboutBlankContentViewer(aPrincipal, aPartitionedPrincipal) {
-      if (this.isRemoteBrowser) {
-        // Ensure that the content process has the permissions which are
-        // needed to create a document with the given principal.
-        let permissionPrincipal = BrowserUtils.principalWithMatchingOA(
-          aPrincipal,
-          this.contentPrincipal
-        );
-        this.frameLoader.remoteTab.transmitPermissionsForPrincipal(
-          permissionPrincipal
-        );
-
-        // This still uses the message manager, for the following reasons:
-        //
-        // 1. Due to bug 1523638, it's virtually certain that, if we've just created
-        //    this <xul:browser>, that the WindowGlobalParent for the top-level frame
-        //    of this browser doesn't exist yet, so it's not possible to get at a
-        //    JS Window Actor for it.
-        //
-        // 2. JS Window Actors are tied to the principals for the frames they're running
-        //    in - switching principals is therefore self-destructive and unexpected.
-        //
-        // So we'll continue to use the message manager until we come up with a better
-        // solution.
-        this.messageManager.sendAsyncMessage(
-          "BrowserElement:CreateAboutBlank",
-          { principal: aPrincipal, partitionedPrincipal: aPartitionedPrincipal }
-        );
-        return;
-      }
       let principal = BrowserUtils.principalWithMatchingOA(
         aPrincipal,
         this.contentPrincipal
@@ -1229,10 +1196,18 @@
         aPartitionedPrincipal,
         this.contentPartitionedPrincipal
       );
-      this.docShell.createAboutBlankContentViewer(
-        principal,
-        partitionedPrincipal
-      );
+
+      if (this.isRemoteBrowser) {
+        this.frameLoader.remoteTab.createAboutBlankContentViewer(
+          principal,
+          partitionedPrincipal
+        );
+      } else {
+        this.docShell.createAboutBlankContentViewer(
+          principal,
+          partitionedPrincipal
+        );
+      }
     }
 
     stopScroll() {
@@ -1427,6 +1402,10 @@
           }
           case "mouseup":
           case "mousedown":
+            // The following mouse click/auxclick event on the autoscroller
+            // shouldn't be fired in web content for compatibility with Chrome.
+            aEvent.preventClickEvent();
+          // fallthrough
           case "contextmenu": {
             if (!this._ignoreMouseEvents) {
               // Use a timeout to prevent the mousedown from opening the popup again.
@@ -1443,6 +1422,9 @@
             break;
           }
           case "popuphidden": {
+            // TODO: When the autoscroller is closed by clicking outside of it,
+            //       we need to prevent following click event for compatibility
+            //       with Chrome.  However, there is no way to do that for now.
             this._autoScrollPopup.removeEventListener(
               "popuphidden",
               this,
@@ -1550,7 +1532,6 @@
             "_documentContentType",
             "_characterSet",
             "_mayEnableCharacterEncodingMenu",
-            "_charsetAutodetected",
             "_contentPrincipal",
             "_contentPartitionedPrincipal",
             "_isSyntheticDocument",
@@ -1661,6 +1642,15 @@
           return { permitUnload: true };
         }
 
+        // Don't bother asking if this browser is hung:
+        let { ProcessHangMonitor } = LazyModules;
+        if (
+          ProcessHangMonitor?.findActiveReport(this) ||
+          ProcessHangMonitor?.findPausedReport(this)
+        ) {
+          return { permitUnload: true };
+        }
+
         let result;
         let success;
 
@@ -1678,7 +1668,8 @@
         // The permitUnload() promise will, alas, not call its resolution
         // callbacks after the browser window the promise lives in has closed,
         // so we have to check for that case explicitly.
-        Services.tm.spinEventLoopUntilOrShutdown(
+        Services.tm.spinEventLoopUntilOrQuit(
+          "browser-custom-element.js:permitUnload",
           () => window.closed || success !== undefined
         );
         if (success) {
@@ -1693,14 +1684,6 @@
       return {
         permitUnload: this.docShell.contentViewer.permitUnload(),
       };
-    }
-
-    print(aOuterWindowID, aPrintSettings) {
-      if (!this.frameLoader) {
-        throw Components.Exception("No frame loader.", Cr.NS_ERROR_FAILURE);
-      }
-
-      return this.frameLoader.print(aOuterWindowID, aPrintSettings);
     }
 
     async drawSnapshot(x, y, w, h, scale, backgroundColor) {

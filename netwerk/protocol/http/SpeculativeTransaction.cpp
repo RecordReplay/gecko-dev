@@ -18,10 +18,7 @@ SpeculativeTransaction::SpeculativeTransaction(
     nsHttpConnectionInfo* aConnInfo, nsIInterfaceRequestor* aCallbacks,
     uint32_t aCaps, std::function<void(bool)>&& aCallback)
     : NullHttpTransaction(aConnInfo, aCallbacks, aCaps),
-      mTriedToWrite(false),
       mCloseCallback(std::move(aCallback)) {}
-
-SpeculativeTransaction::~SpeculativeTransaction() {}
 
 already_AddRefed<SpeculativeTransaction>
 SpeculativeTransaction::CreateWithNewConnInfo(nsHttpConnectionInfo* aConnInfo) {
@@ -76,6 +73,13 @@ void SpeculativeTransaction::Close(nsresult aReason) {
 
   if (mCloseCallback) {
     mCloseCallback(mTriedToWrite && aReason == NS_BASE_STREAM_CLOSED);
+    mCloseCallback = nullptr;
+  }
+}
+
+void SpeculativeTransaction::InvokeCallback() {
+  if (mCloseCallback) {
+    mCloseCallback(true);
     mCloseCallback = nullptr;
   }
 }

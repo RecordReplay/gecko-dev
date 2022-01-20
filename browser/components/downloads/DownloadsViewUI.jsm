@@ -15,6 +15,8 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 XPCOMUtils.defineLazyModuleGetters(this, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   Downloads: "resource://gre/modules/Downloads.jsm",
@@ -135,6 +137,92 @@ var DownloadsViewUI = {
     let [size, unit] = DownloadUtils.convertByteUnits(download.target.size);
     return DownloadsCommon.strings.sizeWithUnits(size, unit);
   },
+
+  /**
+   * Given a context menu and a download element on which it is invoked,
+   * update items in the context menu to reflect available options for
+   * that download element.
+   */
+  updateContextMenuForElement(contextMenu, element) {
+    // Get the state and ensure only the appropriate items are displayed.
+    let state = parseInt(element.getAttribute("state"), 10);
+
+    const {
+      DOWNLOAD_NOTSTARTED,
+      DOWNLOAD_DOWNLOADING,
+      DOWNLOAD_FINISHED,
+      DOWNLOAD_FAILED,
+      DOWNLOAD_CANCELED,
+      DOWNLOAD_PAUSED,
+      DOWNLOAD_BLOCKED_PARENTAL,
+      DOWNLOAD_DIRTY,
+      DOWNLOAD_BLOCKED_POLICY,
+    } = DownloadsCommon;
+
+    contextMenu.querySelector(".downloadPauseMenuItem").hidden =
+      state != DOWNLOAD_DOWNLOADING;
+
+    contextMenu.querySelector(".downloadResumeMenuItem").hidden =
+      state != DOWNLOAD_PAUSED;
+
+    // Only show "unblock" for blocked (dirty) items that have not been
+    // confirmed and have temporary data:
+    contextMenu.querySelector(".downloadUnblockMenuItem").hidden =
+      state != DOWNLOAD_DIRTY || !element.classList.contains("temporary-block");
+
+    // Can only remove finished/failed/canceled/blocked downloads.
+    contextMenu.querySelector(".downloadRemoveFromHistoryMenuItem").hidden = ![
+      DOWNLOAD_FINISHED,
+      DOWNLOAD_FAILED,
+      DOWNLOAD_CANCELED,
+      DOWNLOAD_BLOCKED_PARENTAL,
+      DOWNLOAD_DIRTY,
+      DOWNLOAD_BLOCKED_POLICY,
+    ].includes(state);
+
+    // Can reveal downloads with data on the file system using the relevant OS
+    // tool (Explorer, Finder, appropriate Linux file system viewer):
+    contextMenu.querySelector(".downloadShowMenuItem").hidden =
+      ![
+        DOWNLOAD_NOTSTARTED,
+        DOWNLOAD_DOWNLOADING,
+        DOWNLOAD_FINISHED,
+        DOWNLOAD_PAUSED,
+      ].includes(state) ||
+      (state == DOWNLOAD_FINISHED && !element.hasAttribute("exists"));
+
+    // Show the separator if we're showing either unblock or reveal menu items.
+    contextMenu.querySelector(".downloadCommandsSeparator").hidden =
+      contextMenu.querySelector(".downloadUnblockMenuItem").hidden &&
+      contextMenu.querySelector(".downloadShowMenuItem").hidden;
+
+    // Hide the "use system viewer" and "always use system viewer" items
+    // if the feature is disabled or this download doesn't support it:
+    let useSystemViewerItem = contextMenu.querySelector(
+      ".downloadUseSystemDefaultMenuItem"
+    );
+    let alwaysUseSystemViewerItem = contextMenu.querySelector(
+      ".downloadAlwaysUseSystemDefaultMenuItem"
+    );
+    let canViewInternally = element.hasAttribute("viewable-internally");
+    useSystemViewerItem.hidden =
+      !DownloadsCommon.openInSystemViewerItemEnabled || !canViewInternally;
+
+    alwaysUseSystemViewerItem.hidden =
+      !DownloadsCommon.alwaysOpenInSystemViewerItemEnabled ||
+      !canViewInternally;
+    if (!alwaysUseSystemViewerItem.hidden) {
+      let download = element._shell.download;
+      let mimeInfo = DownloadsCommon.getMimeInfo(download);
+      let { preferredAction, useSystemDefault } = mimeInfo ? mimeInfo : {};
+
+      if (preferredAction === useSystemDefault) {
+        alwaysUseSystemViewerItem.setAttribute("checked", "true");
+      } else {
+        alwaysUseSystemViewerItem.removeAttribute("checked");
+      }
+    }
+  },
 };
 
 DownloadsViewUI.BaseView = class {
@@ -216,7 +304,7 @@ DownloadsViewUI.DownloadElementShell.prototype = {
                          crop="end"/>
           </vbox>
         </hbox>
-        <toolbarseparator />
+        <image class="downloadBlockedBadgeNew" />
         <button class="downloadButton"/>
       `);
       gDownloadListItemFragments.set(document, downloadListItemFragment);
@@ -326,11 +414,29 @@ DownloadsViewUI.DownloadElementShell.prototype = {
    *        either l10n object or string literal.
    */
   showStatus(status, hoverStatus = status) {
-    this._downloadDetailsNormal.setAttribute("value", status);
-    this._downloadDetailsNormal.setAttribute("tooltiptext", status);
-    if (hoverStatus && hoverStatus.l10n) {
-      let document = this.element.ownerDocument;
-      document.l10n.setAttributes(this._downloadDetailsHover, hoverStatus.l10n);
+    let document = this.element.ownerDocument;
+    if (status?.l10n) {
+      document.l10n.setAttributes(
+        this._downloadDetailsNormal,
+        status.l10n.id,
+        status.l10n.args
+      );
+    } else {
+      this._downloadDetailsNormal.removeAttribute("data-l10n-id");
+      this._downloadDetailsNormal.setAttribute("value", status);
+      this._downloadDetailsNormal.setAttribute("tooltiptext", status);
+    }
+    if (hoverStatus?.l10n) {
+      hoverStatus.l10n.id
+        ? document.l10n.setAttributes(
+            this._downloadDetailsHover,
+            hoverStatus.l10n.id,
+            hoverStatus.l10n.args
+          )
+        : document.l10n.setAttributes(
+            this._downloadDetailsHover,
+            hoverStatus.l10n
+          );
     } else {
       this._downloadDetailsHover.removeAttribute("data-l10n-id");
       this._downloadDetailsHover.setAttribute("value", hoverStatus);
@@ -404,7 +510,7 @@ DownloadsViewUI.DownloadElementShell.prototype = {
   },
 
   hideButton() {
-    this._downloadButton.setAttribute("hidden", "true");
+    this._downloadButton.hidden = true;
   },
 
   lastEstimatedSecondsLeft: Infinity,
@@ -428,6 +534,10 @@ DownloadsViewUI.DownloadElementShell.prototype = {
       // the user interface here. The _updateStateInner function takes care of
       // displaying the right button type for all other state changes.
       this.showButton("cancel");
+
+      // If there was a verdict set but the download is running we can assume
+      // that the verdict has been overruled and can be removed.
+      this.element.removeAttribute("verdict");
     }
 
     // Since state changed, reset the time left estimation.
@@ -445,6 +555,15 @@ DownloadsViewUI.DownloadElementShell.prototype = {
   _updateStateInner() {
     let progressPaused = false;
 
+    let improvementsOn = Services.prefs.getBoolPref(
+      "browser.download.improvements_to_download_panel"
+    );
+
+    this.element.classList.toggle(
+      "openWhenFinished",
+      improvementsOn && !this.download.stopped
+    );
+
     if (!this.download.stopped) {
       // The download is in progress, so we don't change the button state
       // because the _updateState function already did it. We still need to
@@ -459,6 +578,11 @@ DownloadsViewUI.DownloadElementShell.prototype = {
         this.lastEstimatedSecondsLeft
       );
       this.lastEstimatedSecondsLeft = newEstimatedSecondsLeft;
+
+      if (improvementsOn && this.download.launchWhenSucceeded) {
+        status = DownloadUtils.getFormattedTimeStatus(newEstimatedSecondsLeft);
+      }
+
       this.showStatus(status);
     } else {
       let verdict = "";

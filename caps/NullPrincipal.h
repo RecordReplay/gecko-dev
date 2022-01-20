@@ -31,7 +31,6 @@ class Value;
       0x83, 0x31, 0x7b, 0xfd, 0x05, 0xb1, 0xed, 0x90 \
     }                                                \
   }
-#define NS_NULLPRINCIPAL_CONTRACTID "@mozilla.org/nullprincipal;1"
 
 #define NS_NULLPRINCIPAL_SCHEME "moz-nullprincipal"
 
@@ -39,14 +38,7 @@ namespace mozilla {
 
 class NullPrincipal final : public BasePrincipal {
  public:
-  // This should only be used by deserialization, and the factory constructor.
-  // Other consumers should use the Create and CreateWithInheritedAttributes
-  // methods.
-  NullPrincipal() : BasePrincipal(eNullPrincipal) {}
-
   static PrincipalKind Kind() { return eNullPrincipal; }
-
-  NS_DECL_NSISERIALIZABLE
 
   NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
   uint32_t GetHashValue() override;
@@ -74,8 +66,7 @@ class NullPrincipal final : public BasePrincipal {
 
   static already_AddRefed<NullPrincipal> CreateWithoutOriginAttributes();
 
-  nsresult Init(const OriginAttributes& aOriginAttributes = OriginAttributes(),
-                nsIURI* aURI = nullptr);
+  static already_AddRefed<nsIURI> CreateURI();
 
   virtual nsresult GetScriptLocation(nsACString& aStr) override;
 
@@ -93,7 +84,15 @@ class NullPrincipal final : public BasePrincipal {
   static already_AddRefed<BasePrincipal> FromProperties(
       nsTArray<NullPrincipal::KeyVal>& aFields);
 
+  class Deserializer : public BasePrincipal::Deserializer {
+   public:
+    NS_IMETHOD Read(nsIObjectInputStream* aStream) override;
+  };
+
  protected:
+  NullPrincipal(nsIURI* aURI, const nsACString& aOriginNoSuffix,
+                const OriginAttributes& aOriginAttributes);
+
   virtual ~NullPrincipal() = default;
 
   bool SubsumesInternal(nsIPrincipal* aOther,
@@ -104,7 +103,7 @@ class NullPrincipal final : public BasePrincipal {
 
   bool MayLoadInternal(nsIURI* aURI) override;
 
-  nsCOMPtr<nsIURI> mURI;
+  const nsCOMPtr<nsIURI> mURI;
 
  private:
   FRIEND_TEST(OriginAttributes, NullPrincipal);
@@ -114,8 +113,9 @@ class NullPrincipal final : public BasePrincipal {
   // This value is generated from mURI.path, with ".mozilla" appended at the
   // end. aURI is used for testing purpose to assign specific UUID rather than
   // random generated one.
-  nsresult Init(const OriginAttributes& aOriginAttributes, bool aIsFirstParty,
-                nsIURI* aURI = nullptr);
+  static already_AddRefed<NullPrincipal> CreateInternal(
+      const OriginAttributes& aOriginAttributes, bool aIsFirstParty,
+      nsIURI* aURI = nullptr);
 };
 
 }  // namespace mozilla

@@ -5,7 +5,7 @@ There are 3 major types of navigations, each of which can cause different
 objects to be replaced. The general rules look something like this:
 
 .. csv-table:: objects replaced or preserved across navigations
-   :header: "Class/Id", ":ref:`in-process navigations`", ":ref:`cross-process navigations`", ":ref:`cross-group navigations`"
+   :header: "Class/Id", ":ref:`in-process navigations <in-process navigations>`", ":ref:`cross-process navigations <cross-process navigations>`", ":ref:`cross-group navigations <cross-group navigations>`"
 
    "BrowserId [#bid]_", |preserve|, |preserve|, |preserve|
    "BrowsingContextWebProgress", |preserve|, |preserve|, |preserve|
@@ -43,6 +43,8 @@ objects to be replaced. The general rules look something like this:
 Types of Navigations
 --------------------
 
+.. _in-process navigations:
+
 in-process navigations
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -52,6 +54,8 @@ common type of navigation when :ref:`Fission` is not enabled.
 These navigations are used when no process switching or BrowsingContext
 replacement is required, which includes most navigations with Fission
 disabled, and most same site-origin navigations when Fission is enabled.
+
+.. _cross-process navigations:
 
 cross-process navigations
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -66,6 +70,8 @@ These process changes are triggered by ``DocumentLoadListener`` when it
 determines that a process switch is required. See that class's documentation
 for more details.
 
+.. _cross-group navigations:
+
 cross-group navigations
 ^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -78,6 +84,11 @@ finish within a different ``BrowsingContextGroup`` than they started with.
 Like :ref:`cross-process navigations`, these navigations are triggered using
 the process switching logic in ``DocumentLoadListener``.
 
+As the parent of a content browsing context cannot change due to a navigation,
+only toplevel content browsing contexts can cross-group navigate. Navigations in
+chrome browsing contexts [#chromebc]_ or content subframes only experience
+either in-process or cross-process navigations.
+
 As of the time of this writing, we currently trigger a cross-group navigation
 in the following circumstances, though this may change in the future:
 
@@ -89,7 +100,21 @@ in the following circumstances, though this may change in the future:
 - When navigating away from a preloaded ``about:newtab`` document.
 - Sometimes, when loading a document with the ``Large-Allocation`` header on
   32-bit windows.
+- When putting a ``BrowsingContext`` into BFCache for the session history
+  in-parent BFCache implementation. This will happen on most toplevel
+  navigations without opener relationships when the ``fission.bfcacheInParent``
+  pref is enabled.
 
 State which needs to be saved over cross-group navigations on
 ``BrowsingContext`` instances is copied in the
 ``CanonicalBrowsingContext::ReplacedBy`` method.
+
+.. [#chromebc]
+
+   A chrome browsing context does **not** refer to pages with the system
+   principal loaded in the content area such as ``about:preferences``.
+   Chrome browsing contexts are generally used as the root context in a chrome
+   window, such where ``browser.xhtml`` is loaded for a browser window.
+
+   All chrome browsing contexts exclusively load in the parent process and
+   cannot process switch when navigating.

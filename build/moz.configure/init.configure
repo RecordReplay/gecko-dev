@@ -218,15 +218,8 @@ shell = help_shell | shell
 
 option(env="PYTHON3", nargs=1, help="Python 3 interpreter (3.6 or later)")
 
-option(
-    env="VIRTUALENV_NAME",
-    nargs=1,
-    default="init_py3",
-    help="Name of the in-objdir virtualenv",
-)
 
-
-@depends("PYTHON3", "VIRTUALENV_NAME", check_build_environment, mozconfig, "--help")
+@depends("PYTHON3", check_build_environment, mozconfig, "--help")
 @imports(_from="__builtin__", _import="Exception")
 @imports("os")
 @imports("sys")
@@ -238,7 +231,7 @@ option(
 @imports(_from="mozbuild.pythonutil", _import="find_python3_executable")
 @imports(_from="mozbuild.pythonutil", _import="python_executable_version")
 @imports(_from="six", _import="ensure_text")
-def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
+def virtualenv_python3(env_python, build_env, mozconfig, help):
     # Avoid re-executing python when running configure --help.
     if help:
         return
@@ -256,7 +249,6 @@ def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
     log.debug("python3: sys.executable: %r" % sys.executable)
 
     python = env_python[0] if env_python else None
-    virtualenv_name = virtualenv_name[0]
 
     # Did our python come from mozconfig? Overrides environment setting.
     # Ideally we'd rely on the mozconfig injection from mozconfig_options,
@@ -288,24 +280,23 @@ def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
     if topobjdir.endswith("/js/src"):
         topobjdir = topobjdir[:-7]
 
-    virtualenvs_root = os.path.join(topobjdir, "_virtualenvs")
-    with LineIO(lambda l: log.info(l), "replace") as out:
-        manager = VirtualenvManager(
-            topsrcdir,
-            os.path.join(virtualenvs_root, virtualenv_name),
-            out,
-            os.path.join(topsrcdir, "build", "build_virtualenv_packages.txt"),
+    test_python = os.environ.get("MOZ_TEST_PYTHON")
+    if test_python:
+        manager = namespace(
+            up_to_date=lambda python: True,
+            python_path=test_python,
         )
-
-    # If we're not in the virtualenv, we need to update the path to include some
-    # necessary modules for find_program.
-    if "MOZBUILD_VIRTUALENV" in os.environ:
-        python = sys.executable
     else:
-        sys.path.insert(0, os.path.join(topsrcdir, "testing", "mozbase", "mozfile"))
-        sys.path.insert(
-            0, os.path.join(topsrcdir, "third_party", "python", "backports")
-        )
+        with LineIO(lambda l: log.info(l), "replace") as out:
+            manager = VirtualenvManager(
+                topsrcdir,
+                os.path.join(topobjdir, "_virtualenvs", "common"),
+                out,
+                os.path.join(topsrcdir, "build", "build_virtualenv_packages.txt"),
+            )
+
+    # Update the path to include some necessary modules for find_program.
+    sys.path.insert(0, os.path.join(topsrcdir, "testing", "mozbase", "mozfile"))
 
     # If we know the Python executable the caller is asking for then verify its
     # version. If the caller did not ask for a specific executable then find
@@ -357,7 +348,7 @@ def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
 
     python = normsep(manager.python_path)
 
-    if not normsep(sys.executable).startswith(normsep(virtualenvs_root)):
+    if python != normsep(sys.executable):
         log.debug(
             "python3: executing as %s, should be running as %s"
             % (sys.executable, manager.python_path)
@@ -365,10 +356,6 @@ def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
         log.info("Re-executing in the virtualenv")
         if env_python:
             del os.environ["PYTHON3"]
-        # Homebrew on macOS will change Python's sys.executable to a custom
-        # value which messes with mach's virtualenv handling code. Override
-        # Homebrew's changes with the correct sys.executable value.
-        os.environ["PYTHONEXECUTABLE"] = python
         # Another quirk on macOS, with the system python, the virtualenv is
         # not fully operational (missing entries in sys.path) if
         # __PYVENV_LAUNCHER__ is set.
@@ -380,11 +367,6 @@ def virtualenv_python3(env_python, virtualenv_name, build_env, mozconfig, help):
     # We are now in the virtualenv
     if not distutils.sysconfig.get_python_lib():
         die("Could not determine python site packages directory")
-
-    # We may have set PYTHONEXECUTABLE above, and that affects python
-    # subprocesses we may invoke as part of configure (e.g. hg), so
-    # unset it.
-    os.environ.pop("PYTHONEXECUTABLE", None)
 
     str_version = ".".join(str(v) for v in version)
 
@@ -475,19 +457,25 @@ def mozconfig_options(mozconfig, early_options, automation, help):
             add(key, value)
 
 
+@depends(check_build_environment, "--help")
+@imports(_from="os.path", _import="exists")
+def js_package(build_env, help):
+    return not exists(os.path.join(build_env.topsrcdir, "browser"))
+
+
 # Source checkout and version control integration.
 # ================================================
 
 
-@depends(check_build_environment, "MOZ_AUTOMATION", "--help")
+@depends(check_build_environment, "MOZ_AUTOMATION", js_package, "--help")
 @checking("for vcs source checkout")
 @imports("os")
-def vcs_checkout_type(build_env, automation, help):
+def vcs_checkout_type(build_env, automation, js_package, help):
     if os.path.exists(os.path.join(build_env.topsrcdir, ".hg")):
         return "hg"
     elif os.path.exists(os.path.join(build_env.topsrcdir, ".git")):
         return "git"
-    elif automation and not help:
+    elif automation and not js_package and not help:
         raise FatalCheckError(
             "unable to resolve VCS type; must run "
             "from a source checkout when MOZ_AUTOMATION "
@@ -645,9 +633,9 @@ def application(app):
 imply_option("--enable-project", application)
 
 
-@depends(check_build_environment)
-def default_project(build_env):
-    if build_env.topobjdir.endswith("/js/src"):
+@depends(check_build_environment, js_package)
+def default_project(build_env, js_package):
+    if js_package or build_env.topobjdir.endswith("/js/src"):
         return "js"
     return "browser"
 
@@ -672,7 +660,7 @@ option(
 @imports(_from="mozbuild.configure.constants", _import="Kernel")
 @imports(_from="mozbuild.configure.constants", _import="OS")
 @imports(_from="__builtin__", _import="ValueError")
-def split_triplet(triplet, allow_msvc=False):
+def split_triplet(triplet, allow_msvc=False, allow_wasi=False):
     # The standard triplet is defined as
     #   CPU_TYPE-VENDOR-OPERATING_SYSTEM
     # There is also a quartet form:
@@ -728,6 +716,8 @@ def split_triplet(triplet, allow_msvc=False):
         canonical_os = canonical_kernel = "OpenBSD"
     elif os.startswith("solaris"):
         canonical_os = canonical_kernel = "SunOS"
+    elif os.startswith("wasi") and allow_wasi:
+        canonical_os = canonical_kernel = "WASI"
     else:
         raise ValueError("Unknown OS: %s" % os)
 
@@ -780,6 +770,9 @@ def split_triplet(triplet, allow_msvc=False):
         endianness = "little"
     elif cpu == "sh4":
         canonical_cpu = "sh4"
+        endianness = "little"
+    elif cpu == "wasm32" and allow_wasi:
+        canonical_cpu = "wasm32"
         endianness = "little"
     else:
         raise ValueError("Unknown CPU type: %s" % cpu)
@@ -921,7 +914,7 @@ def real_target(value, host, shell, project, application):
             pass
 
     try:
-        return split_triplet(config_sub(shell, target))
+        return split_triplet(config_sub(shell, target), allow_wasi=(project == "js"))
     except ValueError as e:
         die(e)
 
@@ -1071,6 +1064,12 @@ set_define("XP_LINUX", target_is_linux)
 
 
 @depends(target)
+def target_is_linux_or_wasi(target):
+    if target.kernel in ("Linux", "WASI"):
+        return True
+
+
+@depends(target)
 def target_is_android(target):
     if target.os == "Android":
         return True
@@ -1137,12 +1136,9 @@ def include_project_configure(project, build_env, help):
     return path
 
 
-@depends(include_project_configure, check_build_environment)
-def build_project(include_project_configure, build_env):
-    ret = os.path.dirname(
-        os.path.relpath(include_project_configure, build_env.topsrcdir)
-    )
-    return ret
+@depends("--enable-project")
+def build_project(project):
+    return project[0]
 
 
 set_config("MOZ_BUILD_APP", build_project)
@@ -1263,6 +1259,7 @@ def milestone(build_env, build_project, version_path, _):
         is_nightly=is_nightly,
         is_release_or_beta=is_release_or_beta,
         is_early_beta_or_earlier=is_early_beta_or_earlier,
+        is_esr=app_version_display.endswith("esr") or None,
         app_version=app_version,
         app_version_display=app_version_display,
     )
@@ -1274,6 +1271,8 @@ set_define("NIGHTLY_BUILD", milestone.is_nightly)
 set_config("RELEASE_OR_BETA", milestone.is_release_or_beta)
 set_define("RELEASE_OR_BETA", milestone.is_release_or_beta)
 add_old_configure_assignment("RELEASE_OR_BETA", milestone.is_release_or_beta)
+set_config("MOZ_ESR", milestone.is_esr)
+set_define("MOZ_ESR", milestone.is_esr)
 set_config("EARLY_BETA_OR_EARLIER", milestone.is_early_beta_or_earlier)
 set_define("EARLY_BETA_OR_EARLIER", milestone.is_early_beta_or_earlier)
 add_old_configure_assignment(
@@ -1291,13 +1290,6 @@ add_old_configure_assignment("MOZILLA_SYMBOLVERSION", milestone.symbolversion)
 set_config("MOZ_APP_VERSION", milestone.app_version)
 set_config("MOZ_APP_VERSION_DISPLAY", milestone.app_version_display)
 add_old_configure_assignment("MOZ_APP_VERSION", milestone.app_version)
-
-
-# Dummy function for availability in toolkit/moz.configure. Overridden in
-# mobile/android/moz.configure.
-@depends(milestone.is_nightly)
-def fennec_nightly(is_nightly):
-    return is_nightly
 
 
 # The app update channel is 'default' when not supplied. The value is used in

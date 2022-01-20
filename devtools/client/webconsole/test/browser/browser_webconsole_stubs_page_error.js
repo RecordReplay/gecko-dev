@@ -5,7 +5,7 @@
 
 const {
   STUBS_UPDATE_ENV,
-  createResourceWatcherForTab,
+  createCommandsForTab,
   getCleanedPacket,
   getSerializedPacket,
   getStubFile,
@@ -43,10 +43,13 @@ add_task(async function() {
 
   let failed = false;
   for (const [key, packet] of generatedStubs) {
-    const packetStr = getSerializedPacket(packet, { sortKeys: true });
+    const packetStr = getSerializedPacket(packet, {
+      sortKeys: true,
+      replaceActorIds: true,
+    });
     const existingPacketStr = getSerializedPacket(
       existingStubs.rawPackets.get(key),
-      { sortKeys: true }
+      { sortKeys: true, replaceActorIds: true }
     );
     is(packetStr, existingPacketStr, `"${key}" packet has expected value`);
     failed = failed || packetStr !== existingPacketStr;
@@ -57,15 +60,15 @@ add_task(async function() {
   } else {
     ok(true, "Stubs are up to date");
   }
-
-  await closeTabAndToolbox();
 });
 
 async function generatePageErrorStubs() {
   const stubs = new Map();
 
   const tab = await addTab(TEST_URI);
-  const resourceWatcher = await createResourceWatcherForTab(tab);
+  const commands = await createCommandsForTab(tab);
+  await commands.targetCommand.startListening();
+  const resourceCommand = commands.resourceCommand;
 
   // The resource-watcher only supports a single call to watch/unwatch per
   // instance, so we attach a unique watch callback, which will forward the
@@ -77,7 +80,7 @@ async function generatePageErrorStubs() {
       handleErrorMessage(resource);
     }
   };
-  await resourceWatcher.watchResources([resourceWatcher.TYPES.ERROR_MESSAGE], {
+  await resourceCommand.watchResources([resourceCommand.TYPES.ERROR_MESSAGE], {
     onAvailable: onErrorMessageAvailable,
   });
 
@@ -169,6 +172,50 @@ function getCommands() {
     throw err;
   `
   );
+  pageError.set(
+    `throw Error Object with error cause`,
+    `
+    var originalError = new SyntaxError("original error")
+    var err = new Error("something went wrong", {
+      cause: originalError
+    });
+    throw err;
+  `
+  );
+  pageError.set(
+    `throw Error Object with cause chain`,
+    `
+    var a = new Error("err-a")
+    var b = new Error("err-b", { cause: a })
+    var c = new Error("err-c", { cause: b })
+    var d = new Error("err-d", { cause: c })
+    throw d;
+  `
+  );
+  pageError.set(
+    `throw Error Object with cyclical cause chain`,
+    `
+    var a = new Error("err-a", { cause: b})
+    var b = new Error("err-b", { cause: a })
+    throw b;
+  `
+  );
+  pageError.set(
+    `throw Error Object with falsy cause`,
+    `throw new Error("null cause", { cause: null });`
+  );
+  pageError.set(
+    `throw Error Object with number cause`,
+    `throw new Error("number cause", { cause: 0 });`
+  );
+  pageError.set(
+    `throw Error Object with string cause`,
+    `throw new Error("string cause", { cause: "cause message" });`
+  );
+  pageError.set(
+    `throw Error Object with object cause`,
+    `throw new Error("object cause", { cause: { code: 234, message: "ERR_234"} });`
+  );
   pageError.set(`Promise reject ""`, `Promise.reject("")`);
   pageError.set(`Promise reject "tomato"`, `Promise.reject("tomato")`);
   pageError.set(`Promise reject false`, `Promise.reject(false)`);
@@ -192,6 +239,16 @@ function getCommands() {
     err.flavor = "delicious";
     Promise.reject(err);
   `
+  );
+  pageError.set(
+    `Promise reject Error Object with error cause`,
+    `Promise.resolve().then(() => {
+      try {
+        unknownFunc();
+      } catch(e) {
+        throw new Error("something went wrong", { cause: e })
+      }
+    })`
   );
   return pageError;
 }

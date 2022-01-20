@@ -23,7 +23,6 @@
 #include "nsIFragmentContentSink.h"
 #include "nsStreamUtils.h"
 #include "nsHTMLTokenizer.h"
-#include "nsDataHashtable.h"
 #include "nsXPCOMCIDInternal.h"
 #include "nsMimeTypes.h"
 #include "mozilla/CondVar.h"
@@ -260,7 +259,8 @@ nsParser::SetCommand(eParserCommands aParserCommand) {
  *  @param   aCharsetSource- the source of the charset
  */
 void nsParser::SetDocumentCharset(NotNull<const Encoding*> aCharset,
-                                  int32_t aCharsetSource) {
+                                  int32_t aCharsetSource,
+                                  bool aChannelHadCharset) {
   mCharset = aCharset;
   mCharsetSource = aCharsetSource;
   if (mParserContext && mParserContext->mScanner) {
@@ -1245,7 +1245,7 @@ static nsresult ParserWriteFunc(nsIInputStream* in, void* closure,
       }
     }
 
-    pws->mParser->SetDocumentCharset(preferred, source);
+    pws->mParser->SetDocumentCharset(preferred, source, false);
     pws->mParser->SetSinkCharset(preferred);
   }
 

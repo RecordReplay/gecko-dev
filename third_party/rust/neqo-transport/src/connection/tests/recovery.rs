@@ -4,22 +4,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::super::{Output, State, LOCAL_IDLE_TIMEOUT};
+use super::super::{Connection, Output, State, LOCAL_IDLE_TIMEOUT};
 use super::{
-    assert_full_cwnd, connect, connect_force_idle, connect_with_rtt, default_client,
-    default_server, fill_cwnd, maybe_authenticate, send_and_receive, send_something, AT_LEAST_PTO,
-    POST_HANDSHAKE_CWND,
+    assert_full_cwnd, connect, connect_force_idle, connect_rtt_idle, connect_with_rtt,
+    default_client, default_server, fill_cwnd, maybe_authenticate, send_and_receive,
+    send_something, AT_LEAST_PTO, DEFAULT_RTT, POST_HANDSHAKE_CWND,
 };
-use crate::frame::StreamType;
 use crate::path::PATH_MTU_V6;
-use crate::recovery::PTO_PACKET_COUNT;
+use crate::recovery::{MAX_OUTSTANDING_UNACK, MIN_OUTSTANDING_UNACK, PTO_PACKET_COUNT};
+use crate::rtt::GRANULARITY;
 use crate::stats::MAX_PTO_COUNTS;
 use crate::tparams::TransportParameter;
-use crate::tracking::ACK_DELAY;
+use crate::tracking::DEFAULT_ACK_DELAY;
+use crate::StreamType;
 
 use neqo_common::qdebug;
 use neqo_crypto::AuthenticationStatus;
-use std::time::Duration;
+use std::mem;
+use std::time::{Duration, Instant};
 use test_fixture::{self, now, split_datagram};
 
 #[test]
@@ -34,12 +36,12 @@ fn pto_works_basic() {
     assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
 
     // Send data on two streams
-    assert_eq!(client.stream_create(StreamType::UniDi).unwrap(), 2);
-    assert_eq!(client.stream_send(2, b"hello").unwrap(), 5);
-    assert_eq!(client.stream_send(2, b" world").unwrap(), 6);
+    let stream1 = client.stream_create(StreamType::UniDi).unwrap();
+    assert_eq!(client.stream_send(stream1, b"hello").unwrap(), 5);
+    assert_eq!(client.stream_send(stream1, b" world!").unwrap(), 7);
 
-    assert_eq!(client.stream_create(StreamType::UniDi).unwrap(), 6);
-    assert_eq!(client.stream_send(6, b"there!").unwrap(), 6);
+    let stream2 = client.stream_create(StreamType::UniDi).unwrap();
+    assert_eq!(client.stream_send(stream2, b"there!").unwrap(), 6);
 
     // Send a packet after some time.
     now += Duration::from_secs(10);
@@ -63,121 +65,91 @@ fn pto_works_basic() {
 fn pto_works_full_cwnd() {
     let mut client = default_client();
     let mut server = default_server();
-    connect_force_idle(&mut client, &mut server);
-
-    let res = client.process(None, now());
-    assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
+    let now = connect_rtt_idle(&mut client, &mut server, DEFAULT_RTT);
 
     // Send lots of data.
-    assert_eq!(client.stream_create(StreamType::UniDi).unwrap(), 2);
-    let (dgrams, now) = fill_cwnd(&mut client, 2, now());
+    let stream_id = client.stream_create(StreamType::UniDi).unwrap();
+    let (dgrams, now) = fill_cwnd(&mut client, stream_id, now);
     assert_full_cwnd(&dgrams, POST_HANDSHAKE_CWND);
 
-    neqo_common::qwarn!("waiting over");
     // Fill the CWND after waiting for a PTO.
-    let (dgrams, now) = fill_cwnd(&mut client, 2, now + AT_LEAST_PTO);
+    let (dgrams, now) = fill_cwnd(&mut client, stream_id, now + AT_LEAST_PTO);
     // Two packets in the PTO.
     // The first should be full sized; the second might be small.
     assert_eq!(dgrams.len(), 2);
     assert_eq!(dgrams[0].len(), PATH_MTU_V6);
 
-    // Both datagrams contain a STREAM frame.
+    // Both datagrams contain one or more STREAM frames.
     for d in dgrams {
         let stream_before = server.stats().frame_rx.stream;
         server.process_input(d, now);
-        assert_eq!(server.stats().frame_rx.stream, stream_before + 1);
+        assert!(server.stats().frame_rx.stream > stream_before);
     }
 }
 
 #[test]
-#[allow(clippy::cognitive_complexity)]
 fn pto_works_ping() {
     let mut client = default_client();
     let mut server = default_server();
     connect_force_idle(&mut client, &mut server);
-
-    let now = now();
+    let mut now = now();
 
     let res = client.process(None, now);
     assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
 
-    // Send "zero" pkt
-    assert_eq!(client.stream_create(StreamType::UniDi).unwrap(), 2);
-    assert_eq!(client.stream_send(2, b"zero").unwrap(), 4);
-    let pkt0 = client.process(None, now + Duration::from_secs(10));
-    assert!(matches!(pkt0, Output::Datagram(_)));
+    now += Duration::from_secs(10);
 
-    // Send "one" pkt
-    assert_eq!(client.stream_send(2, b"one").unwrap(), 3);
-    let pkt1 = client.process(None, now + Duration::from_secs(10));
-
-    // Send "two" pkt
-    assert_eq!(client.stream_send(2, b"two").unwrap(), 3);
-    let pkt2 = client.process(None, now + Duration::from_secs(10));
-
-    // Send "three" pkt
-    assert_eq!(client.stream_send(2, b"three").unwrap(), 5);
-    let pkt3 = client.process(None, now + Duration::from_secs(10));
+    // Send a few packets from the client.
+    let pkt0 = send_something(&mut client, now);
+    let pkt1 = send_something(&mut client, now);
+    let pkt2 = send_something(&mut client, now);
+    let pkt3 = send_something(&mut client, now);
 
     // Nothing to do, should return callback
-    let out = client.process(None, now + Duration::from_secs(10));
-    // Check callback delay is what we expect
-    assert!(matches!(out, Output::Callback(x) if x == Duration::from_millis(45)));
+    let cb = client.process(None, now).callback();
+    // The PTO timer is calculated with:
+    //   RTT + max(rttvar * 4, GRANULARITY) + max_ack_delay
+    // With zero RTT and rttvar, max_ack_delay is minimum too (GRANULARITY)
+    assert_eq!(cb, GRANULARITY * 2);
 
     // Process these by server, skipping pkt0
-    let srv0_pkt1 = server.process(pkt1.dgram(), now + Duration::from_secs(10));
-    // ooo, ack client pkt 1
-    assert!(matches!(srv0_pkt1, Output::Datagram(_)));
+    let srv0 = server.process(Some(pkt1), now).dgram();
+    assert!(srv0.is_some()); // ooo, ack client pkt1
+
+    now += Duration::from_millis(20);
 
     // process pkt2 (no ack yet)
-    let srv2 = server.process(
-        pkt2.dgram(),
-        now + Duration::from_secs(10) + Duration::from_millis(20),
-    );
-    assert!(matches!(srv2, Output::Callback(_)));
+    let srv1 = server.process(Some(pkt2), now).dgram();
+    assert!(srv1.is_none());
 
     // process pkt3 (acked)
-    let srv2 = server.process(
-        pkt3.dgram(),
-        now + Duration::from_secs(10) + Duration::from_millis(20),
-    );
+    let srv2 = server.process(Some(pkt3), now).dgram();
     // ack client pkt 2 & 3
-    assert!(matches!(srv2, Output::Datagram(_)));
+    assert!(srv2.is_some());
 
+    now += Duration::from_millis(20);
     // client processes ack
-    let pkt4 = client.process(
-        srv2.dgram(),
-        now + Duration::from_secs(10) + Duration::from_millis(40),
-    );
+    let pkt4 = client.process(srv2, now).dgram();
     // client resends data from pkt0
-    assert!(matches!(pkt4, Output::Datagram(_)));
+    assert!(pkt4.is_some());
 
     // server sees ooo pkt0 and generates ack
-    let srv_pkt2 = server.process(
-        pkt0.dgram(),
-        now + Duration::from_secs(10) + Duration::from_millis(40),
-    );
-    assert!(matches!(srv_pkt2, Output::Datagram(_)));
+    let srv3 = server.process(Some(pkt0), now).dgram();
+    assert!(srv3.is_some());
 
-    // Orig data is acked
-    let pkt5 = client.process(
-        srv_pkt2.dgram(),
-        now + Duration::from_secs(10) + Duration::from_millis(40),
-    );
-    assert!(matches!(pkt5, Output::Callback(_)));
+    // Accept the acknowledgment.
+    let pkt5 = client.process(srv3, now).dgram();
+    assert!(pkt5.is_none());
 
+    now += Duration::from_millis(70);
     // PTO expires. No unacked data. Only send PING.
-    let pkt6 = client.process(
-        None,
-        now + Duration::from_secs(10) + Duration::from_millis(110),
-    );
+    let client_pings = client.stats().frame_tx.ping;
+    let pkt6 = client.process(None, now).dgram();
+    assert_eq!(client.stats().frame_tx.ping, client_pings + 1);
 
-    let ping_before = server.stats().frame_rx.ping;
-    server.process_input(
-        pkt6.dgram().unwrap(),
-        now + Duration::from_secs(10) + Duration::from_millis(110),
-    );
-    assert_eq!(server.stats().frame_rx.ping, ping_before + 1);
+    let server_pings = server.stats().frame_rx.ping;
+    server.process_input(pkt6.unwrap(), now);
+    assert_eq!(server.stats().frame_rx.ping, server_pings + 1);
 }
 
 #[test]
@@ -231,6 +203,8 @@ fn pto_initial() {
 /// A complete handshake that involves a PTO in the Handshake space.
 #[test]
 fn pto_handshake_complete() {
+    const HALF_RTT: Duration = Duration::from_millis(10);
+
     let mut now = now();
     // start handshake
     let mut client = default_client();
@@ -240,80 +214,97 @@ fn pto_handshake_complete() {
     let cb = client.process(None, now).callback();
     assert_eq!(cb, Duration::from_millis(300));
 
-    now += Duration::from_millis(10);
+    now += HALF_RTT;
     let pkt = server.process(pkt, now).dgram();
 
-    now += Duration::from_millis(10);
+    now += HALF_RTT;
     let pkt = client.process(pkt, now).dgram();
 
     let cb = client.process(None, now).callback();
     // The client now has a single RTT estimate (20ms), so
     // the handshake PTO is set based on that.
-    assert_eq!(cb, Duration::from_millis(60));
+    assert_eq!(cb, HALF_RTT * 6);
 
-    now += Duration::from_millis(10);
+    now += HALF_RTT;
     let pkt = server.process(pkt, now).dgram();
     assert!(pkt.is_none());
 
-    now += Duration::from_millis(10);
+    now += HALF_RTT;
     client.authenticated(AuthenticationStatus::Ok, now);
 
     qdebug!("---- client: SH..FIN -> FIN");
     let pkt1 = client.process(None, now).dgram();
     assert!(pkt1.is_some());
+    assert_eq!(*client.state(), State::Connected);
 
     let cb = client.process(None, now).callback();
-    assert_eq!(cb, Duration::from_millis(60));
+    assert_eq!(cb, HALF_RTT * 6);
 
     let mut pto_counts = [0; MAX_PTO_COUNTS];
     assert_eq!(client.stats.borrow().pto_counts, pto_counts);
 
-    // Wait for PTO to expire and resend a handshake packet
-    now += Duration::from_millis(60);
+    // Wait for PTO to expire and resend a handshake packet.
+    // Wait long enough that the 1-RTT PTO also fires.
+    qdebug!("---- client: PTO");
+    now += HALF_RTT * 6;
     let pkt2 = client.process(None, now).dgram();
-    assert!(pkt2.is_some());
 
     pto_counts[0] = 1;
     assert_eq!(client.stats.borrow().pto_counts, pto_counts);
 
     // Get a second PTO packet.
+    // Add some application data to this datagram, then split the 1-RTT off.
+    // We'll use that packet to force the server to acknowledge 1-RTT.
+    let stream_id = client.stream_create(StreamType::UniDi).unwrap();
+    client.stream_close_send(stream_id).unwrap();
     let pkt3 = client.process(None, now).dgram();
-    assert!(pkt3.is_some());
+    let (pkt3_hs, pkt3_1rtt) = split_datagram(&pkt3.unwrap());
 
     // PTO has been doubled.
     let cb = client.process(None, now).callback();
-    assert_eq!(cb, Duration::from_millis(120));
+    assert_eq!(cb, HALF_RTT * 12);
 
     // We still have only a single PTO
     assert_eq!(client.stats.borrow().pto_counts, pto_counts);
 
-    now += Duration::from_millis(10);
-    // Server receives the first packet.
-    // The output will be a Handshake packet with an ack and a app pn space packet with
-    // HANDSHAKE_DONE.
-    let pkt = server.process(pkt1, now).dgram();
-    assert!(pkt.is_some());
+    qdebug!("---- server: receive FIN and send ACK");
+    now += HALF_RTT;
+    // Now let the server have pkt1 and expect an immediate Handshake ACK.
+    // The output will be a Handshake packet with ACK and 1-RTT packet with
+    // HANDSHAKE_DONE and (because of pkt3_1rtt) an ACK.
+    // This should remove the 1-RTT PTO from messing this test up.
+    let server_acks = server.stats().frame_tx.ack;
+    let server_done = server.stats().frame_tx.handshake_done;
+    server.process_input(pkt3_1rtt.unwrap(), now);
+    let ack = server.process(pkt1, now).dgram();
+    assert!(ack.is_some());
+    assert_eq!(server.stats().frame_tx.ack, server_acks + 2);
+    assert_eq!(server.stats().frame_tx.handshake_done, server_done + 1);
 
-    // Check that the PTO packets (pkt2, pkt3) are Handshake packets.
+    // Check that the other packets (pkt2, pkt3) are Handshake packets.
     // The server discarded the Handshake keys already, therefore they are dropped.
+    // Note that these don't include 1-RTT packets, because 1-RTT isn't send on PTO.
     let dropped_before1 = server.stats().dropped_rx;
-    let frames_before = server.stats().frame_rx.all;
+    let server_frames = server.stats().frame_rx.all;
     server.process_input(pkt2.unwrap(), now);
     assert_eq!(1, server.stats().dropped_rx - dropped_before1);
-    assert_eq!(server.stats().frame_rx.all, frames_before);
+    assert_eq!(server.stats().frame_rx.all, server_frames);
 
     let dropped_before2 = server.stats().dropped_rx;
-    server.process_input(pkt3.unwrap(), now);
+    server.process_input(pkt3_hs, now);
     assert_eq!(1, server.stats().dropped_rx - dropped_before2);
-    assert_eq!(server.stats().frame_rx.all, frames_before);
+    assert_eq!(server.stats().frame_rx.all, server_frames);
 
-    now += Duration::from_millis(10);
-    // Client receive ack for the first packet
-    let cb = client.process(pkt, now).callback();
-    // Ack delay timer for the packet carrying HANDSHAKE_DONE.
-    assert_eq!(cb, ACK_DELAY);
+    now += HALF_RTT;
 
-    // Let the ack timer expire.
+    // Let the client receive the ACK.
+    // It should now be wait to acknowledge the HANDSHAKE_DONE.
+    let cb = client.process(ack, now).callback();
+    // The default ack delay is the RTT divided by the default ACK ratio of 4.
+    let expected_ack_delay = HALF_RTT * 2 / 4;
+    assert_eq!(cb, expected_ack_delay);
+
+    // Let the ACK delay timer expire.
     now += cb;
     let out = client.process(None, now).dgram();
     assert!(out.is_some());
@@ -322,9 +313,7 @@ fn pto_handshake_complete() {
     // We don't send another PING because the handshake space is done and there
     // is nothing to probe for.
 
-    pto_counts[0] = 1;
-    assert_eq!(client.stats.borrow().pto_counts, pto_counts);
-    assert_eq!(cb, LOCAL_IDLE_TIMEOUT - ACK_DELAY);
+    assert_eq!(cb, LOCAL_IDLE_TIMEOUT - expected_ack_delay);
 }
 
 /// Test that PTO in the Handshake space contains the right frames.
@@ -345,7 +334,7 @@ fn pto_handshake_frames() {
     let pkt = client.process(pkt.dgram(), now);
 
     now += Duration::from_millis(10);
-    let _ = server.process(pkt.dgram(), now);
+    mem::drop(server.process(pkt.dgram(), now));
 
     now += Duration::from_millis(10);
     client.authenticated(AuthenticationStatus::Ok, now);
@@ -441,7 +430,7 @@ fn loss_recovery_crash() {
     let now = now();
 
     // The server sends something, but we will drop this.
-    let _ = send_something(&mut server, now);
+    mem::drop(send_something(&mut server, now));
 
     // Then send something again, but let it through.
     let ack = send_and_receive(&mut server, &mut client, now);
@@ -457,7 +446,7 @@ fn loss_recovery_crash() {
     assert!(dgram.is_some());
 
     // This crashes.
-    let _ = send_something(&mut server, now + AT_LEAST_PTO);
+    mem::drop(send_something(&mut server, now + AT_LEAST_PTO));
 }
 
 // If we receive packets after the PTO timer has fired, we won't clear
@@ -472,7 +461,7 @@ fn ack_after_pto() {
     let mut now = now();
 
     // The client sends and is forced into a PTO.
-    let _ = send_something(&mut client, now);
+    mem::drop(send_something(&mut client, now));
 
     // Jump forward to the PTO and drain the PTO packets.
     now += AT_LEAST_PTO;
@@ -487,7 +476,7 @@ fn ack_after_pto() {
     // delivery is just the thing.
     // Note: The server can't ACK anything here, but none of what
     // the client has sent so far has been transferred.
-    let _ = send_something(&mut server, now);
+    mem::drop(send_something(&mut server, now));
     let dgram = send_something(&mut server, now);
 
     // The client is now after a PTO, but if it receives something
@@ -633,4 +622,92 @@ fn loss_time_past_largest_acked() {
     let delay = client.process(None, now).callback();
     assert_ne!(delay, Duration::from_secs(0));
     assert!(delay > lr_time);
+}
+
+/// `sender` sends a little, `receiver` acknowledges it.
+/// Repeat until `count` acknowledgements are sent.
+/// Returns the last packet containing acknowledgements, if any.
+fn trickle(sender: &mut Connection, receiver: &mut Connection, mut count: usize, now: Instant) {
+    let id = sender.stream_create(StreamType::UniDi).unwrap();
+    let mut maybe_ack = None;
+    while count > 0 {
+        qdebug!("trickle: remaining={}", count);
+        assert_eq!(sender.stream_send(id, &[9]).unwrap(), 1);
+        let dgram = sender.process(maybe_ack, now).dgram();
+
+        maybe_ack = receiver.process(dgram, now).dgram();
+        count -= usize::from(maybe_ack.is_some());
+    }
+    sender.process_input(maybe_ack.unwrap(), now);
+}
+
+/// Ensure that a PING frame is sent with ACK sometimes.
+/// `fast` allows testing of when `MAX_OUTSTANDING_UNACK` packets are
+/// outstanding (`fast` is `true`) within 1 PTO and when only
+/// `MIN_OUTSTANDING_UNACK` packets arrive after 2 PTOs (`fast` is `false`).
+fn ping_with_ack(fast: bool) {
+    let mut sender = default_client();
+    let mut receiver = default_server();
+    let mut now = now();
+    connect_force_idle(&mut sender, &mut receiver);
+    let sender_acks_before = sender.stats().frame_tx.ack;
+    let receiver_acks_before = receiver.stats().frame_tx.ack;
+    let count = if fast {
+        MAX_OUTSTANDING_UNACK
+    } else {
+        MIN_OUTSTANDING_UNACK
+    };
+    trickle(&mut sender, &mut receiver, count, now);
+    assert_eq!(sender.stats().frame_tx.ack, sender_acks_before);
+    assert_eq!(receiver.stats().frame_tx.ack, receiver_acks_before + count);
+    assert_eq!(receiver.stats().frame_tx.ping, 0);
+
+    if !fast {
+        // Wait at least one PTO, from the reciever's perspective.
+        // A receiver that hasn't received MAX_OUTSTANDING_UNACK won't send PING.
+        now += receiver.pto() + Duration::from_micros(1);
+        trickle(&mut sender, &mut receiver, 1, now);
+        assert_eq!(receiver.stats().frame_tx.ping, 0);
+    }
+
+    // After a second PTO (or the first if fast), new acknowledgements come
+    // with a PING frame and cause an ACK to be sent by the sender.
+    now += receiver.pto() + Duration::from_micros(1);
+    trickle(&mut sender, &mut receiver, 1, now);
+    assert_eq!(receiver.stats().frame_tx.ping, 1);
+    if let Output::Callback(t) = sender.process_output(now) {
+        assert_eq!(t, DEFAULT_ACK_DELAY);
+        assert!(sender.process_output(now + t).dgram().is_some());
+    }
+    assert_eq!(sender.stats().frame_tx.ack, sender_acks_before + 1);
+}
+
+#[test]
+fn ping_with_ack_fast() {
+    ping_with_ack(true);
+}
+
+#[test]
+fn ping_with_ack_slow() {
+    ping_with_ack(false);
+}
+
+#[test]
+fn ping_with_ack_min() {
+    const COUNT: usize = MIN_OUTSTANDING_UNACK - 2;
+    let mut sender = default_client();
+    let mut receiver = default_server();
+    let mut now = now();
+    connect_force_idle(&mut sender, &mut receiver);
+    let sender_acks_before = sender.stats().frame_tx.ack;
+    let receiver_acks_before = receiver.stats().frame_tx.ack;
+    trickle(&mut sender, &mut receiver, COUNT, now);
+    assert_eq!(sender.stats().frame_tx.ack, sender_acks_before);
+    assert_eq!(receiver.stats().frame_tx.ack, receiver_acks_before + COUNT);
+    assert_eq!(receiver.stats().frame_tx.ping, 0);
+
+    // After 3 PTO, no PING because there are too few outstanding packets.
+    now += receiver.pto() * 3 + Duration::from_micros(1);
+    trickle(&mut sender, &mut receiver, 1, now);
+    assert_eq!(receiver.stats().frame_tx.ping, 0);
 }

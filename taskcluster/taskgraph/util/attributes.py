@@ -20,9 +20,11 @@ RELEASE_PROJECTS = {
     "mozilla-beta",
     "mozilla-release",
     "mozilla-esr78",
+    "mozilla-esr91",
     "comm-central",
     "comm-beta",
     "comm-esr78",
+    "comm-esr91",
     "oak",
 }
 
@@ -39,6 +41,11 @@ TEMPORARY_PROJECTS = set(
         # 'oak',
     }
 )
+
+TRY_PROJECTS = {
+    "try",
+    "try-comm-central",
+}
 
 ALL_PROJECTS = RELEASE_PROMOTION_PROJECTS | TRUNK_PROJECTS | TEMPORARY_PROJECTS
 

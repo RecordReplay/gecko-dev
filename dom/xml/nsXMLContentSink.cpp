@@ -113,6 +113,17 @@ nsresult nsXMLContentSink::Init(Document* aDoc, nsIURI* aURI,
   return NS_OK;
 }
 
+inline void ImplCycleCollectionTraverse(
+    nsCycleCollectionTraversalCallback& aCallback,
+    nsXMLContentSink::StackNode& aField, const char* aName,
+    uint32_t aFlags = 0) {
+  ImplCycleCollectionTraverse(aCallback, aField.mContent, aName, aFlags);
+}
+
+inline void ImplCycleCollectionUnlink(nsXMLContentSink::StackNode& aField) {
+  ImplCycleCollectionUnlink(aField.mContent);
+}
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXMLContentSink)
   NS_INTERFACE_MAP_ENTRY(nsIContentSink)
   NS_INTERFACE_MAP_ENTRY(nsIXMLContentSink)
@@ -123,18 +134,9 @@ NS_INTERFACE_MAP_END_INHERITING(nsContentSink)
 NS_IMPL_ADDREF_INHERITED(nsXMLContentSink, nsContentSink)
 NS_IMPL_RELEASE_INHERITED(nsXMLContentSink, nsContentSink)
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(nsXMLContentSink)
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsXMLContentSink,
-                                                  nsContentSink)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCurrentHead)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocElement)
-  for (uint32_t i = 0, count = tmp->mContentStack.Length(); i < count; i++) {
-    const StackNode& node = tmp->mContentStack.ElementAt(i);
-    cb.NoteXPCOMChild(node.mContent);
-  }
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentChildren)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_INHERITED(nsXMLContentSink, nsContentSink,
+                                   mCurrentHead, mDocElement, mLastTextNode,
+                                   mContentStack, mDocumentChildren)
 
 // nsIContentSink
 NS_IMETHODIMP
@@ -247,6 +249,8 @@ nsXMLContentSink::DidBuildModel(bool aTerminated) {
     // with the document has not.
     return NS_OK;
   }
+
+  FlushTags();
 
   DidBuildModelImpl(aTerminated);
 
@@ -604,13 +608,15 @@ nsresult nsXMLContentSink::AddContentAsLeaf(nsIContent* aContent) {
     if (mXSLTProcessor) {
       mDocumentChildren.AppendElement(aContent);
     } else {
-      mDocument->AppendChildTo(aContent, false);
+      mDocument->AppendChildTo(aContent, false, IgnoreErrors());
     }
   } else {
     nsCOMPtr<nsIContent> parent = GetCurrentContent();
 
     if (parent) {
-      result = parent->AppendChildTo(aContent, false);
+      ErrorResult rv;
+      parent->AppendChildTo(aContent, false, rv);
+      result = rv.StealNSResult();
     }
   }
   return result;
@@ -776,7 +782,7 @@ nsIContent* nsXMLContentSink::GetCurrentContent() {
   return GetCurrentStackNode()->mContent;
 }
 
-StackNode* nsXMLContentSink::GetCurrentStackNode() {
+nsXMLContentSink::StackNode* nsXMLContentSink::GetCurrentStackNode() {
   int32_t count = mContentStack.Length();
   return count != 0 ? &mContentStack[count - 1] : nullptr;
 }
@@ -844,7 +850,7 @@ bool nsXMLContentSink::SetDocElement(int32_t aNameSpaceID, nsAtom* aTagName,
 
   if (!mDocumentChildren.IsEmpty()) {
     for (nsIContent* child : mDocumentChildren) {
-      mDocument->AppendChildTo(child, false);
+      mDocument->AppendChildTo(child, false, IgnoreErrors());
     }
     mDocumentChildren.Clear();
   }
@@ -864,15 +870,12 @@ bool nsXMLContentSink::SetDocElement(int32_t aNameSpaceID, nsAtom* aTagName,
     }
   }
 
-  nsresult rv = mDocument->AppendChildTo(mDocElement, NotifyForDocElement());
-  if (NS_FAILED(rv)) {
+  IgnoredErrorResult rv;
+  mDocument->AppendChildTo(mDocElement, NotifyForDocElement(), rv);
+  if (rv.Failed()) {
     // If we return false here, the caller will bail out because it won't
     // find a parent content node to append to, which is fine.
     return false;
-  }
-
-  if (aTagName == nsGkAtoms::html && aNameSpaceID == kNameSpaceID_XHTML) {
-    ProcessOfflineManifest(aContent);
   }
 
   return true;
@@ -944,7 +947,7 @@ nsresult nsXMLContentSink::HandleStartElement(
     if (!SetDocElement(nameSpaceID, localName, content) && appendContent) {
       NS_ENSURE_TRUE(parent, NS_ERROR_UNEXPECTED);
 
-      parent->AppendChildTo(content, false);
+      parent->AppendChildTo(content, false, IgnoreErrors());
     }
   }
 

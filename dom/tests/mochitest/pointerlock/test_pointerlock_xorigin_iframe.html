@@ -22,6 +22,8 @@ SimpleTest.waitForExplicitFinish();
 
 let gTestFiles = [
   "file_pointerlock_xorigin_iframe.html",
+  "file_pointerlock_xorigin_iframe_no_user_gesture.html",
+  "file_pointerlock_xorigin_iframe_not_focused.html",
 ];
 
 let gTestWindow = null;
@@ -46,6 +48,7 @@ function runNextTest() {
 
     info(`Testing ${file}`);
     gTestWindow = window.open(file, "", "width=500,height=500");
+    info(`Test finish`);
   } else {
     SimpleTest.finish();
   }

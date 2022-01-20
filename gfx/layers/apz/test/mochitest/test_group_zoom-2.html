@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>Various zoom-related tests that spawn in new windows</title>
   <script src="/tests/SimpleTest/SimpleTest.js"></script>
+  <script type="application/javascript" src="apz_test_native_event_utils.js"></script>
   <script type="application/javascript" src="apz_test_utils.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
   <script type="application/javascript">
@@ -39,6 +40,8 @@ var prefs = [
   // Disable touch resampling so that touch events are processed without delay
   // and we don't zoom more than expected due to overprediction.
   ["android.touch_resampling.enabled", false],
+  // Tests depend on window.visualViewport
+  ["dom.visualviewport.enabled", true],
 ];
 
 var instant_repaint_prefs = [
@@ -58,12 +61,21 @@ var subtests = [
   {"file": "helper_zoom_keyboardscroll.html", "prefs": prefs},
   {"file": "helper_zoom_out_clamped_scrollpos.html", "prefs": instant_repaint_prefs},
   {"file": "helper_zoom_out_with_mainthread_clamping.html", "prefs": instant_repaint_prefs},
+  {"file": "helper_fixed_html_hittest.html", "prefs": prefs},
+  // {"file": "helper_zoom_oopif.html", "prefs": prefs}, // disabled, see bug 1716127
 ];
 
 if (isApzEnabled()) {
   // This has a lot of subtests, and Android emulators are slow.
   SimpleTest.requestLongerTimeout(2);
   SimpleTest.waitForExplicitFinish();
+
+  if (getPlatform() == "linux") {
+        subtests.push(
+          {"file": "helper_zoom_with_touchpad.html", "prefs": prefs},
+          {"file": "helper_zoom_oopif.html?touchpad", "prefs": prefs},
+        );
+  }
   window.onload = function() {
     runSubtestsSeriallyInFreshWindows(subtests)
     .then(SimpleTest.finish, SimpleTest.finishWithFailure);

@@ -204,14 +204,6 @@
 		</dict>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>ftp URL</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>ftp</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleURLName</key>
 			<string>file URL</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
@@ -243,6 +235,8 @@
 	<dict>
 		<key>MallocNanoZone</key>
 		<string>0</string>
+		<key>SYSTEM_VERSION_COMPAT</key>
+		<string>0</string>
 	</dict>
 	<key>LSFileQuarantineEnabled</key>
 	<true/>
@@ -251,7 +245,7 @@
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
   <key>NSRequiresAquaSystemAppearance</key>
-  <true/>
+  <false/>
   <key>NSPrincipalClass</key>
   <string>GeckoNSApplication</string>
 	<key>SMPrivilegedExecutables</key>

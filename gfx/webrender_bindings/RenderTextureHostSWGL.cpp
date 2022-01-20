@@ -5,6 +5,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "RenderTextureHostSWGL.h"
+
+#include "mozilla/gfx/Logging.h"
+#include "mozilla/layers/TextureHost.h"
 #include "RenderThread.h"
 
 namespace mozilla {
@@ -48,9 +51,6 @@ bool RenderTextureHostSWGL::UpdatePlanes(RenderCompositor* aCompositor,
           case gfx::ColorDepth::COLOR_12:
           case gfx::ColorDepth::COLOR_16:
             internalFormat = LOCAL_GL_R16;
-            break;
-          default:
-            MOZ_RELEASE_ASSERT(false, "Unhandled YUV color depth");
             break;
         }
         break;
@@ -110,8 +110,16 @@ wr::WrExternalImage RenderTextureHostSWGL::LockSWGL(
     return InvalidToWrExternalImage();
   }
   const PlaneInfo& plane = mPlanes[aChannelIndex];
-  return NativeTextureToWrExternalImage(plane.mTexture, 0, 0, plane.mSize.width,
-                                        plane.mSize.height);
+
+  // Prefer native textures, unless our backend forbids it.
+  layers::TextureHost::NativeTexturePolicy policy =
+      layers::TextureHost::BackendNativeTexturePolicy(
+          layers::WebRenderBackend::SOFTWARE, plane.mSize);
+  return policy == layers::TextureHost::NativeTexturePolicy::FORBID
+             ? RawDataToWrExternalImage((uint8_t*)plane.mData,
+                                        plane.mStride * plane.mSize.height)
+             : NativeTextureToWrExternalImage(
+                   plane.mTexture, 0, 0, plane.mSize.width, plane.mSize.height);
 }
 
 void RenderTextureHostSWGL::UnlockSWGL() {
@@ -139,7 +147,7 @@ void RenderTextureHostSWGL::CleanupPlanes() {
 RenderTextureHostSWGL::~RenderTextureHostSWGL() { CleanupPlanes(); }
 
 bool RenderTextureHostSWGL::LockSWGLCompositeSurface(
-    void* aContext, wr::WrSWGLCompositeSurfaceInfo* aInfo) {
+    void* aContext, wr::SWGLCompositeSurfaceInfo* aInfo) {
   if (!SetContext(aContext)) {
     return false;
   }
@@ -159,10 +167,8 @@ bool RenderTextureHostSWGL::LockSWGLCompositeSurface(
     case gfx::SurfaceFormat::YUV422: {
       aInfo->yuv_planes = mPlanes.size();
       auto colorSpace = GetYUVColorSpace();
-      MOZ_ASSERT(colorSpace != gfx::YUVColorSpace::UNKNOWN);
-      aInfo->color_space = ToWrYuvColorSpace(colorSpace);
+      aInfo->color_space = ToWrYuvRangedColorSpace(colorSpace);
       auto colorDepth = GetColorDepth();
-      MOZ_ASSERT(colorDepth != gfx::ColorDepth::UNKNOWN);
       aInfo->color_depth = ToWrColorDepth(colorDepth);
       break;
     }
@@ -170,6 +176,7 @@ bool RenderTextureHostSWGL::LockSWGLCompositeSurface(
     case gfx::SurfaceFormat::B8G8R8X8:
       break;
     default:
+      gfxCriticalNote << "Unhandled external image format: " << GetFormat();
       MOZ_RELEASE_ASSERT(false, "Unhandled external image format");
       break;
   }
@@ -179,7 +186,7 @@ bool RenderTextureHostSWGL::LockSWGLCompositeSurface(
 }
 
 bool wr_swgl_lock_composite_surface(void* aContext, wr::ExternalImageId aId,
-                                    wr::WrSWGLCompositeSurfaceInfo* aInfo) {
+                                    wr::SWGLCompositeSurfaceInfo* aInfo) {
   RenderTextureHost* texture = RenderThread::Get()->GetRenderTexture(aId);
   if (!texture) {
     return false;

@@ -18,16 +18,16 @@ loader.lazyRequireGetter(
   "devtools/client/fronts/targets/browsing-context",
   true
 );
-loader.lazyRequireGetter(
-  this,
-  "TargetFactory",
-  "devtools/client/framework/target",
-  true
-);
 const {
   FrontClassWithSpec,
   registerFront,
 } = require("devtools/shared/protocol");
+const {
+  DescriptorMixin,
+} = require("devtools/client/fronts/descriptors/descriptor-mixin");
+
+const SERVER_TARGET_SWITCHING_ENABLED_PREF =
+  "devtools.target-switching.server.enabled";
 
 /**
  * DescriptorFront for tab targets.
@@ -37,19 +37,16 @@ const {
  *        TODO: This event could move to the server in order to support
  *        remoteness change for remote debugging.
  */
-class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
+class TabDescriptorFront extends DescriptorMixin(
+  FrontClassWithSpec(tabDescriptorSpec)
+) {
   constructor(client, targetFront, parentFront) {
     super(client, targetFront, parentFront);
-    this._client = client;
 
     // The tab descriptor can be configured to create either local tab targets
     // (eg, regular tab toolbox) or browsing context targets (eg tab remote
     // debugging).
     this._localTab = null;
-
-    // Flipped when creating dedicated tab targets for DevTools WebExtensions.
-    // See toolkit/components/extensions/ExtensionParent.jsm .
-    this.isDevToolsExtensionContext = false;
 
     this._onTargetDestroyed = this._onTargetDestroyed.bind(this);
     this._handleTabEvent = this._handleTabEvent.bind(this);
@@ -61,7 +58,25 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
     this.traits = json.traits || {};
   }
 
-  destroy() {
+  /**
+   * Destroy the front.
+   *
+   * @param Boolean If true, it means that we destroy the front when receiving the descriptor-destroyed
+   *                event from the server.
+   */
+  destroy({ isServerDestroyEvent = false } = {}) {
+    if (this.isDestroyed()) {
+      return;
+    }
+
+    // The descriptor may be destroyed first by the frontend.
+    // When closing the tab, the toolbox document is almost immediately removed from the DOM.
+    // The `unload` event fires and toolbox destroys itself, as well as its related client.
+    //
+    // In such case, we emit the descriptor-destroyed event
+    if (!isServerDestroyEvent) {
+      this.emit("descriptor-destroyed");
+    }
     if (this.isLocalTab) {
       this._teardownLocalTabListeners();
     }
@@ -71,6 +86,26 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
   setLocalTab(localTab) {
     this._localTab = localTab;
     this._setupLocalTabListeners();
+
+    // This is pure legacy. We always assumed closing the DevToolsClient
+    // when the tab was closed. It is mostly important for tests,
+    // but also ensure cleaning up the client and everything on tab closing.
+    // (this flag is handled by DescriptorMixin)
+    this.shouldCloseClient = true;
+
+    // When the target is created from the server side,
+    // it is not created via TabDescriptor.getTarget.
+    // Instead, it is retrieved by the TargetCommand which
+    // will call TabDescriptor.setTarget from TargetCommand.onTargetAvailable
+    if (this.isServerTargetSwitchingEnabled()) {
+      this._targetFrontPromise = new Promise(
+        r => (this._resolveTargetFrontPromise = r)
+      );
+    }
+  }
+
+  get isTabDescriptor() {
+    return true;
   }
 
   get isLocalTab() {
@@ -92,6 +127,14 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
       "TabRemotenessChange",
       this._handleTabEvent
     );
+  }
+
+  isServerTargetSwitchingEnabled() {
+    const isEnabled = Services.prefs.getBoolPref(
+      SERVER_TARGET_SWITCHING_ENABLED_PREF,
+      false
+    );
+    return isEnabled && this.isLocalTab;
   }
 
   get isZombieTab() {
@@ -123,16 +166,11 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
   _createTabTarget(form) {
     const front = new BrowsingContextTargetFront(this._client, null, this);
 
-    if (this.isLocalTab) {
-      front.shouldCloseClient = true;
-    }
-
     // As these fronts aren't instantiated by protocol.js, we have to set their actor ID
     // manually like that:
     front.actorID = form.actor;
     front.form(form);
     this.manage(front);
-    front.on("target-destroyed", this._onTargetDestroyed);
     return front;
   }
 
@@ -141,6 +179,14 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
     // Note that we are also checking that _targetFront has a valid actorID
     // in getTarget, this acts as an additional security to avoid races.
     this._targetFront = null;
+
+    // about:debugging / remote debugging tabs don't support top level
+    // target-switching so we have to remove the descriptor when the target is
+    // destroyed. When about:debugging supports target switching, we can remove
+    // the !isLocalTab check. See Bug 1709267.
+    if (!this.isLocalTab) {
+      this.destroy();
+    }
   }
 
   /**
@@ -161,6 +207,29 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
     }
   }
 
+  /**
+   * Top-level targets created on the server will not be created and managed
+   * by a descriptor front. Instead they are created by the Watcher actor.
+   * On the client side we manually re-establish a link between the descriptor
+   * and the new top-level target.
+   */
+  setTarget(targetFront) {
+    // Completely ignore the previous target.
+    // We might nullify the _targetFront unexpectely due to previous target
+    // being destroyed after the new is created
+    if (this._targetFront) {
+      this._targetFront.off("target-destroyed", this._onTargetDestroyed);
+    }
+    this._targetFront = targetFront;
+    targetFront.setDescriptor(this);
+
+    targetFront.on("target-destroyed", this._onTargetDestroyed);
+
+    if (this.isServerTargetSwitchingEnabled()) {
+      this._resolveTargetFrontPromise(targetFront);
+    }
+  }
+
   async getTarget() {
     if (this._targetFront && !this._targetFront.isDestroyed()) {
       return this._targetFront;
@@ -171,19 +240,20 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
     }
 
     this._targetFrontPromise = (async () => {
-      let targetFront = null;
+      let newTargetFront = null;
       try {
         const targetForm = await super.getTarget();
-        targetFront = this._createTabTarget(targetForm);
-        await targetFront.attach();
+        newTargetFront = this._createTabTarget(targetForm);
+        await newTargetFront.attach();
+        this.setTarget(newTargetFront);
       } catch (e) {
         console.log(
           `Request to connect to TabDescriptor "${this.id}" failed: ${e}`
         );
       }
-      this._targetFront = targetFront;
+
       this._targetFrontPromise = null;
-      return targetFront;
+      return newTargetFront;
     })();
     return this._targetFrontPromise;
   }
@@ -194,15 +264,10 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
   async _handleTabEvent(event) {
     switch (event.type) {
       case "TabClose":
-        // Always destroy the toolbox opened for this local tab target.
-        // Toolboxes are no longer destroyed on target destruction.
+        // Always destroy the toolbox opened for this local tab descriptor.
         // When the toolbox is in a Window Host, it won't be removed from the
         // DOM when the tab is closed.
-        const toolbox = gDevTools.getToolbox(this._targetFront);
-        // A few tests are using TargetFactory.forTab, but aren't spawning any
-        // toolbox. In this case, the toobox won't destroy the target, so we
-        // do it from here. But ultimately, the target should destroy itself
-        // from the actor side anyway.
+        const toolbox = gDevTools.getToolboxForDescriptor(this);
         if (toolbox) {
           // Toolbox.destroy will call target.destroy eventually.
           await toolbox.destroy();
@@ -220,42 +285,9 @@ class TabDescriptorFront extends FrontClassWithSpec(tabDescriptorSpec) {
    * Process change can go in both ways.
    */
   async _onRemotenessChange() {
-    // Responsive design does a crazy dance around tabs and triggers
-    // remotenesschange events. But we should ignore them as at the end
-    // the content doesn't change its remoteness.
-    if (this.localTab.isResponsiveDesignMode) {
-      return;
-    }
-
-    // The front that was created for DevTools page extension does not have corresponding toolbox.
-    if (this.isDevToolsExtensionContext) {
-      return;
-    }
-
-    const toolbox = gDevTools.getToolbox(this._targetFront);
-
-    const targetSwitchingEnabled = Services.prefs.getBoolPref(
-      "devtools.target-switching.enabled",
-      false
-    );
-
-    // When target switching is enabled, everything is handled by the TargetList
     // In a near future, this client side code should be replaced by actor code,
     // notifying about new tab targets.
-    if (targetSwitchingEnabled) {
-      this.emit("remoteness-change", this._targetFront);
-      return;
-    }
-
-    // Otherwise, if we don't support target switching, ensure the toolbox is destroyed.
-    // We need to wait for the toolbox destruction because the TargetFactory memoized the targets,
-    // and only cleans up the cache after the target is destroyed via toolbox destruction.
-    await toolbox.destroy();
-
-    // Fetch the new target for this tab
-    const newTarget = await TargetFactory.forTab(this.localTab, null);
-
-    gDevTools.showToolbox(newTarget);
+    this.emit("remoteness-change", this._targetFront);
   }
 }
 

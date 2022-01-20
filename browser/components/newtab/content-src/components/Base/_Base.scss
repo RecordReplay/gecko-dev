@@ -26,9 +26,7 @@
 main {
   margin: auto;
   width: $wrapper-default-width;
-  // Offset the snippets container so things at the bottom of the page are still
-  // visible when snippets are visible. Adjust for other spacing.
-  padding-bottom: $snippets-container-height - $section-spacing - $base-gutter;
+  padding: 0;
 
   section {
     margin-bottom: $section-spacing;
@@ -51,6 +49,11 @@ main {
     width: $wrapper-max-width-widest;
   }
 
+  &.has-snippet {
+    // Offset the snippets container so things at the bottom of the page are still
+    // visible when snippets are visible. Adjust for other spacing.
+    padding-bottom: $snippets-container-height - $section-spacing - $base-gutter;
+  }
 }
 
 .below-search-snippet.withButton {
@@ -69,7 +72,7 @@ main {
 .ds-outer-wrapper-breakpoint-override {
   main {
     width: 266px;
-    padding-bottom: 68px;
+    padding-bottom: 0;
 
     @media (min-width: $break-point-medium) {
       width: 510px;
@@ -82,6 +85,12 @@ main {
     @media (min-width: $break-point-widest) {
       width: 986px;
     }
+
+    &.has-snippet {
+      // Offset the snippets container so things at the bottom of the page are still
+      // visible when snippets are visible. Adjust for other spacing.
+      padding-bottom: $snippets-container-height - $section-spacing - $base-gutter;
+    }
   }
 }
 
@@ -93,11 +102,7 @@ main {
 .body-wrapper {
   // Hide certain elements so the page structure is fixed, e.g., placeholders,
   // while avoiding flashes of changing content, e.g., icons and text
-  $selectors-to-hide: '
-    .section-title,
-    .sections-list .section:last-of-type,
-    .topics
-  ';
+  $selectors-to-hide: '.section-title, .sections-list .section:last-of-type, .topics';
 
   #{$selectors-to-hide} {
     opacity: 0;
@@ -134,46 +139,5 @@ main {
     &:active {
       background-color: var(--newtab-element-active-color);
     }
-  }
-}
-
-@media (max-height: 701px) {
-  .personalize-button {
-    position: absolute;
-    top: 16px;
-    inset-inline-end: 16px;
-  }
-}
-
-@media (min-height: 700px) {
-  .personalize-button {
-    position: fixed;
-    top: 16px;
-    inset-inline-end: 16px;
-    z-index: 1000;
-  }
-}
-
-.personalize-button {
-  font-size: 12px;
-  font-weight: 600;
-  border: 0;
-  border-radius: 4px;
-  background-color: var(--newtab-background-button-color);
-  color: var(--newtab-background-button-text-color);
-  padding: 3px 10px;
-  min-height: 32px;
-  max-width: 117px;
-
-  &:hover {
-    background-color: var(--newtab-background-button-hover-color);
-  }
-
-  &:active {
-    background-color: var(--newtab-background-button-active-color);
-  }
-
-  &:focus-visible {
-    @include ds-focus-nte;
   }
 }

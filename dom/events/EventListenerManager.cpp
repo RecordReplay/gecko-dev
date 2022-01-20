@@ -287,10 +287,7 @@ void EventListenerManager::AddEventListenerInternal(
     mMayHaveMutationListeners = true;
     // Go from our target to the nearest enclosing DOM window.
     if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      nsCOMPtr<Document> doc = window->GetExtantDoc();
-      if (doc &&
-          !(aFlags.mInSystemGroup &&
-            doc->DontWarnAboutMutationEventsAndAllowSlowDOMMutations())) {
+      if (Document* doc = window->GetExtantDoc()) {
         doc->WarnOnceAbout(DeprecatedOperations::eMutationEvent);
       }
       // If aEventMessage is eLegacySubtreeModified, we need to listen all
@@ -304,9 +301,8 @@ void EventListenerManager::AddEventListenerInternal(
     EnableDevice(eDeviceOrientation);
   } else if (aTypeAtom == nsGkAtoms::onabsolutedeviceorientation) {
     EnableDevice(eAbsoluteDeviceOrientation);
-  } else if (aTypeAtom == nsGkAtoms::ondeviceproximity ||
-             aTypeAtom == nsGkAtoms::onuserproximity) {
-    EnableDevice(eDeviceProximity);
+  } else if (aTypeAtom == nsGkAtoms::onuserproximity) {
+    EnableDevice(eUserProximity);
   } else if (aTypeAtom == nsGkAtoms::ondevicelight) {
     EnableDevice(eDeviceLight);
   } else if (aTypeAtom == nsGkAtoms::ondevicemotion) {
@@ -374,7 +370,8 @@ void EventListenerManager::AddEventListenerInternal(
     if (!aFlags.mInSystemGroup) {
       mMayHaveInputOrCompositionEventListener = true;
     }
-  } else if (aEventMessage == eSelectionChange) {
+  } else if (aEventMessage == eSelectionChange ||
+             aEventMessage == eFormSelect) {
     mMayHaveSelectionChangeEventListener = true;
     if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
       window->SetHasSelectionChangeEventListeners();
@@ -411,6 +408,18 @@ void EventListenerManager::AddEventListenerInternal(
     if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
       if (Document* doc = window->GetExtantDoc()) {
         doc->SetUseCounter(eUseCounter_custom_onunderflow);
+      }
+    }
+  } else if (aTypeAtom == nsGkAtoms::onDOMMouseScroll) {
+    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+      if (Document* doc = window->GetExtantDoc()) {
+        doc->SetUseCounter(eUseCounter_custom_ondommousescroll);
+      }
+    }
+  } else if (aTypeAtom == nsGkAtoms::onMozMousePixelScroll) {
+    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+      if (Document* doc = window->GetExtantDoc()) {
+        doc->SetUseCounter(eUseCounter_custom_onmozmousepixelscroll);
       }
     }
   }
@@ -478,7 +487,6 @@ bool EventListenerManager::IsDeviceType(EventMessage aEventMessage) {
     case eAbsoluteDeviceOrientation:
     case eDeviceMotion:
     case eDeviceLight:
-    case eDeviceProximity:
     case eUserProximity:
 #if defined(MOZ_WIDGET_ANDROID)
     case eOrientationChange:
@@ -515,7 +523,6 @@ void EventListenerManager::EnableDevice(EventMessage aEventMessage) {
       window->EnableDeviceSensor(SENSOR_ORIENTATION);
 #endif
       break;
-    case eDeviceProximity:
     case eUserProximity:
       window->EnableDeviceSensor(SENSOR_PROXIMITY);
       break;
@@ -564,7 +571,6 @@ void EventListenerManager::DisableDevice(EventMessage aEventMessage) {
       window->DisableDeviceSensor(SENSOR_LINEAR_ACCELERATION);
       window->DisableDeviceSensor(SENSOR_GYROSCOPE);
       break;
-    case eDeviceProximity:
     case eUserProximity:
       window->DisableDeviceSensor(SENSOR_PROXIMITY);
       break;
@@ -1031,18 +1037,15 @@ nsresult EventListenerManager::CompileEventHandlerInternal(
 
   RefPtr<ScriptFetchOptions> fetchOptions = new ScriptFetchOptions(
       CORS_NONE, aElement->OwnerDoc()->GetReferrerPolicy(), aElement,
-      aElement->OwnerDoc()->NodePrincipal());
-  NS_ENSURE_TRUE(fetchOptions, NS_ERROR_OUT_OF_MEMORY);
+      aElement->OwnerDoc()->NodePrincipal(), nullptr);
 
   RefPtr<EventScript> eventScript = new EventScript(fetchOptions, uri);
-  NS_ENSURE_TRUE(eventScript, NS_ERROR_OUT_OF_MEMORY);
 
   JS::CompileOptions options(cx);
   // Use line 0 to make the function body starts from line 1.
   options.setIntroductionType("eventHandler")
       .setFileAndLine(url.get(), 0)
-      .setElementAttributeName(jsStr)
-      .setPrivateValue(JS::PrivateValue(eventScript));
+      .setdeferDebugMetadata(true);
 
   JS::Rooted<JSObject*> handler(cx);
   result = nsJSUtils::CompileFunction(jsapi, scopeChain, options,
@@ -1050,6 +1053,11 @@ nsresult EventListenerManager::CompileEventHandlerInternal(
                                       argNames, *body, handler.address());
   NS_ENSURE_SUCCESS(result, result);
   NS_ENSURE_TRUE(handler, NS_ERROR_FAILURE);
+
+  JS::Rooted<JS::Value> privateValue(cx, JS::PrivateValue(eventScript));
+  result = nsJSUtils::UpdateFunctionDebugMetadata(jsapi, handler, options,
+                                                  jsStr, privateValue);
+  NS_ENSURE_SUCCESS(result, result);
 
   MOZ_ASSERT(js::IsObjectInContextCompartment(handler, cx));
   JS::Rooted<JSObject*> handlerGlobal(cx, JS::CurrentGlobalOrNull(cx));
@@ -1410,7 +1418,7 @@ void EventListenerManager::AddEventListener(
     }
 
     if (options.mSignal.WasPassed()) {
-      signal = options.mSignal.Value();
+      signal = &options.mSignal.Value();
     }
   }
 

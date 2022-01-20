@@ -20,13 +20,15 @@ const expectedStyle = (w, h, z) =>
   "overflow:hidden";
 
 add_task(async function() {
-  const { inspector, testActor } = await openInspectorForURL(TEST_URL);
+  const { inspector, highlighterTestFront } = await openInspectorForURL(
+    TEST_URL
+  );
 
   const div = await getNodeFront("div", inspector);
 
   for (const level of TEST_LEVELS) {
     info(`Zoom to level ${level}`);
-    await testActor.zoomPageTo(level, false);
+    setContentPageZoomLevel(level);
 
     info("Highlight the test node");
     await inspector.highlighters.showHighlighterTypeForNode(
@@ -34,15 +36,27 @@ add_task(async function() {
       div
     );
 
-    const isVisible = await testActor.isHighlighting();
+    const isVisible = await highlighterTestFront.isHighlighting();
     ok(isVisible, `The highlighter is visible at zoom level ${level}`);
 
-    await testActor.isNodeCorrectlyHighlighted("div", is);
+    await isNodeCorrectlyHighlighted(highlighterTestFront, "div");
 
     info("Check that the highlighter root wrapper node was scaled down");
 
-    const style = await getElementsNodeStyle(testActor);
-    const { width, height } = await testActor.getWindowDimensions();
+    const style = await getElementsNodeStyle(highlighterTestFront);
+
+    const { width, height } = await SpecialPowers.spawn(
+      gBrowser.selectedBrowser,
+      [],
+      () => {
+        const { require } = ChromeUtils.import(
+          "resource://devtools/shared/Loader.jsm"
+        );
+        const { getWindowDimensions } = require("devtools/shared/layout/utils");
+        return getWindowDimensions(content);
+      }
+    );
+
     is(
       style,
       expectedStyle(width, height, level),
@@ -56,8 +70,8 @@ add_task(async function() {
   }
 });
 
-async function getElementsNodeStyle(testActor) {
-  const value = await testActor.getHighlighterNodeAttribute(
+async function getElementsNodeStyle(highlighterTestFront) {
+  const value = await highlighterTestFront.getHighlighterNodeAttribute(
     "box-model-elements",
     "style"
   );

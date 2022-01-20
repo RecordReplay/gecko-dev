@@ -1,10 +1,12 @@
-use crate::Result;
+use crate::errors::ThreadInfoError;
 use nix::errno::Errno;
 use nix::sys::ptrace;
 use nix::unistd;
 use std::convert::TryInto;
 use std::io::{self, BufRead};
 use std::path;
+
+type Result<T> = std::result::Result<T, ThreadInfoError>;
 
 pub type Pid = i32;
 
@@ -68,14 +70,31 @@ trait CommonThreadInfo {
         let status_file = std::fs::File::open(status_path)?;
         for line in io::BufReader::new(status_file).lines() {
             let l = line?;
-            match &l[0..6] {
-                "Tgid:\t" => tgid = l[6..].parse::<Pid>()?,
-                "PPid:\t" => ppid = l[6..].parse::<Pid>()?,
+            let start = l
+                .get(0..6)
+                .ok_or_else(|| ThreadInfoError::InvalidProcStatusFile(tid, l.clone()))?;
+            match start {
+                "Tgid:\t" => {
+                    tgid = l
+                        .get(6..)
+                        .ok_or_else(|| ThreadInfoError::InvalidProcStatusFile(tid, l.clone()))?
+                        .parse::<Pid>()?
+                }
+                "PPid:\t" => {
+                    ppid = l
+                        .get(6..)
+                        .ok_or_else(|| ThreadInfoError::InvalidProcStatusFile(tid, l.clone()))?
+                        .parse::<Pid>()?
+                }
                 _ => continue,
             }
         }
         if ppid == -1 || tgid == -1 {
-            return Err("ppid or tgid is -1".into());
+            return Err(ThreadInfoError::InvalidPid(
+                format!("/proc/{}/status", tid),
+                ppid,
+                tgid,
+            ));
         }
         Ok((ppid, tgid))
     }
@@ -153,7 +172,7 @@ trait CommonThreadInfo {
     }
 }
 impl ThreadInfo {
-    pub fn create(pid: Pid, tid: Pid) -> Result<Self> {
+    pub fn create(pid: Pid, tid: Pid) -> std::result::Result<Self, ThreadInfoError> {
         Self::create_impl(pid, tid)
     }
 }

@@ -720,26 +720,9 @@ function do_compare_arrays(a1, a2, sorted) {
 function NavBookmarkObserver() {}
 
 NavBookmarkObserver.prototype = {
-  onBeginUpdateBatch() {},
-  onEndUpdateBatch() {},
   onItemRemoved() {},
   onItemChanged() {},
-  onItemMoved() {},
   QueryInterface: ChromeUtils.generateQI(["nsINavBookmarkObserver"]),
-};
-
-/**
- * Generic nsINavHistoryObserver that doesn't implement anything, but provides
- * dummy methods to prevent errors about an object not having a certain method.
- */
-function NavHistoryObserver() {}
-
-NavHistoryObserver.prototype = {
-  onBeginUpdateBatch() {},
-  onEndUpdateBatch() {},
-  onDeleteURI() {},
-  onDeleteVisits() {},
-  QueryInterface: ChromeUtils.generateQI(["nsINavHistoryObserver"]),
 };
 
 /**

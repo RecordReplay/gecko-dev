@@ -14,6 +14,7 @@
 #include "BorderConsts.h"
 #include "DashedCornerFinder.h"
 #include "DottedCornerFinder.h"
+#include "ImageRegion.h"
 #include "nsLayoutUtils.h"
 #include "nsStyleConsts.h"
 #include "nsContentUtils.h"
@@ -21,7 +22,6 @@
 #include "nsCSSRendering.h"
 #include "nsCSSRenderingGradients.h"
 #include "nsDisplayList.h"
-#include "GeckoProfiler.h"
 #include "nsExpirationTracker.h"
 #include "nsIScriptError.h"
 #include "nsClassHashtable.h"
@@ -32,13 +32,13 @@
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/RenderRootStateManager.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/Range.h"
 #include <algorithm>
 
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
-using mozilla::dom::Document;
 
 #define MAX_COMPOSITE_BORDER_WIDTH LayoutDeviceIntCoord(10000)
 
@@ -149,13 +149,12 @@ typedef enum {
 } CornerStyle;
 
 nsCSSBorderRenderer::nsCSSBorderRenderer(
-    nsPresContext* aPresContext, const Document* aDocument,
-    DrawTarget* aDrawTarget, const Rect& aDirtyRect, Rect& aOuterRect,
+    nsPresContext* aPresContext, DrawTarget* aDrawTarget,
+    const Rect& aDirtyRect, Rect& aOuterRect,
     const StyleBorderStyle* aBorderStyles, const Float* aBorderWidths,
     RectCornerRadii& aBorderRadii, const nscolor* aBorderColors,
     bool aBackfaceIsVisible, const Maybe<Rect>& aClipRect)
     : mPresContext(aPresContext),
-      mDocument(aDocument),
       mDrawTarget(aDrawTarget),
       mDirtyRect(aDirtyRect),
       mOuterRect(aOuterRect),
@@ -2533,16 +2532,14 @@ void nsCSSBorderRenderer::DrawFallbackSolidCorner(mozilla::Side aSide,
   RefPtr<Path> path = builder->Finish();
   mDrawTarget->Fill(path, ColorPattern(ToDeviceColor(borderColor)));
 
-  if (mDocument) {
-    if (!mPresContext->HasWarnedAboutTooLargeDashedOrDottedRadius()) {
-      mPresContext->SetHasWarnedAboutTooLargeDashedOrDottedRadius();
-      nsContentUtils::ReportToConsole(
-          nsIScriptError::warningFlag, "CSS"_ns, mDocument,
-          nsContentUtils::eCSS_PROPERTIES,
-          mBorderStyles[aSide] == StyleBorderStyle::Dashed
-              ? "TooLargeDashedRadius"
-              : "TooLargeDottedRadius");
-    }
+  if (!mPresContext->HasWarnedAboutTooLargeDashedOrDottedRadius()) {
+    mPresContext->SetHasWarnedAboutTooLargeDashedOrDottedRadius();
+    nsContentUtils::ReportToConsole(
+        nsIScriptError::warningFlag, "CSS"_ns, mPresContext->Document(),
+        nsContentUtils::eCSS_PROPERTIES,
+        mBorderStyles[aSide] == StyleBorderStyle::Dashed
+            ? "TooLargeDashedRadius"
+            : "TooLargeDottedRadius");
   }
 }
 
@@ -3346,11 +3343,7 @@ void nsCSSBorderRenderer::CreateWebRenderCommands(
         wr::ToBorderSide(ToDeviceColor(mBorderColors[i]), mBorderStyles[i]);
   }
 
-  wr::BorderRadius borderRadius =
-      wr::ToBorderRadius(LayoutDeviceSize::FromUnknownSize(mBorderRadii[0]),
-                         LayoutDeviceSize::FromUnknownSize(mBorderRadii[1]),
-                         LayoutDeviceSize::FromUnknownSize(mBorderRadii[3]),
-                         LayoutDeviceSize::FromUnknownSize(mBorderRadii[2]));
+  wr::BorderRadius borderRadius = wr::ToBorderRadius(mBorderRadii);
 
   if (mLocalClip) {
     LayoutDeviceRect localClip =
@@ -3629,14 +3622,16 @@ ImgDrawResult nsCSSBorderImageRenderer::CreateWebRenderCommands(
           nsRect(nsPoint(), mImageRenderer.GetSize()), appUnitsPerDevPixel);
 
       Maybe<SVGImageContext> svgContext;
+      Maybe<ImageIntRegion> region;
       gfx::IntSize decodeSize =
           nsLayoutUtils::ComputeImageContainerDrawingParameters(
-              img, aForFrame, imageRect, aSc, flags, svgContext);
+              img, aForFrame, imageRect, imageRect, aSc, flags, svgContext,
+              region);
 
       RefPtr<layers::ImageContainer> container;
-      drawResult = img->GetImageContainerAtSize(aManager->LayerManager(),
-                                                decodeSize, svgContext, flags,
-                                                getter_AddRefs(container));
+      drawResult = img->GetImageContainerAtSize(
+          aManager->LayerManager(), decodeSize, svgContext, region, flags,
+          getter_AddRefs(container));
       if (!container) {
         break;
       }
@@ -3708,9 +3703,9 @@ ImgDrawResult nsCSSBorderImageRenderer::CreateWebRenderCommands(
 
       if (gradient.IsLinear()) {
         LayoutDevicePoint startPoint =
-            LayoutDevicePoint(dest.origin.x, dest.origin.y) + lineStart;
+            LayoutDevicePoint(dest.min.x, dest.min.y) + lineStart;
         LayoutDevicePoint endPoint =
-            LayoutDevicePoint(dest.origin.x, dest.origin.y) + lineEnd;
+            LayoutDevicePoint(dest.min.x, dest.min.y) + lineEnd;
 
         aBuilder.PushBorderGradient(
             dest, clip, !aItem->BackfaceIsHidden(),

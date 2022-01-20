@@ -36,7 +36,6 @@ job-defaults:
             - intl/icu/**
             - js/moz.configure
             - js/public/**
-            - js/rust/**
             - js/src/**
             - layout/tools/reftest/reftest/**
             - Makefile.in
@@ -61,13 +60,14 @@ job-defaults:
         toolchain:
             by-worker-type:
                 .*-b-win2012:
-                    - win64-clang-cl
+                    - win64-clang
                     - win64-rust
                 default:
                     - linux64-clang
                     - linux64-gcc
                     - linux64-rust
                     - linux64-dump-syms
+                    - linux64-sysroot
 
 jobs-from:
     - linux.yml

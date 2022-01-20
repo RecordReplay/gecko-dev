@@ -68,55 +68,6 @@ function promiseEvent(aTarget, aEventName, aPreventDefault) {
   return BrowserTestUtils.waitForEvent(aTarget, aEventName, false, cancelEvent);
 }
 
-/**
- * Adds a new search engine to the search service and confirms it completes.
- *
- * @param {string} basename  The file to load that contains the search engine
- *                           details.
- * @param {object} [options] Options for the test:
- *   - {String} [iconURL]       The icon to use for the search engine.
- *   - {Boolean} [setAsCurrent] Whether to set the new engine to be the
- *                              current engine or not.
- *   - {Boolean} [setAsCurrentPrivate] Whether to set the new engine to be the
- *                              current private browsing mode engine or not.
- *                              Defaults to false.
- *   - {String} [testPath]      Used to override the current test path if this
- *                              file is used from a different directory.
- * @returns {Promise} The promise is resolved once the engine is added, or
- *                    rejected if the addition failed.
- */
-async function promiseNewEngine(basename, options = {}) {
-  // Default the setAsCurrent option to true.
-  let setAsCurrent =
-    options.setAsCurrent == undefined ? true : options.setAsCurrent;
-  info("Waiting for engine to be added: " + basename);
-  let url = getRootDirectory(options.testPath || gTestPath) + basename;
-  let engine = await Services.search.addOpenSearchEngine(
-    url,
-    options.iconURL || ""
-  );
-  info("Search engine added: " + basename);
-  const current = await Services.search.getDefault();
-  if (setAsCurrent) {
-    await Services.search.setDefault(engine);
-  }
-  const currentPrivate = await Services.search.getDefaultPrivate();
-  if (options.setAsCurrentPrivate) {
-    await Services.search.setDefaultPrivate(engine);
-  }
-  registerCleanupFunction(async () => {
-    if (setAsCurrent) {
-      await Services.search.setDefault(current);
-    }
-    if (options.setAsCurrentPrivate) {
-      await Services.search.setDefaultPrivate(currentPrivate);
-    }
-    await Services.search.removeEngine(engine);
-    info("Search engine removed: " + basename);
-  });
-  return engine;
-}
-
 // Get an array of the one-off buttons.
 function getOneOffs() {
   let oneOffs = [];
@@ -177,6 +128,10 @@ async function assertSearchSourcesTelemetry(
   let histSnapshot = {};
   let scalars = {};
 
+  // This used to rely on the implied 100ms initial timer of
+  // TestUtils.waitForCondition. See bug 1515466.
+  await new Promise(resolve => setTimeout(resolve, 100));
+
   await TestUtils.waitForCondition(() => {
     histSnapshot = searchCounts.snapshot();
     return (
@@ -230,4 +185,33 @@ async function assertSearchSourcesTelemetry(
       `Should have matched ${name} in scalars and expectedScalars`
     );
   }
+}
+
+async function searchInSearchbar(inputText, win = window) {
+  await new Promise(r => waitForFocus(r, win));
+  let sb = win.BrowserSearch.searchBar;
+  // Write the search query in the searchbar.
+  sb.focus();
+  sb.value = inputText;
+  sb.textbox.controller.startSearch(inputText);
+  // Wait for the popup to show.
+  await BrowserTestUtils.waitForEvent(sb.textbox.popup, "popupshown");
+  // And then for the search to complete.
+  await TestUtils.waitForCondition(
+    () =>
+      sb.textbox.controller.searchStatus >=
+      Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH,
+    "The search in the searchbar must complete."
+  );
+  return sb.textbox.popup;
+}
+
+function clearSearchbarHistory(win = window) {
+  return new Promise((resolve, reject) => {
+    info("cleanup the search history");
+    win.BrowserSearch.searchBar.FormHistory.update(
+      { op: "remove", fieldname: "searchbar-history" },
+      { handleCompletion: resolve, handleError: reject }
+    );
+  });
 }

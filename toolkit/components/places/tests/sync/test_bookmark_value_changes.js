@@ -218,12 +218,10 @@ add_task(async function test_value_combo() {
       },
     },
     {
-      name: "onItemMoved",
+      name: "bookmark-moved",
       params: {
         itemId: localItemIds.get("bzBmk_______"),
-        oldParentId: PlacesUtils.toolbarFolderId,
         oldIndex: 0,
-        newParentId: PlacesUtils.toolbarFolderId,
         newIndex: 2,
         type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
         guid: "bzBmk_______",
@@ -231,6 +229,7 @@ add_task(async function test_value_combo() {
         newParentGuid: PlacesUtils.bookmarks.toolbarGuid,
         source: PlacesUtils.bookmarks.SOURCES.SYNC,
         urlHref: "https://bugzilla.mozilla.org/",
+        isTagging: false,
       },
     },
     {
@@ -1366,17 +1365,15 @@ add_task(async function test_keywords_complex() {
       },
     },
     {
-      // These `onItemMoved` notifications aren't necessary: we only moved
+      // These `bookmark-moved` notifications aren't necessary: we only moved
       // (B C D E) to accomodate (A A1 B1), and Places doesn't usually fire move
       // notifications for repositioned siblings. However, detecting and filtering
       // these out complicates `noteObserverChanges`, so, for simplicity, we
       // record and fire the extra notifications.
-      name: "onItemMoved",
+      name: "bookmark-moved",
       params: {
         itemId: localItemIds.get("bookmarkBBBB"),
-        oldParentId: PlacesUtils.bookmarksMenuFolderId,
         oldIndex: 0,
-        newParentId: PlacesUtils.bookmarksMenuFolderId,
         newIndex: 3,
         type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
         guid: "bookmarkBBBB",
@@ -1384,15 +1381,14 @@ add_task(async function test_keywords_complex() {
         newParentGuid: PlacesUtils.bookmarks.menuGuid,
         source: PlacesUtils.bookmarks.SOURCES.SYNC,
         urlHref: "http://example.com/b",
+        isTagging: false,
       },
     },
     {
-      name: "onItemMoved",
+      name: "bookmark-moved",
       params: {
         itemId: localItemIds.get("bookmarkCCCC"),
-        oldParentId: PlacesUtils.bookmarksMenuFolderId,
         oldIndex: 1,
-        newParentId: PlacesUtils.bookmarksMenuFolderId,
         newIndex: 4,
         type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
         guid: "bookmarkCCCC",
@@ -1400,15 +1396,14 @@ add_task(async function test_keywords_complex() {
         newParentGuid: PlacesUtils.bookmarks.menuGuid,
         source: PlacesUtils.bookmarks.SOURCES.SYNC,
         urlHref: "http://example.com/c-remote",
+        isTagging: false,
       },
     },
     {
-      name: "onItemMoved",
+      name: "bookmark-moved",
       params: {
         itemId: localItemIds.get("bookmarkDDDD"),
-        oldParentId: PlacesUtils.bookmarksMenuFolderId,
         oldIndex: 2,
-        newParentId: PlacesUtils.bookmarksMenuFolderId,
         newIndex: 5,
         type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
         guid: "bookmarkDDDD",
@@ -1416,15 +1411,14 @@ add_task(async function test_keywords_complex() {
         newParentGuid: PlacesUtils.bookmarks.menuGuid,
         source: PlacesUtils.bookmarks.SOURCES.SYNC,
         urlHref: "http://example.com/d",
+        isTagging: false,
       },
     },
     {
-      name: "onItemMoved",
+      name: "bookmark-moved",
       params: {
         itemId: localItemIds.get("bookmarkEEEE"),
-        oldParentId: PlacesUtils.bookmarksMenuFolderId,
         oldIndex: 3,
-        newParentId: PlacesUtils.bookmarksMenuFolderId,
         newIndex: 6,
         type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
         guid: "bookmarkEEEE",
@@ -1432,6 +1426,7 @@ add_task(async function test_keywords_complex() {
         newParentGuid: PlacesUtils.bookmarks.menuGuid,
         source: PlacesUtils.bookmarks.SOURCES.SYNC,
         urlHref: "http://example.com/e",
+        isTagging: false,
       },
     },
     {

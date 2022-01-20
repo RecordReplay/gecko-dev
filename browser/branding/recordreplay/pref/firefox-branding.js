@@ -21,11 +21,11 @@ pref("app.update.url.manual", "https://replay.io");
 pref("app.update.url.details", "https://replay.io");
 
 // Adding a trailing # to support appending targeted help from "Learn more" links
-pref('replay.support.baseURL', 'https://www.notion.so/Replay-Docs-56758667f53a4d51b7c6fc7a641adb02#');
+pref('replay.support.baseURL', 'https://docs.replay.io/docs#');
 pref("startup.homepage_welcome_url", "https://app.replay.io/browser/welcome");
 pref("replay.newtab.url", "https://app.replay.io/browser/new-tab");
 
-pref('app.feedback.baseURL', 'https://www.notion.so/Join-our-community-5f13db877e3c40e6878dd92465c8203a');
+pref('app.feedback.baseURL', 'https://docs.replay.io/docs/join-our-community-bb2ffb6d98104dd589ba2194c0a52c22');
 
 // The number of days a binary is permitted to be old
 // without checking for an update.  This assumes that
@@ -51,4 +51,4 @@ pref('replay.telemetry.url', 'https://telemetry.replay.io');
 pref('replay.telemetry.enabled', true);
 
 // Authentication Flow
-pref('devtools.recordreplay.ext-auth', false);
+pref('devtools.recordreplay.ext-auth', true);

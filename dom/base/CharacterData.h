@@ -152,14 +152,16 @@ class CharacterData : public nsIContent {
   /**
    * Append the text content to aResult.
    */
-  MOZ_MUST_USE
-  bool AppendTextTo(nsAString& aResult, const fallible_t& aFallible) const {
+  [[nodiscard]] bool AppendTextTo(nsAString& aResult,
+                                  const fallible_t& aFallible) const {
     return mText.AppendTo(aResult, aFallible);
   }
 
   void SaveSubtreeState() final {}
 
-#ifdef DEBUG
+#ifdef MOZ_DOM_LIST
+  void ToCString(nsAString& aBuf, int32_t aOffset, int32_t aLen) const;
+
   void List(FILE* out, int32_t aIndent) const override {}
 
   void DumpContent(FILE* out, int32_t aIndent, bool aDumpAll) const override {}
@@ -197,18 +199,13 @@ class CharacterData : public nsIContent {
 
   //----------------------------------------
 
-#ifdef DEBUG
-  void ToCString(nsAString& aBuf, int32_t aOffset, int32_t aLen) const;
-#endif
-
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS_INHERITED(
       CharacterData, nsIContent)
 
   /**
    * Compare two CharacterData nodes for text equality.
    */
-  MOZ_MUST_USE
-  bool TextEquals(const CharacterData* aOther) const {
+  [[nodiscard]] bool TextEquals(const CharacterData* aOther) const {
     return mText.TextEquals(aOther->mText);
   }
 

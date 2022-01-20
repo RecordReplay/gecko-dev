@@ -208,7 +208,6 @@ function calculateOverhead(interval, bufferSize, features) {
     features.includes("stackwalk") && periodicSampling ? 0.05 : 0;
   const overheadFromJavaScript =
     features.includes("js") && periodicSampling ? 0.05 : 0;
-  const overheadFromTaskTracer = features.includes("tasktracer") ? 0.05 : 0;
   const overheadFromJSTracer = features.includes("jstracer") ? 0.05 : 0;
   const overheadFromJSAllocations = features.includes("jsallocations")
     ? 0.05
@@ -222,7 +221,6 @@ function calculateOverhead(interval, bufferSize, features) {
       overheadFromBuffersize +
       overheadFromStackwalk +
       overheadFromJavaScript +
-      overheadFromTaskTracer +
       overheadFromJSTracer +
       overheadFromJSAllocations +
       overheadFromNativeAllocations,
@@ -322,6 +320,13 @@ const featureDescriptions = [
     recommended: true,
   },
   {
+    name: "CPU Utilization",
+    value: "cpu",
+    title:
+      "Record how much CPU has been used between samples by each profiled thread.",
+    recommended: true,
+  },
+  {
     name: "Java",
     value: "java",
     title: "Profile Java code",
@@ -366,14 +371,6 @@ const featureDescriptions = [
     title: "Disable parallel traversal in styling.",
   },
   {
-    name: "TaskTracer",
-    value: "tasktracer",
-    title: "Enable TaskTracer",
-    experimental: true,
-    disabledReason:
-      "TaskTracer requires a custom build with the environment variable MOZ_TASK_TRACER set.",
-  },
-  {
     name: "Screenshots",
     value: "screenshots",
     title: "Record screenshots of all browser windows.",
@@ -412,13 +409,13 @@ const featureDescriptions = [
     title: "Trace real-time audio callbacks.",
   },
   {
-    name: "CPU Utilization",
-    value: "cpu",
+    name: "No Timer Resolution Change",
+    value: "notimerresolutionchange",
     title:
-      "CPU utilization by threads. To view graphs, in about:config set " +
-      "devtools.performance.recording.ui-base-url to " +
-      "https://deploy-preview-3098--perf-html.netlify.app",
-    experimental: true,
+      "Do not enhance the timer resolution for sampling intervals < 10ms, to " +
+      "avoid affecting timer-sensitive code. Warning: Sampling interval may " +
+      "increase in some processes.",
+    disabledReason: "Windows only.",
   },
 ];
 

@@ -20,8 +20,16 @@
 
 class APZCTreeManagerTester : public APZCTesterBase {
  protected:
+  APZCTreeManagerTester() : mLayersOnly(false) {}
+
   virtual void SetUp() {
     APZCTesterBase::SetUp();
+    if (mLayersOnly) {
+      SCOPED_GFX_VAR_MAYBE_EMPLACE(mVarWebRender, UseWebRender, false);
+      SCOPED_GFX_VAR_MAYBE_EMPLACE(mVarSoftwareWebRender, UseSoftwareWebRender,
+                                   false);
+    }
+
     APZThreadUtils::SetThreadAssertionsEnabled(false);
     APZThreadUtils::SetControllerThread(NS_GetCurrentThread());
 
@@ -35,22 +43,30 @@ class APZCTreeManagerTester : public APZCTesterBase {
       ;
     manager->ClearTree();
     manager->ClearContentController();
+    mVarWebRender.reset();
+    mVarSoftwareWebRender.reset();
   }
 
   /**
-   * Sample animations once for all APZCs, 1 ms later than the last sample.
+   * Sample animations once for all APZCs, 1 ms later than the last sample and
+   * return whether there is still any active animations or not.
    */
-  void SampleAnimationsOnce() {
+  bool SampleAnimationsOnce() {
     const TimeDuration increment = TimeDuration::FromMilliseconds(1);
     ParentLayerPoint pointOut;
     AsyncTransform viewTransformOut;
     mcc->AdvanceBy(increment);
 
+    bool activeAnimations = false;
+
     for (const RefPtr<Layer>& layer : layers) {
       if (TestAsyncPanZoomController* apzc = ApzcOf(layer)) {
-        apzc->SampleContentTransformForFrame(&viewTransformOut, pointOut);
+        activeAnimations |=
+            apzc->SampleContentTransformForFrame(&viewTransformOut, pointOut);
       }
     }
+
+    return activeAnimations;
   }
 
   // A convenience function for letting a test modify the frame metrics
@@ -76,6 +92,10 @@ class APZCTreeManagerTester : public APZCTesterBase {
   RefPtr<TestAPZCTreeManager> manager;
   RefPtr<APZSampler> sampler;
   RefPtr<APZUpdater> updater;
+
+  SCOPED_GFX_VAR_MAYBE_TYPE(bool) mVarWebRender;
+  SCOPED_GFX_VAR_MAYBE_TYPE(bool) mVarSoftwareWebRender;
+  bool mLayersOnly;
 
  protected:
   static ScrollMetadata BuildScrollMetadata(

@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Timer;
 
 import org.mozilla.gecko.annotation.WrapForJNI;
-import org.mozilla.gecko.util.GamepadUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.content.Context;
@@ -110,7 +109,7 @@ public class AndroidGamepadManager {
             dpad = new boolean[4];
             triggers = new float[2];
 
-            InputDevice device = InputDevice.getDevice(deviceId);
+            final InputDevice device = InputDevice.getDevice(deviceId);
             if (device != null) {
                 // LTRIGGER/RTRIGGER don't seem to be exposed on older
                 // versions of Android.
@@ -199,13 +198,27 @@ public class AndroidGamepadManager {
         sPendingGamepads.remove(deviceId);
         sGamepads.put(deviceId, new Gamepad(gamepadHandle, deviceId));
         // Handle queued KeyEvents
-        for (KeyEvent ev : pending) {
+        for (final KeyEvent ev : pending) {
             handleKeyEvent(ev);
         }
     }
 
+    private static float sDeadZoneThresholdOverride = 1e-2f;
+
+    private static boolean isValueInDeadZone(final MotionEvent event, final int axis) {
+        final float threshold;
+        if (sDeadZoneThresholdOverride >= 0) {
+            threshold = sDeadZoneThresholdOverride;
+        } else {
+            final InputDevice.MotionRange range = event.getDevice().getMotionRange(axis);
+            threshold = range.getFlat() + range.getFuzz();
+        }
+        final float value = event.getAxisValue(axis);
+        return (Math.abs(value) < threshold);
+    }
+
     private static float deadZone(final MotionEvent ev, final int axis) {
-        if (GamepadUtils.isValueInDeadZone(ev, axis)) {
+        if (isValueInDeadZone(ev, axis)) {
             return 0.0f;
         }
         return ev.getAxisValue(axis);
@@ -234,12 +247,12 @@ public class AndroidGamepadManager {
         }
 
         // First check the analog stick axes
-        boolean[] valid = new boolean[Axis.values().length];
-        float[] axes = new float[Axis.values().length];
+        final boolean[] valid = new boolean[Axis.values().length];
+        final float[] axes = new float[Axis.values().length];
         boolean anyValidAxes = false;
-        for (Axis axis : Axis.values()) {
-            float value = deadZone(ev, axis.axis);
-            int i = axis.ordinal();
+        for (final Axis axis : Axis.values()) {
+            final float value = deadZone(ev, axis.axis);
+            final int i = axis.ordinal();
             if (value != gamepad.axes[i]) {
                 axes[i] = value;
                 gamepad.axes[i] = value;
@@ -254,20 +267,20 @@ public class AndroidGamepadManager {
 
         // Map triggers to buttons.
         if (gamepad.triggerAxes != null) {
-            for (Trigger trigger : Trigger.values()) {
-                int i = trigger.ordinal();
-                int axis = gamepad.triggerAxes[i];
-                float value = deadZone(ev, axis);
+            for (final Trigger trigger : Trigger.values()) {
+                final int i = trigger.ordinal();
+                final int axis = gamepad.triggerAxes[i];
+                final float value = deadZone(ev, axis);
                 if (value != gamepad.triggers[i]) {
                     gamepad.triggers[i] = value;
-                    boolean pressed = value > TRIGGER_PRESSED_THRESHOLD;
+                    final boolean pressed = value > TRIGGER_PRESSED_THRESHOLD;
                     onButtonChange(gamepad.handle, trigger.button, pressed, value);
                 }
             }
         }
         // Map d-pad to buttons.
-        for (DpadAxis dpadaxis : DpadAxis.values()) {
-            float value = deadZone(ev, dpadaxis.axis);
+        for (final DpadAxis dpadaxis : DpadAxis.values()) {
+            final float value = deadZone(ev, dpadaxis.axis);
             mapDpadAxis(gamepad, value < 0.0f, value, dpadaxis.negativeButton);
             mapDpadAxis(gamepad, value > 0.0f, value, dpadaxis.positiveButton);
         }
@@ -280,7 +293,7 @@ public class AndroidGamepadManager {
             return false;
         }
 
-        int deviceId = ev.getDeviceId();
+        final int deviceId = ev.getDeviceId();
         final List<KeyEvent> pendingGamepad = sPendingGamepads.get(deviceId);
         if (pendingGamepad != null) {
             // Queue up key events for pending devices.
@@ -289,7 +302,7 @@ public class AndroidGamepadManager {
         }
 
         if (sGamepads.get(deviceId) == null) {
-            InputDevice device = ev.getDevice();
+            final InputDevice device = ev.getDevice();
             if (device != null &&
                 (device.getSources() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) {
                 // This is a gamepad we haven't seen yet.
@@ -302,7 +315,7 @@ public class AndroidGamepadManager {
         }
 
         int key = -1;
-        for (Button button : Button.values()) {
+        for (final Button button : Button.values()) {
             if (button.button == ev.getKeyCode()) {
                 key = button.ordinal();
                 break;
@@ -318,19 +331,19 @@ public class AndroidGamepadManager {
             return true;
         }
 
-        Gamepad gamepad = sGamepads.get(deviceId);
-        boolean pressed = ev.getAction() == KeyEvent.ACTION_DOWN;
+        final Gamepad gamepad = sGamepads.get(deviceId);
+        final boolean pressed = ev.getAction() == KeyEvent.ACTION_DOWN;
         onButtonChange(gamepad.handle, key, pressed, pressed ? 1.0f : 0.0f);
         return true;
     }
 
     private static void scanForGamepads() {
-        int[] deviceIds = InputDevice.getDeviceIds();
+        final int[] deviceIds = InputDevice.getDeviceIds();
         if (deviceIds == null) {
             return;
         }
         for (int i = 0; i < deviceIds.length; i++) {
-            InputDevice device = InputDevice.getDevice(deviceIds[i]);
+            final InputDevice device = InputDevice.getDevice(deviceIds[i]);
             if (device == null) {
                 continue;
             }
@@ -353,7 +366,7 @@ public class AndroidGamepadManager {
     }
 
     private static void removeGamepad(final int deviceId) {
-        Gamepad gamepad = sGamepads.get(deviceId);
+        final Gamepad gamepad = sGamepads.get(deviceId);
         nativeRemoveGamepad(gamepad.handle);
         sGamepads.remove(deviceId);
     }
@@ -362,7 +375,7 @@ public class AndroidGamepadManager {
         sListener = new InputManager.InputDeviceListener() {
             @Override
             public void onInputDeviceAdded(final int deviceId) {
-                InputDevice device = InputDevice.getDevice(deviceId);
+                final InputDevice device = InputDevice.getDevice(deviceId);
                 if (device == null) {
                     return;
                 }

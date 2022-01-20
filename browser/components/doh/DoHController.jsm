@@ -20,18 +20,53 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   ClientID: "resource://gre/modules/ClientID.jsm",
   ExtensionStorageIDB: "resource://gre/modules/ExtensionStorageIDB.jsm",
-  Config: "resource:///modules/DoHConfig.jsm",
+  DoHConfigController: "resource:///modules/DoHConfig.jsm",
   Heuristics: "resource:///modules/DoHHeuristics.jsm",
   Preferences: "resource://gre/modules/Preferences.jsm",
   setTimeout: "resource://gre/modules/Timer.jsm",
   clearTimeout: "resource://gre/modules/Timer.jsm",
 });
 
+// When this is set we suppress automatic TRR selection beyond dry-run as well
+// as sending observer notifications during heuristics throttling.
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
-  "kDebounceTimeout",
+  "kIsInAutomation",
+  "doh-rollout._testing",
+  false
+);
+
+// We wait until the network has been stably up for this many milliseconds
+// before triggering a heuristics run.
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "kNetworkDebounceTimeout",
   "doh-rollout.network-debounce-timeout",
   1000
+);
+
+// If consecutive heuristics runs are attempted within this period after a first,
+// we suppress them for this duration, at the end of which point we decide whether
+// to do one coalesced run or to extend the timer if the rate limit was exceeded.
+// Note that the very first run is allowed, after which we start the timer.
+// This throttling is necessary due to evidence of clients that experience
+// network volatility leading to thousands of runs per hour. See bug 1626083.
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "kHeuristicsThrottleTimeout",
+  "doh-rollout.heuristics-throttle-timeout",
+  15000
+);
+
+// After the throttle timeout described above, if there are more than this many
+// heuristics attempts during the timeout, we restart the timer without running
+// heuristics. Thus, heuristics are suppressed completely as long as the rate
+// exceeds this limit.
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "kHeuristicsRateLimit",
+  "doh-rollout.heuristics-throttle-rate-limit",
+  2
 );
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -79,8 +114,6 @@ const BREADCRUMB_PREF = "doh-rollout.self-enabled";
 const NETWORK_TRR_MODE_PREF = "network.trr.mode";
 const NETWORK_TRR_URI_PREF = "network.trr.uri";
 
-const TRR_LIST_PREF = "network.trr.resolvers";
-
 const ROLLOUT_MODE_PREF = "doh-rollout.mode";
 const ROLLOUT_URI_PREF = "doh-rollout.uri";
 
@@ -91,7 +124,7 @@ const HEURISTICS_TELEMETRY_CATEGORY = "doh";
 const TRRSELECT_TELEMETRY_CATEGORY = "security.doh.trrPerformance";
 
 const kLinkStatusChangedTopic = "network:link-status-changed";
-const kConnectivityTopic = "network:captive-portal-connectivity";
+const kConnectivityTopic = "network:captive-portal-connectivity-changed";
 const kPrefChangedTopic = "nsPref:changed";
 
 // Helper function to hash the network ID concatenated with telemetry client ID.
@@ -133,11 +166,13 @@ const DoHController = {
       true
     );
 
-    Services.obs.addObserver(this, Config.kConfigUpdateTopic);
+    await DoHConfigController.initComplete;
+
+    Services.obs.addObserver(this, DoHConfigController.kConfigUpdateTopic);
     Preferences.observe(NETWORK_TRR_MODE_PREF, this);
     Preferences.observe(NETWORK_TRR_URI_PREF, this);
 
-    if (Config.enabled) {
+    if (DoHConfigController.currentConfig.enabled) {
       await this.maybeEnableHeuristics();
     } else if (Preferences.get(FIRST_RUN_PREF, false)) {
       await this.rollback();
@@ -158,7 +193,7 @@ const DoHController = {
   // Also used by tests to reset DoHController state (prefs are not cleared
   // here - tests do that when needed between _uninit and init).
   async _uninit() {
-    Services.obs.removeObserver(this, Config.kConfigUpdateTopic);
+    Services.obs.removeObserver(this, DoHConfigController.kConfigUpdateTopic);
     Preferences.ignore(NETWORK_TRR_MODE_PREF, this);
     Preferences.ignore(NETWORK_TRR_URI_PREF, this);
     AsyncShutdown.profileBeforeChange.removeBlocker(this._asyncShutdownBlocker);
@@ -166,9 +201,15 @@ const DoHController = {
   },
 
   // Called to reset state when a new config is available.
+  resetPromise: Promise.resolve(),
   async reset() {
-    await this._uninit();
-    await this.init();
+    this.resetPromise = this.resetPromise.then(async () => {
+      await this._uninit();
+      await this.init();
+      Services.obs.notifyObservers(null, "doh:controller-reloaded");
+    });
+
+    return this.resetPromise;
   },
 
   async migrateLocalStoragePrefs() {
@@ -234,7 +275,9 @@ const DoHController = {
       return;
     }
 
-    Preferences.reset(NETWORK_TRR_MODE_PREF);
+    if (Preferences.get(NETWORK_TRR_MODE_PREF) !== 5) {
+      Preferences.reset(NETWORK_TRR_MODE_PREF);
+    }
     Preferences.reset(PREVIOUS_TRR_MODE_PREF);
   },
 
@@ -291,26 +334,93 @@ const DoHController = {
     }
 
     await this.runTRRSelection();
-    await this.runHeuristics("startup");
+    // If we enter this branch it means that no automatic selection was possible.
+    // In this case, we try to set a fallback (as defined by DoHConfigController).
+    if (!Preferences.isSet(ROLLOUT_URI_PREF)) {
+      Preferences.set(
+        ROLLOUT_URI_PREF,
+        DoHConfigController.currentConfig.fallbackProviderURI
+      );
+    }
+    this.runHeuristicsThrottled("startup");
     Services.obs.addObserver(this, kLinkStatusChangedTopic);
     Services.obs.addObserver(this, kConnectivityTopic);
 
     this._heuristicsAreEnabled = true;
   },
 
-  _lastHeuristicsRunTimestamp: 0,
+  _runsWhileThrottling: 0,
+  _wasThrottleExtended: false,
+  _throttleHeuristics() {
+    if (kHeuristicsThrottleTimeout < 0) {
+      // Skip throttling in tests that set timeout to a negative value.
+      return false;
+    }
+
+    if (this._throttleTimer) {
+      // Already throttling - nothing to do.
+      this._runsWhileThrottling++;
+      return true;
+    }
+
+    this._runsWhileThrottling = 0;
+
+    this._throttleTimer = setTimeout(
+      this._handleThrottleTimeout.bind(this),
+      kHeuristicsThrottleTimeout
+    );
+
+    return false;
+  },
+
+  _handleThrottleTimeout() {
+    delete this._throttleTimer;
+    if (this._runsWhileThrottling > kHeuristicsRateLimit) {
+      // During the throttle period, we saw that the rate limit was exceeded.
+      // We extend the throttle period, and don't bother running heuristics yet.
+      this._wasThrottleExtended = true;
+      // Restart the throttle timer.
+      this._throttleHeuristics();
+      if (kIsInAutomation) {
+        Services.obs.notifyObservers(null, "doh:heuristics-throttle-extend");
+      }
+      return;
+    }
+
+    // If this was an extended throttle and there were no runs during the
+    // extended period, we still want to run heuristics, since the extended
+    // throttle implies we had a non-zero number of attempts before extension.
+    if (this._runsWhileThrottling > 0 || this._wasThrottleExtended) {
+      this.runHeuristicsThrottled("throttled");
+    }
+
+    this._wasThrottleExtended = false;
+
+    if (kIsInAutomation) {
+      Services.obs.notifyObservers(null, "doh:heuristics-throttle-done");
+    }
+  },
+
+  runHeuristicsThrottled(evaluateReason) {
+    // _throttleHeuristics returns true if we've already witnessed a run and the
+    // timeout period hasn't lapsed yet. If it does so, we suppress this run.
+    if (this._throttleHeuristics()) {
+      return;
+    }
+
+    // _throttleHeuristics returned false - we're good to run heuristics.
+    // At this point the timer has been started and subsequent calls will be
+    // suppressed if it hasn't fired yet.
+    this.runHeuristics(evaluateReason);
+  },
   async runHeuristics(evaluateReason) {
     let start = Date.now();
-    // If this function is called in quick succession, _lastHeuristicsRunTimestamp
-    // might be refreshed while we are still awaiting Heuristics.run() below.
-    this._lastHeuristicsRunTimestamp = start;
 
     let results = await Heuristics.run();
 
     if (
       !gNetworkLinkService.isLinkUp ||
       this._lastDebounceTimestamp > start ||
-      this._lastHeuristicsRunTimestamp > start ||
       gCaptivePortalService.state == gCaptivePortalService.LOCKED_PORTAL
     ) {
       // If the network is currently down or there was a debounce triggered
@@ -446,6 +556,14 @@ const DoHController = {
 
     Services.obs.removeObserver(this, kLinkStatusChangedTopic);
     Services.obs.removeObserver(this, kConnectivityTopic);
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+      delete this._debounceTimer;
+    }
+    if (this._throttleTimer) {
+      clearTimeout(this._throttleTimer);
+      delete this._throttleTimer;
+    }
     this._heuristicsAreEnabled = false;
   },
 
@@ -456,22 +574,26 @@ const DoHController = {
   async runTRRSelection() {
     // If persisting the selection is disabled, clear the existing
     // selection.
-    if (!Config.trrSelection.commitResult) {
+    if (!DoHConfigController.currentConfig.trrSelection.commitResult) {
       Preferences.reset(ROLLOUT_URI_PREF);
     }
 
-    if (!Config.trrSelection.enabled) {
+    if (!DoHConfigController.currentConfig.trrSelection.enabled) {
       return;
     }
 
-    if (Preferences.isSet(ROLLOUT_URI_PREF)) {
+    if (
+      Preferences.isSet(ROLLOUT_URI_PREF) &&
+      Preferences.get(ROLLOUT_URI_PREF) ==
+        Preferences.get(TRR_SELECT_DRY_RUN_RESULT_PREF)
+    ) {
       return;
     }
 
     await this.runTRRSelectionDryRun();
 
     // If persisting the selection is disabled, don't commit the value.
-    if (!Config.trrSelection.commitResult) {
+    if (!DoHConfigController.currentConfig.trrSelection.commitResult) {
       return;
     }
 
@@ -486,31 +608,28 @@ const DoHController = {
       // Check whether the existing dry-run-result is in the default
       // list of TRRs. If it is, all good. Else, run the dry run again.
       let dryRunResult = Preferences.get(TRR_SELECT_DRY_RUN_RESULT_PREF);
-      let defaultTRRs = JSON.parse(
-        Services.prefs.getDefaultBranch("").getCharPref(TRR_LIST_PREF)
-      );
-      let dryRunResultIsValid = defaultTRRs.some(
-        trr => trr.url == dryRunResult
+      let dryRunResultIsValid = DoHConfigController.currentConfig.providerList.some(
+        trr => trr.uri == dryRunResult
       );
       if (dryRunResultIsValid) {
         return;
       }
     }
 
-    let setDryRunResultAndRecordTelemetry = trr => {
-      Preferences.set(TRR_SELECT_DRY_RUN_RESULT_PREF, trr);
+    let setDryRunResultAndRecordTelemetry = trrUri => {
+      Preferences.set(TRR_SELECT_DRY_RUN_RESULT_PREF, trrUri);
       Services.telemetry.recordEvent(
         TRRSELECT_TELEMETRY_CATEGORY,
         "trrselect",
         "dryrunresult",
-        trr.substring(0, 40) // Telemetry payload max length
+        trrUri.substring(0, 40) // Telemetry payload max length
       );
     };
 
-    if (Cu.isInAutomation) {
+    if (kIsInAutomation) {
       // For mochitests, just record telemetry with a dummy result.
       // TRRPerformance.jsm is tested in xpcshell.
-      setDryRunResultAndRecordTelemetry("https://dummytrr.com/query");
+      setDryRunResultAndRecordTelemetry("https://example.com/dns-query");
       return;
     }
 
@@ -520,10 +639,13 @@ const DoHController = {
       "resource:///modules/TRRPerformance.jsm"
     );
     await new Promise(resolve => {
+      let trrList = DoHConfigController.currentConfig.trrSelection.providerList.map(
+        trr => trr.uri
+      );
       let racer = new TRRRacer(() => {
         setDryRunResultAndRecordTelemetry(racer.getFastestTRR(true));
         resolve();
-      });
+      }, trrList);
       racer.run();
     });
   },
@@ -539,7 +661,7 @@ const DoHController = {
       case kPrefChangedTopic:
         this.onPrefChanged(data);
         break;
-      case Config.kConfigUpdateTopic:
+      case DoHConfigController.kConfigUpdateTopic:
         this.reset();
         break;
     }
@@ -582,14 +704,20 @@ const DoHController = {
       return;
     }
 
+    if (kNetworkDebounceTimeout < 0) {
+      // Skip debouncing in tests that set timeout to a negative value.
+      this.onConnectionChangedDebounced();
+      return;
+    }
+
     this._lastDebounceTimestamp = Date.now();
     this._debounceTimer = setTimeout(() => {
       this._cancelDebounce();
       this.onConnectionChangedDebounced();
-    }, kDebounceTimeout);
+    }, kNetworkDebounceTimeout);
   },
 
-  async onConnectionChangedDebounced() {
+  onConnectionChangedDebounced() {
     if (!gNetworkLinkService.isLinkUp) {
       return;
     }
@@ -601,15 +729,15 @@ const DoHController = {
     // The network is up and we don't know that we're in a locked portal.
     // Run heuristics. If we detect a portal later, we'll run heuristics again
     // when it's unlocked. In that case, this run will likely have failed.
-    await this.runHeuristics("netchange");
+    this.runHeuristicsThrottled("netchange");
   },
 
-  async onConnectivityAvailable() {
+  onConnectivityAvailable() {
     if (this._debounceTimer) {
       // Already debouncing - nothing to do.
       return;
     }
 
-    await this.runHeuristics("connectivity");
+    this.runHeuristicsThrottled("connectivity");
   },
 };

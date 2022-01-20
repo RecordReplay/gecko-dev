@@ -23,8 +23,8 @@ class HttpConnectionMgrChild final : public PHttpConnectionMgrChild {
 
   mozilla::ipc::IPCResult RecvDoShiftReloadConnectionCleanupWithConnInfo(
       const HttpConnectionInfoCloneArgs& aArgs);
-  mozilla::ipc::IPCResult RecvUpdateCurrentTopLevelOuterContentWindowId(
-      const uint64_t& aWindowId);
+  mozilla::ipc::IPCResult RecvUpdateCurrentTopBrowsingContextId(
+      const uint64_t& aId);
   mozilla::ipc::IPCResult RecvAddTransaction(PHttpTransactionChild* aTrans,
                                              const int32_t& aPriority);
   mozilla::ipc::IPCResult RecvAddTransactionWithStickyConn(
@@ -37,7 +37,7 @@ class HttpConnectionMgrChild final : public PHttpConnectionMgrChild {
   mozilla::ipc::IPCResult RecvCancelTransaction(PHttpTransactionChild* aTrans,
                                                 const nsresult& aReason);
   mozilla::ipc::IPCResult RecvSpeculativeConnect(
-      HttpConnectionInfoCloneArgs aConnInfo,
+      const HttpConnectionInfoCloneArgs& aConnInfo,
       Maybe<SpeculativeConnectionOverriderArgs> aOverriderArgs, uint32_t aCaps,
       Maybe<PAltSvcTransactionChild*> aTrans, const bool& aFetchHTTPSRR);
 

@@ -101,7 +101,7 @@ async function testPolicy(manifest_version = 2, customCSP = null) {
   function background() {
     browser.test.sendMessage(
       "base-url",
-      browser.extension.getURL("").replace(/\/$/, "")
+      browser.runtime.getURL("").replace(/\/$/, "")
     );
 
     browser.test.sendMessage("background-csp", window.getCSP());
@@ -130,6 +130,18 @@ async function testPolicy(manifest_version = 2, customCSP = null) {
     };
   }
 
+  let web_accessible_resources = ["content.html", "tab.html"];
+  if (manifest_version == 3) {
+    let extension_pages = content_security_policy;
+    content_security_policy = {
+      extension_pages,
+    };
+    let resources = web_accessible_resources;
+    web_accessible_resources = [
+      { resources, matches: ["http://example.com/*"] },
+    ];
+  }
+
   let extension = ExtensionTestUtils.loadExtension({
     background,
 
@@ -146,8 +158,7 @@ async function testPolicy(manifest_version = 2, customCSP = null) {
     manifest: {
       manifest_version,
       content_security_policy,
-
-      web_accessible_resources: ["content.html", "tab.html"],
+      web_accessible_resources,
     },
   });
 
@@ -169,7 +180,7 @@ async function testPolicy(manifest_version = 2, customCSP = null) {
   let frameScriptURL = `data:,(${encodeURI(frameScript)}).call(this)`;
   Services.mm.loadFrameScript(frameScriptURL, true, true);
 
-  info(`Testing CSP for policy: ${content_security_policy}`);
+  info(`Testing CSP for policy: ${JSON.stringify(content_security_policy)}`);
 
   await extension.startup();
 

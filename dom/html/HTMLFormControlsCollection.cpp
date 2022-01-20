@@ -27,46 +27,44 @@ bool HTMLFormControlsCollection::ShouldBeInElements(
   // form.
 
   switch (aFormControl->ControlType()) {
-    case NS_FORM_BUTTON_BUTTON:
-    case NS_FORM_BUTTON_RESET:
-    case NS_FORM_BUTTON_SUBMIT:
-    case NS_FORM_INPUT_BUTTON:
-    case NS_FORM_INPUT_CHECKBOX:
-    case NS_FORM_INPUT_COLOR:
-    case NS_FORM_INPUT_EMAIL:
-    case NS_FORM_INPUT_FILE:
-    case NS_FORM_INPUT_HIDDEN:
-    case NS_FORM_INPUT_RESET:
-    case NS_FORM_INPUT_PASSWORD:
-    case NS_FORM_INPUT_RADIO:
-    case NS_FORM_INPUT_SEARCH:
-    case NS_FORM_INPUT_SUBMIT:
-    case NS_FORM_INPUT_TEXT:
-    case NS_FORM_INPUT_TEL:
-    case NS_FORM_INPUT_URL:
-    case NS_FORM_INPUT_NUMBER:
-    case NS_FORM_INPUT_RANGE:
-    case NS_FORM_INPUT_DATE:
-    case NS_FORM_INPUT_TIME:
-    case NS_FORM_INPUT_MONTH:
-    case NS_FORM_INPUT_WEEK:
-    case NS_FORM_INPUT_DATETIME_LOCAL:
-    case NS_FORM_SELECT:
-    case NS_FORM_TEXTAREA:
-    case NS_FORM_FIELDSET:
-    case NS_FORM_OBJECT:
-    case NS_FORM_OUTPUT:
+    case FormControlType::ButtonButton:
+    case FormControlType::ButtonReset:
+    case FormControlType::ButtonSubmit:
+    case FormControlType::InputButton:
+    case FormControlType::InputCheckbox:
+    case FormControlType::InputColor:
+    case FormControlType::InputEmail:
+    case FormControlType::InputFile:
+    case FormControlType::InputHidden:
+    case FormControlType::InputReset:
+    case FormControlType::InputPassword:
+    case FormControlType::InputRadio:
+    case FormControlType::InputSearch:
+    case FormControlType::InputSubmit:
+    case FormControlType::InputText:
+    case FormControlType::InputTel:
+    case FormControlType::InputUrl:
+    case FormControlType::InputNumber:
+    case FormControlType::InputRange:
+    case FormControlType::InputDate:
+    case FormControlType::InputTime:
+    case FormControlType::InputMonth:
+    case FormControlType::InputWeek:
+    case FormControlType::InputDatetimeLocal:
+    case FormControlType::Select:
+    case FormControlType::Textarea:
+    case FormControlType::Fieldset:
+    case FormControlType::Object:
+    case FormControlType::Output:
       return true;
+
+    // These form control types are not supposed to end up in the
+    // form.elements array
+    // XXXbz maybe we should just return aType != InputImage or something
+    // instead of the big switch?
+    case FormControlType::InputImage:
+      break;
   }
-
-  // These form control types are not supposed to end up in the
-  // form.elements array
-  //
-  // NS_FORM_INPUT_IMAGE
-  //
-  // XXXbz maybe we should just check for that type here instead of the big
-  // switch?
-
   return false;
 }
 
@@ -103,15 +101,6 @@ void HTMLFormControlsCollection::Clear() {
   mNameLookupTable.Clear();
 }
 
-void HTMLFormControlsCollection::FlushPendingNotifications() {
-  if (mForm) {
-    Document* doc = mForm->GetUncomposedDoc();
-    if (doc) {
-      doc->FlushPendingNotifications(FlushType::Content);
-    }
-  }
-}
-
 NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLFormControlsCollection)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(HTMLFormControlsCollection)
@@ -140,17 +129,10 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(HTMLFormControlsCollection)
 
 // nsIHTMLCollection interface
 
-uint32_t HTMLFormControlsCollection::Length() {
-  FlushPendingNotifications();
-  return mElements.Length();
-}
+uint32_t HTMLFormControlsCollection::Length() { return mElements.Length(); }
 
 nsISupports* HTMLFormControlsCollection::NamedItemInternal(
-    const nsAString& aName, bool aFlushContent) {
-  if (aFlushContent) {
-    FlushPendingNotifications();
-  }
-
+    const nsAString& aName) {
   return mNameLookupTable.GetWeak(aName);
 }
 
@@ -255,8 +237,6 @@ nsresult HTMLFormControlsCollection::GetSortedControls(
 }
 
 Element* HTMLFormControlsCollection::GetElementAt(uint32_t aIndex) {
-  FlushPendingNotifications();
-
   return mElements.SafeElementAt(aIndex, nullptr);
 }
 
@@ -287,7 +267,7 @@ Element* HTMLFormControlsCollection::GetFirstNamedElement(
 void HTMLFormControlsCollection::NamedGetter(
     const nsAString& aName, bool& aFound,
     Nullable<OwningRadioNodeListOrElement>& aResult) {
-  nsISupports* item = NamedItemInternal(aName, true);
+  nsISupports* item = NamedItemInternal(aName);
   if (!item) {
     aFound = false;
     return;
@@ -305,13 +285,10 @@ void HTMLFormControlsCollection::NamedGetter(
 }
 
 void HTMLFormControlsCollection::GetSupportedNames(nsTArray<nsString>& aNames) {
-  FlushPendingNotifications();
   // Just enumerate mNameLookupTable.  This won't guarantee order, but
   // that's OK, because the HTML5 spec doesn't define an order for
   // this enumeration.
-  for (auto iter = mNameLookupTable.Iter(); !iter.Done(); iter.Next()) {
-    aNames.AppendElement(iter.Key());
-  }
+  AppendToArray(aNames, mNameLookupTable.Keys());
 }
 
 /* virtual */

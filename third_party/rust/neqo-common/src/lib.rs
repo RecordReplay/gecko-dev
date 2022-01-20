@@ -10,6 +10,8 @@
 mod codec;
 mod datagram;
 pub mod event;
+pub mod header;
+pub mod hrtime;
 mod incrdecoder;
 pub mod log;
 pub mod qlog;
@@ -17,6 +19,7 @@ pub mod timer;
 
 pub use self::codec::{Decoder, Encoder};
 pub use self::datagram::Datagram;
+pub use self::header::Header;
 pub use self::incrdecoder::{
     IncrementalDecoderBuffer, IncrementalDecoderIgnore, IncrementalDecoderUint,
 };

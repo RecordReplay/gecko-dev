@@ -105,8 +105,9 @@ typedef struct SFTKSessionContextStr SFTKSessionContext;
 typedef struct SFTKSearchResultsStr SFTKSearchResults;
 typedef struct SFTKHashVerifyInfoStr SFTKHashVerifyInfo;
 typedef struct SFTKHashSignInfoStr SFTKHashSignInfo;
-typedef struct SFTKOAEPEncryptInfoStr SFTKOAEPEncryptInfo;
-typedef struct SFTKOAEPDecryptInfoStr SFTKOAEPDecryptInfo;
+typedef struct SFTKOAEPInfoStr SFTKOAEPInfo;
+typedef struct SFTKPSSSignInfoStr SFTKPSSSignInfo;
+typedef struct SFTKPSSVerifyInfoStr SFTKPSSVerifyInfo;
 typedef struct SFTKSSLMACInfoStr SFTKSSLMACInfo;
 typedef struct SFTKChaCha20Poly1305InfoStr SFTKChaCha20Poly1305Info;
 typedef struct SFTKChaCha20CtrInfoStr SFTKChaCha20CtrInfo;
@@ -190,6 +191,7 @@ struct SFTKObjectStr {
     SFTKSlot *slot;
     void *objectInfo;
     SFTKFree infoFree;
+    PRBool isFIPS;
 };
 
 struct SFTKTokenObjectStr {
@@ -265,6 +267,7 @@ struct SFTKSessionContextStr {
     PRBool rsa;                 /* is rsa */
     PRBool doPad;               /* use PKCS padding for block ciphers */
     PRBool isXCBC;              /* xcbc, use special handling in final */
+    PRBool isFIPS;              /* current operation is in FIPS mode */
     unsigned int blockSize;     /* blocksize for padding */
     unsigned int padDataLength; /* length of the valid data in padbuf */
     /** latest incomplete block of data for block cipher */
@@ -306,6 +309,7 @@ struct SFTKSessionStr {
     SFTKSessionContext *enc_context;
     SFTKSessionContext *hash_context;
     SFTKSessionContext *sign_context;
+    PRBool lastOpWasFIPS;
     SFTKObjectList *objects[1];
 };
 
@@ -388,21 +392,33 @@ struct SFTKHashSignInfoStr {
     NSSLOWKEYPrivateKey *key;
 };
 
-/**
- * Contexts for RSA-OAEP
- */
-struct SFTKOAEPEncryptInfoStr {
-    CK_RSA_PKCS_OAEP_PARAMS *params;
+struct SFTKPSSVerifyInfoStr {
+    size_t size; /* must be first */
+    CK_RSA_PKCS_PSS_PARAMS params;
     NSSLOWKEYPublicKey *key;
 };
 
-struct SFTKOAEPDecryptInfoStr {
-    CK_RSA_PKCS_OAEP_PARAMS *params;
+struct SFTKPSSSignInfoStr {
+    size_t size; /* must be first */
+    CK_RSA_PKCS_PSS_PARAMS params;
     NSSLOWKEYPrivateKey *key;
+};
+
+/**
+ * Contexts for RSA-OAEP
+ */
+struct SFTKOAEPInfoStr {
+    CK_RSA_PKCS_OAEP_PARAMS params;
+    PRBool isEncrypt;
+    union {
+        NSSLOWKEYPublicKey *pub;
+        NSSLOWKEYPrivateKey *priv;
+    } key;
 };
 
 /* context for the Final SSLMAC message */
 struct SFTKSSLMACInfoStr {
+    size_t size; /* must be first */
     void *hashContext;
     SFTKBegin begin;
     SFTKHash update;
@@ -481,6 +497,8 @@ struct SFTKItemTemplateStr {
 /* slot helper macros */
 #define sftk_SlotFromSession(sp) ((sp)->slot)
 #define sftk_isToken(id) (((id)&SFTK_TOKEN_MASK) == SFTK_TOKEN_MAGIC)
+#define sftk_isFIPS(id) \
+    (((id) == FIPS_SLOT_ID) || ((id) >= SFTK_MIN_FIPS_USER_SLOT_ID))
 
 /* the session hash multiplier (see bug 201081) */
 #define SHMULTIPLIER 1791398085
@@ -674,6 +692,7 @@ struct sftk_MACCtxStr {
 typedef struct sftk_MACCtxStr sftk_MACCtx;
 
 extern CK_NSS_MODULE_FUNCTIONS sftk_module_funcList;
+extern CK_NSS_FIPS_FUNCTIONS sftk_fips_funcList;
 
 SEC_BEGIN_PROTOS
 
@@ -780,6 +799,7 @@ extern void sftk_CleanupFreeLists(void);
  * Helper functions to handle the session crypto contexts
  */
 extern CK_RV sftk_InitGeneric(SFTKSession *session,
+                              CK_MECHANISM *pMechanism,
                               SFTKSessionContext **contextPtr,
                               SFTKContextType ctype, SFTKObject **keyPtr,
                               CK_OBJECT_HANDLE hKey, CK_KEY_TYPE *keyTypePtr,
@@ -929,7 +949,12 @@ char **NSC_ModuleDBFunc(unsigned long function, char *parameters, void *args);
 const SECItem *sftk_VerifyDH_Prime(SECItem *dhPrime);
 /* check if dhSubPrime claims dhPrime is a safe prime. */
 SECStatus sftk_IsSafePrime(SECItem *dhPrime, SECItem *dhSubPrime, PRBool *isSafe);
-
+/* map an operation Attribute to a Mechanism flag */
+CK_FLAGS sftk_AttributeToFlags(CK_ATTRIBUTE_TYPE op);
+/* check the FIPS table to determine if this current operation is allowed by
+ * FIPS security policy */
+PRBool sftk_operationIsFIPS(SFTKSlot *slot, CK_MECHANISM *mech,
+                            CK_ATTRIBUTE_TYPE op, SFTKObject *source);
 SEC_END_PROTOS
 
 #endif /* _PKCS11I_H_ */

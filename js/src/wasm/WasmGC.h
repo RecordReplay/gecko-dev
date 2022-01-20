@@ -36,9 +36,9 @@ namespace wasm {
 
 using namespace js::jit;
 
-// Definitions for stack maps.
+// Definitions for stackmaps.
 
-typedef Vector<bool, 32, SystemAllocPolicy> ExitStubMapVector;
+using ExitStubMapVector = Vector<bool, 32, SystemAllocPolicy>;
 
 struct StackMap final {
   // A StackMap is a bit-array containing numMappedWords bits, one bit per
@@ -56,10 +56,11 @@ struct StackMap final {
   // as to limit its range to 11 bits, where
   // 11 == ceil(log2(MaxParams * sizeof-biggest-param-type-in-words))
   //
-  // The map may also cover a ref-typed DebugFrame.  If so that can be noted,
-  // since users of the map need to trace pointers in such a DebugFrame.
+  // The stackmap may also cover a DebugFrame (all DebugFrames get a map).  If
+  // so that can be noted, since users of the map need to trace pointers in a
+  // DebugFrame.
   //
-  // Finally, for sanity checking only, for stack maps associated with a wasm
+  // Finally, for sanity checking only, for stackmaps associated with a wasm
   // trap exit stub, the number of words used by the trap exit stub save area
   // is also noted.  This is used in Instance::traceFrame to check that the
   // TrapExitDummyValue is in the expected place in the frame.
@@ -73,7 +74,10 @@ struct StackMap final {
   // Where is Frame* relative to the top?  This is an offset in words.
   uint32_t frameOffsetFromTop : 11;
 
-  // Notes the presence of a DebugFrame which may contain GC-managed data.
+  // Notes the presence of a DebugFrame.  The DebugFrame may or may not contain
+  // GC-managed data but always gets a stackmap, as computing whether a stack
+  // map is definitively needed is brittle and ultimately not a worthwhile
+  // optimization.
   uint32_t hasDebugFrame : 1;
 
  private:
@@ -184,9 +188,9 @@ class StackMaps {
  public:
   StackMaps() : sorted_(false) {}
   ~StackMaps() {
-    for (size_t i = 0; i < mapping_.length(); i++) {
-      mapping_[i].map->destroy();
-      mapping_[i].map = nullptr;
+    for (auto& maplet : mapping_) {
+      maplet.map->destroy();
+      maplet.map = nullptr;
     }
   }
   [[nodiscard]] bool add(uint8_t* nextInsnAddr, StackMap* map) {
@@ -197,9 +201,9 @@ class StackMaps {
     return add(maplet.nextInsnAddr, maplet.map);
   }
   void clear() {
-    for (size_t i = 0; i < mapping_.length(); i++) {
-      mapping_[i].nextInsnAddr = nullptr;
-      mapping_[i].map = nullptr;
+    for (auto& maplet : mapping_) {
+      maplet.nextInsnAddr = nullptr;
+      maplet.map = nullptr;
     }
     mapping_.clear();
   }
@@ -213,7 +217,7 @@ class StackMaps {
     return m;
   }
   void offsetBy(uintptr_t delta) {
-    for (size_t i = 0; i < mapping_.length(); i++) mapping_[i].offsetBy(delta);
+    for (auto& maplet : mapping_) maplet.offsetBy(delta);
   }
   void sort() {
     MOZ_ASSERT(!sorted_);
@@ -231,7 +235,7 @@ class StackMaps {
         }
         return 0;
       }
-      explicit Comparator(uint8_t* aTarget) : mTarget(aTarget) {}
+      explicit Comparator(const uint8_t* aTarget) : mTarget(aTarget) {}
       const uint8_t* mTarget;
     };
 
@@ -307,7 +311,7 @@ static inline size_t StackArgAreaSizeAligned(const T& argTypes) {
 // A stackmap creation helper.  Create a stackmap from a vector of booleans.
 // The caller owns the resulting stackmap.
 
-typedef Vector<bool, 128, SystemAllocPolicy> StackMapBoolVector;
+using StackMapBoolVector = Vector<bool, 128, SystemAllocPolicy>;
 
 wasm::StackMap* ConvertStackMapBoolVectorToStackMap(
     const StackMapBoolVector& vec, bool hasRefs);
@@ -399,6 +403,12 @@ void EmitWasmPostBarrierGuard(MacroAssembler& masm,
                               const Maybe<Register>& object,
                               Register otherScratch, Register setValue,
                               Label* skipBarrier);
+
+#ifdef DEBUG
+// Check whether |nextPC| is a valid code address for a stackmap created by
+// this compiler.
+bool IsValidStackMapKey(bool debugEnabled, const uint8_t* nextPC);
+#endif
 
 }  // namespace wasm
 }  // namespace js

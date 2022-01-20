@@ -30,7 +30,47 @@ class nsReflowStatus;
 
 namespace mozilla {
 enum class LayoutFrameType : uint8_t;
-}
+
+/**
+ * A set of StyleSizes used as an input parameter to various functions that
+ * compute sizes like nsIFrame::ComputeSize(). If any of the member fields has a
+ * value, the function may use the value instead of retrieving it from the
+ * frame's style.
+ *
+ * The logical sizes are assumed to be in the associated frame's writing-mode.
+ */
+struct StyleSizeOverrides {
+  Maybe<StyleSize> mStyleISize;
+  Maybe<StyleSize> mStyleBSize;
+  Maybe<AspectRatio> mAspectRatio;
+
+  bool HasAnyOverrides() const { return mStyleISize || mStyleBSize; }
+  bool HasAnyLengthOverrides() const {
+    return (mStyleISize && mStyleISize->ConvertsToLength()) ||
+           (mStyleBSize && mStyleBSize->ConvertsToLength());
+  }
+
+  // By default, table wrapper frame considers the size overrides applied to
+  // itself, so it creates any length size overrides for inner table frame by
+  // subtracting the area occupied by the caption and border & padding according
+  // to box-sizing.
+  //
+  // When this flag is true, table wrapper frame is required to apply the size
+  // overrides to the inner table frame directly, without any modification,
+  // which is useful for flex container to override the inner table frame's
+  // preferred main size with 'flex-basis'.
+  //
+  // Note: if mStyleISize is a LengthPercentage, the inner table frame will
+  // comply with the inline-size override without enforcing its min-content
+  // inline-size in nsTableFrame::ComputeSize(). This is necessary so that small
+  // flex-basis values like 'flex-basis:1%' can be resolved correctly; the
+  // flexbox layout algorithm does still explicitly clamp to min-sizes *at a
+  // later step*, after the flex-basis has been resolved -- so this flag won't
+  // actually produce any user-visible tables whose final inline size is smaller
+  // than their min-content inline size.
+  bool mApplyOverridesVerbatim = false;
+};
+}  // namespace mozilla
 
 /**
  * @return aValue clamped to [aMinValue, aMaxValue].
@@ -82,6 +122,10 @@ struct SizeComputationInput {
       mozilla::WritingMode aWM) const {
     return mComputedPadding.ConvertTo(aWM, mWritingMode);
   }
+  mozilla::LogicalMargin ComputedLogicalBorder(mozilla::WritingMode aWM) const {
+    return (mComputedBorderPadding - mComputedPadding)
+        .ConvertTo(aWM, mWritingMode);
+  }
 
   void SetComputedLogicalMargin(mozilla::WritingMode aWM,
                                 const mozilla::LogicalMargin& aMargin) {
@@ -117,7 +161,11 @@ struct SizeComputationInput {
 
   SizeComputationInput(nsIFrame* aFrame, gfxContext* aRenderingContext,
                        mozilla::WritingMode aContainingBlockWritingMode,
-                       nscoord aContainingBlockISize);
+                       nscoord aContainingBlockISize,
+                       const mozilla::Maybe<mozilla::LogicalMargin>& aBorder =
+                           mozilla::Nothing(),
+                       const mozilla::Maybe<mozilla::LogicalMargin>& aPadding =
+                           mozilla::Nothing());
 
 #ifdef DEBUG
   // Reflow trace methods.  Defined in nsFrame.cpp so they have access
@@ -144,7 +192,8 @@ struct SizeComputationInput {
    *    for resolving percentage margin values in the inline and block axes.
    * @return true if the margin is dependent on the containing block size.
    */
-  bool ComputeMargin(mozilla::WritingMode aCBWM, nscoord aPercentBasis);
+  bool ComputeMargin(mozilla::WritingMode aCBWM, nscoord aPercentBasis,
+                     mozilla::LayoutFrameType aFrameType);
 
   /**
    * Computes padding values from the specified padding style information, and
@@ -362,8 +411,6 @@ struct ReflowInput : public SizeComputationInput {
   const nsStylePadding* mStylePadding = nullptr;
   const nsStyleText* mStyleText = nullptr;
 
-  bool IsFloating() const;
-
   // a frame (e.g. nsTableCellFrame) which may need to generate a special
   // reflow for percent bsize calculations
   nsIPercentBSizeObserver* mPercentBSizeObserver = nullptr;
@@ -439,10 +486,6 @@ struct ReflowInput : public SizeComputationInput {
     // overflow columns.
     bool mColumnSetWrapperHasNoBSizeLeft : 1;
 
-    // nsFlexContainerFrame is reflowing this child to measure its intrinsic
-    // BSize.
-    bool mIsFlexContainerMeasuringBSize : 1;
-
     // If this flag is set, the BSize of this frame should be considered
     // indefinite for the purposes of percent resolution on child frames (we
     // should behave as if ComputedBSize() were NS_UNCONSTRAINEDSIZE when doing
@@ -512,6 +555,9 @@ struct ReflowInput : public SizeComputationInput {
     bool mIsBSizeSetByAspectRatio : 1;
   };
   Flags mFlags;
+
+  mozilla::StyleSizeOverrides mStyleSizeOverrides;
+
   mozilla::ComputeSizeFlags mComputeSizeFlags;
 
   // This value keeps track of how deeply nested a given reflow input
@@ -612,6 +658,8 @@ struct ReflowInput : public SizeComputationInput {
    *        Init() instead.
    * @param aFlags A set of flags used for additional boolean parameters (see
    *        InitFlags above).
+   * @param aStyleSizeOverrides The style data used to override mFrame's when we
+   *        call nsIFrame::ComputeSize() internally.
    * @param aComputeSizeFlags A set of flags used when we call
    *        nsIFrame::ComputeSize() internally.
    */
@@ -621,6 +669,7 @@ struct ReflowInput : public SizeComputationInput {
               const mozilla::Maybe<mozilla::LogicalSize>& aContainingBlockSize =
                   mozilla::Nothing(),
               InitFlags aFlags = {},
+              const mozilla::StyleSizeOverrides& aSizeOverrides = {},
               mozilla::ComputeSizeFlags aComputeSizeFlags = {});
 
   /**
@@ -642,13 +691,6 @@ struct ReflowInput : public SizeComputationInput {
                 mozilla::Nothing(),
             const mozilla::Maybe<mozilla::LogicalMargin>& aPadding =
                 mozilla::Nothing());
-
-  /**
-   * Find the content isize of our containing block for the given writing mode,
-   * which need not be the same as the reflow input's mode.
-   */
-  nscoord GetContainingBlockContentISize(
-      mozilla::WritingMode aWritingMode) const;
 
   /**
    * Calculate the used line-height property. The return value will be >= 0.
@@ -815,6 +857,26 @@ struct ReflowInput : public SizeComputationInput {
                              aContainerSize);
   }
 
+  // Resolve any block-axis 'auto' margins (if any) for an absolutely positioned
+  // frame. aMargin and aOffsets are both outparams (though we only touch
+  // aOffsets if the position is overconstrained)
+  static void ComputeAbsPosBlockAutoMargin(nscoord aAvailMarginSpace,
+                                           WritingMode aContainingBlockWM,
+                                           bool aIsMarginBStartAuto,
+                                           bool aIsMarginBEndAuto,
+                                           LogicalMargin& aMargin,
+                                           LogicalMargin& aOffsets);
+
+  // Resolve any inline-axis 'auto' margins (if any) for an absolutely
+  // positioned frame. aMargin and aOffsets are both outparams (though we only
+  // touch aOffsets if the position is overconstrained)
+  static void ComputeAbsPosInlineAutoMargin(nscoord aAvailMarginSpace,
+                                            WritingMode aContainingBlockWM,
+                                            bool aIsMarginIStartAuto,
+                                            bool aIsMarginIEndAuto,
+                                            LogicalMargin& aMargin,
+                                            LogicalMargin& aOffsets);
+
 #ifdef DEBUG
   // Reflow trace methods.  Defined in nsFrame.cpp so they have access
   // to the display-reflow infrastructure.
@@ -873,8 +935,7 @@ struct ReflowInput : public SizeComputationInput {
   // This calculates the size by using the resolved auto block size (from
   // non-auto block insets), according to the writing mode of current block.
   LogicalSize CalculateAbsoluteSizeWithResolvedAutoBlockSize(
-      nscoord aAutoBSize, bool aNeedsComputeInlineSizeByAspectRatio,
-      const LogicalSize& aTentativeComputedSize);
+      nscoord aAutoBSize, const LogicalSize& aTentativeComputedSize);
 
   void InitAbsoluteConstraints(nsPresContext* aPresContext,
                                const ReflowInput* aCBReflowInput,
@@ -894,7 +955,7 @@ struct ReflowInput : public SizeComputationInput {
                                     nscoord* aInsideBoxSizing,
                                     nscoord* aOutsideBoxSizing) const;
 
-  void CalculateBlockSideMargins(LayoutFrameType aFrameType);
+  void CalculateBlockSideMargins();
 
   /**
    * @return true if mFrame is an internal table frame, i.e. an

@@ -64,6 +64,8 @@ static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 #define kNanosecondsPerSecond 1000000000.0
 
 #if defined(XP_WIN)
+#  include "mozilla/PreXULSkeletonUI.h"
+
 #  include "mozilla/perfprobe.h"
 /**
  * Events sent to the system for profiling purposes
@@ -441,11 +443,10 @@ nsAppStartup::Quit(uint32_t aMode, int aExitCode, bool* aUserAllowedQuit) {
 
     // No chance of the shutdown being cancelled from here on; tell people
     // we're shutting down for sure while all services are still available.
-    if (obsService) {
-      bool isRestarting = mozilla::AppShutdown::IsRestarting();
-      obsService->NotifyObservers(nullptr, "quit-application",
-                                  isRestarting ? u"restart" : u"shutdown");
-    }
+    bool isRestarting = mozilla::AppShutdown::IsRestarting();
+    mozilla::AppShutdown::AdvanceShutdownPhase(
+        mozilla::ShutdownPhase::AppShutdownConfirmed,
+        isRestarting ? u"restart" : u"shutdown");
 
     if (!mRunning) {
       postedExitEvent = true;
@@ -469,6 +470,53 @@ nsAppStartup::Quit(uint32_t aMode, int aExitCode, bool* aUserAllowedQuit) {
     mShuttingDown = false;
   }
   return rv;
+}
+
+// Ensure ShutdownPhase.h and nsIAppStartup.idl are in sync.
+static_assert(int(nsIAppStartup::SHUTDOWN_PHASE_NOTINSHUTDOWN) ==
+                      int(mozilla::ShutdownPhase::NotInShutdown) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_APPSHUTDOWNCONFIRMED) ==
+                      int(mozilla::ShutdownPhase::AppShutdownConfirmed) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_APPSHUTDOWNNETTEARDOWN) ==
+                      int(mozilla::ShutdownPhase::AppShutdownNetTeardown) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_APPSHUTDOWNTEARDOWN) ==
+                      int(mozilla::ShutdownPhase::AppShutdownTeardown) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_APPSHUTDOWN) ==
+                      int(mozilla::ShutdownPhase::AppShutdown) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_APPSHUTDOWNQM) ==
+                      int(mozilla::ShutdownPhase::AppShutdownQM) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_APPSHUTDOWNRELEMETRY) ==
+                      int(mozilla::ShutdownPhase::AppShutdownTelemetry) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_XPCOMWILLSHUTDOWN) ==
+                      int(mozilla::ShutdownPhase::XPCOMWillShutdown) &&
+                  int(nsIAppStartup::SHUTDOWN_PHASE_XPCOMSHUTDOWN) ==
+                      int(mozilla::ShutdownPhase::XPCOMShutdown),
+              "IDLShutdownPhase values are as expected");
+
+// Helper for safe conversion to native shutdown phases.
+Result<ShutdownPhase, nsresult> IDLShutdownPhaseToNative(
+    nsAppStartup::IDLShutdownPhase aPhase) {
+  if (uint8_t(aPhase) <= nsIAppStartup::SHUTDOWN_PHASE_XPCOMSHUTDOWN) {
+    return ShutdownPhase(aPhase);
+  }
+  return Err(NS_ERROR_ILLEGAL_VALUE);
+}
+
+NS_IMETHODIMP
+nsAppStartup::AdvanceShutdownPhase(IDLShutdownPhase aPhase) {
+  ShutdownPhase nativePhase;
+  MOZ_TRY_VAR(nativePhase, IDLShutdownPhaseToNative(aPhase));
+  AppShutdown::AdvanceShutdownPhase(nativePhase);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsAppStartup::IsInOrBeyondShutdownPhase(IDLShutdownPhase aPhase,
+                                        bool* aIsInOrBeyond) {
+  ShutdownPhase nativePhase;
+  MOZ_TRY_VAR(nativePhase, IDLShutdownPhaseToNative(aPhase));
+  *aIsInOrBeyond = AppShutdown::IsInOrBeyond(nativePhase);
+  return NS_OK;
 }
 
 void nsAppStartup::CloseAllWindows() {
@@ -578,6 +626,16 @@ nsAppStartup::GetSecondsSinceLastOSRestart(int64_t* aResult) {
 #else
   return NS_ERROR_NOT_IMPLEMENTED;
 #endif
+}
+
+NS_IMETHODIMP
+nsAppStartup::GetShowedPreXULSkeletonUI(bool* aResult) {
+#if defined(XP_WIN)
+  *aResult = GetPreXULSkeletonUIWasShown();
+#else
+  *aResult = false;
+#endif
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1006,8 +1064,8 @@ nsAppStartup::CreateInstanceWithProfile(nsIToolkitProfile* aProfile) {
 
   NS_ConvertUTF8toUTF16 wideName(profileName);
 
-  const char16_t* args[] = {u"-no-remote", u"-P", wideName.get()};
-  rv = process->Runw(false, args, 3);
+  const char16_t* args[] = {u"-P", wideName.get()};
+  rv = process->Runw(false, args, 2);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }

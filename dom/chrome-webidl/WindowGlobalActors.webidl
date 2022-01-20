@@ -20,11 +20,28 @@ interface WindowContext {
 
   readonly attribute WindowContext topWindowContext;
 
+  // True if this WindowContext is currently frozen in the BFCache.
+  readonly attribute boolean isInBFCache;
+
   // True if this window has registered a "beforeunload" event handler.
   readonly attribute boolean hasBeforeUnload;
 
   // True if the principal of this window is for a local ip address.
   readonly attribute boolean isLocalIP;
+
+  // True if the corresponding document has `loading='lazy'` images;
+  // It won't become false if the image becomes non-lazy.
+  readonly attribute boolean hadLazyLoadImage;
+
+  /**
+   * Partially determines whether script execution is allowed in this
+   * BrowsingContext. Script execution will be permitted only if this
+   * attribute is true and script execution is allowed in the owner
+   * BrowsingContext.
+   *
+   * May only be set in the context's owning process.
+   */
+  [SetterThrows] attribute boolean allowJavascript;
 };
 
 // Keep this in sync with nsIContentViewer::PermitUnloadAction.
@@ -103,6 +120,7 @@ interface WindowGlobalParent : WindowContext {
    */
   [Throws]
   JSWindowActorParent getActor(UTF8String name);
+  JSWindowActorParent? getExistingActor(UTF8String name);
 
   /**
    * Renders a region of the frame into an image bitmap.
@@ -167,4 +185,5 @@ interface WindowGlobalChild {
    */
   [Throws]
   JSWindowActorChild getActor(UTF8String name);
+  JSWindowActorChild? getExistingActor(UTF8String name);
 };

@@ -286,14 +286,7 @@ nsresult nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
 
     case eMouseClick: {
       WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent();
-      if (mouseEvent->IsLeftClickEvent()
-#ifdef XP_MACOSX
-          // On Mac, ctrl-click will send a context menu event from the widget,
-          // so we don't want to dispatch widget command if it is redispatched
-          // from the mouse event with ctrl key is pressed.
-          && !mouseEvent->IsControl()
-#endif
-      ) {
+      if (mouseEvent->IsLeftClickEvent()) {
         MouseClicked(mouseEvent);
       }
       break;
@@ -512,7 +505,8 @@ nsResizerFrame::Direction nsResizerFrame::GetDirection() {
 void nsResizerFrame::MouseClicked(WidgetMouseEvent* aEvent) {
   // Execute the oncommand event handler.
   nsCOMPtr<nsIContent> content = mContent;
-  nsContentUtils::DispatchXULCommand(
-      content, false, nullptr, nullptr, aEvent->IsControl(), aEvent->IsAlt(),
-      aEvent->IsShift(), aEvent->IsMeta(), aEvent->mInputSource);
+  nsContentUtils::DispatchXULCommand(content, false, nullptr, nullptr,
+                                     aEvent->IsControl(), aEvent->IsAlt(),
+                                     aEvent->IsShift(), aEvent->IsMeta(),
+                                     aEvent->mInputSource, aEvent->mButton);
 }

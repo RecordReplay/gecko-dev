@@ -17,6 +17,7 @@
 #include "nsWeakReference.h"
 #include "nsIContentSniffer.h"
 #include "nsRefPtrHashtable.h"
+#include "nsTHashSet.h"
 #include "nsExpirationTracker.h"
 #include "ImageCacheKey.h"
 #include "imgRequest.h"
@@ -190,7 +191,7 @@ class imgLoader final : public imgILoader,
   typedef mozilla::image::ImageCacheKey ImageCacheKey;
   typedef nsRefPtrHashtable<nsGenericHashKey<ImageCacheKey>, imgCacheEntry>
       imgCacheTable;
-  typedef nsTHashtable<nsPtrHashKey<imgRequest>> imgSet;
+  typedef nsTHashSet<imgRequest*> imgSet;
   typedef mozilla::Mutex Mutex;
 
   NS_DECL_ISUPPORTS
@@ -240,6 +241,9 @@ class imgLoader final : public imgILoader,
   imgLoader();
   nsresult Init();
 
+  bool IsImageAvailable(nsIURI*, nsIPrincipal* aTriggeringPrincipal,
+                        mozilla::CORSMode, mozilla::dom::Document*);
+
   [[nodiscard]] nsresult LoadImage(
       nsIURI* aURI, nsIURI* aInitialDocumentURI, nsIReferrerInfo* aReferrerInfo,
       nsIPrincipal* aLoadingPrincipal, uint64_t aRequestContextID,
@@ -272,8 +276,7 @@ class imgLoader final : public imgILoader,
    * @param aAcceptedMimeTypes Which kinds of MIME types to treat as images.
    */
   static bool SupportImageWithMimeType(
-      const char* aMimeType,
-      AcceptedMimeTypes aAccept = AcceptedMimeTypes::IMAGES);
+      const nsACString&, AcceptedMimeTypes aAccept = AcceptedMimeTypes::IMAGES);
 
   static void GlobalInit();  // for use by the factory
   static void Shutdown();    // for use by the factory
@@ -326,6 +329,9 @@ class imgLoader final : public imgILoader,
 
   void VerifyCacheSizes();
 
+  nsresult RemoveEntriesInternal(nsIPrincipal* aPrincipal,
+                                 const nsACString* aBaseDomain);
+
   // The image loader maintains a hash table of all imgCacheEntries. However,
   // only some of them will be evicted from the cache: those who have no
   // imgRequestProxies watching their imgRequests.
@@ -340,10 +346,6 @@ class imgLoader final : public imgILoader,
   bool SetHasNoProxies(imgRequest* aRequest, imgCacheEntry* aEntry);
   bool SetHasProxies(imgRequest* aRequest);
 
-  // This method converts imgIRequest::CORS_* values to mozilla::CORSMode
-  // values.
-  static mozilla::CORSMode ConvertToCORSMode(uint32_t aImgCORS);
-
  private:  // methods
   static already_AddRefed<imgLoader> CreateImageLoader();
 
@@ -356,7 +358,7 @@ class imgLoader final : public imgILoader,
       mozilla::dom::Document* aLoadingDocument, nsLoadFlags aLoadFlags,
       nsContentPolicyType aLoadPolicyType, bool aCanMakeNewChannel,
       bool* aNewChannelCreated, imgRequestProxy** aProxyRequest,
-      nsIPrincipal* aTriggeringPrincipal, int32_t aCORSMode, bool aLinkPreload);
+      nsIPrincipal* aTriggeringPrincipal, mozilla::CORSMode, bool aLinkPreload);
 
   bool ValidateRequestWithNewChannel(
       imgRequest* request, nsIURI* aURI, nsIURI* aInitialDocumentURI,
@@ -365,7 +367,7 @@ class imgLoader final : public imgILoader,
       mozilla::dom::Document* aLoadingDocument, uint64_t aInnerWindowId,
       nsLoadFlags aLoadFlags, nsContentPolicyType aContentPolicyType,
       imgRequestProxy** aProxyRequest, nsIPrincipal* aLoadingPrincipal,
-      int32_t aCORSMode, bool aLinkPreload, bool* aNewChannelCreated);
+      mozilla::CORSMode, bool aLinkPreload, bool* aNewChannelCreated);
 
   // aURI may be different from imgRequest's URI in the case of blob URIs, as we
   // can share requests with different URIs.

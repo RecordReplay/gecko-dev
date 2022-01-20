@@ -6,8 +6,10 @@
 #ifndef mozilla_image_Image_h
 #define mozilla_image_Image_h
 
+#include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/SizeOfState.h"
 #include "mozilla/ThreadSafeWeakPtr.h"
 #include "mozilla/TimeStamp.h"
@@ -15,6 +17,7 @@
 #include "gfx2DGlue.h"
 #include "imgIContainer.h"
 #include "ImageContainer.h"
+#include "ImageRegion.h"
 #include "LookupResult.h"
 #include "nsStringFwd.h"
 #include "ProgressTracker.h"
@@ -82,14 +85,15 @@ struct MemoryCounter {
   uint32_t mSurfaceTypes;
 };
 
-enum class SurfaceMemoryCounterType { NORMAL, COMPOSITING, COMPOSITING_PREV };
+enum class SurfaceMemoryCounterType { NORMAL, CONTAINER };
 
 struct SurfaceMemoryCounter {
   SurfaceMemoryCounter(
-      const SurfaceKey& aKey, bool aIsLocked, bool aCannotSubstitute,
-      bool aIsFactor2, bool aFinished,
+      const SurfaceKey& aKey, const gfx::SourceSurface* aSurface,
+      bool aIsLocked, bool aCannotSubstitute, bool aIsFactor2, bool aFinished,
       SurfaceMemoryCounterType aType = SurfaceMemoryCounterType::NORMAL)
       : mKey(aKey),
+        mSurface(aSurface),
         mType(aType),
         mIsLocked(aIsLocked),
         mCannotSubstitute(aCannotSubstitute),
@@ -97,6 +101,7 @@ struct SurfaceMemoryCounter {
         mFinished(aFinished) {}
 
   const SurfaceKey& Key() const { return mKey; }
+  const gfx::SourceSurface* Surface() const { return mSurface; }
   MemoryCounter& Values() { return mValues; }
   const MemoryCounter& Values() const { return mValues; }
   SurfaceMemoryCounterType Type() const { return mType; }
@@ -107,6 +112,7 @@ struct SurfaceMemoryCounter {
 
  private:
   const SurfaceKey mKey;
+  const gfx::SourceSurface* MOZ_NON_OWNING_REF mSurface;
   MemoryCounter mValues;
   const SurfaceMemoryCounterType mType;
   const bool mIsLocked;
@@ -317,6 +323,14 @@ class ImageResource : public Image {
    */
   nsIURI* GetURI() const override { return mURI; }
 
+  /*
+   * Should be called by its subclasses after they populate @aCounters so that
+   * we can cross reference against any of our ImageContainers that contain
+   * surfaces not in the cache.
+   */
+  void CollectSizeOfSurfaces(nsTArray<SurfaceMemoryCounter>& aCounters,
+                             MallocSizeOf aMallocSizeOf) const override;
+
  protected:
   explicit ImageResource(nsIURI* aURI);
   ~ImageResource();
@@ -399,7 +413,8 @@ class ImageResource : public Image {
   virtual Tuple<ImgDrawResult, gfx::IntSize, RefPtr<gfx::SourceSurface>>
   GetFrameInternal(const gfx::IntSize& aSize,
                    const Maybe<SVGImageContext>& aSVGContext,
-                   uint32_t aWhichFrame, uint32_t aFlags) {
+                   const Maybe<ImageIntRegion>& aRegion, uint32_t aWhichFrame,
+                   uint32_t aFlags) {
     return MakeTuple(ImgDrawResult::BAD_IMAGE, aSize,
                      RefPtr<gfx::SourceSurface>());
   }
@@ -419,6 +434,7 @@ class ImageResource : public Image {
   ImgDrawResult GetImageContainerImpl(layers::LayerManager* aManager,
                                       const gfx::IntSize& aSize,
                                       const Maybe<SVGImageContext>& aSVGContext,
+                                      const Maybe<ImageIntRegion>& aRegion,
                                       uint32_t aFlags,
                                       layers::ImageContainer** aContainer);
 
@@ -431,6 +447,33 @@ class ImageResource : public Image {
 
   void ReleaseImageContainer();
 
+  class MOZ_RAII AutoProfilerImagePaintMarker {
+   public:
+    explicit AutoProfilerImagePaintMarker(ImageResource* self)
+        : mStartTime(TimeStamp::NowUnfuzzed()) {
+      nsAutoCString spec;
+      if (self->mURI && profiler_can_accept_markers()) {
+        static const size_t sMaxTruncatedLength = 1024;
+        self->mURI->GetSpec(mSpec);
+        if (mSpec.Length() >= sMaxTruncatedLength) {
+          mSpec.Truncate(sMaxTruncatedLength);
+        }
+      }
+    }
+
+    ~AutoProfilerImagePaintMarker() {
+      if (!mSpec.IsEmpty()) {
+        PROFILER_MARKER_TEXT("Image Paint", GRAPHICS,
+                             MarkerTiming::IntervalUntilNowFrom(mStartTime),
+                             mSpec);
+      }
+    }
+
+   protected:
+    TimeStamp mStartTime;
+    nsAutoCString mSpec;
+  };
+
  private:
   void SetCurrentImage(layers::ImageContainer* aContainer,
                        gfx::SourceSurface* aSurface,
@@ -439,15 +482,18 @@ class ImageResource : public Image {
   struct ImageContainerEntry {
     ImageContainerEntry(const gfx::IntSize& aSize,
                         const Maybe<SVGImageContext>& aSVGContext,
+                        const Maybe<ImageIntRegion>& aRegion,
                         layers::ImageContainer* aContainer, uint32_t aFlags)
         : mSize(aSize),
           mSVGContext(aSVGContext),
+          mRegion(aRegion),
           mContainer(aContainer),
           mLastDrawResult(ImgDrawResult::NOT_READY),
           mFlags(aFlags) {}
 
     gfx::IntSize mSize;
     Maybe<SVGImageContext> mSVGContext;
+    Maybe<ImageIntRegion> mRegion;
     // A weak pointer to our ImageContainer, which stays alive only as long as
     // the layer system needs it.
     ThreadSafeWeakPtr<layers::ImageContainer> mContainer;

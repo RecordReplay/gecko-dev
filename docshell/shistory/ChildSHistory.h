@@ -67,13 +67,14 @@ class ChildSHistory : public nsISupports, public nsWrapperCache {
    * backwards.
    */
   bool CanGo(int32_t aOffset);
-  void Go(int32_t aOffset, bool aRequireUserInteraction, ErrorResult& aRv);
+  void Go(int32_t aOffset, bool aRequireUserInteraction, bool aUserActivation,
+          ErrorResult& aRv);
   void AsyncGo(int32_t aOffset, bool aRequireUserInteraction,
-               CallerType aCallerType, ErrorResult& aRv);
+               bool aUserActivation, CallerType aCallerType, ErrorResult& aRv);
 
   // aIndex is the new index, and aOffset is the offset between new and current.
   void GotoIndex(int32_t aIndex, int32_t aOffset, bool aRequireUserInteraction,
-                 ErrorResult& aRv);
+                 bool aUserActivation, ErrorResult& aRv);
 
   void RemovePendingHistoryNavigations();
 
@@ -93,28 +94,27 @@ class ChildSHistory : public nsISupports, public nsWrapperCache {
   nsID AddPendingHistoryChange();
   nsID AddPendingHistoryChange(int32_t aIndexDelta, int32_t aLengthDelta);
 
-  // AsyncHistoryLength is for testing.
-  void SetAsyncHistoryLength(bool aEnable, ErrorResult& aRv);
-  bool AsyncHistoryLength() { return mAsyncHistoryLength; }
-
  private:
-  virtual ~ChildSHistory() = default;
+  virtual ~ChildSHistory();
 
   class PendingAsyncHistoryNavigation
       : public Runnable,
         public mozilla::LinkedListElement<PendingAsyncHistoryNavigation> {
    public:
     PendingAsyncHistoryNavigation(ChildSHistory* aHistory, int32_t aOffset,
-                                  bool aRequireUserInteraction)
+                                  bool aRequireUserInteraction,
+                                  bool aUserActivation)
         : Runnable("PendingAsyncHistoryNavigation"),
           mHistory(aHistory),
           mRequireUserInteraction(aRequireUserInteraction),
+          mUserActivation(aUserActivation),
           mOffset(aOffset) {}
 
     NS_IMETHOD Run() override {
       if (isInList()) {
         remove();
-        mHistory->Go(mOffset, mRequireUserInteraction, IgnoreErrors());
+        mHistory->Go(mOffset, mRequireUserInteraction, mUserActivation,
+                     IgnoreErrors());
       }
       return NS_OK;
     }
@@ -122,6 +122,7 @@ class ChildSHistory : public nsISupports, public nsWrapperCache {
    private:
     RefPtr<ChildSHistory> mHistory;
     bool mRequireUserInteraction;
+    bool mUserActivation;
     int32_t mOffset;
   };
 
@@ -138,8 +139,6 @@ class ChildSHistory : public nsISupports, public nsWrapperCache {
     int32_t mLengthDelta;
   };
   AutoTArray<PendingSHistoryChange, 2> mPendingSHistoryChanges;
-
-  bool mAsyncHistoryLength = false;
 
   // Needs to start 1 above default epoch in parent
   uint64_t mHistoryEpoch = 1;

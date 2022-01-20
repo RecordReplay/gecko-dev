@@ -8,7 +8,7 @@
 #import "mozSelectableElements.h"
 #import "MOXWebAreaAccessible.h"
 #import "MacUtils.h"
-#include "Accessible-inl.h"
+#include "LocalAccessible-inl.h"
 #include "nsCocoaUtils.h"
 
 using namespace mozilla::a11y;
@@ -75,7 +75,7 @@ using namespace mozilla::a11y;
     return;
   }
 
-  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
     acc->SetSelected([selected boolValue]);
   } else {
     mGeckoAccessible.AsProxy()->SetSelected([selected boolValue]);
@@ -204,7 +204,7 @@ using namespace mozilla::a11y;
       filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
                                                    mozAccessible* child,
                                                    NSDictionary* bindings) {
-        if (Accessible* acc = [child geckoAccessible].AsAccessible()) {
+        if (LocalAccessible* acc = [child geckoAccessible].AsAccessible()) {
           if (acc->IsContent() && acc->GetContent()->IsXULElement()) {
             return ((acc->VisibilityState() & states::INVISIBLE) == 0);
           }
@@ -290,7 +290,7 @@ using namespace mozilla::a11y;
 }
 
 - (NSString*)moxMenuItemMarkChar {
-  Accessible* acc = mGeckoAccessible.AsAccessible();
+  LocalAccessible* acc = mGeckoAccessible.AsAccessible();
   if (acc && acc->IsContent() &&
       acc->GetContent()->IsXULElement(nsGkAtoms::menuitem)) {
     // We need to provide a marker character. This is the visible "√" you see
@@ -299,9 +299,9 @@ using namespace mozilla::a11y;
     // We do this only with XUL menuitems that conform to the native theme, and
     // not with aria menu items that might have a pseudo element or something.
     if (acc->ChildCount() == 1 &&
-        acc->FirstChild()->Role() == roles::STATICTEXT) {
+        acc->LocalFirstChild()->Role() == roles::STATICTEXT) {
       nsAutoString marker;
-      acc->FirstChild()->Name(marker);
+      acc->LocalFirstChild()->Name(marker);
       if (marker.Length() == 1) {
         return nsCocoaUtils::ToNSString(marker);
       }
@@ -319,6 +319,7 @@ using namespace mozilla::a11y;
 - (void)handleAccessibleEvent:(uint32_t)eventType {
   switch (eventType) {
     case nsIAccessibleEvent::EVENT_FOCUS:
+      [self invalidateState];
       // Our focused state is equivelent to native selected states for menus.
       mozAccessible* parent = (mozAccessible*)[self moxUnignoredParent];
       [parent moxPostNotification:
@@ -327,6 +328,13 @@ using namespace mozilla::a11y;
   }
 
   [super handleAccessibleEvent:eventType];
+}
+
+- (void)moxPerformPress {
+  [super moxPerformPress];
+  // when a menu item is pressed (chosen), we need to tell
+  // VoiceOver about it, so we send this notification
+  [self moxPostNotification:@"AXMenuItemSelected"];
 }
 
 @end

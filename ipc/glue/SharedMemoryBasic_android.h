@@ -9,10 +9,10 @@
 
 #include "base/file_descriptor_posix.h"
 
-#include "SharedMemory.h"
+#include "mozilla/ipc/SharedMemory.h"
 
 #ifdef FUZZING
-#  include "SharedMemoryFuzzer.h"
+#  include "mozilla/ipc/SharedMemoryFuzzer.h"
 #endif
 
 //
@@ -33,6 +33,8 @@ class SharedMemoryBasic final
   virtual bool Create(size_t aNbytes) override;
 
   virtual bool Map(size_t nBytes, void* fixed_address = nullptr) override;
+
+  virtual void Unmap() override;
 
   virtual void CloseHandle() override;
 
@@ -59,8 +61,6 @@ class SharedMemoryBasic final
 
  private:
   ~SharedMemoryBasic();
-
-  void Unmap();
 
   // The /dev/ashmem fd we allocate.
   int mShmFd;

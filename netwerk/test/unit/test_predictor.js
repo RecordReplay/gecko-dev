@@ -40,11 +40,11 @@ ValidityChecker.prototype = {
 
   QueryInterface: ChromeUtils.generateQI(["nsICacheEntryOpenCallback"]),
 
-  onCacheEntryCheck(entry, appCache) {
+  onCacheEntryCheck(entry) {
     return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
   },
 
-  onCacheEntryAvailable(entry, isnew, appCache, status) {
+  onCacheEntryAvailable(entry, isnew, status) {
     // Check if forced valid
     Assert.equal(entry.isForcedValid, this.httpStatus === 200);
     this.verifier.maybe_run_next_test();
@@ -157,11 +157,11 @@ var prepListener = {
     this.continueCallback = cb;
   },
 
-  onCacheEntryCheck(entry, appCache) {
+  onCacheEntryCheck(entry) {
     return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
   },
 
-  onCacheEntryAvailable(entry, isNew, appCache, result) {
+  onCacheEntryAvailable(entry, isNew, result) {
     Assert.equal(result, Cr.NS_OK);
     entry.setMetaDataElement("predictor_test", "1");
     entry.metaDataReady();
@@ -173,10 +173,7 @@ var prepListener = {
 };
 
 function open_and_continue(uris, continueCallback) {
-  var ds = Services.cache2.diskCacheStorage(
-    Services.loadContextInfo.default,
-    false
-  );
+  var ds = Services.cache2.diskCacheStorage(Services.loadContextInfo.default);
 
   prepListener.init(uris.length, continueCallback);
   for (var i = 0; i < uris.length; ++i) {

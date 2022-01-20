@@ -65,7 +65,6 @@ nsresult nsAboutCache::Channel::Init(nsIURI* aURI, nsILoadInfo* aLoadInfo) {
     // ...and visit all we can
     mStorageList.AppendElement("memory"_ns);
     mStorageList.AppendElement("disk"_ns);
-    mStorageList.AppendElement("appcache"_ns);
   } else {
     // ...and visit just the specified storage, entries will output too
     mStorageList.AppendElement(storageName);
@@ -215,14 +214,10 @@ nsresult nsAboutCache::GetStorage(nsACString const& storageName,
 
   nsCOMPtr<nsICacheStorage> cacheStorage;
   if (storageName == "disk") {
-    rv = cacheService->DiskCacheStorage(loadInfo, false,
-                                        getter_AddRefs(cacheStorage));
+    rv = cacheService->DiskCacheStorage(loadInfo, getter_AddRefs(cacheStorage));
   } else if (storageName == "memory") {
     rv = cacheService->MemoryCacheStorage(loadInfo,
                                           getter_AddRefs(cacheStorage));
-  } else if (storageName == "appcache") {
-    rv = cacheService->AppCacheStorage(loadInfo, nullptr,
-                                       getter_AddRefs(cacheStorage));
   } else {
     rv = NS_ERROR_UNEXPECTED;
   }

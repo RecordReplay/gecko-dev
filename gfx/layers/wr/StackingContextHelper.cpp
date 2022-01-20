@@ -31,6 +31,8 @@ StackingContextHelper::StackingContextHelper(
       mDeferredTransformItem(aParams.mDeferredTransformItem),
       mRasterizeLocally(aParams.mRasterizeLocally ||
                         aParentSC.mRasterizeLocally) {
+  MOZ_ASSERT(!aContainerItem || aContainerItem->CreatesStackingContextHelper());
+
   mOrigin = aParentSC.mOrigin + aBounds.TopLeft();
   // Compute scale for fallback rendering. We don't try to guess a scale for 3d
   // transformed items
@@ -62,7 +64,8 @@ StackingContextHelper::StackingContextHelper(
           transform2d * aParentSC.mSnappingSurfaceTransform;
     }
 
-  } else if (aParams.reference_frame_kind == wr::WrReferenceFrameKind::Zoom &&
+  } else if (aParams.reference_frame_kind ==
+                 wr::WrReferenceFrameKind::Transform &&
              aContainerItem &&
              aContainerItem->GetType() == DisplayItemType::TYPE_ASYNC_ZOOM &&
              aContainerItem->Frame()) {

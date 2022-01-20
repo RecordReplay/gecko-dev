@@ -72,9 +72,9 @@ async function clickURLBarSuggestion(resultTitle, button = 1) {
  *   The function to run with the new search engine as default.
  */
 async function withNewSearchEngine(taskFn) {
-  const url =
-    getRootDirectory(gTestPath) + "urlbarTelemetrySearchSuggestions.xml";
-  let suggestionEngine = await Services.search.addOpenSearchEngine(url, "");
+  let suggestionEngine = await SearchTestUtils.promiseNewSearchEngine(
+    getRootDirectory(gTestPath) + "urlbarTelemetrySearchSuggestions.xml"
+  );
   let previousEngine = await Services.search.getDefault();
   await Services.search.setDefault(suggestionEngine);
 
@@ -87,11 +87,13 @@ async function withNewSearchEngine(taskFn) {
 }
 
 add_task(async function setup() {
-  // Create a new search engine.
-  await Services.search.addEngineWithDetails("MozSearch", {
-    alias: "mozalias",
-    method: "GET",
-    template: "http://example.com/?q={searchTerms}",
+  await SearchTestUtils.installSearchExtension({
+    name: "MozSearch",
+    keyword: "mozalias",
+    // TODO: Bug 1698568. This should just be `search_url: "https://example.com"`
+    // with the default value of `search_url_get_params`.
+    search_url: "https://example.com/?q={searchTerms}",
+    search_url_get_params: "",
   });
 
   // Make it the default search engine.
@@ -123,9 +125,9 @@ add_task(async function setup() {
     set: [["browser.urlbar.maxHistoricalSearchSuggestions", 0]],
   });
 
-  // Use the default matching bucket configuration.
+  // This test assumes that general results are shown before suggestions.
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.urlbar.matchBuckets", "general:5,suggestion:4"]],
+    set: [["browser.urlbar.showSearchSuggestionsFirst", false]],
   });
 
   // Allows UrlbarTestUtils to access this scope's test helpers, like Assert.
@@ -135,7 +137,6 @@ add_task(async function setup() {
   registerCleanupFunction(async function() {
     Services.telemetry.canRecordExtended = oldCanRecord;
     await Services.search.setDefault(originalEngine);
-    await Services.search.removeEngine(engine);
     Services.prefs.setBoolPref(SUGGEST_URLBAR_PREF, suggestionsEnabled);
     await PlacesUtils.history.clear();
     await UrlbarTestUtils.formHistory.clear();
@@ -1170,7 +1171,7 @@ add_task(async function test_privateWindow() {
   SearchSERPTelemetry.overrideSearchTelemetryForTests([
     {
       telemetryId: "example",
-      searchPageRegexp: "^http://example\\.com/",
+      searchPageRegexp: "^https://example\\.com/",
       queryParamName: "q",
     },
   ]);

@@ -49,12 +49,6 @@ mozilla::GenericErrorResult<AbortReason> MIRGenerator::abort(AbortReason r) {
       case AbortReason::Alloc:
         JitSpew(JitSpew_IonAbort, "AbortReason::Alloc");
         break;
-      case AbortReason::Inlining:
-        JitSpew(JitSpew_IonAbort, "AbortReason::Inlining");
-        break;
-      case AbortReason::PreliminaryObjects:
-        JitSpew(JitSpew_IonAbort, "AbortReason::PreliminaryObjects");
-        break;
       case AbortReason::Disable:
         JitSpew(JitSpew_IonAbort, "AbortReason::Disable");
         break;
@@ -156,6 +150,8 @@ MBasicBlock* MBasicBlock::New(MIRGraph& graph, size_t stackDepth,
 MBasicBlock* MBasicBlock::NewPopN(MIRGraph& graph, const CompileInfo& info,
                                   MBasicBlock* pred, BytecodeSite* site,
                                   Kind kind, uint32_t popped) {
+  MOZ_ASSERT(site->pc() != nullptr);
+
   MBasicBlock* block = new (graph.alloc()) MBasicBlock(graph, info, site, kind);
   if (!block->init()) {
     return nullptr;
@@ -326,17 +322,80 @@ MBasicBlock* MBasicBlock::New(MIRGraph& graph, const CompileInfo& info,
   return block;
 }
 
+// Create an empty and unreachable block which jumps to |header|. Used
+// when the normal entry into a loop is removed (but the loop is still
+// reachable due to OSR) to preserve the invariant that every loop
+// header has two predecessors, which is needed for building the
+// dominator tree. The new block is inserted immediately before the
+// header, which preserves the graph ordering (post-order/RPO). These
+// blocks will all be removed before lowering.
+MBasicBlock* MBasicBlock::NewFakeLoopPredecessor(MIRGraph& graph,
+                                                 MBasicBlock* header) {
+  MOZ_ASSERT(graph.osrBlock());
+
+  MBasicBlock* backedge = header->backedge();
+  MBasicBlock* fake = MBasicBlock::New(graph, header->info(), nullptr,
+                                       MBasicBlock::FAKE_LOOP_PRED);
+  if (!fake) {
+    return nullptr;
+  }
+
+  graph.insertBlockBefore(header, fake);
+  fake->setUnreachable();
+
+  // Create fake defs to use as inputs for any phis in |header|.
+  for (MPhiIterator iter(header->phisBegin()), end(header->phisEnd());
+       iter != end; ++iter) {
+    MPhi* phi = *iter;
+    auto* fakeDef = MUnreachableResult::New(graph.alloc(), phi->type());
+    fake->add(fakeDef);
+    if (!phi->addInputSlow(fakeDef)) {
+      return nullptr;
+    }
+  }
+
+  fake->end(MGoto::New(graph.alloc(), header));
+
+  if (!header->addPredecessorWithoutPhis(fake)) {
+    return nullptr;
+  }
+
+  // The backedge is always the last predecessor, but we have added a
+  // new pred. Restore |backedge| as |header|'s loop backedge.
+  header->clearLoopHeader();
+  header->setLoopHeader(backedge);
+
+  return fake;
+}
+
+void MIRGraph::removeFakeLoopPredecessors() {
+  MOZ_ASSERT(osrBlock());
+  size_t id = 0;
+  for (ReversePostorderIterator it = rpoBegin(); it != rpoEnd();) {
+    MBasicBlock* block = *it++;
+    if (block->isFakeLoopPred()) {
+      MOZ_ASSERT(block->unreachable());
+      MBasicBlock* succ = block->getSingleSuccessor();
+      succ->removePredecessor(block);
+      removeBlock(block);
+    } else {
+      block->setId(id++);
+    }
+  }
+#ifdef DEBUG
+  canBuildDominators_ = false;
+#endif
+}
+
 MBasicBlock::MBasicBlock(MIRGraph& graph, const CompileInfo& info,
                          BytecodeSite* site, Kind kind)
-    : unreachable_(false),
-      graph_(graph),
+    : graph_(graph),
       info_(info),
       predecessors_(graph.alloc()),
       stackPosition_(info_.firstStackSlot()),
       id_(0),
       domIndex_(0),
       numDominated_(0),
-      pc_(site->pc()),
       lir_(nullptr),
       callerResumePoint_(nullptr),
       entryResumePoint_(nullptr),
@@ -348,15 +407,14 @@ MBasicBlock::MBasicBlock(MIRGraph& graph, const CompileInfo& info,
       mark_(false),
       immediatelyDominated_(graph.alloc()),
       immediateDominator_(nullptr),
-      trackedSite_(site),
-      hitCount_(0),
-      hitState_(HitState::NotDefined)
+      trackedSite_(site)
 #if defined(JS_ION_PERF) || defined(DEBUG)
       ,
       lineno_(0u),
       columnIndex_(0u)
 #endif
 {
+  MOZ_ASSERT(trackedSite_, "trackedSite_ is non-nullptr");
 }
 
 bool MBasicBlock::init() { return slots_.init(graph_.alloc(), info_.nslots()); }
@@ -533,9 +591,8 @@ void MBasicBlock::moveBefore(MInstruction* at, MInstruction* ins) {
 
   // Insert into new block, which may be distinct.
   // Uses and operands are untouched.
-  ins->setBlock(at->block());
+  ins->setInstructionBlock(at->block(), at->trackedSite());
   at->block()->instructions_.insertBefore(at, ins);
-  ins->setTrackedSite(at->trackedSite());
 }
 
 MInstruction* MBasicBlock::safeInsertTop(MDefinition* ins, IgnoreTop ignore) {
@@ -681,18 +738,16 @@ void MBasicBlock::clear() {
 
 void MBasicBlock::insertBefore(MInstruction* at, MInstruction* ins) {
   MOZ_ASSERT(at->block() == this);
-  ins->setBlock(this);
+  ins->setInstructionBlock(this, at->trackedSite());
   graph().allocDefinitionId(ins);
   instructions_.insertBefore(at, ins);
-  ins->setTrackedSite(at->trackedSite());
 }
 
 void MBasicBlock::insertAfter(MInstruction* at, MInstruction* ins) {
   MOZ_ASSERT(at->block() == this);
-  ins->setBlock(this);
+  ins->setInstructionBlock(this, at->trackedSite());
   graph().allocDefinitionId(ins);
   instructions_.insertAfter(at, ins);
-  ins->setTrackedSite(at->trackedSite());
 }
 
 void MBasicBlock::insertAtEnd(MInstruction* ins) {
@@ -705,7 +760,7 @@ void MBasicBlock::insertAtEnd(MInstruction* ins) {
 
 void MBasicBlock::addPhi(MPhi* phi) {
   phis_.pushBack(phi);
-  phi->setBlock(this);
+  phi->setPhiBlock(this);
   graph().allocDefinitionId(phi);
 }
 
@@ -743,13 +798,13 @@ void MBasicBlock::flagOperandsOfPrunedBranches(MInstruction* ins) {
   // SplitEdge blocks.  SplitEdge blocks only have a Goto instruction before
   // Range Analysis phase.  In adjustInputs, we are manipulating instructions
   // which have a TypePolicy.  So, as a Goto has no operand and no type
-  // policy, the entry resume point should exists.
+  // policy, the entry resume point should exist.
   MOZ_ASSERT(rp);
 
-  // Flag all operand as being potentially used.
+  // Flag all operands as being potentially used.
   while (rp) {
     for (size_t i = 0, end = rp->numOperands(); i < end; i++) {
-      rp->getOperand(i)->setUseRemovedUnchecked();
+      rp->getOperand(i)->setImplicitlyUsedUnchecked();
     }
     rp = rp->caller();
   }

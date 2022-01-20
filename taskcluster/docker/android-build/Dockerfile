@@ -22,11 +22,6 @@ RUN apt-get update && \
       less \
       openssh-client \
       procps \
-      python-cryptography \
-      python-dev \
-      python-pip \
-      python-setuptools \
-      python-virtualenv \
       python3-dev \
       rsync \
       screen \
@@ -37,8 +32,8 @@ RUN apt-get update && \
       valgrind \
       vim \
       wget \
-      yasm \
-      zip
+      zip \
+      zstd
 
 # Add wrapper scripts for xvfb allowing tasks to easily retry starting up xvfb.
 # %include taskcluster/docker/recipes/xvfb.sh

@@ -57,7 +57,7 @@ void LIRGeneratorMIPSShared::lowerForALUInt64(
     LInstructionHelper<INT64_PIECES, 2 * INT64_PIECES, 0>* ins,
     MDefinition* mir, MDefinition* lhs, MDefinition* rhs) {
   ins->setInt64Operand(0, useInt64RegisterAtStart(lhs));
-  ins->setInt64Operand(INT64_PIECES, lhs != rhs
+  ins->setInt64Operand(INT64_PIECES, willHaveDifferentLIRNodes(lhs, rhs)
                                          ? useInt64OrConstant(rhs)
                                          : useInt64OrConstantAtStart(rhs));
   defineInt64ReuseInput(ins, mir, 0);
@@ -73,6 +73,10 @@ void LIRGeneratorMIPSShared::lowerForMulInt64(LMulI64* ins, MMul* mir,
 #ifdef JS_CODEGEN_MIPS32
   needsTemp = true;
   cannotAliasRhs = true;
+  // See the documentation on willHaveDifferentLIRNodes; that test does not
+  // allow additional constraints.
+  MOZ_CRASH(
+      "cannotAliasRhs cannot be used the way it is used in the guard below");
   if (rhs->isConstant()) {
     int64_t constant = rhs->toConstant()->toInt64();
     int32_t shift = mozilla::FloorLog2(constant);
@@ -89,9 +93,10 @@ void LIRGeneratorMIPSShared::lowerForMulInt64(LMulI64* ins, MMul* mir,
   }
 #endif
   ins->setInt64Operand(0, useInt64RegisterAtStart(lhs));
-  ins->setInt64Operand(INT64_PIECES, (lhs != rhs || cannotAliasRhs)
-                                         ? useInt64OrConstant(rhs)
-                                         : useInt64OrConstantAtStart(rhs));
+  ins->setInt64Operand(INT64_PIECES,
+                       (willHaveDifferentLIRNodes(lhs, rhs) || cannotAliasRhs)
+                           ? useInt64OrConstant(rhs)
+                           : useInt64OrConstantAtStart(rhs));
 
   if (needsTemp) {
     ins->setTemp(0, temp());
@@ -144,6 +149,15 @@ template void LIRGeneratorMIPSShared::lowerForShiftInt64(
 template void LIRGeneratorMIPSShared::lowerForShiftInt64(
     LInstructionHelper<INT64_PIECES, INT64_PIECES + 1, 1>* ins,
     MDefinition* mir, MDefinition* lhs, MDefinition* rhs);
+
+void LIRGeneratorMIPSShared::lowerForCompareI64AndBranch(
+    MTest* mir, MCompare* comp, JSOp op, MDefinition* left, MDefinition* right,
+    MBasicBlock* ifTrue, MBasicBlock* ifFalse) {
+  LCompareI64AndBranch* lir = new (alloc())
+      LCompareI64AndBranch(comp, op, useInt64Register(left),
+                           useInt64OrConstant(right), ifTrue, ifFalse);
+  add(lir, mir);
+}
 
 void LIRGeneratorMIPSShared::lowerForFPU(LInstructionHelper<1, 1, 0>* ins,
                                          MDefinition* mir, MDefinition* input) {
@@ -242,6 +256,20 @@ void LIRGeneratorMIPSShared::lowerDivI(MDiv* div) {
   define(lir, div);
 }
 
+void LIRGeneratorMIPSShared::lowerNegI(MInstruction* ins, MDefinition* input) {
+  define(new (alloc()) LNegI(useRegisterAtStart(input)), ins);
+}
+
+void LIRGeneratorMIPSShared::lowerNegI64(MInstruction* ins,
+                                         MDefinition* input) {
+  defineInt64ReuseInput(new (alloc()) LNegI64(useInt64RegisterAtStart(input)),
+                        ins, 0);
+}
+
+void LIRGenerator::visitAbs(MAbs* ins) {
+  define(allocateAbs(ins, useRegisterAtStart(ins->input())), ins);
+}
+
 void LIRGeneratorMIPSShared::lowerMulI(MMul* mul, MDefinition* lhs,
                                        MDefinition* rhs) {
   LMulI* lir = new (alloc()) LMulI;
@@ -295,6 +323,20 @@ void LIRGenerator::visitPowHalf(MPowHalf* ins) {
   MOZ_ASSERT(input->type() == MIRType::Double);
   LPowHalfD* lir = new (alloc()) LPowHalfD(useRegisterAtStart(input));
   defineReuseInput(lir, ins, 0);
+}
+
+void LIRGeneratorMIPSShared::lowerWasmSelectI(MWasmSelect* select) {
+  auto* lir = new (alloc())
+      LWasmSelect(useRegisterAtStart(select->trueExpr()),
+                  useAny(select->falseExpr()), useRegister(select->condExpr()));
+  defineReuseInput(lir, select, LWasmSelect::TrueExprIndex);
+}
+
+void LIRGeneratorMIPSShared::lowerWasmSelectI64(MWasmSelect* select) {
+  auto* lir = new (alloc()) LWasmSelectI64(
+      useInt64RegisterAtStart(select->trueExpr()),
+      useInt64(select->falseExpr()), useRegister(select->condExpr()));
+  defineInt64ReuseInput(lir, select, LWasmSelectI64::TrueExprIndex);
 }
 
 LTableSwitch* LIRGeneratorMIPSShared::newLTableSwitch(
@@ -587,16 +629,28 @@ void LIRGenerator::visitCompareExchangeTypedArrayElement(
   MOZ_ASSERT(ins->arrayType() != Scalar::Float64);
 
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
-  MOZ_ASSERT(ins->index()->type() == MIRType::Int32);
+  MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
 
   const LUse elements = useRegister(ins->elements());
-  const LAllocation index = useRegisterOrConstant(ins->index());
-
-  // If the target is a floating register then we need a temp at the
-  // CodeGenerator level for creating the result.
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->arrayType());
 
   const LAllocation newval = useRegister(ins->newval());
   const LAllocation oldval = useRegister(ins->oldval());
+
+  if (Scalar::isBigIntType(ins->arrayType())) {
+    LInt64Definition temp1 = tempInt64();
+    LInt64Definition temp2 = tempInt64();
+
+    auto* lir = new (alloc()) LCompareExchangeTypedArrayElement64(
+        elements, index, oldval, newval, temp1, temp2);
+    define(lir, ins);
+    assignSafepoint(lir, ins);
+    return;
+  }
+
+  // If the target is a floating register then we need a temp at the
+  // CodeGenerator level for creating the result.
 
   LDefinition outTemp = LDefinition::BogusTemp();
   LDefinition valueTemp = LDefinition::BogusTemp();
@@ -623,18 +677,31 @@ void LIRGenerator::visitCompareExchangeTypedArrayElement(
 
 void LIRGenerator::visitAtomicExchangeTypedArrayElement(
     MAtomicExchangeTypedArrayElement* ins) {
-  MOZ_ASSERT(ins->arrayType() <= Scalar::Uint32);
-
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
-  MOZ_ASSERT(ins->index()->type() == MIRType::Int32);
+  MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
 
   const LUse elements = useRegister(ins->elements());
-  const LAllocation index = useRegisterOrConstant(ins->index());
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->arrayType());
+
+  const LAllocation value = useRegister(ins->value());
+
+  if (Scalar::isBigIntType(ins->arrayType())) {
+    LInt64Definition temp1 = tempInt64();
+    LDefinition temp2 = temp();
+
+    auto* lir = new (alloc()) LAtomicExchangeTypedArrayElement64(
+        elements, index, value, temp1, temp2);
+    define(lir, ins);
+    assignSafepoint(lir, ins);
+    return;
+  }
 
   // If the target is a floating register then we need a temp at the
   // CodeGenerator level for creating the result.
 
-  const LAllocation value = useRegister(ins->value());
+  MOZ_ASSERT(ins->arrayType() <= Scalar::Uint32);
+
   LDefinition outTemp = LDefinition::BogusTemp();
   LDefinition valueTemp = LDefinition::BogusTemp();
   LDefinition offsetTemp = LDefinition::BogusTemp();
@@ -759,11 +826,36 @@ void LIRGenerator::visitAtomicTypedArrayElementBinop(
   MOZ_ASSERT(ins->arrayType() != Scalar::Float64);
 
   MOZ_ASSERT(ins->elements()->type() == MIRType::Elements);
-  MOZ_ASSERT(ins->index()->type() == MIRType::Int32);
+  MOZ_ASSERT(ins->index()->type() == MIRType::IntPtr);
 
   const LUse elements = useRegister(ins->elements());
-  const LAllocation index = useRegisterOrConstant(ins->index());
+  const LAllocation index =
+      useRegisterOrIndexConstant(ins->index(), ins->arrayType());
   const LAllocation value = useRegister(ins->value());
+
+  if (Scalar::isBigIntType(ins->arrayType())) {
+    LInt64Definition temp1 = tempInt64();
+    LInt64Definition temp2 = tempInt64();
+
+    // Case 1: the result of the operation is not used.
+    //
+    // We can omit allocating the result BigInt.
+
+    if (ins->isForEffect()) {
+      auto* lir = new (alloc()) LAtomicTypedArrayElementBinopForEffect64(
+          elements, index, value, temp1, temp2);
+      add(lir, ins);
+      return;
+    }
+
+    // Case 2: the result of the operation is used.
+
+    auto* lir = new (alloc())
+        LAtomicTypedArrayElementBinop64(elements, index, value, temp1, temp2);
+    define(lir, ins);
+    assignSafepoint(lir, ins);
+    return;
+  }
 
   LDefinition valueTemp = LDefinition::BogusTemp();
   LDefinition offsetTemp = LDefinition::BogusTemp();
@@ -775,7 +867,7 @@ void LIRGenerator::visitAtomicTypedArrayElementBinop(
     maskTemp = temp();
   }
 
-  if (!ins->hasUses()) {
+  if (ins->isForEffect()) {
     LAtomicTypedArrayElementBinopForEffect* lir =
         new (alloc()) LAtomicTypedArrayElementBinopForEffect(
             elements, index, value, valueTemp, offsetTemp, maskTemp);
@@ -840,6 +932,13 @@ void LIRGenerator::visitWasmBinarySimd128(MWasmBinarySimd128* ins) {
   MOZ_CRASH("binary SIMD NYI");
 }
 
+#ifdef ENABLE_WASM_SIMD
+bool MWasmBitselectSimd128::specializeConstantMaskAsShuffle(
+    int8_t shuffle[16]) {
+  return false;
+}
+#endif
+
 bool MWasmBinarySimd128::specializeForConstantRhs() {
   // Probably many we want to do here
   return false;
@@ -872,4 +971,12 @@ void LIRGenerator::visitWasmUnarySimd128(MWasmUnarySimd128* ins) {
 
 void LIRGenerator::visitWasmReduceSimd128(MWasmReduceSimd128* ins) {
   MOZ_CRASH("reduce-SIMD NYI");
+}
+
+void LIRGenerator::visitWasmLoadLaneSimd128(MWasmLoadLaneSimd128* ins) {
+  MOZ_CRASH("load-lane SIMD NYI");
+}
+
+void LIRGenerator::visitWasmStoreLaneSimd128(MWasmStoreLaneSimd128* ins) {
+  MOZ_CRASH("store-lane SIMD NYI");
 }

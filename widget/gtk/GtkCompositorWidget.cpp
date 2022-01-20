@@ -5,11 +5,18 @@
 
 #include "GtkCompositorWidget.h"
 
-#include "gfxPlatformGtk.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/widget/InProcessCompositorWidget.h"
 #include "mozilla/widget/PlatformWidgetTypes.h"
 #include "nsWindow.h"
+
+#ifdef MOZ_X11
+#  include "mozilla/X11Util.h"
+#endif
+
+#ifdef MOZ_WAYLAND
+#  include "mozilla/layers/NativeLayerWayland.h"
+#endif
 
 namespace mozilla {
 namespace widget {
@@ -21,7 +28,7 @@ GtkCompositorWidget::GtkCompositorWidget(
       mWidget(aWindow),
       mClientSize("GtkCompositorWidget::mClientSize") {
 #if defined(MOZ_WAYLAND)
-  if (!aInitData.IsX11Display()) {
+  if (GdkIsWaylandDisplay()) {
     if (!aWindow) {
       NS_WARNING("GtkCompositorWidget: We're missing nsWindow!");
     }
@@ -29,45 +36,27 @@ GtkCompositorWidget::GtkCompositorWidget(
   }
 #endif
 #if defined(MOZ_X11)
-  if (aInitData.IsX11Display()) {
-    // If we have a nsWindow, then grab the already existing display connection
-    // If we don't, then use the init data to connect to the display
-    if (aWindow) {
-      mXDisplay = aWindow->XDisplay();
-    } else {
-      mXDisplay = XOpenDisplay(aInitData.XDisplayString().get());
-    }
+  if (GdkIsX11Display()) {
     mXWindow = (Window)aInitData.XWindow();
 
     // Grab the window's visual and depth
     XWindowAttributes windowAttrs;
-    if (!XGetWindowAttributes(mXDisplay, mXWindow, &windowAttrs)) {
+    if (!XGetWindowAttributes(DefaultXDisplay(), mXWindow, &windowAttrs)) {
       NS_WARNING("GtkCompositorWidget(): XGetWindowAttributes() failed!");
     }
 
     Visual* visual = windowAttrs.visual;
-    mDepth = windowAttrs.depth;
+    int depth = windowAttrs.depth;
 
     // Initialize the window surface provider
-    mProvider.Initialize(mXDisplay, mXWindow, visual, mDepth,
-                         aInitData.Shaped());
+    mProvider.Initialize(mXWindow, visual, depth, aInitData.Shaped());
   }
 #endif
   auto size = mClientSize.Lock();
   *size = aInitData.InitialClientSize();
 }
 
-GtkCompositorWidget::~GtkCompositorWidget() {
-  mProvider.CleanupResources();
-
-#if defined(MOZ_X11)
-  // If we created our own display connection, we need to destroy it
-  if (!mWidget && mXDisplay) {
-    XCloseDisplay(mXDisplay);
-    mXDisplay = nullptr;
-  }
-#endif
-}
+GtkCompositorWidget::~GtkCompositorWidget() { mProvider.CleanupResources(); }
 
 already_AddRefed<gfx::DrawTarget> GtkCompositorWidget::StartRemoteDrawing() {
   return nullptr;
@@ -76,7 +65,8 @@ void GtkCompositorWidget::EndRemoteDrawing() {}
 
 already_AddRefed<gfx::DrawTarget>
 GtkCompositorWidget::StartRemoteDrawingInRegion(
-    LayoutDeviceIntRegion& aInvalidRegion, layers::BufferMode* aBufferMode) {
+    const LayoutDeviceIntRegion& aInvalidRegion,
+    layers::BufferMode* aBufferMode) {
   return mProvider.StartRemoteDrawingInRegion(aInvalidRegion, aBufferMode);
 }
 
@@ -114,8 +104,6 @@ EGLNativeWindowType GtkCompositorWidget::GetEGLNativeWindow() {
   return nullptr;
 }
 
-int32_t GtkCompositorWidget::GetDepth() { return mDepth; }
-
 #if defined(MOZ_WAYLAND)
 void GtkCompositorWidget::SetEGLNativeWindowSize(
     const LayoutDeviceIntSize& aEGLWindowSize) {
@@ -125,23 +113,32 @@ void GtkCompositorWidget::SetEGLNativeWindowSize(
 }
 #endif
 
-void GtkCompositorWidget::ClearBeforePaint(
-    RefPtr<gfx::DrawTarget> aTarget, const LayoutDeviceIntRegion& aRegion) {
+LayoutDeviceIntRegion GtkCompositorWidget::GetTransparentRegion() {
   // We need to clear target buffer alpha values of popup windows as
   // SW-WR paints with alpha blending (see Bug 1674473).
-  if (mWidget->IsPopup()) {
-    for (auto iter = aRegion.RectIter(); !iter.Done(); iter.Next()) {
-      aTarget->ClearRect(gfx::Rect(iter.Get().ToUnknownRect()));
-    }
+  if (!mWidget || mWidget->IsPopup()) {
+    return LayoutDeviceIntRect(LayoutDeviceIntPoint(0, 0), GetClientSize());
   }
 
   // Clear background of titlebar area to render titlebar
   // transparent corners correctly.
-  gfx::Rect rect;
-  if (mWidget->GetTitlebarRect(rect)) {
-    aTarget->ClearRect(rect);
-  }
+  return mWidget->GetTitlebarRect();
 }
+
+#ifdef MOZ_WAYLAND
+RefPtr<mozilla::layers::NativeLayerRoot>
+GtkCompositorWidget::GetNativeLayerRoot() {
+  if (gfx::gfxVars::UseWebRenderCompositor()) {
+    if (!mNativeLayerRoot) {
+      MOZ_ASSERT(mWidget && mWidget->GetMozContainer());
+      mNativeLayerRoot = NativeLayerRootWayland::CreateForMozContainer(
+          mWidget->GetMozContainer());
+    }
+    return mNativeLayerRoot;
+  }
+  return nullptr;
+}
+#endif
 
 }  // namespace widget
 }  // namespace mozilla

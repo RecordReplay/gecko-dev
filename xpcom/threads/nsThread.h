@@ -21,6 +21,7 @@
 #include "mozilla/TaskDispatcher.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
+#include "nsIDelayedRunnableObserver.h"
 #include "nsIDirectTaskDispatcher.h"
 #include "nsIEventTarget.h"
 #include "nsISerialEventTarget.h"
@@ -31,6 +32,7 @@
 
 namespace mozilla {
 class CycleCollectedJSContext;
+class DelayedRunnable;
 class SynchronizedEventQueue;
 class ThreadEventQueue;
 class ThreadEventTarget;
@@ -152,6 +154,7 @@ class PerformanceCounterState {
 // A native thread
 class nsThread : public nsIThreadInternal,
                  public nsISupportsPriority,
+                 public nsIDelayedRunnableObserver,
                  public nsIDirectTaskDispatcher,
                  private mozilla::LinkedListElement<nsThread> {
   friend mozilla::LinkedList<nsThread>;
@@ -238,8 +241,6 @@ class nsThread : public nsIThreadInternal,
 
   static nsThreadEnumerator Enumerate();
 
-  static uint32_t MaxActiveThreads();
-
   // When entering local execution mode a new event queue is created and used as
   // an event source. This queue is only accessible through an
   // nsLocalExecutionGuard constructed from the nsLocalExecutionRecord returned
@@ -259,6 +260,10 @@ class nsThread : public nsIThreadInternal,
     MOZ_ASSERT(IsOnCurrentThread());
     mUseHangMonitor = aValue;
   }
+
+  void OnDelayedRunnableCreated(mozilla::DelayedRunnable* aRunnable) override;
+  void OnDelayedRunnableScheduled(mozilla::DelayedRunnable* aRunnable) override;
+  void OnDelayedRunnableRan(mozilla::DelayedRunnable* aRunnable) override;
 
  private:
   void DoMainThreadSpecificProcessing() const;
@@ -287,11 +292,6 @@ class nsThread : public nsIThreadInternal,
   static mozilla::OffTheBooksMutex& ThreadListMutex();
   static mozilla::LinkedList<nsThread>& ThreadList();
   static void ClearThreadList();
-
-  // The current number of active threads.
-  static uint32_t sActiveThreads;
-  // The maximum current number of active threads we've had in this session.
-  static uint32_t sMaxActiveThreads;
 
   void AddToThreadList();
   void MaybeRemoveFromThreadList();

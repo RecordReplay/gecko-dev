@@ -35,6 +35,9 @@
 #include "GeckoProfiler.h"
 #include "nsAppRunner.h"
 #include "xpcpublic.h"
+#ifdef MOZ_BACKGROUNDTASKS
+#  include "mozilla/BackgroundTasks.h"
+#endif
 
 #if defined(XP_WIN)
 #  include <windows.h>
@@ -115,6 +118,12 @@ StartupCache* StartupCache::GetSingletonNoInit() {
 }
 
 StartupCache* StartupCache::GetSingleton() {
+#ifdef MOZ_BACKGROUNDTASKS
+  if (BackgroundTasks::IsBackgroundTaskMode()) {
+    return nullptr;
+  }
+#endif
+
   if (!gStartupCache) {
     if (!XRE_IsParentProcess()) {
       return nullptr;
@@ -849,16 +858,14 @@ bool StartupCacheDebugOutputStream::CheckReferences(nsISupports* aObject) {
   NS_ENSURE_SUCCESS(rv, false);
   if (flags & nsIClassInfo::SINGLETON) return true;
 
-  nsISupportsHashKey* key = mObjectMap->GetEntry(aObject);
-  if (key) {
+  bool inserted = mObjectMap->EnsureInserted(aObject);
+  if (!inserted) {
     NS_ERROR(
         "non-singleton aObject is referenced multiple times in this"
         "serialization, we don't support that.");
-    return false;
   }
 
-  mObjectMap->PutEntry(aObject);
-  return true;
+  return inserted;
 }
 
 // nsIObjectOutputStream implementation

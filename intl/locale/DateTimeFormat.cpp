@@ -16,7 +16,7 @@ namespace mozilla {
 using namespace mozilla::intl;
 
 nsCString* DateTimeFormat::mLocale = nullptr;
-nsDataHashtable<nsCStringHashKey, UDateFormat*>* DateTimeFormat::mFormatCache;
+nsTHashMap<nsCStringHashKey, UDateFormat*>* DateTimeFormat::mFormatCache;
 
 static const int32_t DATETIME_FORMAT_INITIAL_LEN = 127;
 
@@ -80,6 +80,12 @@ nsresult DateTimeFormat::FormatDateTime(
       break;
     case Skeleton::yyyyMMMM:
       skeleton.AssignASCII("yyyyMMMM");
+      break;
+    case Skeleton::E:
+      skeleton.AssignASCII("E");
+      break;
+    case Skeleton::EEEE:
+      skeleton.AssignASCII("EEEE");
       break;
     default:
       MOZ_ASSERT_UNREACHABLE("Unhandled skeleton enum");
@@ -248,10 +254,10 @@ nsresult DateTimeFormat::FormatUDateTime(
   }
   if (!mFormatCache) {
     mFormatCache =
-        new nsDataHashtable<nsCStringHashKey, UDateFormat*>(kMaxCachedFormats);
+        new nsTHashMap<nsCStringHashKey, UDateFormat*>(kMaxCachedFormats);
   }
 
-  UDateFormat*& dateTimeFormat = mFormatCache->GetOrInsert(key);
+  UDateFormat*& dateTimeFormat = mFormatCache->LookupOrInsert(key);
 
   if (!dateTimeFormat) {
     // We didn't have a cached formatter for this key, so create one.
@@ -354,8 +360,8 @@ void DateTimeFormat::BuildTimeZoneString(
 /*static*/
 void DateTimeFormat::DeleteCache() {
   if (mFormatCache) {
-    for (auto i = mFormatCache->Iter(); !i.Done(); i.Next()) {
-      udat_close(i.Data());
+    for (const auto& entry : mFormatCache->Values()) {
+      udat_close(entry);
     }
     delete mFormatCache;
     mFormatCache = nullptr;

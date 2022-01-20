@@ -217,6 +217,7 @@ void UiCompositorControllerParent::NotifyFirstPaint() {
 void UiCompositorControllerParent::NotifyUpdateScreenMetrics(
     const GeckoViewMetrics& aMetrics) {
 #if defined(MOZ_WIDGET_ANDROID)
+  // TODO: Need to handle different x-and y-scales.
   CSSToScreenScale scale = ViewTargetAs<ScreenPixel>(
       aMetrics.mZoom.ToScaleFactor(),
       PixelCastJustification::ScreenIsParentLayerForRoot);
@@ -248,6 +249,7 @@ void UiCompositorControllerParent::InitializeForSameProcess() {
   // This function is called by UiCompositorControllerChild in the main thread.
   // So dispatch to the compositor thread to Initialize.
   if (!CompositorThreadHolder::IsInCompositorThread()) {
+    SetOtherProcessId(base::GetCurrentProcId());
     SynchronousTask task(
         "UiCompositorControllerParent::InitializeForSameProcess");
 

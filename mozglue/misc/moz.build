@@ -8,12 +8,15 @@ FINAL_LIBRARY = "mozglue"
 
 EXPORTS.mozilla += [
     "AutoProfilerLabel.h",
+    "AwakeTimeStamp.h",
     "decimal/Decimal.h",
     "decimal/DoubleConversion.h",
+    "IntegerPrintfMacros.h",
     "MmapFaultHandler.h",
     "PlatformConditionVariable.h",
     "PlatformMutex.h",
     "Printf.h",
+    "Sprintf.h",
     "StackWalk.h",
     "TimeStamp.h",
     "Uptime.h",
@@ -26,14 +29,17 @@ EXPORTS.mozilla.glue += [
 
 if CONFIG["OS_ARCH"] == "WINNT":
     EXPORTS.mozilla += [
+        "GetKnownFolderPath.h",
         "PreXULSkeletonUI.h",
         "StackWalk_windows.h",
+        "StackWalkThread.h",
         "TimeStamp_windows.h",
         "WindowsDpiAwareness.h",
     ]
 
 SOURCES += [
     "AutoProfilerLabel.cpp",
+    "AwakeTimeStamp.cpp",
     "MmapFaultHandler.cpp",
     "Printf.cpp",
     "StackWalk.cpp",
@@ -54,6 +60,8 @@ if CONFIG["OS_ARCH"] == "WINNT":
         "DynamicallyLinkedFunctionPtr.h",
         "ImportDir.h",
         "NativeNt.h",
+        "WindowsDpiInitialization.h",
+        "WindowsEnumProcessModules.h",
         "WindowsMapRemoteView.h",
         "WindowsProcessMitigations.h",
     ]
@@ -61,13 +69,30 @@ if CONFIG["OS_ARCH"] == "WINNT":
         "WindowsUnicode.h",
     ]
     SOURCES += [
-        "PreXULSkeletonUI.cpp",
+        "GetKnownFolderPath.cpp",
         "TimeStamp_windows.cpp",
+        "WindowsDpiInitialization.cpp",
         "WindowsMapRemoteView.cpp",
         "WindowsProcessMitigations.cpp",
         "WindowsUnicode.cpp",
     ]
-    OS_LIBS += ["dbghelp"]
+
+    OS_LIBS += [
+        "dbghelp",
+        "oleaut32",
+        "ole32",
+    ]
+
+    if not CONFIG["JS_STANDALONE"]:
+        SOURCES += [
+            "PreXULSkeletonUI.cpp",
+        ]
+
+    if CONFIG["ACCESSIBILITY"]:
+        SOURCES += [
+            "/ipc/mscom/ActivationContext.cpp",
+            "/ipc/mscom/ProcessRuntime.cpp",
+        ]
 elif CONFIG["HAVE_CLOCK_MONOTONIC"]:
     SOURCES += [
         "TimeStamp_posix.cpp",
@@ -83,6 +108,12 @@ if CONFIG["OS_ARCH"] == "WINNT":
     SOURCES += [
         "ConditionVariable_windows.cpp",
         "Mutex_windows.cpp",
+    ]
+# WASI hasn't supported cond vars and mutexes yet so noop implementation is used.
+elif CONFIG["OS_ARCH"] == "WASI":
+    SOURCES += [
+        "ConditionVariable_noop.cpp",
+        "Mutex_noop.cpp",
     ]
 else:
     SOURCES += [

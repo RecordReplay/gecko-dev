@@ -116,9 +116,7 @@ WMFVideoMFTManager::WMFVideoMFTManager(
       mImageSize(aConfig.mImage),
       mDecodedImageSize(aConfig.mImage),
       mVideoStride(0),
-      mColorSpace(aConfig.mColorSpace != gfx::YUVColorSpace::UNKNOWN
-                      ? Some(aConfig.mColorSpace)
-                      : Nothing()),
+      mColorSpace(aConfig.mColorSpace),
       mColorRange(aConfig.mColorRange),
       mImageContainer(aImageContainer),
       mKnowsCompositor(aKnowsCompositor),
@@ -476,7 +474,7 @@ WMFVideoMFTManager::Input(MediaRawData* aSample) {
     // The colorspace definition is found in the H264 SPS NAL, available out of
     // band, while for VP9 it's only available within the VP9 bytestream.
     // The info would have been updated by the MediaChangeMonitor.
-    mColorSpace = Some(aSample->mTrackInfo->GetAsVideoInfo()->mColorSpace);
+    mColorSpace = aSample->mTrackInfo->GetAsVideoInfo()->mColorSpace;
     mColorRange = aSample->mTrackInfo->GetAsVideoInfo()->mColorRange;
   }
   mLastDuration = aSample->mDuration;
@@ -508,6 +506,32 @@ bool WMFVideoMFTManager::CanUseDXVA(IMFMediaType* aType, float aFramerate) {
   }
 
   return mDXVA2Manager->SupportsConfig(aType, aFramerate);
+}
+
+TimeUnit WMFVideoMFTManager::GetSampleDurationOrLastKnownDuration(
+    IMFSample* aSample) const {
+  TimeUnit duration = GetSampleDuration(aSample);
+  if (!duration.IsValid()) {
+    // WMF returned a non-success code (likely duration unknown, but the API
+    // also allows for other, unspecified codes).
+    LOG("Got unknown sample duration -- bad return code. Using mLastDuration.");
+  } else if (duration == TimeUnit::Zero()) {
+    // Duration is zero. WMF uses this to indicate an unknown duration.
+    LOG("Got unknown sample duration -- zero duration returned. Using "
+        "mLastDuration.");
+  } else if (duration.IsNegative()) {
+    // A negative duration will cause issues up the stack. It's also unclear
+    // why this would happen, but the API allows for it by returning a signed
+    // int, so we handle it here.
+    LOG("Got negative sample duration: %f seconds. Using mLastDuration "
+        "instead.",
+        duration.ToSeconds());
+  } else {
+    // We got a duration without any problems.
+    return duration;
+  }
+
+  return mLastDuration;
 }
 
 HRESULT
@@ -614,7 +638,7 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
 
   TimeUnit pts = GetSampleTime(aSample);
   NS_ENSURE_TRUE(pts.IsValid(), E_FAIL);
-  TimeUnit duration = GetSampleDuration(aSample);
+  TimeUnit duration = GetSampleDurationOrLastKnownDuration(aSample);
   NS_ENSURE_TRUE(duration.IsValid(), E_FAIL);
   gfx::IntRect pictureRegion =
       mVideoInfo.ScaledImageRect(videoWidth, videoHeight);
@@ -668,7 +692,7 @@ WMFVideoMFTManager::CreateD3DVideoFrame(IMFSample* aSample,
 
   TimeUnit pts = GetSampleTime(aSample);
   NS_ENSURE_TRUE(pts.IsValid(), E_FAIL);
-  TimeUnit duration = GetSampleDuration(aSample);
+  TimeUnit duration = GetSampleDurationOrLastKnownDuration(aSample);
   NS_ENSURE_TRUE(duration.IsValid(), E_FAIL);
   RefPtr<VideoData> v = VideoData::CreateFromImage(
       mVideoInfo.mDisplay, aStreamOffset, pts, duration, image.forget(), false,
@@ -770,13 +794,16 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
         continue;
       }
       TimeUnit pts = GetSampleTime(sample);
-      TimeUnit duration = GetSampleDuration(sample);
+      TimeUnit duration = GetSampleDurationOrLastKnownDuration(sample);
       if (!pts.IsValid() || !duration.IsValid()) {
         return E_FAIL;
       }
       if (mSeekTargetThreshold.isSome()) {
         if ((pts + duration) < mSeekTargetThreshold.ref()) {
-          LOG("Dropping video frame which pts is smaller than seek target.");
+          LOG("Dropping video frame which pts (%" PRId64 " + %" PRId64
+              ") is smaller than seek target (%" PRId64 ").",
+              pts.ToMicroseconds(), duration.ToMicroseconds(),
+              mSeekTargetThreshold->ToMicroseconds());
           // It is necessary to clear the pointer to release the previous output
           // buffer.
           sample = nullptr;
@@ -803,12 +830,6 @@ WMFVideoMFTManager::Output(int64_t aStreamOffset, RefPtr<MediaData>& aOutData) {
   NS_ENSURE_TRUE(frame, E_FAIL);
 
   aOutData = frame;
-  // The VP9 decoder doesn't provide a valid duration. As VP9 doesn't have a
-  // concept of pts vs dts and have no latency. We can as such use the last
-  // known input duration.
-  if (mStreamType == VP9 && aOutData->mDuration == TimeUnit::Zero()) {
-    aOutData->mDuration = mLastDuration;
-  }
 
   if (mNullOutputCount) {
     mGotValidOutputAfterNullOutput = true;

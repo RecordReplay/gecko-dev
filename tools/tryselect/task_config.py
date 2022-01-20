@@ -7,7 +7,6 @@ Templates provide a way of modifying the task definition of selected tasks.
 They are added to 'try_task_config.json' and processed by the transforms.
 """
 
-from __future__ import absolute_import, print_function, unicode_literals
 
 import json
 import os
@@ -27,7 +26,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 build = MozbuildObject.from_environment(cwd=here)
 
 
-class TryConfig(object):
+class TryConfig:
     __metaclass__ = ABCMeta
 
     def __init__(self):
@@ -68,7 +67,7 @@ class Artifact(TryConfig):
 
     def add_arguments(self, parser):
         group = parser.add_mutually_exclusive_group()
-        return super(Artifact, self).add_arguments(group)
+        return super().add_arguments(group)
 
     @classmethod
     def is_artifact_build(cls):
@@ -112,7 +111,7 @@ class Pernosco(TryConfig):
 
     def add_arguments(self, parser):
         group = parser.add_mutually_exclusive_group()
-        return super(Pernosco, self).add_arguments(group)
+        return super().add_arguments(group)
 
     def try_config(self, pernosco, **kwargs):
         if pernosco is None:
@@ -235,7 +234,7 @@ class RangeAction(Action):
         self.min = min
         self.max = max
         kwargs["metavar"] = "[{}-{}]".format(self.min, self.max)
-        super(RangeAction, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
         name = option_string or self.dest
@@ -328,6 +327,39 @@ class GeckoProfile(TryConfig):
                 "help": "Create and upload a gecko profile during talos/raptor tasks.",
             },
         ],
+        [
+            ["--gecko-profile-interval"],
+            {
+                "dest": "gecko_profile_interval",
+                "type": float,
+                "help": "How frequently to take samples (ms)",
+            },
+        ],
+        [
+            ["--gecko-profile-entries"],
+            {
+                "dest": "gecko_profile_entries",
+                "type": int,
+                "help": "How many samples to take with the profiler",
+            },
+        ],
+        [
+            ["--gecko-profile-features"],
+            {
+                "dest": "gecko_profile_features",
+                "type": str,
+                "default": None,
+                "help": "Set the features enabled for the profiler.",
+            },
+        ],
+        [
+            ["--gecko-profile-threads"],
+            {
+                "dest": "gecko_profile_threads",
+                "type": str,
+                "help": "Comma-separated list of threads to sample.",
+            },
+        ],
         # For backwards compatibility
         [
             ["--talos-profile"],
@@ -350,11 +382,26 @@ class GeckoProfile(TryConfig):
         ],
     ]
 
-    def try_config(self, profile, **kwargs):
-        if profile:
-            return {
+    def try_config(
+        self,
+        profile,
+        gecko_profile_interval,
+        gecko_profile_entries,
+        gecko_profile_features,
+        gecko_profile_threads,
+        **kwargs
+    ):
+        if profile or not all(
+            s is None for s in (gecko_profile_features, gecko_profile_threads)
+        ):
+            cfg = {
                 "gecko-profile": True,
+                "gecko-profile-interval": gecko_profile_interval,
+                "gecko-profile-entries": gecko_profile_entries,
+                "gecko-profile-features": gecko_profile_features,
+                "gecko-profile-threads": gecko_profile_threads,
             }
+            return {key: value for key, value in cfg.items() if value is not None}
 
 
 class Browsertime(TryConfig):

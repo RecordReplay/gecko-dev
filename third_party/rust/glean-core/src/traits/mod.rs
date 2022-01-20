@@ -2,9 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Important: consider this module unstable / experimental.
+//! API definitions for the different metric types supported by the Glean SDK.
 //!
-//! The different metric types supported by the Glean SDK to handle data.
+//! Individual metric types implement this trait to expose the specific metrics API.
+//! It can be used by wrapping implementations to guarantee API conformance.
 
 mod boolean;
 mod counter;
@@ -14,8 +15,10 @@ mod event;
 mod jwe;
 mod labeled;
 mod memory_distribution;
+mod numerator;
 mod ping;
 mod quantity;
+mod rate;
 mod string;
 mod string_list;
 mod timespan;
@@ -33,8 +36,10 @@ pub use self::event::NoExtraKeys;
 pub use self::jwe::Jwe;
 pub use self::labeled::Labeled;
 pub use self::memory_distribution::MemoryDistribution;
+pub use self::numerator::Numerator;
 pub use self::ping::Ping;
 pub use self::quantity::Quantity;
+pub use self::rate::Rate;
 pub use self::string::String;
 pub use self::string_list::StringList;
 pub use self::timespan::Timespan;

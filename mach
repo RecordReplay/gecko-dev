@@ -10,20 +10,6 @@
 # Embeds a shell script inside a Python triple quote. This pattern is valid
 # shell because `''':'`, `':'` and `:` are all equivalent, and `:` is a no-op.
 ''':'
-# Commands that are to be run with Python 2.
-py2commands="
-    awsy-test
-    firefox-ui-functional
-    jsshell-bench
-    marionette-test
-    jstests
-    mozharness
-    raptor
-    raptor-test
-    telemetry-tests-client
-    test
-    wpt-metadata-merge
-"
 
 # Commands that are to be run with the system Python 3 instead of the
 # virtualenv.
@@ -39,11 +25,11 @@ run_py() {
     shift
     if command -v "$py_executable" > /dev/null
     then
-        exec "$py_executable" "$0" "$@"
+        exec "$py_executable" $py_profile_command_args "$0" "$@"
     else
         echo "This mach command requires $py_executable, which wasn't found on the system!"
         case "$py_executable" in
-            python2.7|python3) ;;
+            python3) ;;
             *)
                 echo "Consider running 'mach bootstrap' or 'mach create-mach-environment' to create the mach virtualenvs, or set MACH_USE_SYSTEM_PYTHON to use the system Python installation over a virtualenv."
                 ;;
@@ -69,10 +55,14 @@ get_command() {
                 shift 2
             fi
             ;;
+        --no-interactive) shift;;
         --log-interval) shift;;
         --log-no-times) shift;;
         -h) shift;;
         --debug-command) shift;;
+        --profile-command)
+            py_profile_command="1"
+            shift;;
         --settings)
             if [ "$#" -lt 2 ]
             then
@@ -82,33 +72,40 @@ get_command() {
                 shift 2
             fi
             ;;
-        # When running `./mach help <command>`, the correct Python for <command>
-        # needs to be used.
-        help) echo $2; break;;
-        # When running `./mach mach-completion /path/to/mach <command>`, the
-        # correct Python for <command> needs to be used.
-        mach-completion) echo $3; break;;
         "") echo; break;;
         *) echo $1; break;;
     esac
     done
+    return ${py_profile_command}
 }
 
 state_dir=${MOZBUILD_STATE_PATH:-~/.mozbuild}
 command=$(get_command "$@")
+py_profile_command=$?
+
+if [ ${py_profile_command} -eq 0 ]
+then
+    py_profile_command_args=""
+else
+    # We would prefer to use an array variable here, but we're limited to POSIX.
+    # None of our arguments have quoting or spaces so we can safely interpolate
+    # a string instead.
+    py_profile_command_args="-m cProfile -o mach_profile_${command}.cProfile"
+    echo "Running with --profile-command.  To visualize, use snakeviz:"
+    echo "$HOME/.mozbuild/_virtualenvs/mach/bin/python -m pip install snakeviz"
+    echo "$HOME/.mozbuild/_virtualenvs/mach/bin/python -m snakeviz mach_profile_${command}.cProfile"
+fi
 
 # If MACH_USE_SYSTEM_PYTHON or MOZ_AUTOMATION are set, always use the
-# python{2.7,3} executables and not the virtualenv locations.
+# python 3 executables and not the virtualenv locations.
 if [ -z ${MACH_USE_SYSTEM_PYTHON} ] && [ -z ${MOZ_AUTOMATION} ]
 then
     case "$OSTYPE" in
         cygwin|msys|win32) bin_path=Scripts;;
         *) bin_path=bin;;
     esac
-    py2executable=$state_dir/_virtualenvs/mach_py2/$bin_path/python
     py3executable=$state_dir/_virtualenvs/mach/$bin_path/python
 else
-    py2executable=python2.7
     py3executable=python3
 fi
 
@@ -119,28 +116,7 @@ case " $(echo $nativecmds) " in
         ;;
 esac
 
-# Check for the mach subcommand in the Python 2 commands list and run it
-# with the correct interpreter.
-case " $(echo $py2commands) " in
-    *\ $command\ *)
-        run_py "$py2executable" "$@"
-        ;;
-    *)
-	if [ -z ${MACH_PY2} ]
-	then
-            run_py "$py3executable" "$@"
-	else
-	    if [ $command != "python-test" ]
-	    then
-	       echo "MACH_PY2 is only valid for mach python-test; please unset MACH_PY2 to continue."
-	       exit 1
-	    fi
-	    run_py "$py2executable" "$@"
-	fi
-        ;;
-esac
-
-# Run Python 3 for everything else.
+# # Use the mach virtualenv's Python 3 for the rest of the commands.
 run_py "$py3executable" "$@"
 '''
 

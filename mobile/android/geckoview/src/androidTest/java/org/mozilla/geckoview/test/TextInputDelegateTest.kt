@@ -6,12 +6,15 @@ package org.mozilla.geckoview.test
 
 import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
+import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.AssertCalled
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.WithDisplay
 import org.mozilla.geckoview.test.util.Callbacks
 
 import androidx.test.filters.MediumTest
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.KeyEvent
 import android.view.View
@@ -611,6 +614,17 @@ class TextInputDelegateTest : BaseSessionTest() {
                                  ic, "aab", 3)
     }
 
+    // Test for setting large text on text box.
+    @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
+    @Test fun inputConnection_largeText() {
+        val content = (1..1024000).map {
+            ('a'..'z').random()
+        }.joinToString("")
+        setupContent(content)
+        val ic = mainSession.textInput.onCreateInputConnection(EditorInfo())!!
+        assertText("Can set large initial text", ic, content, /* checkGecko */ false)
+    }
+
     // Bug 1133802, duplication when setting the same composing text more than once.
     @Ignore // Disable for frequent failures.
     @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
@@ -780,6 +794,60 @@ class TextInputDelegateTest : BaseSessionTest() {
     }
 
     @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
+    @Test fun editorInfo_defaultByInputType() {
+        assumeThat("type attribute is input element only", id, equalTo("#input"))
+        // Disable this with WebRender due to unexpected abort by mozilla::gl::GLContext::fTexSubImage2D
+        // (Bug 1706688, Bug 1710060 and etc)
+        assumeThat(sessionRule.env.isWebrender and sessionRule.env.isDebugBuild, equalTo(false))
+
+        mainSession.textInput.view = View(InstrumentationRegistry.getInstrumentation().targetContext)
+        mainSession.loadTestPath(FORMS5_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        for (inputType in listOf("#email1", "#pass1", "#search1", "#tel1", "#url1")) {
+            mainSession.evaluateJS("document.querySelector('$inputType').focus()")
+            mainSession.waitUntilCalled(GeckoSession.TextInputDelegate::class, "restartInput")
+
+            // IC will be updated asynchronously, so spin event loop
+            processChildEvents()
+            processParentEvents()
+
+            val editorInfo = EditorInfo()
+            val ic = mainSession.textInput.onCreateInputConnection(editorInfo)!!
+            assertThat("InputConnection is created correctly", ic, notNullValue())
+
+            // Even if we get IC, new EditorInfo isn't updated yet.
+            // We post and wait for empty job to IC thread to flush all IC's job.
+            val result = object : GeckoResult<Boolean>() {
+                init {
+                    val icHandler = mainSession.textInput.getHandler(Handler(Looper.getMainLooper()))
+                    icHandler.post({
+                        complete(true)
+                    })
+                }
+            }
+            sessionRule.waitForResult(result)
+            mainSession.textInput.onCreateInputConnection(editorInfo)
+
+            assertThat("EditorInfo.inputType of $inputType", editorInfo.inputType, equalTo(
+                when (inputType) {
+                    "#email1" -> InputType.TYPE_CLASS_TEXT or
+                                 InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                    "#pass1" -> InputType.TYPE_CLASS_TEXT or
+                                InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    "#search1" -> InputType.TYPE_CLASS_TEXT or
+                                  InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or
+                                  InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE or
+                                  InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    "#tel1" -> InputType.TYPE_CLASS_PHONE
+                    "#url1" -> InputType.TYPE_CLASS_TEXT or
+                               InputType.TYPE_TEXT_VARIATION_URI
+                    else -> 0
+                }))
+        }
+    }
+
+    @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
     @Test fun editorInfo_enterKeyHint() {
         // no way to set enterkeyhint on designmode.
         assumeThat("Not in designmode", id, not(equalTo("#designmode")))
@@ -922,5 +990,31 @@ class TextInputDelegateTest : BaseSessionTest() {
         pressKey(ic, KeyEvent.KEYCODE_R)
         assertText("Can set input string by keypress after calling blur and focus",
                    ic, "bar")
+    }
+
+    @WithDisplay(width = 512, height = 512) // Child process updates require having a display.
+    @Test fun inputConnection_bug1650705() {
+        // no way on designmode.
+        assumeThat("Not in designmode", id, not(equalTo("#designmode")))
+
+        setupContent("")
+        val ic = mainSession.textInput.onCreateInputConnection(EditorInfo())!!
+
+        commitText(ic, "foo", 1)
+        ic.setSelection(0, 3)
+
+        mainSession.evaluateJS("""
+            input_event_count = 0;
+            document.querySelector('$id').addEventListener('input', () => {
+                input_event_count++;
+            })
+        """)
+
+        setComposingText(ic, "barbaz", 1)
+
+        val count = mainSession.evaluateJS("input_event_count") as Double;
+        assertThat("input event is once", count, equalTo(1.0))
+
+        finishComposingText(ic)
     }
 }

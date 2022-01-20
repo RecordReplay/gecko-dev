@@ -18,15 +18,14 @@ add_task(async function() {
 
   // TODO: Resume with clicking on the overlay button, when Bug 1580394 is fixed.
   info("Resume");
-  resume(dbg);
-  await waitFor(() => !isPaused(dbg), "Wait for the debugger to resume");
+  await resume(dbg);
   ok(true, "We're not paused anymore");
 
   info("Wait for a bit, just to make sure the overlay isn't displayed");
   await waitForTime(5000);
 
-  const testFront = await getTestActor(dbg.toolbox);
-  const isPausedOverlayVisible = await testFront.isPausedDebuggerOverlayVisible();
+  const highlighterTestFront = await getHighlighterTestFront(dbg.toolbox);
+  const isPausedOverlayVisible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
   is(
     isPausedOverlayVisible,
     false,

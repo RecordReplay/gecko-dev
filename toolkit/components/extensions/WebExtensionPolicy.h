@@ -7,6 +7,7 @@
 #define mozilla_extensions_WebExtensionPolicy_h
 
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/Nullable.h"
 #include "mozilla/dom/WebExtensionPolicyBinding.h"
 #include "mozilla/dom/WindowProxyHolder.h"
@@ -28,11 +29,38 @@ class Promise;
 
 namespace extensions {
 
+using dom::WebAccessibleResourceInit;
 using dom::WebExtensionInit;
 using dom::WebExtensionLocalizeCallback;
 
 class DocInfo;
 class WebExtensionContentScript;
+
+class WebAccessibleResource final : public nsISupports {
+ public:
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS(WebAccessibleResource)
+
+  WebAccessibleResource(dom::GlobalObject& aGlobal,
+                        const WebAccessibleResourceInit& aInit,
+                        ErrorResult& aRv);
+
+  bool IsWebAccessiblePath(const nsAString& aPath) const {
+    return mWebAccessiblePaths.Matches(aPath);
+  }
+
+  bool SourceMayAccessPath(const URLInfo& aURI, const nsAString& aPath) {
+    return mWebAccessiblePaths.Matches(aPath) && mMatches &&
+           mMatches->Matches(aURI);
+  }
+
+ protected:
+  virtual ~WebAccessibleResource() = default;
+
+ private:
+  MatchGlobSet mWebAccessiblePaths;
+  RefPtr<MatchPatternSet> mMatches;
+};
 
 class WebExtensionPolicy final : public nsISupports,
                                  public nsWrapperCache,
@@ -77,8 +105,25 @@ class WebExtensionPolicy final : public nsISupports,
                     bool aCheckRestricted = true,
                     bool aAllowFilePermission = false) const;
 
-  bool IsPathWebAccessible(const nsAString& aPath) const {
-    return mWebAccessiblePaths.Matches(aPath);
+  bool IsWebAccessiblePath(const nsAString& aPath) const {
+    for (const auto& resource : mWebAccessibleResources) {
+      if (resource->IsWebAccessiblePath(aPath)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool SourceMayAccessPath(const URLInfo& aURI, const nsAString& aPath) const {
+    if (mManifestVersion < 3) {
+      return IsWebAccessiblePath(aPath);
+    }
+    for (const auto& resource : mWebAccessibleResources) {
+      if (resource->SourceMayAccessPath(aURI, aPath)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool HasPermission(const nsAtom* aPermission) const {
@@ -195,21 +240,20 @@ class WebExtensionPolicy final : public nsISupports,
   nsString mExtensionPageCSP;
   nsString mBaseCSP;
 
-  uint64_t mBrowsingContextGroupId = 0;
+  dom::BrowsingContextGroup::KeepAlivePtr mBrowsingContextGroup;
 
   bool mActive = false;
-  bool mAllowPrivateBrowsingByDefault = true;
 
   RefPtr<WebExtensionLocalizeCallback> mLocalizeCallback;
 
   bool mIsPrivileged;
   RefPtr<AtomSet> mPermissions;
   RefPtr<MatchPatternSet> mHostPermissions;
-  MatchGlobSet mWebAccessiblePaths;
 
   dom::Nullable<nsTArray<nsString>> mBackgroundScripts;
   nsString mBackgroundWorkerScript;
 
+  nsTArray<RefPtr<WebAccessibleResource>> mWebAccessibleResources;
   nsTArray<RefPtr<WebExtensionContentScript>> mContentScripts;
 
   RefPtr<dom::Promise> mReadyPromise;

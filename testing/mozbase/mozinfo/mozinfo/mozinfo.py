@@ -149,8 +149,26 @@ elif sys.platform in ("solaris", "sunos5"):
 else:
     os_version = version = unknown
 
+info["apple_silicon"] = False
+if (
+    info["os"] == "mac"
+    and float(os_version) > 10.15
+    and processor == "i386"
+    and bits == "64bit"
+):
+    info["apple_silicon"] = True
+
+info["apple_catalina"] = False
+if info["os"] == "mac" and float(os_version) == 10.15:
+    info["apple_catalina"] = True
+
+info["win10_2004"] = False
+if info["os"] == "win" and version == "10.0.19041":
+    info["win10_2004"] = True
+
 info["version"] = version
 info["os_version"] = StringVersion(os_version)
+
 
 # processor type and bits
 if processor in ["i386", "i686"]:

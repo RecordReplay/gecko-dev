@@ -20,6 +20,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
+#include "mozilla/WindowsProcessMitigations.h"
 #include "mozilla/WindowsVersion.h"
 #include "mozilla/WinHeaderOnlyUtils.h"
 #include "nsWindowsHelpers.h"
@@ -69,8 +70,8 @@ typedef NTSTATUS(NTAPI* LdrLoadDll_func)(PWCHAR filePath, PULONG flags,
 static WindowsDllInterceptor::FuncHookType<LdrLoadDll_func> stub_LdrLoadDll;
 
 #ifdef _M_AMD64
-typedef decltype(
-    RtlInstallFunctionTableCallback)* RtlInstallFunctionTableCallback_func;
+typedef decltype(RtlInstallFunctionTableCallback)*
+    RtlInstallFunctionTableCallback_func;
 static WindowsDllInterceptor::FuncHookType<RtlInstallFunctionTableCallback_func>
     stub_RtlInstallFunctionTableCallback;
 
@@ -672,7 +673,7 @@ MFBT_API void DllBlocklist_Initialize(uint32_t aInitFlags) {
   // If someone injects a thread early that causes user32.dll to load off the
   // main thread this causes issues, so load it as soon as we've initialized
   // the block-list. (See bug 1400637)
-  if (!sUser32BeforeBlocklist) {
+  if (!sUser32BeforeBlocklist && !IsWin32kLockedDown()) {
     ::LoadLibraryW(L"user32.dll");
   }
 
@@ -759,6 +760,11 @@ namespace mozilla {
 Authenticode* GetAuthenticode();
 }  // namespace mozilla
 
+/**
+ * Please note that DllBlocklist_SetFullDllServices is called with
+ * aSvc = nullptr to de-initialize the resources even though they
+ * have been initialized via DllBlocklist_SetBasicDllServices.
+ */
 MFBT_API void DllBlocklist_SetFullDllServices(
     mozilla::glue::detail::DllServicesBase* aSvc) {
   glue::AutoExclusiveLock lock(gDllServicesLock);

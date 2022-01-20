@@ -249,9 +249,9 @@ static BOOL WINAPI NoOp_DllMain(HINSTANCE, DWORD, LPVOID) { return TRUE; }
 static bool IsDependentModule(
     const UNICODE_STRING& aModuleLeafName,
     mozilla::freestanding::Kernel32ExportsSolver& aK32Exports) {
-  // We enable automatic DLL blocking only in Nightly for now because it caused
-  // a compat issue (bug 1682304).
-#if defined(NIGHTLY_BUILD)
+  // We enable automatic DLL blocking only in early Beta or earlier for now
+  // because it caused a compat issue (bug 1682304 and 1704373).
+#if defined(EARLY_BETA_OR_EARLIER)
   aK32Exports.Resolve(mozilla::freestanding::gK32ExportsResolveOnce);
   if (!aK32Exports.IsResolved()) {
     return false;
@@ -389,8 +389,14 @@ NTSTATUS NTAPI patched_NtMapViewOfSection(
     return STATUS_ACCESS_DENIED;
   }
 
-  // We don't care about mappings that aren't MEM_IMAGE
-  if (!(mbi.Type & MEM_IMAGE)) {
+  // We don't care about mappings that aren't MEM_IMAGE or executable.
+  // We check for the AllocationProtect, not the Protect field because
+  // the first section of a mapped image is always PAGE_READONLY even
+  // when it's mapped as an executable.
+  constexpr DWORD kPageExecutable = PAGE_EXECUTE | PAGE_EXECUTE_READ |
+                                    PAGE_EXECUTE_READWRITE |
+                                    PAGE_EXECUTE_WRITECOPY;
+  if (!(mbi.Type & MEM_IMAGE) || !(mbi.AllocationProtect & kPageExecutable)) {
     return stubStatus;
   }
 
@@ -467,7 +473,7 @@ NTSTATUS NTAPI patched_NtMapViewOfSection(
   if (nt::RtlGetProcessHeap()) {
     ModuleLoadFrame::NotifySectionMap(
         nt::AllocatedUnicodeString(sectionFileName), *aBaseAddress, stubStatus,
-        loadStatus);
+        loadStatus, isDependent);
   }
 
   if (loadStatus == ModuleLoadInfo::Status::Loaded ||

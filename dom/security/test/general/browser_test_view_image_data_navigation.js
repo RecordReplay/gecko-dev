@@ -9,10 +9,7 @@ add_task(async function test_principal_right_click_open_link_in_new_tab() {
     getRootDirectory(gTestPath) + "file_view_image_data_navigation.html";
 
   await BrowserTestUtils.withNewTab(TEST_PAGE, async function(browser) {
-    let loadPromise = BrowserTestUtils.browserLoaded(
-      gBrowser.selectedBrowser,
-      true
-    );
+    let loadPromise = BrowserTestUtils.waitForNewTab(gBrowser, null, true);
 
     // simulate right-click->view-image
     BrowserTestUtils.waitForEvent(document, "popupshown", false, event => {
@@ -26,13 +23,15 @@ add_task(async function test_principal_right_click_open_link_in_new_tab() {
       { type: "contextmenu", button: 2 },
       gBrowser.selectedBrowser
     );
-    await loadPromise;
+    let tab = await loadPromise;
 
-    let spec = gBrowser.selectedBrowser.currentURI.spec;
+    let spec = tab.linkedBrowser.currentURI.spec;
     ok(
       spec.startsWith("data:image/svg+xml;"),
       "data:image/svg navigation allowed through right-click view-image"
     );
+
+    gBrowser.removeTab(tab);
   });
 });
 
@@ -45,15 +44,12 @@ add_task(async function test_right_click_open_bg_image() {
     getRootDirectory(gTestPath) + "file_view_bg_image_data_navigation.html";
 
   await BrowserTestUtils.withNewTab(TEST_PAGE, async function(browser) {
-    let loadPromise = BrowserTestUtils.browserLoaded(
-      gBrowser.selectedBrowser,
-      true
-    );
+    let loadPromise = BrowserTestUtils.waitForNewTab(gBrowser, null, true);
 
-    // simulate right-click->view-bg-image
+    // simulate right-click->view-image
     BrowserTestUtils.waitForEvent(document, "popupshown", false, event => {
       // These are operations that must be executed synchronously with the event.
-      document.getElementById("context-viewbgimage").doCommand();
+      document.getElementById("context-viewimage").doCommand();
       event.target.hidePopup();
       return true;
     });
@@ -62,12 +58,14 @@ add_task(async function test_right_click_open_bg_image() {
       { type: "contextmenu", button: 2 },
       gBrowser.selectedBrowser
     );
-    await loadPromise;
+    let tab = await loadPromise;
 
-    let spec = gBrowser.selectedBrowser.currentURI.spec;
+    let spec = tab.linkedBrowser.currentURI.spec;
     ok(
       spec.startsWith("data:image/svg+xml;"),
-      "data:image/svg navigation allowed through right-click view-bg-image"
+      "data:image/svg navigation allowed through right-click view-image with background image"
     );
+
+    gBrowser.removeTab(tab);
   });
 });

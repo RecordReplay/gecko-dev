@@ -80,6 +80,15 @@ const SpecialMessageActions = {
   },
 
   /**
+   * Pin Firefox to taskbar.
+   *
+   * @param {Window} window Reference to a window object
+   */
+  pinFirefoxToTaskbar(window) {
+    window.getShellService().pinToTaskbar();
+  },
+
+  /**
    *  Set browser as the operating system default browser.
    *
    *  @param {Window} window Reference to a window object
@@ -228,6 +237,13 @@ const SpecialMessageActions = {
           action.data.url,
           action.data.telemetrySource
         );
+        break;
+      case "PIN_FIREFOX_TO_TASKBAR":
+        this.pinFirefoxToTaskbar(window);
+        break;
+      case "PIN_AND_DEFAULT":
+        this.pinFirefoxToTaskbar(window);
+        this.setDefaultBrowser(window);
         break;
       case "SET_DEFAULT_BROWSER":
         this.setDefaultBrowser(window);

@@ -12,7 +12,6 @@
 #  include "MediaEventSource.h"
 #  include "MediaMetadataManager.h"
 #  include "MediaPromiseDefs.h"
-#  include "PDMFactory.h"
 #  include "PlatformDecoderModule.h"
 #  include "SeekTarget.h"
 #  include "mozilla/Atomics.h"
@@ -110,7 +109,8 @@ class MediaFormatReader final
 
   // Requests one video sample from the reader.
   RefPtr<VideoDataPromise> RequestVideoData(
-      const media::TimeUnit& aTimeThreshold);
+      const media::TimeUnit& aTimeThreshold,
+      bool aRequestNextVideoKeyFrame = false);
 
   // Requests one audio sample from the reader.
   //
@@ -288,6 +288,9 @@ class MediaFormatReader final
   // Perform an internal seek to aTime. If aDropTarget is true then
   // the first sample past the target will be dropped.
   void InternalSeek(TrackType aTrack, const InternalSeekTarget& aTarget);
+  // Return the end time of the internal seek target if it exists. Otherwise,
+  // return infinity.
+  media::TimeUnit GetInternalSeekTargetEndTime() const;
 
   // Drain the current decoder.
   void DrainDecoder(TrackType aTrack);
@@ -306,7 +309,16 @@ class MediaFormatReader final
   void Reset(TrackType aTrack);
   void DropDecodedSamples(TrackType aTrack);
 
-  bool ShouldSkip(media::TimeUnit aTimeThreshold);
+  // Return a target timeunit which the reader should skip to, this would be
+  // either the timethreshold we pass, or the time of the next keyframe. Return
+  // nothing if we don't need to skip.
+  // @param aTimeThreshold
+  // The time that we expect the time of next video frame should be or go beyond
+  // @param aRequestNextVideoKeyFrame
+  // If true and the next keyframe's time is larger than aTimeThreshold, skip to
+  // the next keyframe time instead of aTimeThreshold.
+  Maybe<media::TimeUnit> ShouldSkip(media::TimeUnit aTimeThreshold,
+                                    bool aRequestNextVideoKeyFrame);
 
   void SetVideoDecodeThreshold();
 
@@ -316,9 +328,6 @@ class MediaFormatReader final
   // storage of the decoder benchmark.
   // This is called only on TaskQueue.
   void NotifyDecoderBenchmarkStore();
-
-  RefPtr<PDMFactory> mPlatform;
-  RefPtr<PDMFactory> mEncryptedPlatform;
 
   enum class DrainState {
     None,

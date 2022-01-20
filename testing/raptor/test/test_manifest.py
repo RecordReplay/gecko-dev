@@ -185,11 +185,11 @@ def test_get_raptor_test_list_firefox(create_args):
 
 
 def test_get_raptor_test_list_chrome(create_args):
-    args = create_args(app="chrome", test="raptor-speedometer", browser_cycles=1)
+    args = create_args(app="chrome", test="speedometer", browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-speedometer-chrome"
+    assert test_list[0]["name"] == "speedometer"
 
 
 def test_get_raptor_test_list_geckoview(create_args):
@@ -201,130 +201,145 @@ def test_get_raptor_test_list_geckoview(create_args):
 
 
 def test_get_raptor_test_list_gecko_profiling_enabled(create_args):
-    args = create_args(
-        test="raptor-tp6-google-firefox", gecko_profile=True, browser_cycles=1
-    )
+    args = create_args(test="amazon", gecko_profile=True, browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0]["gecko_profile"] is True
     assert test_list[0].get("gecko_profile_entries") == "14000000"
     assert test_list[0].get("gecko_profile_interval") == "1"
     assert test_list[0].get("gecko_profile_threads") is None
+    assert test_list[0].get("gecko_profile_features") is None
 
 
 def test_get_raptor_test_list_gecko_profiling_enabled_args_override(create_args):
     args = create_args(
-        test="raptor-tp6-google-firefox",
+        test="amazon",
         gecko_profile=True,
         gecko_profile_entries=42,
         gecko_profile_interval=100,
-        gecko_profile_threads=["Foo"],
+        gecko_profile_threads="Foo",
+        gecko_profile_features="Mood,UserNetWorth",
         browser_cycles=1,
     )
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0]["gecko_profile"] is True
     assert test_list[0]["gecko_profile_entries"] == "42"
     assert test_list[0]["gecko_profile_interval"] == "100"
     assert test_list[0]["gecko_profile_threads"] == "Foo"
+    assert test_list[0]["gecko_profile_features"] == "Mood,UserNetWorth"
+
+
+def test_get_raptor_test_list_gecko_profiling_enabled_extra_args_override(create_args):
+    args = create_args(
+        test="amazon",
+        gecko_profile=True,
+        gecko_profile_entries=42,
+        gecko_profile_interval=100,
+        gecko_profile_extra_threads=["Foo", "Oof"],
+        gecko_profile_threads="String,Rope",
+        browser_cycles=1,
+    )
+
+    test_list = get_raptor_test_list(args, mozinfo.os)
+    assert len(test_list) == 1
+    assert test_list[0]["name"] == "amazon"
+    assert test_list[0]["gecko_profile"] is True
+    assert test_list[0]["gecko_profile_entries"] == "42"
+    assert test_list[0]["gecko_profile_interval"] == "100"
+    assert test_list[0]["gecko_profile_threads"] == "String,Rope,Foo,Oof"
 
 
 def test_get_raptor_test_list_gecko_profiling_disabled(create_args):
     args = create_args(
-        test="raptor-tp6-google-firefox",
+        test="amazon",
         gecko_profile=False,
         gecko_profile_entries=42,
         gecko_profile_interval=100,
         gecko_profile_threads=["Foo"],
+        gecko_profile_features=["Temperature"],
         browser_cycles=1,
     )
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0].get("gecko_profile") is None
     assert test_list[0].get("gecko_profile_entries") is None
     assert test_list[0].get("gecko_profile_interval") is None
     assert test_list[0].get("gecko_profile_threads") is None
+    assert test_list[0].get("gecko_profile_features") is None
 
 
 def test_get_raptor_test_list_gecko_profiling_disabled_args_override(create_args):
     args = create_args(
-        test="raptor-tp6-google-firefox",
+        test="amazon",
         gecko_profile=False,
         gecko_profile_entries=42,
         gecko_profile_interval=100,
         gecko_profile_threads=["Foo"],
+        gecko_profile_features=["Temperature"],
         browser_cycles=1,
     )
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0].get("gecko_profile") is None
     assert test_list[0].get("gecko_profile_entries") is None
     assert test_list[0].get("gecko_profile_interval") is None
     assert test_list[0].get("gecko_profile_threads") is None
+    assert test_list[0].get("gecko_profile_features") is None
 
 
 def test_get_raptor_test_list_debug_mode(create_args):
-    args = create_args(
-        test="raptor-tp6-google-firefox", debug_mode=True, browser_cycles=1
-    )
+    args = create_args(test="amazon", debug_mode=True, browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0]["debug_mode"] is True
     assert test_list[0]["page_cycles"] == 2
 
 
 def test_get_raptor_test_list_using_live_sites(create_args):
-    args = create_args(
-        test="raptor-tp6-amazon-firefox", live_sites=True, browser_cycles=1
-    )
+    args = create_args(test="amazon", live_sites=True, browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-amazon-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0]["use_live_sites"] == "true"
     assert test_list[0]["playback"] is None
 
 
 def test_get_raptor_test_list_override_page_cycles(create_args):
-    args = create_args(
-        test="raptor-tp6-google-firefox", page_cycles=99, browser_cycles=1
-    )
+    args = create_args(test="amazon", page_cycles=99, browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0]["page_cycles"] == 99
 
 
 def test_get_raptor_test_list_override_page_timeout(create_args):
-    args = create_args(
-        test="raptor-tp6-google-firefox", page_timeout=9999, browser_cycles=1
-    )
+    args = create_args(test="amazon", page_timeout=9999, browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     assert test_list[0]["page_timeout"] == 9999
 
 
 def test_get_raptor_test_list_add_test_url_params(create_args):
-    args = create_args(
-        test="raptor-tp6-google-firefox", test_url_params="c=4", browser_cycles=1
-    )
+    args = create_args(test="amazon", test_url_params="c=4", browser_cycles=1)
 
     test_list = get_raptor_test_list(args, mozinfo.os)
     assert len(test_list) == 1
-    assert test_list[0]["name"] == "raptor-tp6-google-firefox"
+    assert test_list[0]["name"] == "amazon"
     query_params = parse_qs(urlsplit(test_list[0]["test_url"]).query)
     assert query_params.get("c") == ["4"]
 

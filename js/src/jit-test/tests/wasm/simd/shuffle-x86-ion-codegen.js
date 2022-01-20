@@ -1,4 +1,4 @@
-// |jit-test| skip-if: !wasmSimdEnabled() || !hasDisassembler() || wasmCompileMode() != "ion" || !getBuildConfiguration().x64; include:codegen-x64-test.js
+// |jit-test| skip-if: !wasmSimdEnabled() || !hasDisassembler() || wasmCompileMode() != "ion" || !getBuildConfiguration().x64 || getBuildConfiguration().simulator; include:codegen-x64-test.js
 
 // Test that there are no extraneous moves or fixups for SIMD shuffle
 // operations.  See README-codegen.md for general information about this type of
@@ -29,8 +29,7 @@ f2 0f 70 c0 aa            pshuflw \\$0xAA, %xmm0, %xmm0
      // Permute bytes
     ['i8x16.shuffle 2 1 4 3 6 5 8 7 10 9 12 11 14 13 0 15',
 `
-66 44 0f 6f 3d ${RIPRADDR} movdqax ${RIPR}, %xmm15
-66 41 0f 38 00 c7          pshufb %xmm15, %xmm0`],
+66 0f 38 00 05 ${RIPRADDR} pshufbx ${RIPR}, %xmm0`],
 
      // Permute words
     ['i8x16.shuffle 2 3 0 1 6 7 4 5 10 11 8 9 14 15 12 13',
@@ -77,3 +76,15 @@ codegenTestX64_v128xLITERAL_v128(
 66 0f ef c9               pxor %xmm1, %xmm1
 66 0f 73 d8 03            psrldq \\$0x03, %xmm0`]]);
 
+// SSE4.1 PBLENDVB instruction is using XMM0, checking if blend
+// operation generated as expected.
+codegenTestX64_adhoc(
+     `(func (export "f") (param v128 v128 v128 v128) (result v128)
+        (i8x16.shuffle 0 17 2 3 4 5 6 7 24 25 26 11 12 13 30 15
+          (local.get 2)(local.get 3)))`,
+     'f',
+`
+66 0f 6f ca               movdqa %xmm2, %xmm1
+66 0f 6f 05 ${RIPRADDR}   movdqax ${RIPR}, %xmm0
+66 0f 38 10 cb            pblendvb %xmm3, %xmm1
+66 0f 6f c1               movdqa %xmm1, %xmm0`);

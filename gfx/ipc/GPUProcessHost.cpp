@@ -12,7 +12,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "VRGPUChild.h"
-#include "ProcessUtils.h"
+#include "mozilla/ipc/ProcessUtils.h"
 
 namespace mozilla {
 namespace gfx {
@@ -139,7 +139,7 @@ void GPUProcessHost::InitAfterConnect(bool aSucceeded) {
     mProcessToken = ++sProcessTokenCounter;
     mGPUChild = MakeUnique<GPUChild>(this);
     DebugOnly<bool> rv = mGPUChild->Open(
-        TakeChannel(), base::GetProcId(GetChildProcessHandle()));
+        TakeInitialPort(), base::GetProcId(GetChildProcessHandle()));
     MOZ_ASSERT(rv);
 
     mGPUChild->Init();

@@ -102,6 +102,15 @@ urlbar.tips
     Incremented when the user picks the update_web search intervention.
   - ``intervention_update_web-shown``
     Incremented when the update_web search intervention is shown.
+  - ``tabtosearch-shown``
+    Increment when a non-onboarding tab-to-search result is shown, once per
+    engine per engagement. Please note that the number of times non-onboarding
+    tab-to-search results are picked is the sum of all keys in
+    ``urlbar.searchmode.tabtosearch``. Please also note that more detailed
+    telemetry is recorded about both onboarding and non-onboarding tab-to-search
+    results in urlbar.tabtosearch.*. These probes in ``urlbar.tips`` are still
+    recorded because ``urlbar.tabtosearch.*`` is not currently recorded
+    in Release.
   - ``tabtosearch_onboard-shown``
     Incremented when a tab-to-search onboarding result is shown, once per engine
     per engagement. Please note that the number of times tab-to-search
@@ -126,7 +135,8 @@ urlbar.searchmode.*
     menu.
   - ``handoff``
     Used when the user uses the search box on the new tab page and is handed off
-    to the address bar.
+    to the address bar. NOTE: This entry point was deprecated in Firefox 88.
+    Handoff no longer enters search mode.
   - ``keywordoffer``
     Used when the user selects a keyword offer result.
   - ``oneoff``
@@ -235,6 +245,22 @@ urlbar.picked.searchmode.*
     a Google search suggestion at index 2, we would record in **both**
     ``urlbar.picked.searchsuggestion`` and ``urlbar.picked.searchmode.oneoff``.
 
+urlbar.tabtosearch.*
+  This is a set of keyed scalars whose values are uints incremented when a
+  tab-to-search result is shown, once per engine per engagement. There are two
+  sub-probes: ``urlbar.tabtosearch.impressions`` and
+  ``urlbar.tabtosearch.impressions_onboarding``. The former records impressions
+  of regular tab-to-search results and the latter records impressions of
+  onboarding tab-to-search results. The key values are identical to those of the
+  ``urlbar.searchmode.*`` probes: they are the names of the engines shown in the
+  tab-to-search results. Engines that are not built in are grouped under the
+  key ``other``.
+
+  .. note::
+    Due to the potentially sensitive nature of these data, they are currently
+    collected only on pre-release version of Firefox. See bug 1686330.
+
+
 
 Event Telemetry
 ---------------
@@ -287,7 +313,7 @@ Event Object
   - ``drop_go``
     The user dropped text on the input field.
   - ``paste_go``
-    The user used Paste & Go feature. It is not the same as paste and Enter.
+    The user used Paste and Go feature. It is not the same as paste and Enter.
   - ``blur``
     The user unfocused the urlbar. This is only valid for ``abandonment``.
 
@@ -312,7 +338,7 @@ Event Extra
     ``history``, ``keyword``, ``searchengine``, ``searchsuggestion``,
     ``switchtab``, ``remotetab``, ``extension``, ``oneoff``, ``keywordoffer``,
     ``canonized``, ``tip``, ``tiphelp``, ``formhistory``, ``tabtosearch``,
-    ``unknown``
+    ``help``, ``unknown``
     In practice, ``tabtosearch`` should not appear in real event telemetry.
     Opening a tab-to-search result enters search mode and entering search mode
     does not currently mark the end of an engagement. It is noted here for
@@ -327,74 +353,164 @@ Event Extra
     This is only present for ``engagement`` events.
   - ``provider``
     The name of the result provider for the selected result. Existing values
-    are: ``HeuristicFallback``, ``Autofill``, ``UnifiedComplete``,
+    are: ``HeuristicFallback``, ``Autofill``, ``Places``,
     ``TokenAliasEngines``, ``SearchSuggestions``, ``UrlbarProviderTopSites``.
+    Data from before Firefox 91 will also list ``UnifiedComplete`` as a
+    provider. This is equivalent to ``Places``.
     Values can also be defined by `URLBar provider experiments`_.
 
     .. _URLBar provider experiments: experiments.html#developing-address-bar-extensions
 
-Search probes relevant to the Address Bar
------------------------------------------
 
-SEARCH_COUNTS
-  This histogram tracks search engines and Search Access Points. It is augmented
-  by multiple SAPs, including the urlbar.
-  It's a keyed histogram, the keys are strings made up of search engine names
-  and SAP names, for example ``google.urlbar``.
-  For each key, this records the count of searches made using that engine and SAP.
-  SAP names can be:
+Custom pings for Contextual Services
+------------------------------------
 
-    - ``alias`` This is when using an alias (like ``@google``) in the urlbar.
-      Note there is often confusion between the terms alias and keyword, and
-      they may be used inappropriately: aliases refer to search engines, while
-      keywords refer to bookmarks. We expect no results for this SAP in Firefox
-      83+, since urlbar-searchmode replaces it.
-    - ``abouthome``
-    - ``contextmenu``
-    - ``newtab``
-    - ``searchbar``
-    - ``system``
-    - ``urlbar`` Except aliases and search mode.
-    - ``urlbar-searchmode`` Used when the Urlbar is in search mode.
-    - ``webextension``
-    - ``oneoff-urlbar``
-    - ``oneoff-searchbar``
-    - ``unknown`` This is actually the searchbar, when using the current engine
-      one-off button.
+Contextual Services currently has two features running within the Urlbar: TopSites
+and QuickSuggest. We send various pings as the `custom pings`_ to record the impressions
+and clicks of these two features.
 
-browser.engagement.navigation.*
-  These keyed scalars track search through different SAPs, for example the
-  urlbar is tracked by ``browser.engagement.navigation.urlbar``.
-  It counts loads triggered in a subsession from the specified SAP, broken down
-  by the originating action.
-  Possible SAPs are:
+    .. _custom pings: https://docs.telemetry.mozilla.org/cookbooks/new_ping.html#sending-a-custom-ping
 
-    - ``urlbar``  Except search mode.
-    - ``urlbar_searchmode``  Used when the Urlbar is in search mode.
-    - ``searchbar``
-    - ``about_home``
-    - ``about_newtab``
-    - ``contextmenu``
-    - ``webextension``
-    - ``system`` Indicates a search from the command line.
+TopSites Impression
+  This records an impression when a sponsored TopSite is shown.
 
-  Recorded actions may be:
+  - ``context_id``
+    A UUID representing this user. Note that it's not client_id, nor can it be used to link to a client_id.
+  - ``tile_id``
+    A unique identifier for the sponsored TopSite.
+  - ``source``
+    The browser location where the impression was displayed.
+  - ``position``
+    The placement of the TopSite (1-based).
+  - ``advertiser``
+    The Name of the advertiser.
+  - ``reporting_url``
+    The reporting URL of the sponsored TopSite, normally pointing to the ad partner's reporting endpoint.
+  - ``version``
+    Firefox version.
+  - ``release_channel``
+    Firefox release channel.
+  - ``locale``
+    User's current locale.
 
-    - ``search``
-      Used for any search from ``contextmenu``, ``system`` and ``webextension``.
-    - ``search_alias``
-      For ``urlbar``, indicates the user confirmed a search through an alias.
-    - ``search_enter``
-      For ``about_home`` and ``about:newtab`` this counts any search.
-      For the other SAPs it tracks typing and then pressing Enter.
-    - ``search_formhistory``
-      For ``urlbar``, indicates the user picked a form history result.
-    - ``search_oneoff``
-      For ``urlbar`` or ``searchbar``, indicates the user confirmed a search
-      using a one-off button.
-    - ``search_suggestion``
-      For ``urlbar`` or ``searchbar``, indicates the user confirmed a search
-      suggestion.
+TopSites Click
+  This records a click ping when a sponsored TopSite is clicked by the user.
+
+  - ``context_id``
+    A UUID representing this user. Note that it's not client_id, nor can it be used to link to a client_id.
+  - ``tile_id``
+    A unique identifier for the sponsored TopSite.
+  - ``source``
+    The browser location where the click was tirggered.
+  - ``position``
+    The placement of the TopSite (1-based).
+  - ``advertiser``
+    The Name of the advertiser.
+  - ``reporting_url``
+    The reporting URL of the sponsored TopSite, normally pointing to the ad partner's reporting endpoint.
+  - ``version``
+    Firefox version.
+  - ``release_channel``
+    Firefox release channel.
+  - ``locale``
+    User's current locale.
+
+QuickSuggest Impression
+  This records an impression when the following two conditions hold:
+    - A user needs to complete the search action by picking a result from the Urlbar
+    - There must be a QuickSuggest link shown at the end of that search action.
+      No impression will be recorded for any QuickSuggest links that are shown
+      during the user typing, only the last one (if any) counts
+
+  Payload:
+
+  - ``context_id``
+    A UUID representing this user. Note that it's not client_id, nor can it be used to link to a client_id.
+  - ``search_query``
+    The exact search query typed in by the user.
+  - ``matched_keywords``
+    The matched keywords that leads to the QuickSuggest link.
+  - ``is_clicked``
+    Whether or not the use has clicked on the QuickSuggest link.
+  - ``block_id``
+    A unique identifier for a QuickSuggest link (a.k.a a keywords block).
+  - ``position``
+    The placement of the QuickSuggest link in the Urlbar (1-based).
+  - ``advertiser``
+    The Name of the advertiser.
+  - ``reporting_url``
+    The reporting URL of the QuickSuggest link, normally pointing to the ad partner's reporting endpoint.
+
+QuickSuggest Click
+  This records a click ping when a QuickSuggest link is clicked by the user.
+
+  - ``context_id``
+    A UUID representing this user. Note that it's not client_id, nor can it be
+    used to link to a client_id.
+  - ``advertiser``
+    The Name of the advertiser.
+  - ``block_id``
+    A unique identifier for a QuickSuggest link (a.k.a a keywords block).
+  - ``position``
+    The placement of the QuickSuggest link in the Urlbar (1-based).
+  - ``reporting_url``
+    The reporting URL of the QuickSuggest link, normally pointing to the ad partner's reporting endpoint.
+
+
+Other telemetry relevant to the Address Bar
+-------------------------------------------
+
+Search Telemetry
+  Some of the `search telemetry`_ is also relevant to the address bar.
+
+contextual.services.topsites.*
+  These keyed scalars instrument the impressions and clicks for sponsored TopSites
+  in the urlbar.
+  The key is a combination of the source and the placement of the TopSites link
+  (1-based) such as 'urlbar_1'. For each key, it records the counter of the
+  impression or click.
+  Note that these scalars are shared with the TopSites on the newtab page.
+
+contextual.services.quicksuggest.*
+  These keyed scalars record impressions and clicks on Quick Suggest results,
+  also called Firefox Suggest results, in the address bar. The keys for each
+  scalar are the 1-based indexes of the Quick Suggest results, and the values
+  are the number of impressions or clicks for the corresponding indexes. For
+  example, for a Quick Suggest impression at 0-based index 9, the value for key
+  ``10`` will be incremented in the
+  ``contextual.services.quicksuggest.impression`` scalar.
+
+  The keyed scalars are:
+
+    - ``contextual.services.quicksuggest.impression``
+      Incremented when a Quick Suggest result is shown in an address bar
+      engagement where the user picks any result. The particular picked result
+      doesn't matter, and it doesn't need to be the Quick Suggest result.
+    - ``contextual.services.quicksuggest.click``
+      Incremented when the user picks a Quick Suggest result (not including the
+      help button).
+    - ``contextual.services.quicksuggest.help``
+      Incremented when the user picks the onboarding help button in a Quick
+      Suggest result.
+
+contextservices.quicksuggest
+  This is event telemetry under the ``contextservices.quicksuggest`` category.
+  It's enabled only when the ``browser.urlbar.quicksuggest.enabled`` pref is
+  true. An event is recorded when the user toggles the
+  ``browser.urlbar.suggest.quicksuggest`` pref, which corresponds to the
+  checkbox in about:preferences#search labeled "Show Firefox Suggest in the
+  address bar (suggested and sponsored results)". If the user never toggles
+  the pref, then this event is never recorded.
+
+  The full spec for this event is:
+
+    - Category: ``contextservices.quicksuggest``
+    - Method: ``enable_toggled``
+    - Objects: ``enabled``, ``disabled`` -- ``enabled`` is recorded when the
+      pref is flipped from false to true, and ``disabled`` is recorded when the
+      pref is flipped from true to false.
+    - Value: Not used
+    - Extra: Not used
 
 Obsolete probes
 ---------------
@@ -435,11 +551,4 @@ FX_URLBAR_SELECTED_RESULT_INDEX_BY_TYPE and FX_URLBAR_SELECTED_RESULT_INDEX_BY_T
   FX_URLBAR_SELECTED_RESULT_TYPE above). For each key, this recorded the indexes
   of picked results for that result type.
 
-Obsolete search probes
-----------------------
-
-navigation.search (OBSOLETE)
-  This is a legacy and disabled event telemetry that is currently under
-  discussion for removal or modernization. It can't be enabled through a pref.
-  it's more or less equivalent to browser.engagement.navigation, but can also
-  report the picked search engine.
+.. _search telemetry: /browser/search/telemetry.html

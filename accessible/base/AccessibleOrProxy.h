@@ -7,8 +7,8 @@
 #ifndef mozilla_a11y_AccessibleOrProxy_h
 #define mozilla_a11y_AccessibleOrProxy_h
 
-#include "mozilla/a11y/Accessible.h"
-#include "mozilla/a11y/ProxyAccessible.h"
+#include "mozilla/a11y/LocalAccessible.h"
+#include "mozilla/a11y/RemoteAccessible.h"
 #include "mozilla/a11y/Role.h"
 
 #include <stdint.h>
@@ -17,31 +17,39 @@ namespace mozilla {
 namespace a11y {
 
 /**
- * This class stores an Accessible* or a ProxyAccessible* in a safe manner
+ * This class stores a LocalAccessible* or a RemoteAccessible* in a safe manner
  * with size sizeof(void*).
  */
 class AccessibleOrProxy {
  public:
+  // XXX: A temporary constructor to aid in the transition to
+  // an Accessible base class.
   MOZ_IMPLICIT AccessibleOrProxy(Accessible* aAcc)
+      : mBits(aAcc ? (aAcc->IsRemote()
+                          ? reinterpret_cast<uintptr_t>(aAcc->AsRemote()) |
+                                IS_PROXY
+                          : reinterpret_cast<uintptr_t>(aAcc->AsLocal()))
+                   : 0) {}
+  MOZ_IMPLICIT AccessibleOrProxy(LocalAccessible* aAcc)
       : mBits(reinterpret_cast<uintptr_t>(aAcc)) {}
-  MOZ_IMPLICIT AccessibleOrProxy(ProxyAccessible* aProxy)
+  MOZ_IMPLICIT AccessibleOrProxy(RemoteAccessible* aProxy)
       : mBits(aProxy ? (reinterpret_cast<uintptr_t>(aProxy) | IS_PROXY) : 0) {}
   MOZ_IMPLICIT AccessibleOrProxy(decltype(nullptr)) : mBits(0) {}
   MOZ_IMPLICIT AccessibleOrProxy() : mBits(0) {}
 
   bool IsProxy() const { return mBits & IS_PROXY; }
-  ProxyAccessible* AsProxy() const {
+  RemoteAccessible* AsProxy() const {
     if (IsProxy()) {
-      return reinterpret_cast<ProxyAccessible*>(mBits & ~IS_PROXY);
+      return reinterpret_cast<RemoteAccessible*>(mBits & ~IS_PROXY);
     }
 
     return nullptr;
   }
 
   bool IsAccessible() const { return !IsProxy(); }
-  Accessible* AsAccessible() const {
+  LocalAccessible* AsAccessible() const {
     if (IsAccessible()) {
-      return reinterpret_cast<Accessible*>(mBits);
+      return reinterpret_cast<LocalAccessible*>(mBits);
     }
 
     return nullptr;
@@ -51,7 +59,7 @@ class AccessibleOrProxy {
 
   uint32_t ChildCount() const {
     if (IsProxy()) {
-      return AsProxy()->ChildrenCount();
+      return AsProxy()->ChildCount();
     }
 
     if (RemoteChildDoc()) {
@@ -72,15 +80,15 @@ class AccessibleOrProxy {
    */
   AccessibleOrProxy ChildAt(uint32_t aIdx) const {
     if (IsProxy()) {
-      return AsProxy()->ChildAt(aIdx);
+      return AsProxy()->RemoteChildAt(aIdx);
     }
 
-    ProxyAccessible* childDoc = RemoteChildDoc();
+    RemoteAccessible* childDoc = RemoteChildDoc();
     if (childDoc && aIdx == 0) {
       return childDoc;
     }
 
-    return AsAccessible()->GetChildAt(aIdx);
+    return AsAccessible()->LocalChildAt(aIdx);
   }
 
   /**
@@ -88,15 +96,15 @@ class AccessibleOrProxy {
    */
   AccessibleOrProxy FirstChild() {
     if (IsProxy()) {
-      return AsProxy()->FirstChild();
+      return AsProxy()->RemoteFirstChild();
     }
 
-    ProxyAccessible* childDoc = RemoteChildDoc();
+    RemoteAccessible* childDoc = RemoteChildDoc();
     if (childDoc) {
       return childDoc;
     }
 
-    return AsAccessible()->FirstChild();
+    return AsAccessible()->LocalFirstChild();
   }
 
   /**
@@ -104,15 +112,15 @@ class AccessibleOrProxy {
    */
   AccessibleOrProxy LastChild() {
     if (IsProxy()) {
-      return AsProxy()->LastChild();
+      return AsProxy()->RemoteLastChild();
     }
 
-    ProxyAccessible* childDoc = RemoteChildDoc();
+    RemoteAccessible* childDoc = RemoteChildDoc();
     if (childDoc) {
       return childDoc;
     }
 
-    return AsAccessible()->LastChild();
+    return AsAccessible()->LocalLastChild();
   }
 
   /**
@@ -120,10 +128,10 @@ class AccessibleOrProxy {
    */
   AccessibleOrProxy NextSibling() {
     if (IsProxy()) {
-      return AsProxy()->NextSibling();
+      return AsProxy()->RemoteNextSibling();
     }
 
-    return AsAccessible()->NextSibling();
+    return AsAccessible()->LocalNextSibling();
   }
 
   /**
@@ -131,10 +139,10 @@ class AccessibleOrProxy {
    */
   AccessibleOrProxy PrevSibling() {
     if (IsProxy()) {
-      return AsProxy()->PrevSibling();
+      return AsProxy()->RemotePrevSibling();
     }
 
-    return AsAccessible()->PrevSibling();
+    return AsAccessible()->LocalPrevSibling();
   }
 
   role Role() const {
@@ -149,8 +157,8 @@ class AccessibleOrProxy {
 
   AccessibleOrProxy Parent() const;
 
-  AccessibleOrProxy ChildAtPoint(int32_t aX, int32_t aY,
-                                 Accessible::EWhichChildAtPoint aWhichChild);
+  AccessibleOrProxy ChildAtPoint(
+      int32_t aX, int32_t aY, LocalAccessible::EWhichChildAtPoint aWhichChild);
 
   bool operator!=(const AccessibleOrProxy& aOther) const {
     return mBits != aOther.mBits;
@@ -168,7 +176,7 @@ class AccessibleOrProxy {
   /**
    * If this is an OuterDocAccessible, return the remote child document.
    */
-  ProxyAccessible* RemoteChildDoc() const;
+  RemoteAccessible* RemoteChildDoc() const;
 
   uintptr_t mBits;
   static const uintptr_t IS_PROXY = 0x1;

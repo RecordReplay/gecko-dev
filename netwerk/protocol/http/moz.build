@@ -64,6 +64,7 @@ EXPORTS.mozilla.net += [
     "nsServerTiming.h",
     "NullHttpChannel.h",
     "NullHttpTransaction.h",
+    "OpaqueResponseUtils.h",
     "ParentChannelListener.h",
     "PHttpChannelParams.h",
     "PSpdyPush.h",
@@ -96,7 +97,7 @@ UNIFIED_SOURCES += [
     "ConnectionEntry.cpp",
     "ConnectionHandle.cpp",
     "DelayHttpChannelQueue.cpp",
-    "HalfOpenSocket.cpp",
+    "DnsAndConnectSocket.cpp",
     "Http2Compression.cpp",
     "Http2Push.cpp",
     "Http2Session.cpp",
@@ -140,6 +141,7 @@ UNIFIED_SOURCES += [
     "nsServerTiming.cpp",
     "NullHttpChannel.cpp",
     "NullHttpTransaction.cpp",
+    "OpaqueResponseUtils.cpp",
     "ParentChannelListener.cpp",
     "PendingTransactionInfo.cpp",
     "PendingTransactionQueue.cpp",
@@ -148,6 +150,11 @@ UNIFIED_SOURCES += [
     "TRRServiceChannel.cpp",
     "TunnelUtils.cpp",
 ]
+
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+    UNIFIED_SOURCES += [
+        "HttpWinUtils.cpp",
+    ]
 
 # These files cannot be built in unified mode because of OS X headers.
 SOURCES += [

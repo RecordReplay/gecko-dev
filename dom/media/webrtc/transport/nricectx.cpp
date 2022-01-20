@@ -44,6 +44,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 
 #include "nr_socket_proxy_config.h"
+#include "nsXULAppAPI.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 
@@ -205,36 +206,42 @@ nsresult NrIceStunServer::ToNicerStunStruct(nr_ice_stun_server* server) const {
   int r;
 
   memset(server, 0, sizeof(nr_ice_stun_server));
+  uint8_t protocol;
   if (transport_ == kNrIceTransportUdp) {
-    server->transport = IPPROTO_UDP;
+    protocol = IPPROTO_UDP;
   } else if (transport_ == kNrIceTransportTcp) {
-    server->transport = IPPROTO_TCP;
+    protocol = IPPROTO_TCP;
   } else if (transport_ == kNrIceTransportTls) {
-    server->transport = IPPROTO_TCP;
-    if (has_addr_) {
-      // Refuse to try TLS without an FQDN
-      return NS_ERROR_INVALID_ARG;
-    }
-    server->tls = 1;
+    protocol = IPPROTO_TCP;
   } else {
     MOZ_MTLOG(ML_ERROR, "Unsupported STUN server transport: " << transport_);
     return NS_ERROR_FAILURE;
   }
 
   if (has_addr_) {
-    r = nr_praddr_to_transport_addr(&addr_, &server->u.addr, server->transport,
-                                    0);
+    if (transport_ == kNrIceTransportTls) {
+      // Refuse to try TLS without an FQDN
+      return NS_ERROR_INVALID_ARG;
+    }
+    r = nr_praddr_to_transport_addr(&addr_, &server->addr, protocol, 0);
     if (r) {
       return NS_ERROR_FAILURE;
     }
-    server->type = NR_ICE_STUN_SERVER_TYPE_ADDR;
   } else {
-    MOZ_ASSERT(sizeof(server->u.dnsname.host) > host_.size());
-    PL_strncpyz(server->u.dnsname.host, host_.c_str(),
-                sizeof(server->u.dnsname.host));
-    server->u.dnsname.port = port_;
-    server->type = NR_ICE_STUN_SERVER_TYPE_DNSNAME;
+    MOZ_ASSERT(sizeof(server->addr.fqdn) > host_.size());
+    // Dummy information to keep nICEr happy
+    if (use_ipv6_if_fqdn_) {
+      nr_str_port_to_transport_addr("::", port_, protocol, &server->addr);
+    } else {
+      nr_str_port_to_transport_addr("0.0.0.0", port_, protocol, &server->addr);
+    }
+    PL_strncpyz(server->addr.fqdn, host_.c_str(), sizeof(server->addr.fqdn));
+    if (transport_ == kNrIceTransportTls) {
+      server->addr.tls = 1;
+    }
   }
+
+  nr_transport_addr_fmt_addr_string(&server->addr);
 
   return NS_OK;
 }
@@ -496,6 +503,14 @@ void NrIceCtx::InitializeGlobals(const GlobalConfig& aConfig) {
       NR_reg_set_string((char*)NR_ICE_REG_PREF_FORCE_INTERFACE_NAME,
                         const_cast<char*>(aConfig.mForceNetInterface.get()));
     }
+
+    // For now, always use nr_resolver for UDP.
+    NR_reg_set_char((char*)NR_ICE_REG_USE_NR_RESOLVER_FOR_UDP, 1);
+
+    // Use nr_resolver for TCP only when not in e10s mode (for unit-tests)
+    if (XRE_IsParentProcess()) {
+      NR_reg_set_char((char*)NR_ICE_REG_USE_NR_RESOLVER_FOR_TCP, 1);
+    }
   }
 }
 
@@ -610,6 +625,11 @@ bool NrIceCtx::Initialize() {
     test_nat->block_tcp_ = config_.mNatSimulatorConfig->mBlockTcp;
     test_nat->error_code_for_drop_ =
         config_.mNatSimulatorConfig->mErrorCodeForDrop;
+    if (config_.mNatSimulatorConfig->mRedirectAddress.Length()) {
+      test_nat
+          ->stun_redirect_map_[config_.mNatSimulatorConfig->mRedirectAddress] =
+          config_.mNatSimulatorConfig->mRedirectTargets;
+    }
     test_nat->enabled_ = true;
     SetNat(test_nat);
   }
@@ -735,19 +755,23 @@ nsresult NrIceCtx::SetStunServers(
     const std::vector<NrIceStunServer>& stun_servers) {
   if (stun_servers.empty()) return NS_OK;
 
-  auto servers = MakeUnique<nr_ice_stun_server[]>(stun_servers.size());
+  // We assume nr_ice_stun_server is memmoveable. That's true right now.
+  std::vector<nr_ice_stun_server> servers;
 
   for (size_t i = 0; i < stun_servers.size(); ++i) {
-    nsresult rv = stun_servers[i].ToNicerStunStruct(&servers[i]);
-    if (NS_FAILED(rv)) {
-      MOZ_MTLOG(ML_ERROR, "Couldn't set STUN server for '" << name_ << "'");
-      return NS_ERROR_FAILURE;
+    nr_ice_stun_server server;
+    nsresult rv = stun_servers[i].ToNicerStunStruct(&server);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      MOZ_MTLOG(ML_ERROR, "Couldn't convert STUN server for '" << name_ << "'");
+    } else {
+      servers.push_back(server);
     }
   }
 
-  int r = nr_ice_ctx_set_stun_servers(ctx_, servers.get(), stun_servers.size());
+  int r = nr_ice_ctx_set_stun_servers(ctx_, &servers[0],
+                                      static_cast<int>(servers.size()));
   if (r) {
-    MOZ_MTLOG(ML_ERROR, "Couldn't set STUN server for '" << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't set STUN servers for '" << name_ << "'");
     return NS_ERROR_FAILURE;
   }
 
@@ -760,23 +784,26 @@ nsresult NrIceCtx::SetTurnServers(
     const std::vector<NrIceTurnServer>& turn_servers) {
   if (turn_servers.empty()) return NS_OK;
 
-  auto servers = MakeUnique<nr_ice_turn_server[]>(turn_servers.size());
+  // We assume nr_ice_turn_server is memmoveable. That's true right now.
+  std::vector<nr_ice_turn_server> servers;
 
   for (size_t i = 0; i < turn_servers.size(); ++i) {
-    nsresult rv = turn_servers[i].ToNicerTurnStruct(&servers[i]);
-    if (NS_FAILED(rv)) {
-      MOZ_MTLOG(ML_ERROR, "Couldn't set TURN server for '" << name_ << "'");
-      return NS_ERROR_FAILURE;
+    nr_ice_turn_server server;
+    nsresult rv = turn_servers[i].ToNicerTurnStruct(&server);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      MOZ_MTLOG(ML_ERROR, "Couldn't convert TURN server for '" << name_ << "'");
+    } else {
+      servers.push_back(server);
     }
   }
 
-  int r = nr_ice_ctx_set_turn_servers(ctx_, servers.get(), turn_servers.size());
+  int r = nr_ice_ctx_set_turn_servers(ctx_, &servers[0],
+                                      static_cast<int>(servers.size()));
   if (r) {
-    MOZ_MTLOG(ML_ERROR, "Couldn't set TURN server for '" << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't set TURN servers for '" << name_ << "'");
+    // TODO(ekr@rtfm.com): This leaks the username/password. Need to free that.
     return NS_ERROR_FAILURE;
   }
-
-  // TODO(ekr@rtfm.com): This leaks the username/password. Need to free that.
 
   return NS_OK;
 }

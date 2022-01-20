@@ -20,9 +20,12 @@
 #ifndef UMUTEX_H
 #define UMUTEX_H
 
+#ifndef __wasi__
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#endif
+
 #include <type_traits>
 
 #include "unicode/utypes.h"
@@ -38,6 +41,8 @@
 // See issue ICU-20185.
 #error U_USER_ATOMICS and U_USER_MUTEX_H are not supported
 #endif
+
+#ifndef __wasi__
 
 // Export an explicit template instantiation of std::atomic<int32_t>. 
 // When building DLLs for Windows this is required as it is used as a data member of the exported SharedObject class.
@@ -63,6 +68,7 @@ template struct std::atomic<std::mutex *>;
 #endif
 #endif
 
+#endif
 
 U_NAMESPACE_BEGIN
 
@@ -71,6 +77,8 @@ U_NAMESPACE_BEGIN
  *   Low Level Atomic Operations, ICU wrappers for.
  *
  ****************************************************************************/
+
+#ifndef __wasi__
 
 typedef std::atomic<int32_t> u_atomic_int32_t;
 #define ATOMIC_INT32_T_INITIALIZER(val) ATOMIC_VAR_INIT(val)
@@ -91,6 +99,28 @@ inline int32_t umtx_atomic_dec(u_atomic_int32_t *var) {
     return var->fetch_sub(1) - 1;
 }
 
+#else
+
+typedef int32_t u_atomic_int32_t;
+#define ATOMIC_INT32_T_INITIALIZER(val) val
+
+inline int32_t umtx_loadAcquire(u_atomic_int32_t &var) {
+    return var;
+}
+
+inline void umtx_storeRelease(u_atomic_int32_t &var, int32_t val) {
+    var = val;
+}
+
+inline int32_t umtx_atomic_inc(u_atomic_int32_t *var) {
+    return ++(*var);
+}
+
+inline int32_t umtx_atomic_dec(u_atomic_int32_t *var) {
+    return --(*var);
+}
+
+#endif
 
 /*************************************************************************************************
  *
@@ -236,14 +266,20 @@ public:
         if (fRecordReplayOrderedLock) {
           mozilla::recordreplay::OrderedLock(fRecordReplayOrderedLock);
         }
+#ifndef __wasi__
         std::mutex *m = fMutex.load(std::memory_order_acquire);
         if (m == nullptr) { m = getMutex(); }
         m->lock();
+#endif
         if (fRecordReplayOrderedLock) {
           mozilla::recordreplay::OrderedUnlock(fRecordReplayOrderedLock);
         }
     }
-    void unlock() { fMutex.load(std::memory_order_relaxed)->unlock(); }
+    void unlock() {
+#ifndef __wasi__
+        fMutex.load(std::memory_order_relaxed)->unlock();
+#endif
+    }
 
     static void cleanup();
 
@@ -252,8 +288,10 @@ public:
     }
 
 private:
+#ifndef __wasi__
     alignas(std::mutex) char fStorage[sizeof(std::mutex)] {};
     std::atomic<std::mutex *> fMutex { nullptr };
+#endif
     int fRecordReplayOrderedLock = 0;
 
     /** All initialized UMutexes are kept in a linked list, so that they can be found,
@@ -266,7 +304,9 @@ private:
      * Initial fast check is inline, in lock().  The returned value may never
      * be nullptr.
      */
+#ifndef __wasi__
     std::mutex *getMutex();
+#endif
 };
 
 
@@ -275,13 +315,13 @@ private:
  *              the global ICU mutex.  Recursive locks are an error
  *              and may cause a deadlock on some platforms.
  */
-U_INTERNAL void U_EXPORT2 umtx_lock(UMutex* mutex);
+U_CAPI void U_EXPORT2 umtx_lock(UMutex* mutex);
 
 /* Unlock a mutex.
  * @param mutex The given mutex to be unlocked.  Pass NULL to specify
  *              the global ICU mutex.
  */
-U_INTERNAL void U_EXPORT2 umtx_unlock (UMutex* mutex);
+U_CAPI void U_EXPORT2 umtx_unlock (UMutex* mutex);
 
 
 U_NAMESPACE_END

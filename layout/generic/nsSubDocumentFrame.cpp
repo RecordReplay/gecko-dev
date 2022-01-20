@@ -40,7 +40,6 @@
 #include "nsIObjectLoadingContent.h"
 #include "nsLayoutUtils.h"
 #include "FrameLayerBuilder.h"
-#include "nsPluginFrame.h"
 #include "nsContentUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsQueryObject.h"
@@ -52,6 +51,7 @@
 #include "mozilla/layers/WebRenderUserData.h"
 #include "mozilla/layers/WebRenderScrollData.h"
 #include "mozilla/layers/RenderRootStateManager.h"
+#include "mozilla/ProfilerLabels.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -435,7 +435,7 @@ void nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   bool constructZoomItem = subdocRootFrame && parentAPD != subdocAPD;
   bool needsOwnLayer = false;
   if (constructZoomItem || presContext->IsRootContentDocument() ||
-      (sf && sf->IsScrollingActive(aBuilder))) {
+      (sf && sf->IsScrollingActive())) {
     needsOwnLayer = true;
   }
 
@@ -672,11 +672,12 @@ AspectRatio nsSubDocumentFrame::GetIntrinsicRatio() const {
 LogicalSize nsSubDocumentFrame::ComputeAutoSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
   if (!IsInline()) {
     return nsIFrame::ComputeAutoSize(aRenderingContext, aWM, aCBSize,
                                      aAvailableISize, aMargin, aBorderPadding,
-                                     aFlags);
+                                     aSizeOverrides, aFlags);
   }
 
   const WritingMode wm = GetWritingMode();
@@ -688,10 +689,11 @@ LogicalSize nsSubDocumentFrame::ComputeAutoSize(
 nsIFrame::SizeComputationResult nsSubDocumentFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
   return {ComputeSizeWithIntrinsicDimensions(
               aRenderingContext, aWM, GetIntrinsicSize(), GetAspectRatio(),
-              aCBSize, aMargin, aBorderPadding, aFlags),
+              aCBSize, aMargin, aBorderPadding, aSizeOverrides, aFlags),
           AspectRatioUsage::None};
 }
 
@@ -745,7 +747,7 @@ void nsSubDocumentFrame::Reflow(nsPresContext* aPresContext,
 
   FinishAndStoreOverflow(&aDesiredSize);
 
-  if (!aPresContext->IsPaginated() && !mPostedReflowCallback) {
+  if (!aPresContext->IsRootPaginatedDocument() && !mPostedReflowCallback) {
     PresShell()->PostReflowCallback(this);
     mPostedReflowCallback = true;
   }
@@ -893,6 +895,7 @@ static nsView* BeginSwapDocShellsForViews(nsView* aSibling);
 
 void nsSubDocumentFrame::DestroyFrom(nsIFrame* aDestructRoot,
                                      PostDestroyData& aPostDestroyData) {
+  PropagateIsUnderHiddenEmbedderElementToSubView(true);
   if (mPostedReflowCallback) {
     PresShell()->CancelReflowCallback(this);
     mPostedReflowCallback = false;
@@ -972,7 +975,6 @@ static CallState BeginSwapDocShellsForDocument(Document& aDocument) {
       ::DestroyDisplayItemDataForFrames(rootFrame);
     }
   }
-  aDocument.EnumerateActivityObservers(nsPluginFrame::BeginSwapDocShells);
   aDocument.EnumerateSubDocuments(BeginSwapDocShellsForDocument);
   return CallState::Continue;
 }
@@ -1056,7 +1058,6 @@ static CallState EndSwapDocShellsForDocument(Document& aDocument) {
     }
   }
 
-  aDocument.EnumerateActivityObservers(nsPluginFrame::EndSwapDocShells);
   aDocument.EnumerateSubDocuments(EndSwapDocShellsForDocument);
   return CallState::Continue;
 }
@@ -1068,7 +1069,7 @@ static void EndSwapDocShellsForViews(nsView* aSibling) {
     }
     nsIFrame* frame = aSibling->GetFrame();
     if (frame) {
-      nsIFrame* parent = nsLayoutUtils::GetCrossDocParentFrame(frame);
+      nsIFrame* parent = nsLayoutUtils::GetCrossDocParentFrameInProcess(frame);
       if (parent->HasAnyStateBits(NS_FRAME_IN_POPUP)) {
         nsIFrame::AddInPopupStateBitToDescendants(frame);
       } else {
@@ -1079,7 +1080,7 @@ static void EndSwapDocShellsForViews(nsView* aSibling) {
                !parent->HasAnyStateBits(NS_FRAME_DESCENDANT_NEEDS_PAINT |
                                         NS_FRAME_IS_NONDISPLAY)) {
           parent->AddStateBits(NS_FRAME_DESCENDANT_NEEDS_PAINT);
-          parent = nsLayoutUtils::GetCrossDocParentFrame(parent);
+          parent = nsLayoutUtils::GetCrossDocParentFrameInProcess(parent);
         }
       }
     }
@@ -1121,20 +1122,15 @@ void nsSubDocumentFrame::EndSwapDocShells(nsIFrame* aOther) {
 }
 
 void nsSubDocumentFrame::ClearDisplayItems() {
-  DisplayItemArray* items = GetProperty(DisplayItems());
-  if (!items) {
-    return;
-  }
-
-  nsIFrame* displayRoot = nsLayoutUtils::GetDisplayRootFrame(this);
-  MOZ_ASSERT(displayRoot);
-
-  RetainedDisplayListBuilder* retainedBuilder =
-      displayRoot->GetProperty(RetainedDisplayListBuilder::Cached());
-  MOZ_ASSERT(retainedBuilder);
-
-  for (nsDisplayItemBase* i : *items) {
+  for (nsDisplayItemBase* i : DisplayItems()) {
     if (i->GetType() == DisplayItemType::TYPE_SUBDOCUMENT) {
+      nsIFrame* displayRoot = nsLayoutUtils::GetDisplayRootFrame(this);
+      MOZ_ASSERT(displayRoot);
+
+      RetainedDisplayListBuilder* retainedBuilder =
+          displayRoot->GetProperty(RetainedDisplayListBuilder::Cached());
+      MOZ_ASSERT(retainedBuilder);
+
       auto* item = static_cast<nsDisplaySubDocument*>(i);
       item->GetChildren()->DeleteAll(retainedBuilder->Builder());
       item->Disown();
@@ -1427,7 +1423,6 @@ bool nsDisplayRemote::UpdateScrollData(
 
   if (aLayerData) {
     aLayerData->SetReferentId(mLayersId);
-    Matrix4x4 m = Matrix4x4::Translation(mOffset.x, mOffset.y, 0.0);
 
     // Apply the top level resolution if we are in the same process of the top
     // level document. We don't need to apply it in cases where we are in OOP
@@ -1438,9 +1433,10 @@ bool nsDisplayRemote::UpdateScrollData(
     if (inProcessRootContext &&
         inProcessRootContext->IsRootContentDocumentCrossProcess()) {
       float resolution = inProcessRootContext->PresShell()->GetResolution();
-      m.PostScale(resolution, resolution, 1.0);
+      aLayerData->SetResolution(resolution);
     }
 
+    Matrix4x4 m = Matrix4x4::Translation(mOffset.x, mOffset.y, 0.0);
     aLayerData->SetTransform(m);
     aLayerData->SetEventRegionsOverride(mEventRegionsOverride);
     aLayerData->SetRemoteDocumentSize(GetFrameSize(mFrame));

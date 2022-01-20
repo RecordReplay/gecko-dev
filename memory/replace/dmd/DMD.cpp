@@ -643,8 +643,7 @@ static uint32_t gGCStackTraceTableWhenSizeExceeds = 4 * 1024;
 
     PNT_TIB pTib = reinterpret_cast<PNT_TIB>(NtCurrentTeb());
     void* stackEnd = static_cast<void*>(pTib->StackBase);
-    FramePointerStackWalk(StackWalkCallback, /* skipFrames = */ 0, MaxFrames,
-                          &tmp, fp, stackEnd);
+    FramePointerStackWalk(StackWalkCallback, MaxFrames, &tmp, fp, stackEnd);
 #elif defined(XP_MACOSX)
     // This avoids MozStackWalk(), which has become unusably slow on Mac due to
     // changes in libunwind.
@@ -662,15 +661,9 @@ static uint32_t gGCStackTraceTableWhenSizeExceeds = 4 * 1024;
     asm("ldr %0, [x29]\n\t" : "=r"(fp));
 #  endif
     void* stackEnd = pthread_get_stackaddr_np(pthread_self());
-    FramePointerStackWalk(StackWalkCallback, /* skipFrames = */ 0, MaxFrames,
-                          &tmp, fp, stackEnd);
+    FramePointerStackWalk(StackWalkCallback, MaxFrames, &tmp, fp, stackEnd);
 #else
-#  if defined(XP_WIN) && defined(_M_X64)
-    int skipFrames = 1;
-#  else
-    int skipFrames = 2;
-#  endif
-    MozStackWalk(StackWalkCallback, skipFrames, MaxFrames, &tmp);
+    MozStackWalk(StackWalkCallback, nullptr, MaxFrames, &tmp);
 #endif
   }
 
@@ -1034,7 +1027,24 @@ static void AllocCallback(void* aPtr, size_t aReqSize, Thread* aT) {
   // options and the outcome of a Bernoulli trial.
   bool getTrace = gOptions->DoFullStacks() || gBernoulli->trial(actualSize);
   LiveBlock b(aPtr, aReqSize, getTrace ? StackTrace::Get(aT) : nullptr);
-  MOZ_ALWAYS_TRUE(gLiveBlockTable->putNew(aPtr, b));
+  LiveBlockTable::AddPtr p = gLiveBlockTable->lookupForAdd(aPtr);
+  if (!p) {
+    // Most common case: there wasn't a record already.
+    MOZ_ALWAYS_TRUE(gLiveBlockTable->add(p, b));
+  } else {
+    // Edge-case: there was a record for the same address. We'll assume the
+    // allocator is not giving out a pointer to an existing allocation, so
+    // this means the previously recorded allocation was freed while we were
+    // blocking interceptions. This can happen while processing the data in
+    // e.g. AnalyzeImpl.
+    if (gOptions->IsCumulativeMode()) {
+      // Copy it out so it can be added to the dead block list later.
+      DeadBlock db(*p);
+      MaybeAddToDeadBlockTable(db);
+    }
+    gLiveBlockTable->remove(p);
+    MOZ_ALWAYS_TRUE(gLiveBlockTable->putNew(aPtr, b));
+  }
 }
 
 static void FreeCallback(void* aPtr, Thread* aT, DeadBlock* aDeadBlock) {

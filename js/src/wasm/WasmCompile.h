@@ -31,55 +31,6 @@ namespace wasm {
 
 uint32_t ObservedCPUFeatures();
 
-// Describes the JS scripted caller of a request to compile a wasm module.
-
-struct ScriptedCaller {
-  UniqueChars filename;
-  bool filenameIsURL;
-  unsigned line;
-
-  ScriptedCaller() : filenameIsURL(false), line(0) {}
-};
-
-// Describes all the parameters that control wasm compilation.
-
-struct CompileArgs;
-using MutableCompileArgs = RefPtr<CompileArgs>;
-using SharedCompileArgs = RefPtr<const CompileArgs>;
-
-struct CompileArgs : ShareableBase<CompileArgs> {
-  ScriptedCaller scriptedCaller;
-  UniqueChars sourceMapURL;
-
-  bool baselineEnabled;
-  bool ionEnabled;
-  bool craneliftEnabled;
-  bool debugEnabled;
-  bool forceTiering;
-
-  FeatureArgs features;
-
-  // CompileArgs has two constructors:
-  //
-  // - one through a factory function `build`, which checks that flags are
-  // consistent with each other.
-  // - one that gives complete access to underlying fields.
-  //
-  // You should use the first one in general, unless you have a very good
-  // reason (i.e. no JSContext around and you know which flags have been used).
-
-  static SharedCompileArgs build(JSContext* cx,
-                                 ScriptedCaller&& scriptedCaller);
-
-  explicit CompileArgs(ScriptedCaller&& scriptedCaller)
-      : scriptedCaller(std::move(scriptedCaller)),
-        baselineEnabled(false),
-        ionEnabled(false),
-        craneliftEnabled(false),
-        debugEnabled(false),
-        forceTiering(false) {}
-};
-
 // Return the estimated compiled (machine) code size for the given bytecode size
 // compiled at the given tier.
 
@@ -91,17 +42,15 @@ double EstimateCompiledCodeSize(Tier tier, size_t bytecodeSize);
 //  - *error points to a string description of the error
 //  - *error is null and the caller should report out-of-memory.
 
-SharedModule CompileBuffer(
-    const CompileArgs& args, const ShareableBytes& bytecode, UniqueChars* error,
-    UniqueCharsVector* warnings,
-    JS::OptimizedEncodingListener* listener = nullptr,
-    JSTelemetrySender telemetrySender = JSTelemetrySender());
+SharedModule CompileBuffer(const CompileArgs& args,
+                           const ShareableBytes& bytecode, UniqueChars* error,
+                           UniqueCharsVector* warnings,
+                           JS::OptimizedEncodingListener* listener = nullptr);
 
 // Attempt to compile the second tier of the given wasm::Module.
 
 void CompileTier2(const CompileArgs& args, const Bytes& bytecode,
-                  const Module& module, Atomic<bool>* cancelled,
-                  JSTelemetrySender telemetrySender = JSTelemetrySender());
+                  const Module& module, Atomic<bool>* cancelled);
 
 // Compile the given WebAssembly module which has been broken into three
 // partitions:
@@ -132,12 +81,12 @@ struct StreamEndData {
 };
 using ExclusiveStreamEndData = ExclusiveWaitableData<StreamEndData>;
 
-SharedModule CompileStreaming(
-    const CompileArgs& args, const Bytes& envBytes, const Bytes& codeBytes,
-    const ExclusiveBytesPtr& codeBytesEnd,
-    const ExclusiveStreamEndData& streamEnd, const Atomic<bool>& cancelled,
-    UniqueChars* error, UniqueCharsVector* warnings,
-    JSTelemetrySender telemetrySender = JSTelemetrySender());
+SharedModule CompileStreaming(const CompileArgs& args, const Bytes& envBytes,
+                              const Bytes& codeBytes,
+                              const ExclusiveBytesPtr& codeBytesEnd,
+                              const ExclusiveStreamEndData& streamEnd,
+                              const Atomic<bool>& cancelled, UniqueChars* error,
+                              UniqueCharsVector* warnings);
 
 }  // namespace wasm
 }  // namespace js

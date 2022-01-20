@@ -49,8 +49,14 @@ const TEST_URL =
 `);
 
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   info("Open the inspector to a blank page.");
-  const { inspector, testActor } = await openInspectorForURL("about:blank");
+  const { inspector } = await openInspectorForURL("about:blank");
 
   info("Navigate to the test url and waiting for the page to be loaded.");
   await navigateTo(TEST_URL);
@@ -63,8 +69,9 @@ add_task(async function() {
   );
 
   info("Check the node is highlighted.");
+  const highlighterTestFront = await getHighlighterTestFront(inspector.toolbox);
   is(
-    await testActor.isHighlighting(),
+    await highlighterTestFront.isHighlighting(),
     true,
     "Box Model highlighter is working as expected."
   );

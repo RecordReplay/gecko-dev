@@ -26,14 +26,7 @@
 static_assert(MOZ_ALIGNOF(Pickle::memberAlignmentType) >= MOZ_ALIGNOF(uint32_t),
               "Insufficient alignment");
 
-#ifndef MOZ_TASK_TRACER
 static const uint32_t kHeaderSegmentCapacity = 64;
-#else
-// TaskTracer would add extra fields to the header to carry task ID and
-// other information.
-// \see class Message::HeaderTaskTracer
-static const uint32_t kHeaderSegmentCapacity = 128;
-#endif
 
 static const uint32_t kDefaultSegmentCapacity = 4096;
 
@@ -473,7 +466,8 @@ bool Pickle::WriteSentinel(uint32_t sentinel) {
 }
 
 void Pickle::EndRead(PickleIterator& iter, uint32_t ipcMsgType) const {
-  DCHECK(iter.iter_.Done());
+  // FIXME: Deal with the footer somehow...
+  // DCHECK(iter.iter_.Done());
 
   if (NS_IsMainThread() && ipcMsgType != 0) {
     uint32_t latencyMs =

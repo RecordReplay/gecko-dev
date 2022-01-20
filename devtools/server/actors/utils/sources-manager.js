@@ -5,6 +5,7 @@
 "use strict";
 
 const { Ci } = require("chrome");
+const ChromeUtils = require("ChromeUtils");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const { assert, fetch } = DevToolsUtils;
 const EventEmitter = require("devtools/shared/event-emitter");
@@ -34,6 +35,11 @@ class SourcesManager extends EventEmitter {
     super();
     this._thread = threadActor;
     this.allowSource = source => {
+      // Inspecting sources is not allowed when recording/replaying.
+      // The devtools should not be able to inspect/change JS state.
+      if (ChromeUtils.isRecordingOrReplaying()) {
+        return false;
+      }
       return !isHiddenSource(source) && allowSourceFn(source);
     };
 
@@ -411,8 +417,11 @@ class SourcesManager extends EventEmitter {
     // Without this check, the cache may return stale data that doesn't match
     // the document shown in the browser.
     let loadFromCache = canUseCache;
-    if (canUseCache && this._thread._parent._getCacheDisabled) {
-      loadFromCache = !this._thread._parent._getCacheDisabled();
+    if (canUseCache && this._thread._parent.browsingContext) {
+      loadFromCache = !(
+        this._thread._parent.browsingContext.defaultLoadFlags ===
+        Ci.nsIRequest.LOAD_BYPASS_CACHE
+      );
     }
 
     // Fetch the sources with the same principal as the original document

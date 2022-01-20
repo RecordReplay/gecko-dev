@@ -19,13 +19,15 @@
 #include "wasm/WasmCompile.h"
 
 #include "mozilla/Maybe.h"
-#include "mozilla/Unused.h"
 
 #include <algorithm>
 
-#include "jit/ProcessExecutableMemory.h"
+#ifndef __wasi__
+#  include "jit/ProcessExecutableMemory.h"
+#endif
+
 #include "util/Text.h"
-#include "vm/HelperThreadState.h"
+#include "vm/HelperThreads.h"
 #include "vm/Realm.h"
 #include "wasm/WasmBaselineCompile.h"
 #include "wasm/WasmCraneliftCompile.h"
@@ -78,23 +80,33 @@ uint32_t wasm::ObservedCPUFeatures() {
 #endif
 }
 
-FeatureArgs FeatureArgs::build(JSContext* cx) {
+FeatureArgs FeatureArgs::build(JSContext* cx, const FeatureOptions& options) {
   FeatureArgs features;
+
+#define WASM_FEATURE(NAME, LOWER_NAME, ...) \
+  features.LOWER_NAME = wasm::NAME##Available(cx);
+  JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE);
+#undef WASM_FEATURE
+
   features.sharedMemory =
       wasm::ThreadsAvailable(cx) ? Shareable::True : Shareable::False;
-  features.refTypes = wasm::ReftypesAvailable(cx);
-  features.functionReferences = wasm::FunctionReferencesAvailable(cx);
-  features.gcTypes = wasm::GcTypesAvailable(cx);
-  features.multiValue = wasm::MultiValuesAvailable(cx);
-  features.v128 = wasm::SimdAvailable(cx);
   features.hugeMemory = wasm::IsHugeMemoryEnabled();
-  features.simdWormhole = wasm::SimdWormholeAvailable(cx);
-  features.exceptions = wasm::ExceptionsAvailable(cx);
+
+  // See comments in WasmConstants.h regarding the meaning of the wormhole
+  // options.
+  bool wormholeOverride =
+      wasm::SimdWormholeAvailable(cx) && options.simdWormhole;
+  features.simdWormhole = wormholeOverride;
+  if (wormholeOverride) {
+    features.v128 = true;
+  }
+
   return features;
 }
 
 SharedCompileArgs CompileArgs::build(JSContext* cx,
-                                     ScriptedCaller&& scriptedCaller) {
+                                     ScriptedCaller&& scriptedCaller,
+                                     const FeatureOptions& options) {
   bool baseline = BaselineAvailable(cx);
   bool ion = IonAvailable(cx);
   bool cranelift = CraneliftAvailable(cx);
@@ -141,7 +153,7 @@ SharedCompileArgs CompileArgs::build(JSContext* cx,
   target->craneliftEnabled = cranelift;
   target->debugEnabled = debug;
   target->forceTiering = forceTiering;
-  target->features = FeatureArgs::build(cx);
+  target->features = FeatureArgs::build(cx, options);
 
   Log(cx, "available wasm compilers: tier1=%s tier2=%s",
       baseline ? "baseline" : "none",
@@ -149,6 +161,108 @@ SharedCompileArgs CompileArgs::build(JSContext* cx,
 
   return target;
 }
+
+/*
+ * [SMDOC] Tiered wasm compilation.
+ *
+ * "Tiered compilation" refers to the mechanism where we first compile the code
+ * with a fast non-optimizing compiler so that we can start running the code
+ * quickly, while in the background recompiling the code with the slower
+ * optimizing compiler.  Code created by baseline is called "tier-1"; code
+ * created by the optimizing compiler is called "tier-2".  When the tier-2 code
+ * is ready, we "tier up" the code by creating paths from tier-1 code into their
+ * tier-2 counterparts; this patching is performed as the program is running.
+ *
+ * ## Selecting the compilation mode
+ *
+ * When wasm bytecode arrives, we choose the compilation strategy based on
+ * switches and on aspects of the code and the hardware.  If switches allow
+ * tiered compilation to happen (the normal case), the following logic applies.
+ *
+ * If the code is sufficiently large that tiered compilation would be beneficial
+ * but not so large that it might blow our compiled code budget and make
+ * compilation fail, we choose tiered compilation.  Otherwise we go straight to
+ * optimized code.
+ *
+ * The expected benefit of tiering is computed by TieringBeneficial(), below,
+ * based on various estimated parameters of the hardware: ratios of object code
+ * to byte code, speed of the system, number of cores.
+ *
+ * ## Mechanics of tiering up; patching
+ *
+ * Every time control enters a tier-1 function, the function prologue loads its
+ * tiering pointer from the tiering jump table (see JumpTable in WasmCode.h) and
+ * jumps to it.
+ *
+ * Initially, an entry in the tiering table points to the instruction inside the
+ * tier-1 function that follows the jump instruction (hence the jump is an
+ * expensive nop).  When the tier-2 compiler is finished, the table is patched
+ * racily to point into the tier-2 function at the correct prologue location
+ * (see loop near the end of Module::finishTier2()).  As tier-2 compilation is
+ * performed at most once per Module, there is at most one such racy overwrite
+ * per table element during the lifetime of the Module.
+ *
+ * The effect of the patching is to cause the tier-1 function to jump to its
+ * tier-2 counterpart whenever the tier-1 function is called subsequently.  That
+ * is, tier-1 code performs standard frame setup on behalf of whatever code it
+ * jumps to, and the target code (tier-1 or tier-2) allocates its own frame in
+ * whatever way it wants.
+ *
+ * The racy writing means that it is often nondeterministic whether tier-1 or
+ * tier-2 code is reached by any call during the tiering-up process; if F calls
+ * A and B in that order, it may reach tier-2 code for A and tier-1 code for B.
+ * If F is running concurrently on threads T1 and T2, T1 and T2 may see code
+ * from different tiers for either function.
+ *
+ * Note, tiering up also requires upgrading the jit-entry stubs so that they
+ * reference tier-2 code.  The mechanics of this upgrading are described at
+ * WasmInstanceObject::getExportedFunction().
+ *
+ * ## Current limitations of tiering
+ *
+ * Tiering is not always seamless.  Partly, it is possible for a program to get
+ * stuck in tier-1 code.  Partly, a function that has tiered up continues to
+ * force execution to go via tier-1 code to reach tier-2 code, paying for an
+ * additional jump and a slightly less optimized prologue than tier-2 code could
+ * have had on its own.
+ *
+ * Known tiering limitiations:
+ *
+ * - We can tier up only at function boundaries.  If a tier-1 function has a
+ *   long-running loop it will not tier up until it returns to its caller.  If
+ *   this loop never exits (a runloop in a worker, for example) then the
+ *   function will never tier up.
+ *
+ *   To do better, we need OSR.
+ *
+ * - Wasm Table entries are never patched during tier-up.  A Table of funcref
+ *   holds not a JSFunction pointer, but a (code*,Tls*) pair of pointers.  When
+ *   a table.set operation is performed, the JSFunction value is decomposed and
+ *   its code and Tls pointers are stored in the table; subsequently, when a
+ *   table.get operation is performed, the JSFunction value is reconstituted
+ *   from its code pointer using fairly elaborate machinery.  (The mechanics are
+ *   the same also for the reflected JS operations on a WebAssembly.Table.  For
+ *   everything, see WasmTable.{cpp,h}.)  The code pointer in the Table will
+ *   always be the code pointer belonging to the best tier that was active at
+ *   the time when that function was stored in that Table slot; in many cases,
+ *   it will be tier-1 code.  As a consequence, a call through a table will
+ *   first enter tier-1 code and then jump to tier-2 code.
+ *
+ *   To do better, we must update all the tables in the system when an instance
+ *   tiers up.  This is expected to be very hard.
+ *
+ * - Imported Wasm functions are never patched during tier-up.  Imports are held
+ *   in FuncImportTls values in the instance's Tls, and for a wasm callee,
+ *   what's stored is the raw code pointer into the best tier of the callee that
+ *   was active at the time the import was resolved.  That could be baseline
+ *   code, and if it is, the situation is as for Table entries: a call to an
+ *   import will always go via that import's tier-1 code, which will tier up
+ *   with an indirect jump.
+ *
+ *   To do better, we must update all the import tables in the system that
+ *   import functions from instances whose modules have tiered up.  This is
+ *   expected to be hard.
+ */
 
 // Classify the current system as one of a set of recognizable classes.  This
 // really needs to get our tier-1 systems right.
@@ -366,7 +480,7 @@ static const double spaceCutoffPct = 0.9;
 
 // Figure out whether we should use tiered compilation or not.
 static bool TieringBeneficial(uint32_t codeSize) {
-  uint32_t cpuCount = HelperThreadState().cpuCount;
+  uint32_t cpuCount = GetHelperThreadCPUCount();
   MOZ_ASSERT(cpuCount > 0);
 
   // It's mostly sensible not to background compile when there's only one
@@ -380,17 +494,15 @@ static bool TieringBeneficial(uint32_t codeSize) {
     return false;
   }
 
-  MOZ_ASSERT(HelperThreadState().threadCount >= cpuCount);
-
   // Compute the max number of threads available to do actual background
   // compilation work.
 
-  uint32_t workers = HelperThreadState().maxWasmCompilationThreads();
+  uint32_t workers = GetMaxWasmCompilationThreads();
 
   // The number of cores we will use is bounded both by the CPU count and the
-  // worker count.
+  // worker count, since the worker count already takes this into account.
 
-  uint32_t cores = std::min(cpuCount, workers);
+  uint32_t cores = workers;
 
   SystemClass cls = ClassifySystem();
 
@@ -575,8 +687,7 @@ SharedModule wasm::CompileBuffer(const CompileArgs& args,
                                  const ShareableBytes& bytecode,
                                  UniqueChars* error,
                                  UniqueCharsVector* warnings,
-                                 JS::OptimizedEncodingListener* listener,
-                                 JSTelemetrySender telemetrySender) {
+                                 JS::OptimizedEncodingListener* listener) {
   Decoder d(bytecode.bytes, 0, error, warnings);
 
   ModuleEnvironment moduleEnv(args.features);
@@ -587,7 +698,7 @@ SharedModule wasm::CompileBuffer(const CompileArgs& args,
   compilerEnv.computeParameters(d);
 
   ModuleGenerator mg(args, &moduleEnv, &compilerEnv, nullptr, error);
-  if (!mg.init(nullptr, telemetrySender)) {
+  if (!mg.init(nullptr)) {
     return nullptr;
   }
 
@@ -603,8 +714,7 @@ SharedModule wasm::CompileBuffer(const CompileArgs& args,
 }
 
 void wasm::CompileTier2(const CompileArgs& args, const Bytes& bytecode,
-                        const Module& module, Atomic<bool>* cancelled,
-                        JSTelemetrySender telemetrySender) {
+                        const Module& module, Atomic<bool>* cancelled) {
   UniqueChars error;
   Decoder d(bytecode, 0, &error);
 
@@ -621,7 +731,7 @@ void wasm::CompileTier2(const CompileArgs& args, const Bytes& bytecode,
   compilerEnv.computeParameters(d);
 
   ModuleGenerator mg(args, &moduleEnv, &compilerEnv, cancelled, &error);
-  if (!mg.init(nullptr, telemetrySender)) {
+  if (!mg.init(nullptr)) {
     return;
   }
 
@@ -721,7 +831,7 @@ SharedModule wasm::CompileStreaming(
     const ExclusiveBytesPtr& codeBytesEnd,
     const ExclusiveStreamEndData& exclusiveStreamEnd,
     const Atomic<bool>& cancelled, UniqueChars* error,
-    UniqueCharsVector* warnings, JSTelemetrySender telemetrySender) {
+    UniqueCharsVector* warnings) {
   CompilerEnvironment compilerEnv(args);
   ModuleEnvironment moduleEnv(args.features);
 
@@ -743,7 +853,7 @@ SharedModule wasm::CompileStreaming(
   }
 
   ModuleGenerator mg(args, &moduleEnv, &compilerEnv, &cancelled, error);
-  if (!mg.init(nullptr, telemetrySender)) {
+  if (!mg.init(nullptr)) {
     return nullptr;
   }
 

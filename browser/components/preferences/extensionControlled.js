@@ -44,8 +44,6 @@ const API_PROXY_PREFS = [
   "network.proxy.http",
   "network.proxy.http_port",
   "network.proxy.share_proxy_settings",
-  "network.proxy.ftp",
-  "network.proxy.ftp_port",
   "network.proxy.ssl",
   "network.proxy.ssl_port",
   "network.proxy.socks",
@@ -253,7 +251,7 @@ function showEnableExtensionMessage(settingName) {
   };
   let label = document.createXULElement("label");
   let addonIcon = icon(
-    "chrome://mozapps/skin/extensions/extension.svg",
+    "chrome://mozapps/skin/extensions/extensionGeneric.svg",
     "addons-icon"
   );
   let toolbarIcon = icon("chrome://browser/skin/menu.svg", "menu-icon");
@@ -290,7 +288,9 @@ async function initListenersForPrefChange(type, prefId, controlledElement) {
 
   let managementObserver = async () => {
     let managementControlled = await handleControllingExtension(type, prefId);
-    controlledElement.disabled = managementControlled;
+    // Enterprise policy may have locked the pref, so we need to preserve that
+    controlledElement.disabled =
+      managementControlled || Services.prefs.prefIsLocked(prefId);
   };
   managementObserver();
   Management.on(`extension-setting-changed:${prefId}`, managementObserver);

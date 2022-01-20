@@ -5,14 +5,10 @@
 
 from __future__ import absolute_import, print_function
 
-LIBFFI_DIRS = (("js/ctypes/libffi", "libffi"),)
 HG_EXCLUSIONS = [".hg", ".hgignore", ".hgtags"]
-
-CVSROOT_LIBFFI = ":pserver:anoncvs@sources.redhat.com:/cvs/libffi"
 
 import os
 import sys
-import datetime
 import shutil
 import glob
 from optparse import OptionParser
@@ -63,38 +59,10 @@ def do_hg_replace(dir, repository, tag, exclusions, hg):
                 os.remove(excluded)
 
 
-def do_cvs_export(modules, tag, cvsroot, cvs):
-    """Check out a CVS directory without CVS metadata, using "export"
-    modules is a list of directories to check out and the corresponding
-    cvs module, e.g. (('js/ctypes/libffi', 'libffi'),)
-    """
-    for module_tuple in modules:
-        module = module_tuple[0]
-        cvs_module = module_tuple[1]
-        fullpath = os.path.join(topsrcdir, module)
-        if os.path.exists(fullpath):
-            print("Removing '%s'" % fullpath)
-            shutil.rmtree(fullpath)
-
-        (parent, leaf) = os.path.split(module)
-        print(
-            "CVS export begin: "
-            + datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        )
-        check_call_noisy(
-            [cvs, "-d", cvsroot, "export", "-r", tag, "-d", leaf, cvs_module],
-            cwd=os.path.join(topsrcdir, parent),
-        )
-        print(
-            "CVS export end: "
-            + datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        )
-
-
 def toggle_trailing_blank_line(depname):
     """If the trailing line is empty, then we'll delete it.
     Otherwise we'll add a blank line."""
-    lines = open(depname, "r").readlines()
+    lines = open(depname, "rb").readlines()
     if not lines:
         print("unexpected short file", file=sys.stderr)
         return
@@ -162,9 +130,7 @@ def warn_if_patch_exists(path):
         return
 
 
-o = OptionParser(
-    usage="client.py [options] update_nspr tagname | update_nss tagname | update_libffi tagname"
-)
+o = OptionParser(usage="client.py [options] update_nspr tagname | update_nss tagname")
 o.add_option(
     "--skip-mozilla",
     dest="skip_mozilla",
@@ -173,17 +139,6 @@ o.add_option(
     help="Obsolete",
 )
 
-o.add_option(
-    "--cvs",
-    dest="cvs",
-    default=os.environ.get("CVS", "cvs"),
-    help="The location of the cvs binary",
-)
-o.add_option(
-    "--cvsroot",
-    dest="cvsroot",
-    help="The CVSROOT for libffi (default : %s)" % CVSROOT_LIBFFI,
-)
 o.add_option(
     "--hg",
     dest="hg",
@@ -216,11 +171,6 @@ elif action in ("update_nss"):
     if not options.repo:
         options.repo = "https://hg.mozilla.org/projects/nss"
     update_nspr_or_nss(tag, depfile, "security/nss", options.repo)
-elif action in ("update_libffi"):
-    (tag,) = args[1:]
-    if not options.cvsroot:
-        options.cvsroot = CVSROOT_LIBFFI
-    do_cvs_export(LIBFFI_DIRS, tag, options.cvsroot, options.cvs)
 else:
     o.print_help()
     sys.exit(2)

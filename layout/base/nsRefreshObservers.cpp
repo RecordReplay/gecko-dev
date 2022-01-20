@@ -5,42 +5,40 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsRefreshObservers.h"
-#include "PresShell.h"
+#include "nsPresContext.h"
 
 namespace mozilla {
 
-OneShotPostRefreshObserver::OneShotPostRefreshObserver(PresShell* aPresShell,
+ManagedPostRefreshObserver::ManagedPostRefreshObserver(nsPresContext* aPc,
                                                        Action&& aAction)
-    : mPresShell(aPresShell), mAction(std::move(aAction)) {}
+    : mPresContext(aPc), mAction(std::move(aAction)) {}
 
-OneShotPostRefreshObserver::OneShotPostRefreshObserver(PresShell* aPresShell)
-    : mPresShell(aPresShell) {}
+ManagedPostRefreshObserver::ManagedPostRefreshObserver(nsPresContext* aPc)
+    : mPresContext(aPc) {}
 
-OneShotPostRefreshObserver::~OneShotPostRefreshObserver() = default;
+ManagedPostRefreshObserver::~ManagedPostRefreshObserver() = default;
 
-void OneShotPostRefreshObserver::DidRefresh() {
-  if (!mPresShell) {
-    MOZ_ASSERT_UNREACHABLE(
-        "Post-refresh observer fired again after failed attempt at "
-        "unregistering it");
-    return;
+void ManagedPostRefreshObserver::Cancel() {
+  // Caller holds a strong reference, so no need to reference stuff from here.
+  mAction(true);
+  mAction = nullptr;
+  mPresContext = nullptr;
+}
+
+void ManagedPostRefreshObserver::DidRefresh() {
+  RefPtr<ManagedPostRefreshObserver> thisObject = this;
+
+  Unregister unregister = mAction(false);
+  if (unregister == Unregister::Yes) {
+    if (RefPtr<nsPresContext> pc = std::move(mPresContext)) {
+      // In theory mAction could've ended up in `Cancel` being called. In which
+      // case we're already unregistered so no need to do anything.
+      mAction = nullptr;
+      pc->UnregisterManagedPostRefreshObserver(this);
+    } else {
+      MOZ_DIAGNOSTIC_ASSERT(!mAction);
+    }
   }
-
-  RefPtr<OneShotPostRefreshObserver> kungfuDeathGrip = this;
-
-  mAction(mPresShell, this);
-
-  nsPresContext* presContext = mPresShell->GetPresContext();
-  if (!presContext) {
-    MOZ_ASSERT_UNREACHABLE(
-        "Unable to unregister post-refresh observer! Leaking it instead of "
-        "leaving garbage registered");
-    // Graceful handling, just in case...
-    mPresShell = nullptr;
-    mAction = Action();
-    return;
-  }
-  presContext->UnregisterOneShotPostRefreshObserver(this);
 }
 
 }  // namespace mozilla

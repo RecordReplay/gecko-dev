@@ -261,7 +261,7 @@ class CommandAction(argparse.Action):
                 setattr(command_namespace, name, extra)
             else:
                 setattr(command_namespace, name, options.get("default", []))
-        elif extra and handler.cls.__name__ != "DeprecatedCommands":
+        elif extra:
             raise UnrecognizedArgumentError(command, extra)
 
     def _handle_main_help(self, parser, verbose):
@@ -469,24 +469,25 @@ class CommandAction(argparse.Action):
         c_parser.print_help()
 
     def _suggest_command(self, command):
-        # Make sure we don't suggest any deprecated commands.
-        names = [
-            h.name
-            for h in self._mach_registrar.command_handlers.values()
-            if h.cls.__name__ != "DeprecatedCommands"
-        ]
-
-        # Bug 1577908 - We used to automatically re-execute the suggested
-        # command with the proper spelling. But because the `mach` driver now
-        # uses a whitelist to determine which command to run with Python 2, all
-        # misspellings are automatically run with Python 3 (and would fail if
-        # we were to correct a Python 2 command here). So we now suggest the
-        # command instead. Once the Python 3 migration has completed, we can
-        # turn autosuggestions back on. We could alternatively figure out a way
-        # to compare the suggested command against the mach whitelist.
-        suggested_commands = set(difflib.get_close_matches(command, names, cutoff=0.5))
-        suggested_commands |= {cmd for cmd in names if cmd.startswith(command)}
-        raise UnknownCommandError(command, "run", suggested_commands)
+        names = [h.name for h in self._mach_registrar.command_handlers.values()]
+        # We first try to look for a valid command that is very similar to the given command.
+        suggested_commands = difflib.get_close_matches(command, names, cutoff=0.8)
+        # If we find more than one matching command, or no command at all,
+        # we give command suggestions instead (with a lower matching threshold).
+        # All commands that start with the given command (for instance:
+        # 'mochitest-plain', 'mochitest-chrome', etc. for 'mochitest-')
+        # are also included.
+        if len(suggested_commands) != 1:
+            suggested_commands = set(
+                difflib.get_close_matches(command, names, cutoff=0.5)
+            )
+            suggested_commands |= {cmd for cmd in names if cmd.startswith(command)}
+            raise UnknownCommandError(command, "run", suggested_commands)
+        sys.stderr.write(
+            "We're assuming the '%s' command is '%s' and we're "
+            "executing it for you.\n\n" % (command, suggested_commands[0])
+        )
+        return suggested_commands[0]
 
 
 class NoUsageFormatter(argparse.HelpFormatter):

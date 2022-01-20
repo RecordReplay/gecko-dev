@@ -9,6 +9,9 @@
 "use strict";
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
 const { BrowserTestUtils } = ChromeUtils.import(
   "resource://testing-common/BrowserTestUtils.jsm"
 );
@@ -19,17 +22,33 @@ const { TestUtils } = ChromeUtils.import(
 
 const EXPORTED_SYMBOLS = ["PromptTestUtils"];
 
+const kPrefs = {};
+
 // Whether prompts with modal type TAB are shown as SubDialog (true) or
 // TabModalPrompt (false).
-let tabPromptSubDialogEnabled = Services.prefs.getBoolPref(
+XPCOMUtils.defineLazyPreferenceGetter(
+  kPrefs,
+  "tabPromptSubDialogEnabled",
   "prompts.tabChromePromptSubDialog",
+  false
+);
+
+// Whether web content prompts (alert etc.) are shown as SubDialog (true)
+// or TabModalPrompt (false)
+XPCOMUtils.defineLazyPreferenceGetter(
+  kPrefs,
+  "contentPromptSubDialogEnabled",
+  "prompts.contentPromptSubDialog",
   false
 );
 
 function isCommonDialog(modalType) {
   return (
     modalType === Services.prompt.MODAL_TYPE_WINDOW ||
-    (tabPromptSubDialogEnabled && modalType === Services.prompt.MODAL_TYPE_TAB)
+    (kPrefs.tabPromptSubDialogEnabled &&
+      modalType === Services.prompt.MODAL_TYPE_TAB) ||
+    (kPrefs.contentPromptSubDialogEnabled &&
+      modalType === Services.prompt.MODAL_TYPE_CONTENT)
   );
 }
 
@@ -148,7 +167,7 @@ let PromptTestUtils = {
       } else if (parent instanceof Ci.nsIDOMChromeWindow) {
         // Parent is window
         parentWindow = parent;
-        parentBrowser = parentWindow.gBrowser.selectedBrowser;
+        parentBrowser = parentWindow.gBrowser?.selectedBrowser;
       } else {
         throw new Error("Invalid parent. Expected browser or dom window");
       }
@@ -160,19 +179,44 @@ let PromptTestUtils = {
 
     let dialog;
     await TestUtils.topicObserved(topic, subject => {
+      // If we are not given a browser, use the currently selected browser of the window
+      let browser =
+        parentBrowser || subject.ownerGlobal.gBrowser?.selectedBrowser;
       if (isCommonDialog(modalType)) {
         // Is not associated with given parent window, skip
         if (parentWindow && subject.opener !== parentWindow) {
           return false;
         }
+
+        // For tab prompts, ensure that the associated browser matches.
+        if (browser && modalType == Services.prompt.MODAL_TYPE_TAB) {
+          let dialogBox = parentWindow.gBrowser.getTabDialogBox(browser);
+          let hasMatchingDialog = dialogBox
+            .getTabDialogManager()
+            ._dialogs.some(
+              d => d._frame?.browsingContext == subject.browsingContext
+            );
+          if (!hasMatchingDialog) {
+            return false;
+          }
+        }
+
+        if (browser && modalType == Services.prompt.MODAL_TYPE_CONTENT) {
+          let dialogBox = parentWindow.gBrowser.getTabDialogBox(browser);
+          let hasMatchingDialog = dialogBox
+            .getContentDialogManager()
+            ._dialogs.some(
+              d => d._frame?.browsingContext == subject.browsingContext
+            );
+          if (!hasMatchingDialog) {
+            return false;
+          }
+        }
+
         // subject is the window object of the prompt which has a Dialog object
         // attached.
         dialog = subject.Dialog;
       } else {
-        // If we are not given a browser, use the currently selected browser of the window
-        let browser =
-          parentBrowser || subject.ownerGlobal.gBrowser.selectedBrowser;
-
         // subject is the tabprompt dom node
         // Get the full prompt object which has the dialog object
         let prompt = browser.tabModalPromptBox.getPrompt(subject);

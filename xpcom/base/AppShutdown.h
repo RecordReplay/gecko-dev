@@ -7,6 +7,7 @@
 #ifndef AppShutdown_h
 #define AppShutdown_h
 
+#include <type_traits>
 #include "ShutdownPhase.h"
 
 namespace mozilla {
@@ -19,6 +20,8 @@ enum class AppShutdownMode {
 class AppShutdown {
  public:
   static bool IsShuttingDown();
+  static ShutdownPhase GetCurrentShutdownPhase();
+  static bool IsInOrBeyond(ShutdownPhase aPhase);
 
   /**
    * Returns the current exit code that the process will be terminated with.
@@ -48,12 +51,6 @@ class AppShutdown {
   static void MaybeDoRestart();
 
   /**
-   * This will perform a fast shutdown via _exit(0) or similar if the user's
-   * prefs are configured to do so at this phase.
-   */
-  static void MaybeFastShutdown(ShutdownPhase aPhase);
-
-  /**
    * The _exit() call is not a safe way to terminate your own process on
    * Windows, because _exit runs DLL detach callbacks which run static
    * destructors for xul.dll.
@@ -69,6 +66,47 @@ class AppShutdown {
    * restart.
    */
   static bool IsRestarting();
+
+  /**
+   * Wrapper for shutdown notifications that informs the terminator before
+   * we notify other observers. Calls MaybeFastShutdown.
+   */
+  static void AdvanceShutdownPhase(
+      ShutdownPhase aPhase, const char16_t* aNotificationData = nullptr,
+      const nsCOMPtr<nsISupports>& aNotificationSubject =
+          nsCOMPtr<nsISupports>(nullptr));
+
+  /**
+   * XXX: Before tackling bug 1697745 we need the
+   * possibility to advance the phase without notification
+   * in the content process.
+   */
+  static void AdvanceShutdownPhaseWithoutNotify(ShutdownPhase aPhase);
+
+  /**
+   * This will perform a fast shutdown via _exit(0) or similar if the user's
+   * prefs are configured to do so at this phase.
+   */
+  static void MaybeFastShutdown(ShutdownPhase aPhase);
+
+  /**
+   * Map shutdown phase to observer key
+   */
+  static const char* GetObserverKey(ShutdownPhase aPhase);
+
+  /**
+   * Map observer topic key to shutdown phase
+   */
+  static ShutdownPhase GetShutdownPhaseFromTopic(const char* aTopic);
+
+#ifdef DEBUG
+  /**
+   * Check, if we are allowed to send a shutdown notification.
+   * Shutdown specific topics are only allowed during calls to
+   * AdvanceShutdownPhase itself.
+   */
+  static bool IsNoOrLegalShutdownTopic(const char* aTopic);
+#endif
 };
 
 }  // namespace mozilla

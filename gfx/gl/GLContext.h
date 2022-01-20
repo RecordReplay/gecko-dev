@@ -45,7 +45,7 @@
 #include "mozilla/WeakPtr.h"
 
 #ifdef MOZ_WIDGET_ANDROID
-#  include "GeckoProfiler.h"
+#  include "mozilla/ProfilerLabels.h"
 #endif
 
 namespace mozilla {
@@ -3779,6 +3779,8 @@ UniquePtr<Texture> CreateTexture(GLContext&, const gfx::IntSize& size);
  * texel for a texture from its format and type.
  */
 uint32_t GetBytesPerTexel(GLenum format, GLenum type);
+
+void MesaMemoryLeakWorkaround();
 
 } /* namespace gl */
 } /* namespace mozilla */

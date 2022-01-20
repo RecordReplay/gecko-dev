@@ -45,7 +45,8 @@ class nsInlineFrame : public nsContainerFrame {
 #endif
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override {
-    if (aFlags & (eSupportsCSSTransforms | eSupportsContainLayoutAndPaint)) {
+    if (aFlags & (eSupportsCSSTransforms | eSupportsContainLayoutAndPaint |
+                  eSupportsAspectRatio)) {
       return false;
     }
     return nsContainerFrame::IsFrameOfType(
@@ -76,13 +77,13 @@ class nsInlineFrame : public nsContainerFrame {
                                  InlineMinISizeData* aData) override;
   virtual void AddInlinePrefISize(gfxContext* aRenderingContext,
                                   InlinePrefISizeData* aData) override;
-  SizeComputationResult ComputeSize(gfxContext* aRenderingContext,
-                                    mozilla::WritingMode aWM,
-                                    const mozilla::LogicalSize& aCBSize,
-                                    nscoord aAvailableISize,
-                                    const mozilla::LogicalSize& aMargin,
-                                    const mozilla::LogicalSize& aBorderPadding,
-                                    mozilla::ComputeSizeFlags aFlags) override;
+  SizeComputationResult ComputeSize(
+      gfxContext* aRenderingContext, mozilla::WritingMode aWM,
+      const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
+      const mozilla::LogicalSize& aMargin,
+      const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
+      mozilla::ComputeSizeFlags aFlags) override;
   virtual nsRect ComputeTightBounds(DrawTarget* aDrawTarget) const override;
   virtual void Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
                       const ReflowInput& aReflowInput,

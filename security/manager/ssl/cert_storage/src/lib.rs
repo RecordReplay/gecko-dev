@@ -22,11 +22,17 @@ extern crate thin_vec;
 extern crate time;
 #[macro_use]
 extern crate xpcom;
+#[macro_use]
+extern crate malloc_size_of_derive;
 extern crate storage_variant;
 extern crate tempfile;
 
+extern crate wr_malloc_size_of;
+use wr_malloc_size_of as malloc_size_of;
+
 use byteorder::{LittleEndian, NetworkEndian, ReadBytesExt, WriteBytesExt};
 use crossbeam_utils::atomic::AtomicCell;
+use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use memmap::Mmap;
 use moz_task::{create_background_task_queue, is_main_thread, Task, TaskRunnable};
 use nserror::{
@@ -54,8 +60,9 @@ use storage_variant::VariantType;
 use thin_vec::ThinVec;
 use xpcom::interfaces::{
     nsICRLiteState, nsICertInfo, nsICertStorage, nsICertStorageCallback, nsIFile,
-    nsIIssuerAndSerialRevocationState, nsIObserver, nsIPrefBranch, nsIRevocationState,
-    nsISerialEventTarget, nsISubjectAndPubKeyRevocationState, nsISupports,
+    nsIHandleReportCallback, nsIIssuerAndSerialRevocationState, nsIMemoryReporter,
+    nsIMemoryReporterManager, nsIObserver, nsIPrefBranch, nsIRevocationState, nsISerialEventTarget,
+    nsISubjectAndPubKeyRevocationState, nsISupports,
 };
 use xpcom::{nsIID, GetterAddrefs, RefPtr, ThreadBoundRefPtr, XpCom};
 
@@ -103,6 +110,23 @@ struct EnvAndStore {
     store: SingleStore,
 }
 
+impl MallocSizeOf for EnvAndStore {
+    fn size_of(&self, _ops: &mut MallocSizeOfOps) -> usize {
+        self.env
+            .read()
+            .and_then(|reader| {
+                let iter = self.store.iter_start(&reader)?.into_iter();
+                Ok(iter
+                    .map(|r| {
+                        r.map(|(k, v)| k.len() + v.serialized_size().unwrap_or(0) as usize)
+                            .unwrap_or(0)
+                    })
+                    .sum())
+            })
+            .unwrap_or(0)
+    }
+}
+
 // In Rust, structs cannot have self references (if a struct gets moved, the compiler has no
 // guarantees that the references are still valid). In our case, since the memmapped data is at a
 // particular place in memory (and that's what we're referencing), we can use the rental crate to
@@ -120,13 +144,15 @@ rental! {
 }
 
 /// `SecurityState`
+#[derive(MallocSizeOf)]
 struct SecurityState {
     profile_path: PathBuf,
     env_and_store: Option<EnvAndStore>,
     int_prefs: HashMap<String, u32>,
+    #[ignore_malloc_size_of = "rental crate does not allow impls for rental structs"]
     crlite_filter: Option<holding::CRLiteFilter>,
     /// Maps issuer spki hashes to sets of seiral numbers.
-    crlite_stash: HashMap<Vec<u8>, HashSet<Vec<u8>>>,
+    crlite_stash: Option<HashMap<Vec<u8>, HashSet<Vec<u8>>>>,
     /// Tracks the number of asynchronous operations which have been dispatched but not completed.
     remaining_ops: i32,
 }
@@ -140,7 +166,7 @@ impl SecurityState {
             env_and_store: None,
             int_prefs: HashMap::new(),
             crlite_filter: None,
-            crlite_stash: HashMap::new(),
+            crlite_stash: None,
             remaining_ops: 0,
         })
     }
@@ -182,7 +208,6 @@ impl SecurityState {
             None => Ok(()),
         }?;
         self.load_crlite_filter()?;
-        self.load_crlite_stash()?;
         Ok(())
     }
 
@@ -275,7 +300,7 @@ impl SecurityState {
             return Ok(self.crlite_filter.is_some());
         }
         if data_type == nsICertStorage::DATA_TYPE_CRLITE_FILTER_INCREMENTAL as u8 {
-            return Ok(self.crlite_stash.len() != 0);
+            return Ok(self.crlite_stash.is_some());
         }
 
         let env_and_store = match self.env_and_store.as_ref() {
@@ -396,7 +421,7 @@ impl SecurityState {
         // First drop any existing crlite filter and clear the accumulated stash.
         {
             let _ = self.crlite_filter.take();
-            self.crlite_stash.clear();
+            let _ = self.crlite_stash.take();
             let mut path = get_store_path(&self.profile_path)?;
             path.push("crlite.stash");
             // Truncate the stash file if it exists.
@@ -464,63 +489,8 @@ impl SecurityState {
         path.push("crlite.stash");
         let mut stash_file = OpenOptions::new().append(true).create(true).open(path)?;
         stash_file.write_all(&stash)?;
-        self.load_crlite_stash_from(&mut stash.as_slice())?;
-        Ok(())
-    }
-
-    fn load_crlite_stash(&mut self) -> Result<(), SecurityStateError> {
-        self.crlite_stash.clear();
-        let mut path = get_store_path(&self.profile_path)?;
-        path.push("crlite.stash");
-        // Before we've downloaded any stashes, this file won't exist.
-        if !path.exists() {
-            return Ok(());
-        }
-        let mut stash_file = File::open(path)?;
-        self.load_crlite_stash_from(&mut stash_file)?;
-        Ok(())
-    }
-
-    fn load_crlite_stash_from(&mut self, reader: &mut dyn Read) -> Result<(), SecurityStateError> {
-        // The basic unit of the stash file is an issuer subject public key info
-        // hash (sha-256) followed by a number of serial numbers corresponding
-        // to revoked certificates issued by that issuer. More specifically,
-        // each unit consists of:
-        //   4 bytes little-endian: the number of serial numbers following the issuer spki hash
-        //   1 byte: the length of the issuer spki hash
-        //   issuer spki hash length bytes: the issuer spki hash
-        //   as many times as the indicated serial numbers:
-        //     1 byte: the length of the serial number
-        //     serial number length bytes: the serial number
-        // The stash file consists of any number of these units concatenated
-        // together.
-        loop {
-            let num_serials = match reader.read_u32::<LittleEndian>() {
-                Ok(num_serials) => num_serials,
-                Err(_) => break, // end-of-file, presumably
-            };
-            let issuer_spki_hash_len = reader.read_u8().map_err(|e| {
-                SecurityStateError::from(format!("error reading stash issuer_spki_hash_len: {}", e))
-            })?;
-            let mut issuer_spki_hash = vec![0; issuer_spki_hash_len as usize];
-            reader.read_exact(&mut issuer_spki_hash).map_err(|e| {
-                SecurityStateError::from(format!("error reading stash issuer_spki_hash: {}", e))
-            })?;
-            let serials = self
-                .crlite_stash
-                .entry(issuer_spki_hash)
-                .or_insert(HashSet::new());
-            for _ in 0..num_serials {
-                let serial_len = reader.read_u8().map_err(|e| {
-                    SecurityStateError::from(format!("error reading stash serial_len: {}", e))
-                })?;
-                let mut serial = vec![0; serial_len as usize];
-                reader.read_exact(&mut serial).map_err(|e| {
-                    SecurityStateError::from(format!("error reading stash serial: {}", e))
-                })?;
-                let _ = serials.insert(serial);
-            }
-        }
+        let crlite_stash = self.crlite_stash.get_or_insert(HashMap::new());
+        load_crlite_stash_from_reader_into_map(&mut stash.as_slice(), crlite_stash)?;
         Ok(())
     }
 
@@ -529,10 +499,14 @@ impl SecurityState {
         issuer_spki: &[u8],
         serial: &[u8],
     ) -> Result<bool, SecurityStateError> {
+        let crlite_stash = match self.crlite_stash.as_ref() {
+            Some(crlite_stash) => crlite_stash,
+            None => return Ok(false),
+        };
         let mut digest = Sha256::default();
         digest.input(issuer_spki);
         let lookup_key = digest.result().as_slice().to_vec();
-        let serials = match self.crlite_stash.get(&lookup_key) {
+        let serials = match crlite_stash.get(&lookup_key) {
             Some(serials) => serials,
             None => return Ok(false),
         };
@@ -1088,6 +1062,117 @@ fn remove_db(path: &Path) -> Result<(), SecurityStateError> {
     Ok(())
 }
 
+// Helper function to read stash information from the given reader and insert the results into the
+// given stash map.
+fn load_crlite_stash_from_reader_into_map(
+    reader: &mut dyn Read,
+    dest: &mut HashMap<Vec<u8>, HashSet<Vec<u8>>>,
+) -> Result<(), SecurityStateError> {
+    // The basic unit of the stash file is an issuer subject public key info
+    // hash (sha-256) followed by a number of serial numbers corresponding
+    // to revoked certificates issued by that issuer. More specifically,
+    // each unit consists of:
+    //   4 bytes little-endian: the number of serial numbers following the issuer spki hash
+    //   1 byte: the length of the issuer spki hash
+    //   issuer spki hash length bytes: the issuer spki hash
+    //   as many times as the indicated serial numbers:
+    //     1 byte: the length of the serial number
+    //     serial number length bytes: the serial number
+    // The stash file consists of any number of these units concatenated
+    // together.
+    loop {
+        let num_serials = match reader.read_u32::<LittleEndian>() {
+            Ok(num_serials) => num_serials,
+            Err(_) => break, // end of input, presumably
+        };
+        let issuer_spki_hash_len = reader.read_u8().map_err(|e| {
+            SecurityStateError::from(format!("error reading stash issuer_spki_hash_len: {}", e))
+        })?;
+        let mut issuer_spki_hash = vec![0; issuer_spki_hash_len as usize];
+        reader.read_exact(&mut issuer_spki_hash).map_err(|e| {
+            SecurityStateError::from(format!("error reading stash issuer_spki_hash: {}", e))
+        })?;
+        let serials = dest.entry(issuer_spki_hash).or_insert(HashSet::new());
+        for _ in 0..num_serials {
+            let serial_len = reader.read_u8().map_err(|e| {
+                SecurityStateError::from(format!("error reading stash serial_len: {}", e))
+            })?;
+            let mut serial = vec![0; serial_len as usize];
+            reader.read_exact(&mut serial).map_err(|e| {
+                SecurityStateError::from(format!("error reading stash serial: {}", e))
+            })?;
+            let _ = serials.insert(serial);
+        }
+    }
+    Ok(())
+}
+
+// This is a helper struct that implements the task that asynchronously reads the CRLite stash on a
+// background thread.
+struct BackgroundReadStashTask {
+    profile_path: PathBuf,
+    security_state: Arc<RwLock<SecurityState>>,
+}
+
+impl BackgroundReadStashTask {
+    fn new(
+        profile_path: PathBuf,
+        security_state: &Arc<RwLock<SecurityState>>,
+    ) -> BackgroundReadStashTask {
+        BackgroundReadStashTask {
+            profile_path,
+            security_state: Arc::clone(security_state),
+        }
+    }
+}
+
+impl Task for BackgroundReadStashTask {
+    fn run(&self) {
+        let mut path = match get_store_path(&self.profile_path) {
+            Ok(path) => path,
+            Err(e) => {
+                error!("error getting security_state path: {}", e.message);
+                return;
+            }
+        };
+        path.push("crlite.stash");
+        // Before we've downloaded any stashes, this file won't exist.
+        if !path.exists() {
+            return;
+        }
+        let mut stash_file = match File::open(path) {
+            Ok(file) => file,
+            Err(e) => {
+                error!("error opening stash file: {}", e);
+                return;
+            }
+        };
+        let mut crlite_stash = HashMap::new();
+        match load_crlite_stash_from_reader_into_map(&mut stash_file, &mut crlite_stash) {
+            Ok(()) => {}
+            Err(e) => {
+                error!("error loading crlite stash: {}", e.message);
+                return;
+            }
+        }
+        let mut ss = match self.security_state.write() {
+            Ok(ss) => ss,
+            Err(_) => return,
+        };
+        match ss.crlite_stash.replace(crlite_stash) {
+            Some(_) => {
+                error!("replacing existing crlite stash when reading for the first time?");
+                return;
+            }
+            None => {}
+        }
+    }
+
+    fn done(&self) -> Result<(), nsresult> {
+        Ok(())
+    }
+}
+
 fn do_construct_cert_storage(
     _outer: *const nsISupports,
     iid: *const xpcom::nsIID,
@@ -1095,10 +1180,31 @@ fn do_construct_cert_storage(
 ) -> Result<(), SecurityStateError> {
     let path_buf = get_profile_path()?;
 
+    let security_state = Arc::new(RwLock::new(SecurityState::new(path_buf.clone())?));
     let cert_storage = CertStorage::allocate(InitCertStorage {
-        security_state: Arc::new(RwLock::new(SecurityState::new(path_buf)?)),
+        security_state: security_state.clone(),
         queue: create_background_task_queue(cstr!("cert_storage"))?,
     });
+    let memory_reporter = MemoryReporter::allocate(InitMemoryReporter { security_state });
+
+    // Dispatch a task to the background task queue to asynchronously read the CRLite stash file (if
+    // present) and load it into cert_storage. This task does not hold the
+    // cert_storage.security_state mutex for the majority of its operation, which allows certificate
+    // verification threads to query cert_storage without blocking. This is important for
+    // performance, but it means that certificate verifications that happen before the task has
+    // completed will not have stash information, and thus may not know of revocations that have
+    // occurred since the last full CRLite filter was downloaded. As long as the last full filter
+    // was downloaded no more than 10 days ago, this is no worse than relying on OCSP responses,
+    // which have a maximum validity of 10 days.
+    // NB: because the background task queue is serial, this task will complete before other tasks
+    // later dispatched to the queue run. This means that other tasks that interact with the stash
+    // will do so with the correct set of preconditions.
+    let load_crlite_stash_task = Box::new(BackgroundReadStashTask::new(
+        path_buf,
+        &cert_storage.security_state,
+    ));
+    let runnable = TaskRunnable::new("LoadCrliteStash", load_crlite_stash_task)?;
+    TaskRunnable::dispatch(runnable, cert_storage.queue.coerce())?;
 
     unsafe {
         cert_storage
@@ -1108,6 +1214,14 @@ fn do_construct_cert_storage(
             .map_err(|res| SecurityStateError {
                 message: (*res.error_name()).as_str_unchecked().to_owned(),
             })?;
+
+        if let Some(reporter) = memory_reporter.query_interface::<nsIMemoryReporter>() {
+            if let Some(reporter_manager) = xpcom::get_service::<nsIMemoryReporterManager>(cstr!(
+                "@mozilla.org/memory-reporter-manager;1"
+            )) {
+                reporter_manager.RegisterStrongReporter(&*reporter);
+            }
+        }
 
         return cert_storage.setup_prefs();
     };
@@ -1737,6 +1851,46 @@ impl CertStorage {
             }
             _ => (),
         }
+        NS_OK
+    }
+}
+
+extern "C" {
+    fn cert_storage_malloc_size_of(ptr: *const xpcom::reexports::libc::c_void) -> usize;
+}
+
+#[derive(xpcom)]
+#[xpimplements(nsIMemoryReporter)]
+#[refcnt = "atomic"]
+struct InitMemoryReporter {
+    security_state: Arc<RwLock<SecurityState>>,
+}
+
+#[allow(non_snake_case)]
+impl MemoryReporter {
+    unsafe fn CollectReports(
+        &self,
+        callback: *const nsIHandleReportCallback,
+        data: *const nsISupports,
+        _anonymize: bool,
+    ) -> nserror::nsresult {
+        let ss = try_ns!(self.security_state.read());
+        let mut ops = MallocSizeOfOps::new(cert_storage_malloc_size_of, None);
+        let size = ss.size_of(&mut ops);
+        let callback = match RefPtr::from_raw(callback) {
+            Some(ptr) => ptr,
+            None => return NS_ERROR_UNEXPECTED,
+        };
+        // This does the same as MOZ_COLLECT_REPORT
+        callback.Callback(
+            &nsCStr::new() as &nsACString,
+            &nsCStr::from("explicit/cert-storage/storage") as &nsACString,
+            nsIMemoryReporter::KIND_HEAP as i32,
+            nsIMemoryReporter::UNITS_BYTES as i32,
+            size as i64,
+            &nsCStr::from("Memory used by certificate storage") as &nsACString,
+            data,
+        );
         NS_OK
     }
 }

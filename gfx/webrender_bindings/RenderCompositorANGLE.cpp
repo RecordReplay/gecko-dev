@@ -43,8 +43,8 @@ namespace wr {
 
 /* static */
 UniquePtr<RenderCompositor> RenderCompositorANGLE::Create(
-    RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError) {
-  const auto& gl = RenderThread::Get()->SharedGL(aError);
+    const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError) {
+  const auto& gl = RenderThread::Get()->SingletonGL(aError);
   if (!gl) {
     if (aError.IsEmpty()) {
       aError.Assign("RcANGLE(no shared GL)"_ns);
@@ -55,7 +55,7 @@ UniquePtr<RenderCompositor> RenderCompositorANGLE::Create(
   }
 
   UniquePtr<RenderCompositorANGLE> compositor =
-      MakeUnique<RenderCompositorANGLE>(std::move(aWidget));
+      MakeUnique<RenderCompositorANGLE>(aWidget);
   if (!compositor->Initialize(aError)) {
     return nullptr;
   }
@@ -63,8 +63,8 @@ UniquePtr<RenderCompositor> RenderCompositorANGLE::Create(
 }
 
 RenderCompositorANGLE::RenderCompositorANGLE(
-    RefPtr<widget::CompositorWidget>&& aWidget)
-    : RenderCompositor(std::move(aWidget)),
+    const RefPtr<widget::CompositorWidget>& aWidget)
+    : RenderCompositor(aWidget),
       mEGLConfig(nullptr),
       mEGLSurface(nullptr),
       mUseTripleBuffering(false),
@@ -80,7 +80,7 @@ RenderCompositorANGLE::~RenderCompositorANGLE() {
 }
 
 ID3D11Device* RenderCompositorANGLE::GetDeviceOfEGLDisplay(nsACString& aError) {
-  const auto& gl = RenderThread::Get()->SharedGL(aError);
+  const auto& gl = RenderThread::Get()->SingletonGL(aError);
   if (!gl) {
     if (aError.IsEmpty()) {
       aError.Assign("RcANGLE(no shared GL in get device)"_ns);
@@ -127,7 +127,7 @@ bool RenderCompositorANGLE::ShutdownEGLLibraryIfNecessary(nsACString& aError) {
   if ((!displayDevice || device.get() != displayDevice) &&
       RenderThread::Get()->RendererCount() == 0) {
     // Shutdown GLLibraryEGL for updating EGLDisplay.
-    RenderThread::Get()->ClearSharedGL();
+    RenderThread::Get()->ClearSingletonGL();
   }
   return true;
 }
@@ -147,7 +147,7 @@ bool RenderCompositorANGLE::Initialize(nsACString& aError) {
     aError.Append("(Shutdown EGL)"_ns);
     return false;
   }
-  const auto gl = RenderThread::Get()->SharedGL(aError);
+  const auto gl = RenderThread::Get()->SingletonGL(aError);
   if (!gl) {
     if (aError.IsEmpty()) {
       aError.Assign("RcANGLE(no shared GL post maybe shutdown)"_ns);
@@ -162,7 +162,7 @@ bool RenderCompositorANGLE::Initialize(nsACString& aError) {
   const auto& gle = gl::GLContextEGL::Cast(gl);
   const auto& egl = gle->mEgl;
   if (!gl::CreateConfig(*egl, &mEGLConfig, /* bpp */ 32,
-                        /* enableDepthBuffer */ true, gl->IsGLES())) {
+                        /* enableDepthBuffer */ false, gl->IsGLES())) {
     aError.Assign("RcANGLE(create EGLConfig failed)"_ns);
     return false;
   }
@@ -276,7 +276,13 @@ bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
     desc.SampleDesc.Quality = 0;
     desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 
-    if (gfx::gfxVars::UseWebRenderFlipSequentialWin()) {
+    bool useFlipSequential = gfx::gfxVars::UseWebRenderFlipSequentialWin();
+    if (useFlipSequential && !mWidget->AsWindows()->GetCompositorHwnd()) {
+      useFlipSequential = false;
+      gfxCriticalNoteOnce << "FLIP_SEQUENTIAL needs CompositorHwnd. Fallback";
+    }
+
+    if (useFlipSequential) {
       useTripleBuffering = gfx::gfxVars::UseWebRenderTripleBufferingWin();
       if (useTripleBuffering) {
         desc.BufferCount = 3;
@@ -299,18 +305,18 @@ bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
       mSwapChain = swapChain1;
       mSwapChain1 = swapChain1;
       mUseTripleBuffering = useTripleBuffering;
-    } else if (gfx::gfxVars::UseWebRenderFlipSequentialWin()) {
+    } else if (useFlipSequential) {
       gfxCriticalNoteOnce << "FLIP_SEQUENTIAL is not supported. Fallback";
-
-      if (mWidget->AsWindows()->GetCompositorHwnd()) {
-        // Destroy compositor window.
-        mWidget->AsWindows()->DestroyCompositorWindow();
-        hwnd = mWidget->AsWindows()->GetHwnd();
-      }
     }
   }
 
   if (!mSwapChain) {
+    if (mWidget->AsWindows()->GetCompositorHwnd()) {
+      // Destroy compositor window.
+      mWidget->AsWindows()->DestroyCompositorWindow();
+      hwnd = mWidget->AsWindows()->GetHwnd();
+    }
+
     DXGI_SWAP_CHAIN_DESC swapDesc{};
     swapDesc.BufferDesc.Width = 0;
     swapDesc.BufferDesc.Height = 0;
@@ -494,7 +500,7 @@ bool RenderCompositorANGLE::BeginFrame() {
     if (!mSyncObject->Synchronize(/* aFallible */ true)) {
       // It's timeout or other error. Handle the device-reset here.
       RenderThread::Get()->HandleDeviceReset(
-          "SyncObject", nullptr, LOCAL_GL_UNKNOWN_CONTEXT_RESET_ARB);
+          "SyncObject", LOCAL_GL_UNKNOWN_CONTEXT_RESET_ARB);
       return false;
     }
   }
@@ -537,12 +543,10 @@ RenderedFrameId RenderCompositorANGLE::EndFrame(
         for (size_t i = 0; i < aDirtyRects.Length(); ++i) {
           const DeviceIntRect& rect = aDirtyRects[i];
           // Clip rect to bufferSize
-          int left = std::max(0, std::min(rect.origin.x, bufferSize.width));
-          int top = std::max(0, std::min(rect.origin.y, bufferSize.height));
-          int right = std::max(
-              0, std::min(rect.origin.x + rect.size.width, bufferSize.width));
-          int bottom = std::max(
-              0, std::min(rect.origin.y + rect.size.height, bufferSize.height));
+          int left = std::max(0, std::min(rect.min.x, bufferSize.width));
+          int top = std::max(0, std::min(rect.min.y, bufferSize.height));
+          int right = std::max(0, std::min(rect.max.x, bufferSize.width));
+          int bottom = std::max(0, std::min(rect.max.y, bufferSize.height));
 
           // When rect is not empty, the rect could be passed to Present1().
           if (left < right && top < bottom) {
@@ -691,7 +695,7 @@ bool RenderCompositorANGLE::CreateEGLSurface() {
 
   const auto buffer = reinterpret_cast<EGLClientBuffer>(backBuf.get());
 
-  const auto gl = RenderThread::Get()->SharedGL();
+  const auto gl = RenderThread::Get()->SingletonGL();
   const auto& gle = gl::GLContextEGL::Cast(gl);
   const auto& egl = gle->mEgl;
   const EGLSurface surface = egl->fCreatePbufferFromClientBuffer(
@@ -872,14 +876,6 @@ bool RenderCompositorANGLE::ShouldUseNativeCompositor() {
   return UseCompositor();
 }
 
-uint32_t RenderCompositorANGLE::GetMaxUpdateRects() {
-  if (UseCompositor() &&
-      StaticPrefs::gfx_webrender_compositor_max_update_rects_AtStartup() > 0) {
-    return 1;
-  }
-  return 0;
-}
-
 void RenderCompositorANGLE::CompositorBeginFrame() {
   mDCLayerTree->CompositorBeginFrame();
 }
@@ -934,12 +930,11 @@ void RenderCompositorANGLE::AddSurface(
   mDCLayerTree->AddSurface(aId, aTransform, aClipRect, aImageRendering);
 }
 
-CompositorCapabilities RenderCompositorANGLE::GetCompositorCapabilities() {
-  CompositorCapabilities caps;
+void RenderCompositorANGLE::GetCompositorCapabilities(
+    CompositorCapabilities* aCaps) {
+  RenderCompositor::GetCompositorCapabilities(aCaps);
 
-  caps.virtual_surface_size = VIRTUAL_SURFACE_SIZE;
-
-  return caps;
+  aCaps->virtual_surface_size = VIRTUAL_SURFACE_SIZE;
 }
 
 void RenderCompositorANGLE::EnableNativeCompositor(bool aEnable) {

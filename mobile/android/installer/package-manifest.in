@@ -85,6 +85,7 @@
 ; [Base Browser Files]
 @BINPATH@/application.ini
 @BINPATH@/platform.ini
+@BINPATH@/defaults/settings/last_modified.json
 @BINPATH@/defaults/settings/blocklists/addons.json
 ; TODO bug 1639050: addons-bloomfilters should be used instead of addons.json
 @BINPATH@/defaults/settings/security-state/onecrl.json
@@ -110,7 +111,6 @@
 #if defined(ENABLE_TESTS) && defined(MOZ_DEBUG)
 @BINPATH@/components/TestInterfaceJS.js
 @BINPATH@/components/TestInterfaceJS.manifest
-@BINPATH@/components/TestInterfaceJSMaplike.js
 #endif
 
 ; Modules
@@ -206,12 +206,12 @@
 
 @BINPATH@/components/GeckoView.manifest
 
-; Remote control protocol
-#ifdef ENABLE_MARIONETTE
-@BINPATH@/chrome/marionette@JAREXT@
-@BINPATH@/chrome/marionette.manifest
+; WebDriver (Marionette, Remote Agent) remote protocols
+#ifdef ENABLE_WEBDRIVER
 @BINPATH@/components/marionette.manifest
 @BINPATH@/components/marionette.js
+@BINPATH@/chrome/remote@JAREXT@
+@BINPATH@/chrome/remote.manifest
 #endif
 
 #ifdef PKG_LOCALE_MANIFEST

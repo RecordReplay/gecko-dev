@@ -5,54 +5,25 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/a11y/DocAccessibleChildBase.h"
-#include "mozilla/a11y/ProxyAccessible.h"
+#include "mozilla/a11y/RemoteAccessible.h"
+#include "mozilla/StaticPrefs_accessibility.h"
 
-#include "Accessible-inl.h"
+#include "LocalAccessible-inl.h"
 
 namespace mozilla {
 namespace a11y {
 
 /* static */
-uint32_t DocAccessibleChildBase::InterfacesFor(Accessible* aAcc) {
-  uint32_t interfaces = 0;
-  if (aAcc->IsHyperText() && aAcc->AsHyperText()->IsTextRole())
-    interfaces |= Interfaces::HYPERTEXT;
-
-  if (aAcc->IsLink()) interfaces |= Interfaces::HYPERLINK;
-
-  if (aAcc->HasNumericValue()) interfaces |= Interfaces::VALUE;
-
-  if (aAcc->IsImage()) interfaces |= Interfaces::IMAGE;
-
-  if (aAcc->IsTable()) {
-    interfaces |= Interfaces::TABLE;
-  }
-
-  if (aAcc->IsTableCell()) interfaces |= Interfaces::TABLECELL;
-
-  if (aAcc->IsDoc()) interfaces |= Interfaces::DOCUMENT;
-
-  if (aAcc->IsSelect()) {
-    interfaces |= Interfaces::SELECTION;
-  }
-
-  if (aAcc->ActionCount()) {
-    interfaces |= Interfaces::ACTION;
-  }
-
-  return interfaces;
-}
-
-/* static */
-void DocAccessibleChildBase::SerializeTree(Accessible* aRoot,
+void DocAccessibleChildBase::SerializeTree(LocalAccessible* aRoot,
                                            nsTArray<AccessibleData>& aTree) {
   uint64_t id = reinterpret_cast<uint64_t>(aRoot->UniqueID());
 #if defined(XP_WIN)
-  int32_t msaaId = AccessibleWrap::GetChildIDFor(aRoot);
+  int32_t msaaId = StaticPrefs::accessibility_cache_enabled_AtStartup()
+                       ? 0
+                       : MsaaAccessible::GetChildIDFor(aRoot);
 #endif
   a11y::role role = aRoot->Role();
   uint32_t childCount = aRoot->ChildCount();
-  uint32_t interfaces = InterfacesFor(aRoot);
 
   // OuterDocAccessibles are special because we don't want to serialize the
   // child doc here, we'll call PDocAccessibleConstructor in
@@ -62,19 +33,32 @@ void DocAccessibleChildBase::SerializeTree(Accessible* aRoot,
     childCount = 0;
   }
 
+  uint32_t genericTypes = aRoot->mGenericTypes;
+  if (aRoot->ARIAHasNumericValue()) {
+    // XXX: We need to do this because this requires a state check.
+    genericTypes |= eNumericValue;
+  }
+  if (aRoot->ActionCount()) {
+    genericTypes |= eActionable;
+  }
+
 #if defined(XP_WIN)
-  aTree.AppendElement(AccessibleData(id, msaaId, role, childCount, interfaces));
+  aTree.AppendElement(AccessibleData(
+      id, msaaId, role, childCount, static_cast<AccType>(aRoot->mType),
+      static_cast<AccGenericType>(genericTypes), aRoot->mRoleMapEntryIndex));
 #else
-  aTree.AppendElement(AccessibleData(id, role, childCount, interfaces));
+  aTree.AppendElement(AccessibleData(
+      id, role, childCount, static_cast<AccType>(aRoot->mType),
+      static_cast<AccGenericType>(genericTypes), aRoot->mRoleMapEntryIndex));
 #endif
 
   for (uint32_t i = 0; i < childCount; i++) {
-    SerializeTree(aRoot->GetChildAt(i), aTree);
+    SerializeTree(aRoot->LocalChildAt(i), aTree);
   }
 }
 
-void DocAccessibleChildBase::InsertIntoIpcTree(Accessible* aParent,
-                                               Accessible* aChild,
+void DocAccessibleChildBase::InsertIntoIpcTree(LocalAccessible* aParent,
+                                               LocalAccessible* aChild,
                                                uint32_t aIdxInParent) {
   uint64_t parentID =
       aParent->IsDoc() ? 0 : reinterpret_cast<uint64_t>(aParent->UniqueID());
@@ -85,7 +69,7 @@ void DocAccessibleChildBase::InsertIntoIpcTree(Accessible* aParent,
 }
 
 void DocAccessibleChildBase::ShowEvent(AccShowEvent* aShowEvent) {
-  Accessible* parent = aShowEvent->Parent();
+  LocalAccessible* parent = aShowEvent->LocalParent();
   uint64_t parentID =
       parent->IsDoc() ? 0 : reinterpret_cast<uint64_t>(parent->UniqueID());
   uint32_t idxInParent = aShowEvent->GetAccessible()->IndexInParent();

@@ -10,7 +10,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsXPCOMCIDInternal.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIObserver.h"
@@ -28,8 +28,7 @@ static StaticAutoPtr<ReentrantMonitor> sMonitor;
 
 // Hashtable, maps thread pool name to SharedThreadPool instance.
 // Modified only on the main thread.
-static StaticAutoPtr<nsDataHashtable<nsCStringHashKey, SharedThreadPool*>>
-    sPools;
+static StaticAutoPtr<nsTHashMap<nsCStringHashKey, SharedThreadPool*>> sPools;
 
 static already_AddRefed<nsIThreadPool> CreateThreadPool(const nsCString& aName);
 
@@ -51,10 +50,10 @@ SharedThreadPoolShutdownObserver::Observe(nsISupports* aSubject,
 #ifdef EARLY_BETA_OR_EARLIER
   {
     ReentrantMonitorAutoEnter mon(*sMonitor);
-    if (!sPools->Iter().Done()) {
+    if (!sPools->IsEmpty()) {
       nsAutoCString str;
-      for (auto i = sPools->Iter(); !i.Done(); i.Next()) {
-        str.AppendPrintf("\"%s\" ", nsAutoCString(i.Key()).get());
+      for (const auto& key : sPools->Keys()) {
+        str.AppendPrintf("\"%s\" ", nsAutoCString(key).get());
       }
       printf_stderr(
           "SharedThreadPool in xpcom-shutdown-threads. Waiting for "
@@ -73,7 +72,7 @@ void SharedThreadPool::InitStatics() {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(!sMonitor && !sPools);
   sMonitor = new ReentrantMonitor("SharedThreadPool");
-  sPools = new nsDataHashtable<nsCStringHashKey, SharedThreadPool*>();
+  sPools = new nsTHashMap<nsCStringHashKey, SharedThreadPool*>();
   nsCOMPtr<nsIObserverService> obsService =
       mozilla::services::GetObserverService();
   nsCOMPtr<nsIObserver> obs = new SharedThreadPoolShutdownObserver();
@@ -100,42 +99,44 @@ already_AddRefed<SharedThreadPool> SharedThreadPool::Get(
   MOZ_ASSERT(sMonitor && sPools);
   ReentrantMonitorAutoEnter mon(*sMonitor);
   RefPtr<SharedThreadPool> pool;
-  nsresult rv;
 
-  if (auto entry = sPools->LookupForAdd(aName)) {
-    pool = entry.Data();
-    if (NS_FAILED(pool->EnsureThreadLimitIsAtLeast(aThreadLimit))) {
-      NS_WARNING("Failed to set limits on thread pool");
-    }
-  } else {
-    nsCOMPtr<nsIThreadPool> threadPool(CreateThreadPool(aName));
-    if (NS_WARN_IF(!threadPool)) {
-      sPools->Remove(aName);  // XXX entry.Remove()
-      return nullptr;
-    }
-    pool = new SharedThreadPool(aName, threadPool);
+  return sPools->WithEntryHandle(
+      aName, [&](auto&& entry) -> already_AddRefed<SharedThreadPool> {
+        if (entry) {
+          pool = entry.Data();
+          if (NS_FAILED(pool->EnsureThreadLimitIsAtLeast(aThreadLimit))) {
+            NS_WARNING("Failed to set limits on thread pool");
+          }
+        } else {
+          nsCOMPtr<nsIThreadPool> threadPool(CreateThreadPool(aName));
+          if (NS_WARN_IF(!threadPool)) {
+            sPools->Remove(aName);  // XXX entry.Remove()
+            return nullptr;
+          }
+          pool = new SharedThreadPool(aName, threadPool);
 
-    // Set the thread and idle limits. Note that we don't rely on the
-    // EnsureThreadLimitIsAtLeast() call below, as the default thread limit
-    // is 4, and if aThreadLimit is less than 4 we'll end up with a pool
-    // with 4 threads rather than what we expected; so we'll have unexpected
-    // behaviour.
-    rv = pool->SetThreadLimit(aThreadLimit);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      sPools->Remove(aName);  // XXX entry.Remove()
-      return nullptr;
-    }
+          // Set the thread and idle limits. Note that we don't rely on the
+          // EnsureThreadLimitIsAtLeast() call below, as the default thread
+          // limit is 4, and if aThreadLimit is less than 4 we'll end up with a
+          // pool with 4 threads rather than what we expected; so we'll have
+          // unexpected behaviour.
+          nsresult rv = pool->SetThreadLimit(aThreadLimit);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            sPools->Remove(aName);  // XXX entry.Remove()
+            return nullptr;
+          }
 
-    rv = pool->SetIdleThreadLimit(aThreadLimit);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      sPools->Remove(aName);  // XXX entry.Remove()
-      return nullptr;
-    }
+          rv = pool->SetIdleThreadLimit(aThreadLimit);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            sPools->Remove(aName);  // XXX entry.Remove()
+            return nullptr;
+          }
 
-    entry.OrInsert([pool]() { return pool.get(); });
-  }
+          entry.Insert(pool.get());
+        }
 
-  return pool.forget();
+        return pool.forget();
+      });
 }
 
 NS_IMETHODIMP_(MozExternalRefCountType) SharedThreadPool::AddRef(void) {

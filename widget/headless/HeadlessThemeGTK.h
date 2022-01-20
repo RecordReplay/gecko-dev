@@ -19,8 +19,8 @@ class HeadlessThemeGTK final : private nsNativeTheme, public nsITheme {
   HeadlessThemeGTK() = default;
   NS_IMETHOD DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                   StyleAppearance aAppearance,
-                                  const nsRect& aRect,
-                                  const nsRect& aDirtyRect) override;
+                                  const nsRect& aRect, const nsRect& aDirtyRect,
+                                  DrawOverflow) override;
 
   [[nodiscard]] LayoutDeviceIntMargin GetWidgetBorder(
       nsDeviceContext* aContext, nsIFrame* aFrame,
@@ -49,7 +49,10 @@ class HeadlessThemeGTK final : private nsNativeTheme, public nsITheme {
   NS_IMETHOD_(bool)
   ThemeDrawsFocusForWidget(StyleAppearance aAppearance) override;
 
-  virtual bool ThemeNeedsComboboxDropmarker() override;
+  bool ThemeNeedsComboboxDropmarker() override;
+
+  ScrollbarSizes GetScrollbarSizes(nsPresContext*, StyleScrollbarWidth,
+                                   Overlay) override;
 
  protected:
   virtual ~HeadlessThemeGTK() = default;

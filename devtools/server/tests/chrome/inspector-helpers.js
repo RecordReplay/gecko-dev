@@ -1,12 +1,13 @@
 /* exported attachURL, promiseDone,
    promiseOnce,
    addTest, addAsyncTest,
-   runNextTest, _documentWalker,
-   createResourceWatcher */
+   runNextTest, _documentWalker */
 "use strict";
 
 const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
-const { TargetFactory } = require("devtools/client/framework/target");
+const {
+  CommandsFactory,
+} = require("devtools/shared/commands/commands-factory");
 const { DevToolsServer } = require("devtools/server/devtools-server");
 const {
   BrowserTestUtils,
@@ -14,11 +15,6 @@ const {
 const {
   DocumentWalker: _documentWalker,
 } = require("devtools/server/actors/inspector/document-walker");
-
-const { TargetList } = require("devtools/shared/resources/target-list");
-const {
-  ResourceWatcher,
-} = require("devtools/shared/resources/resource-watcher");
 
 const Services = require("Services");
 
@@ -45,23 +41,13 @@ SimpleTest.registerCleanupFunction(function() {
 });
 
 /**
- * Add a new test tab in the browser and load the given url.
- * @return Promise a promise that resolves to the new target representing
- *         the page currently opened.
- */
-
-async function getTargetForSelectedTab(gBrowser) {
-  const selectedTab = gBrowser.selectedTab;
-  await BrowserTestUtils.browserLoaded(selectedTab.linkedBrowser);
-  return TargetFactory.forTab(selectedTab);
-}
-
-/**
  * Open a tab, load the url, wait for it to signal its readiness,
- * find the tab with the devtools server, and call the callback.
+ * connect to this tab via DevTools protocol and return.
  *
- * Returns a function which can be called to close the opened ta
- * and disconnect its devtools client.
+ * Returns an object with a few helpful attributes:
+ * - commands {Object}: The commands object defined by modules from devtools/shared/commands
+ * - target {TargetFront}: The current top-level target front.
+ * - doc {HtmlDocument}: the tab's document that got opened
  */
 async function attachURL(url) {
   // Get the current browser window
@@ -77,18 +63,22 @@ async function attachURL(url) {
   const win = window.open(url, "_blank");
   await windowOpened;
 
-  const target = await getTargetForSelectedTab(gBrowser);
-  await target.attach();
+  const commands = await CommandsFactory.forTab(gBrowser.selectedTab);
+  await commands.targetCommand.startListening();
 
   const cleanup = async function() {
-    await target.destroy();
+    await commands.destroy();
     if (win) {
       win.close();
     }
   };
 
   gAttachCleanups.push(cleanup);
-  return { target, doc: win.document };
+  return {
+    commands,
+    target: commands.targetCommand.targetFront,
+    doc: win.document,
+  };
 }
 
 function promiseOnce(target, event) {
@@ -138,9 +128,4 @@ function runNextTest() {
         ex
     );
   }
-}
-
-function createResourceWatcher(target) {
-  const targetList = new TargetList(target.client.mainRoot, target);
-  return new ResourceWatcher(targetList);
 }

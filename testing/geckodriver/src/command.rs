@@ -3,7 +3,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::logging;
-use base64;
 use hyper::Method;
 use serde::de::{self, Deserialize, Deserializer};
 use serde_json::{self, Value};
@@ -123,21 +122,21 @@ impl<'de> Deserialize<'de> for AddonInstallParameters {
         struct Base64 {
             addon: String,
             temporary: Option<bool>,
-        };
+        }
 
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Path {
             path: String,
             temporary: Option<bool>,
-        };
+        }
 
         #[derive(Debug, Deserialize)]
         #[serde(untagged)]
         enum Helper {
             Base64(Base64),
             Path(Path),
-        };
+        }
 
         let params = match Helper::deserialize(deserializer)? {
             Helper::Path(ref mut data) => AddonInstallParameters {

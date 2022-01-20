@@ -63,6 +63,7 @@ struct TexturedEffect : public Effect {
         mTextureCoords(0, 0, 1.0f, 1.0f),
         mTexture(aTexture),
         mPremultiplied(aPremultiplied),
+        mPremultipliedCopy(false),
         mSamplingFilter(aSamplingFilter) {}
 
   TexturedEffect* AsTexturedEffect() override { return this; }
@@ -72,6 +73,7 @@ struct TexturedEffect : public Effect {
   gfx::Rect mTextureCoords;
   TextureSource* mTexture;
   bool mPremultiplied;
+  bool mPremultipliedCopy;
   gfx::SamplingFilter mSamplingFilter;
 };
 
@@ -245,7 +247,6 @@ inline already_AddRefed<TexturedEffect> CreateTexturedEffect(
 
   switch (aHost->GetReadFormat()) {
     case gfx::SurfaceFormat::YUV:
-      MOZ_ASSERT(aHost->GetYUVColorSpace() != gfx::YUVColorSpace::UNKNOWN);
       result = new EffectYCbCr(aSource, aHost->GetYUVColorSpace(),
                                aHost->GetColorRange(), aHost->GetColorDepth(),
                                aSamplingFilter);

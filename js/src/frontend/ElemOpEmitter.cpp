@@ -14,13 +14,8 @@
 using namespace js;
 using namespace js::frontend;
 
-ElemOpEmitter::ElemOpEmitter(BytecodeEmitter* bce, Kind kind, ObjKind objKind,
-                             NameVisibility visibility)
-    : bce_(bce), kind_(kind), objKind_(objKind), visibility_(visibility) {
-  // Can't access private names of super!
-  MOZ_ASSERT_IF(visibility == NameVisibility::Private,
-                objKind != ObjKind::Super);
-}
+ElemOpEmitter::ElemOpEmitter(BytecodeEmitter* bce, Kind kind, ObjKind objKind)
+    : bce_(bce), kind_(kind), objKind_(objKind) {}
 
 bool ElemOpEmitter::prepareForObj() {
   MOZ_ASSERT(state_ == State::Start);
@@ -56,43 +51,16 @@ bool ElemOpEmitter::prepareForKey() {
   return true;
 }
 
-bool ElemOpEmitter::emitPrivateGuard() {
-  MOZ_ASSERT(state_ == State::Key);
-
-  if (!isPrivate()) {
-    return true;
-  }
-
-  if (isPropInit()) {
-    //            [stack] OBJ KEY
-    if (!bce_->emitCheckPrivateField(ThrowCondition::ThrowHas,
-                                     ThrowMsgKind::PrivateDoubleInit)) {
-      //            [stack] OBJ KEY BOOL
-      return false;
-    }
-  } else {
-    if (!bce_->emitCheckPrivateField(ThrowCondition::ThrowHasNot,
-                                     isPrivateGet()
-                                         ? ThrowMsgKind::MissingPrivateOnGet
-                                         : ThrowMsgKind::MissingPrivateOnSet)) {
-      //            [stack] OBJ KEY BOOL
-      return false;
-    }
-  }
-
-  // CheckPrivate leaves the result of the HasOwnCheck on the stack. Pop it off.
-  return bce_->emit1(JSOp::Pop);
-  //            [stack] OBJ KEY
-}
-
 bool ElemOpEmitter::emitGet() {
   MOZ_ASSERT(state_ == State::Key);
 
   // Assert the key in the get.
-  if (!bce_->maybeEmitRecordReplayAssert(bce_->cx->parserNames().element)) {
+  if (!bce_->maybeEmitRecordReplayAssert("element")) {
     return false;
   }
 
+  // Inc/dec and compound assignment use the KEY twice, but if it's an object,
+  // it must be converted ToPropertyKey only once, per spec.
   if (isIncDec() || isCompoundAssignment()) {
     if (!bce_->emit1(JSOp::ToPropertyKey)) {
       //            [stack] # if Super
@@ -101,10 +69,6 @@ bool ElemOpEmitter::emitGet() {
       //            [stack] OBJ KEY
       return false;
     }
-  }
-
-  if (!emitPrivateGuard()) {
-    return false;
   }
 
   if (isSuper()) {
@@ -133,7 +97,7 @@ bool ElemOpEmitter::emitGet() {
   } else {
     op = JSOp::GetElem;
   }
-  if (!bce_->emitElemOpBase(op, ShouldInstrument::Yes)) {
+  if (!bce_->emitElemOpBase(op)) {
     //              [stack] # if Get
     //              [stack] ELEM
     //              [stack] # if Call
@@ -152,7 +116,7 @@ bool ElemOpEmitter::emitGet() {
   }
 
   // Assert the value read by the get.
-  if (!bce_->maybeEmitRecordReplayAssert(bce_->cx->parserNames().element)) {
+  if (!bce_->maybeEmitRecordReplayAssert("element")) {
     return false;
   }
 
@@ -168,14 +132,11 @@ bool ElemOpEmitter::prepareForRhs() {
   MOZ_ASSERT_IF(isCompoundAssignment(), state_ == State::Get);
 
   // Assert the element written by the set.
-  if (!bce_->maybeEmitRecordReplayAssert(bce_->cx->parserNames().element)) {
+  if (!bce_->maybeEmitRecordReplayAssert("element")) {
     return false;
   }
 
   if (isSimpleAssignment() || isPropInit()) {
-    if (!emitPrivateGuard()) {
-      return false;
-    }
     // For CompoundAssignment, SuperBase is already emitted by emitGet.
     if (isSuper()) {
       if (!bce_->emitSuperBase()) {
@@ -204,7 +165,6 @@ bool ElemOpEmitter::skipObjAndKeyAndRhs() {
 bool ElemOpEmitter::emitDelete() {
   MOZ_ASSERT(state_ == State::Key);
   MOZ_ASSERT(isDelete());
-  MOZ_ASSERT(!isPrivate());
 
   if (isSuper()) {
     if (!bce_->emit1(JSOp::ToPropertyKey)) {
@@ -229,7 +189,6 @@ bool ElemOpEmitter::emitDelete() {
       return false;
     }
   } else {
-    MOZ_ASSERT(!isPrivate());
     JSOp op = bce_->sc->strict() ? JSOp::StrictDelElem : JSOp::DelElem;
     if (!bce_->emitElemOpBase(op)) {
       // SUCCEEDED
@@ -250,7 +209,7 @@ bool ElemOpEmitter::emitAssignment() {
   MOZ_ASSERT_IF(isPropInit(), !isSuper());
 
   // Assert the value written by the set.
-  if (!bce_->maybeEmitRecordReplayAssert(bce_->cx->parserNames().element)) {
+  if (!bce_->maybeEmitRecordReplayAssert("element")) {
     return false;
   }
 
@@ -259,7 +218,7 @@ bool ElemOpEmitter::emitAssignment() {
                                                  : JSOp::SetElemSuper
                : bce_->sc->strict() ? JSOp::StrictSetElem
                                     : JSOp::SetElem;
-  if (!bce_->emitElemOpBase(setOp, ShouldInstrument::Yes)) {
+  if (!bce_->emitElemOpBase(setOp)) {
     //              [stack] ELEM
     return false;
   }
@@ -306,7 +265,7 @@ bool ElemOpEmitter::emitIncDec() {
       isSuper()
           ? (bce_->sc->strict() ? JSOp::StrictSetElemSuper : JSOp::SetElemSuper)
           : (bce_->sc->strict() ? JSOp::StrictSetElem : JSOp::SetElem);
-  if (!bce_->emitElemOpBase(setOp, ShouldInstrument::Yes)) {
+  if (!bce_->emitElemOpBase(setOp)) {
     //              [stack] N? N+1
     return false;
   }

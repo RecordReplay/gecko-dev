@@ -2,13 +2,11 @@ from collections import OrderedDict
 from datetime import datetime, timedelta
 from io import BytesIO
 import json
-import socket
 import uuid
 
 from hpack.struct import HeaderTuple
+from http.cookies import BaseCookie, Morsel
 from hyperframe.frame import HeadersFrame, DataFrame, ContinuationFrame
-from six import binary_type, text_type, integer_types, itervalues, PY3
-from six.moves.http_cookies import BaseCookie, Morsel
 
 from .constants import response_codes, h2_headers
 from .logger import get_logger
@@ -91,7 +89,7 @@ class Response(object):
                 message = value[1]
                 # Only call str() if message is not a string type, so that we
                 # don't get `str(b"foo") == "b'foo'"` in Python 3.
-                if not isinstance(message, (binary_type, text_type)):
+                if not isinstance(message, (bytes, str)):
                     message = str(message)
                 self._status = (code, message)
         else:
@@ -122,9 +120,8 @@ class Response(object):
             max_age = 0
             expires = timedelta(days=-1)
 
-        if PY3:
-            name = isomorphic_decode(name)
-            value = isomorphic_decode(value)
+        name = isomorphic_decode(name)
+        value = isomorphic_decode(value)
 
         days = {i+1: name for i, name in enumerate(["jan", "feb", "mar",
                                                     "apr", "may", "jun",
@@ -163,15 +160,11 @@ class Response(object):
 
     def unset_cookie(self, name):
         """Remove a cookie from those that are being sent with the response"""
-        if PY3:
-            name = isomorphic_decode(name)
+        name = isomorphic_decode(name)
         cookies = self.headers.get("Set-Cookie")
         parser = BaseCookie()
         for cookie in cookies:
-            if PY3:
-                # BaseCookie.load expects a text string.
-                cookie = isomorphic_decode(cookie)
-            parser.load(cookie)
+            parser.load(isomorphic_decode(cookie))
 
         if name in parser.keys():
             del self.headers["Set-Cookie"]
@@ -199,9 +192,9 @@ class Response(object):
                           string facilitating non-streaming operations like
                           template substitution.
         """
-        if isinstance(self.content, binary_type):
+        if isinstance(self.content, bytes):
             yield self.content
-        elif isinstance(self.content, text_type):
+        elif isinstance(self.content, str):
             yield self.content.encode(self.encoding)
         elif hasattr(self.content, "read"):
             if read_file:
@@ -249,14 +242,20 @@ class Response(object):
                         ("Content-Length", len(data))]
         self.content = data
         if code == 500:
-            self.logger.error(message)
+            if isinstance(message, str) and message:
+                first_line = message.splitlines()[0]
+            else:
+                first_line = "<no message given>"
+            self.logger.error("Exception loading %s: %s" % (self.request.url,
+                                                            first_line))
+            self.logger.info(message)
 
 
 class MultipartContent(object):
     def __init__(self, boundary=None, default_content_type=None):
         self.items = []
         if boundary is None:
-            boundary = text_type(uuid.uuid4())
+            boundary = str(uuid.uuid4())
         self.boundary = boundary
         self.default_content_type = default_content_type
 
@@ -284,7 +283,7 @@ class MultipartContent(object):
 
 class MultipartPart(object):
     def __init__(self, data, content_type=None, headers=None):
-        assert isinstance(data, binary_type), data
+        assert isinstance(data, bytes), data
         self.headers = ResponseHeaders()
 
         if content_type is not None:
@@ -303,8 +302,8 @@ class MultipartPart(object):
     def to_bytes(self):
         rv = []
         for key, value in self.headers:
-            assert isinstance(key, binary_type)
-            assert isinstance(value, binary_type)
+            assert isinstance(key, bytes)
+            assert isinstance(value, bytes)
             rv.append(b"%s: %s" % (key, value))
         rv.append(b"")
         rv.append(self.data)
@@ -313,7 +312,7 @@ class MultipartPart(object):
 
 def _maybe_encode(s):
     """Encode a string or an int into binary data using isomorphic_encode()."""
-    if isinstance(s, integer_types):
+    if isinstance(s, int):
         return b"%i" % (s,)
     return isomorphic_encode(s)
 
@@ -377,7 +376,7 @@ class ResponseHeaders(object):
         self.set(key, value)
 
     def __iter__(self):
-        for key, values in itervalues(self.data):
+        for key, values in self.data.values():
             for value in values:
                 yield key, value
 
@@ -447,10 +446,10 @@ class H2ResponseWriter(object):
         for header, value in headers:
             # h2_headers are native strings
             # header field names are strings of ASCII
-            if isinstance(header, binary_type):
+            if isinstance(header, bytes):
                 header = header.decode('ascii')
             # value in headers can be either string or integer
-            if isinstance(value, binary_type):
+            if isinstance(value, bytes):
                 value = self.decode(value)
             if header in h2_headers:
                 header = ':' + header
@@ -482,7 +481,7 @@ class H2ResponseWriter(object):
         :param last: Flag to signal if this is the last frame in stream.
         :param stream_id: Id of stream to send frame on. Will use the request stream ID if None
         """
-        if isinstance(item, (text_type, binary_type)):
+        if isinstance(item, (str, bytes)):
             data = BytesIO(self.encode(item))
         else:
             data = item
@@ -638,18 +637,18 @@ class H2ResponseWriter(object):
 
     def decode(self, data):
         """Convert bytes to unicode according to response.encoding."""
-        if isinstance(data, binary_type):
+        if isinstance(data, bytes):
             return data.decode(self._response.encoding)
-        elif isinstance(data, text_type):
+        elif isinstance(data, str):
             return data
         else:
             raise ValueError(type(data))
 
     def encode(self, data):
         """Convert unicode to bytes according to response.encoding."""
-        if isinstance(data, binary_type):
+        if isinstance(data, bytes):
             return data
-        elif isinstance(data, text_type):
+        elif isinstance(data, str):
             return data.encode(self._response.encoding)
         else:
             raise ValueError
@@ -707,7 +706,7 @@ class ResponseWriter(object):
         if not self.write(b": "):
             return False
         if isinstance(value, int):
-            if not self.write(text_type(value)):
+            if not self.write(str(value)):
                 return False
         elif not self.write(value):
             return False
@@ -720,7 +719,7 @@ class ResponseWriter(object):
                 if not self.write_header(name, f()):
                     return False
 
-        if (isinstance(self._response.content, (binary_type, text_type)) and
+        if (isinstance(self._response.content, (bytes, str)) and
             not self._seen_header("content-length")):
             #Would be nice to avoid double-encoding here
             if not self.write_header("Content-Length", len(self.encode(self._response.content))):
@@ -767,7 +766,7 @@ class ResponseWriter(object):
         """Writes the data 'as is'"""
         if data is None:
             raise ValueError('data cannot be None')
-        if isinstance(data, (text_type, binary_type)):
+        if isinstance(data, (str, bytes)):
             # Deliberately allows both text and binary types. See `self.encode`.
             return self.write(data)
         else:
@@ -782,7 +781,7 @@ class ResponseWriter(object):
         try:
             self._wfile.write(self.encode(data))
             return True
-        except socket.error:
+        except OSError:
             # This can happen if the socket got closed by the remote end
             return False
 
@@ -797,7 +796,7 @@ class ResponseWriter(object):
                 break
             try:
                 self._wfile.write(buf)
-            except socket.error:
+            except OSError:
                 success = False
                 break
         data.close()
@@ -805,9 +804,9 @@ class ResponseWriter(object):
 
     def encode(self, data):
         """Convert unicode to bytes according to response.encoding."""
-        if isinstance(data, binary_type):
+        if isinstance(data, bytes):
             return data
-        elif isinstance(data, text_type):
+        elif isinstance(data, str):
             return data.encode(self._response.encoding)
         else:
             raise ValueError("data %r should be text or binary, but is %s" % (data, type(data)))

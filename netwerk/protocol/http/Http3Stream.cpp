@@ -19,20 +19,7 @@ namespace net {
 
 Http3Stream::Http3Stream(nsAHttpTransaction* httpTransaction,
                          Http3Session* session)
-    : mSendState(PREPARING_HEADERS),
-      mRecvState(BEFORE_HEADERS),
-      mStreamId(UINT64_MAX),
-      mSession(session),
-      mTransaction(httpTransaction),
-      mQueued(false),
-      mDataReceived(false),
-      mResetRecv(false),
-      mRequestBodyLenRemaining(0),
-      mSocketTransport(session->SocketTransport()),
-      mTotalSent(0),
-      mTotalRead(0),
-      mFin(false),
-      mSendingBlockedByFlowControlCount(0) {
+    : mSession(session), mTransaction(httpTransaction) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("Http3Stream::Http3Stream [this=%p]", this));
 }
@@ -174,14 +161,13 @@ nsresult Http3Stream::OnReadSegment(const char* buf, uint32_t count,
       }
 
       // Successfully activated.
-      mTransaction->OnTransportStatus(mSocketTransport,
-                                      NS_NET_STATUS_SENDING_TO, mTotalSent);
+      mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_SENDING_TO,
+                                      mTotalSent);
 
       if (mRequestBodyLenRemaining) {
         mSendState = SENDING_BODY;
       } else {
-        mTransaction->OnTransportStatus(mSocketTransport,
-                                        NS_NET_STATUS_WAITING_FOR, 0);
+        mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_WAITING_FOR, 0);
         mSession->CloseSendingSide(mStreamId);
         mSendState = SEND_DONE;
       }
@@ -204,10 +190,13 @@ nsresult Http3Stream::OnReadSegment(const char* buf, uint32_t count,
         break;
       }
 
+      mTotalSent += *countRead;
+      mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_SENDING_TO,
+                                      mTotalSent);
+
       mRequestBodyLenRemaining -= *countRead;
       if (!mRequestBodyLenRemaining) {
-        mTransaction->OnTransportStatus(mSocketTransport,
-                                        NS_NET_STATUS_WAITING_FOR, 0);
+        mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_WAITING_FOR, 0);
         mSession->CloseSendingSide(mStreamId);
         mSendState = SEND_DONE;
         Telemetry::Accumulate(
@@ -220,8 +209,7 @@ nsresult Http3Stream::OnReadSegment(const char* buf, uint32_t count,
       *countRead = count;
       mRequestBodyLenRemaining -= count;
       if (!mRequestBodyLenRemaining) {
-        mTransaction->OnTransportStatus(mSocketTransport,
-                                        NS_NET_STATUS_WAITING_FOR, 0);
+        mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_WAITING_FOR, 0);
         mSendState = SEND_DONE;
       }
       break;
@@ -281,8 +269,8 @@ nsresult Http3Stream::OnWriteSegment(char* buf, uint32_t count,
         rv = NS_BASE_STREAM_WOULD_BLOCK;
       } else {
         mTotalRead += *countWritten;
-        mTransaction->OnTransportStatus(
-            mSocketTransport, NS_NET_STATUS_RECEIVING_FROM, mTotalRead);
+        mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_RECEIVING_FROM,
+                                        mTotalRead);
       }
     } break;
     case READING_DATA: {
@@ -300,8 +288,8 @@ nsresult Http3Stream::OnWriteSegment(char* buf, uint32_t count,
         }
       } else {
         mTotalRead += *countWritten;
-        mTransaction->OnTransportStatus(
-            mSocketTransport, NS_NET_STATUS_RECEIVING_FROM, mTotalRead);
+        mTransaction->OnTransportStatus(nullptr, NS_NET_STATUS_RECEIVING_FROM,
+                                        mTotalRead);
 
         if (mFin) {
           mRecvState = RECEIVED_FIN;

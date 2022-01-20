@@ -6,11 +6,14 @@ use api::{BorderRadius, ClipMode, HitTestItem, HitTestResult, ItemTag, Primitive
 use api::{PipelineId, ApiHitTester, ClipId};
 use api::units::*;
 use crate::clip::{ClipItemKind, ClipStore, ClipNode, rounded_rectangle_contains_point};
+use crate::clip::{polygon_contains_point};
+use crate::prim_store::PolygonKey;
+use crate::scene_builder_thread::Interners;
 use crate::spatial_tree::{SpatialNodeIndex, SpatialTree};
-use crate::internal_types::{FastHashMap, LayoutPrimitiveInfo};
+use crate::internal_types::{FastHashMap, FastHashSet, LayoutPrimitiveInfo};
 use std::ops;
 use std::sync::{Arc, Mutex};
-use crate::util::LayoutToWorldFastTransform;
+use crate::util::{LayoutToWorldFastTransform, VecHelper};
 
 pub struct SharedHitTester {
     // We don't really need a mutex here. We could do with some sort of
@@ -78,6 +81,7 @@ impl HitTestClipNode {
     fn new(
         node: ClipNode,
         spatial_node_index: SpatialNodeIndex,
+        interners: &Interners,
     ) -> Self {
         let region = match node.item.kind {
             ClipItemKind::Rectangle { rect, mode } => {
@@ -86,8 +90,14 @@ impl HitTestClipNode {
             ClipItemKind::RoundedRectangle { rect, radius, mode } => {
                 HitTestRegion::RoundedRectangle(rect, radius, mode)
             }
-            ClipItemKind::Image { rect, .. } => {
-                HitTestRegion::Rectangle(rect, ClipMode::Clip)
+            ClipItemKind::Image { rect, polygon_handle, .. } => {
+                if let Some(handle) = polygon_handle {
+                    // Retrieve the polygon data from the interner.
+                    let polygon = &interners.polygon[handle];
+                    HitTestRegion::Polygon(rect, *polygon)
+                } else {
+                    HitTestRegion::Rectangle(rect, ClipMode::Clip)
+                }
             }
             ClipItemKind::BoxShadow { .. } => HitTestRegion::Invalid,
         };
@@ -169,6 +179,11 @@ pub struct HitTestingScene {
     /// of hit-test items that reference the same clip
     #[ignore_malloc_size_of = "simple"]
     cached_clip_id: Option<(ClipId, ops::Range<ClipNodeIndex>)>,
+
+    /// Temporary buffer used to de-duplicate clip ids when creating hit
+    /// test clip nodes.
+    #[ignore_malloc_size_of = "ClipId"]
+    seen_clips: FastHashSet<ClipId>,
 }
 
 impl HitTestingScene {
@@ -180,6 +195,7 @@ impl HitTestingScene {
             items: Vec::with_capacity(stats.items_count),
             clip_id_stack: Vec::with_capacity(8),
             cached_clip_id: None,
+            seen_clips: FastHashSet::default(),
         }
     }
 
@@ -199,6 +215,7 @@ impl HitTestingScene {
         spatial_node_index: SpatialNodeIndex,
         clip_id: ClipId,
         clip_store: &ClipStore,
+        interners: &Interners,
     ) {
         let clip_range = match self.cached_clip_id {
             Some((cached_clip_id, ref range)) if cached_clip_id == clip_id => {
@@ -207,12 +224,17 @@ impl HitTestingScene {
             Some(_) | None => {
                 let start = ClipNodeIndex(self.clip_nodes.len() as u32);
 
+                // Clear the set of which clip ids have been encountered for this item
+                self.seen_clips.clear();
+
                 // Flatten all clips from the stacking context hierarchy
                 for clip_id in &self.clip_id_stack {
                     add_clips(
                         *clip_id,
                         clip_store,
                         &mut self.clip_nodes,
+                        &mut self.seen_clips,
+                        interners,
                     );
                 }
 
@@ -221,6 +243,8 @@ impl HitTestingScene {
                     clip_id,
                     clip_store,
                     &mut self.clip_nodes,
+                    &mut self.seen_clips,
+                    interners,
                 );
 
                 let end = ClipNodeIndex(self.clip_nodes.len() as u32);
@@ -273,6 +297,7 @@ enum HitTestRegion {
     Invalid,
     Rectangle(LayoutRect, ClipMode),
     RoundedRectangle(LayoutRect, BorderRadius, ClipMode),
+    Polygon(LayoutRect, PolygonKey),
 }
 
 impl HitTestRegion {
@@ -286,6 +311,8 @@ impl HitTestRegion {
                 rounded_rectangle_contains_point(point, &rect, &radii),
             HitTestRegion::RoundedRectangle(rect, radii, ClipMode::ClipOut) =>
                 !rounded_rectangle_contains_point(point, &rect, &radii),
+            HitTestRegion::Polygon(rect, polygon) =>
+                polygon_contains_point(point, &rect, &polygon),
             HitTestRegion::Invalid => true,
         }
     }
@@ -441,7 +468,7 @@ impl HitTester {
                         pipeline: pipeline_id,
                         tag: item.tag,
                         point_in_viewport,
-                        point_relative_to_item: point_in_layer - item.rect.origin.to_vector(),
+                        point_relative_to_item: point_in_layer - item.rect.min.to_vector(),
                     });
                 }
             }
@@ -476,16 +503,26 @@ fn add_clips(
     clip_id: ClipId,
     clip_store: &ClipStore,
     clip_nodes: &mut Vec<HitTestClipNode>,
+    seen_clips: &mut FastHashSet<ClipId>,
+    interners: &Interners,
 ) {
+    // If this clip-id has already been added to this hit-test item, skip it
+    if seen_clips.contains(&clip_id) {
+        return;
+    }
+    seen_clips.insert(clip_id);
+
     let template = &clip_store.templates[&clip_id];
+    let instances = &clip_store.instances[template.clips.start as usize .. template.clips.end as usize];
 
-    for clip in &template.clips {
-        let hit_test_clip_node = HitTestClipNode::new(
-            clip.key.into(),
-            clip.clip.spatial_node_index,
+    for clip in instances {
+        clip_nodes.alloc().init(
+            HitTestClipNode::new(
+                clip.key.into(),
+                clip.clip.spatial_node_index,
+                interners,
+            )
         );
-
-        clip_nodes.push(hit_test_clip_node);
     }
 
     // The ClipId parenting is terminated when we reach the root ClipId
@@ -494,6 +531,8 @@ fn add_clips(
             template.parent,
             clip_store,
             clip_nodes,
+            seen_clips,
+            interners,
         );
     }
 }

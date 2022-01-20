@@ -39,6 +39,10 @@ async function testDoorHanger(
         "network.cookie.cookieBehavior",
         Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
       ],
+      [
+        "network.cookie.cookieBehavior.pbmode",
+        Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
+      ],
       ["privacy.trackingprotection.enabled", false],
       ["privacy.trackingprotection.pbmode.enabled", false],
       ["privacy.trackingprotection.annotate_channels", true],
@@ -220,28 +224,36 @@ async function testDoorHanger(
     await Promise.all([ct, permChanged]);
   }
   if (choice != BLOCK) {
-    let identityPopupPromise = BrowserTestUtils.waitForEvent(
+    let permissionPopupPromise = BrowserTestUtils.waitForEvent(
       window,
       "popupshown",
       true,
-      event => event.target == gIdentityHandler._identityPopup
+      event => event.target == gPermissionPanel._permissionPopup
     );
-    gIdentityHandler._identityBox.click();
-    await identityPopupPromise;
-    let permissionItem = document.getElementById(
-      `identity-popup-permission-label-3rdPartyStorage^https://tracking.example.org`
+    gPermissionPanel._identityPermissionBox.click();
+    await permissionPopupPromise;
+    let permissionItem = document.querySelector(
+      ".permission-popup-permission-item-3rdPartyStorage"
     );
     ok(permissionItem, "Permission item exists");
     ok(
       BrowserTestUtils.is_visible(permissionItem),
       "Permission item visible in the identity panel"
     );
-    identityPopupPromise = BrowserTestUtils.waitForEvent(
-      gIdentityHandler._identityPopup,
+    let permissionLearnMoreLink = document.getElementById(
+      "permission-popup-storage-access-permission-learn-more"
+    );
+    ok(permissionLearnMoreLink, "Permission learn more link exists");
+    ok(
+      BrowserTestUtils.is_visible(permissionLearnMoreLink),
+      "Permission learn more link is visible in the identity panel"
+    );
+    permissionPopupPromise = BrowserTestUtils.waitForEvent(
+      gPermissionPanel._permissionPopup,
       "popuphidden"
     );
-    gIdentityHandler._identityPopup.hidePopup();
-    await identityPopupPromise;
+    gPermissionPanel._permissionPopup.hidePopup();
+    await permissionPopupPromise;
   }
 
   BrowserTestUtils.removeTab(tab);

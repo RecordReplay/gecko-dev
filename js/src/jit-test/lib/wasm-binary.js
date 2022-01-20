@@ -55,10 +55,12 @@ const BlockCode        = 0x02;
 const TryCode          = 0x06;
 const CatchCode        = 0x07;
 const ThrowCode        = 0x08;
+const RethrowCode      = 0x09;
 const EndCode          = 0x0b;
 const ReturnCode       = 0x0f;
 const CallCode         = 0x10;
 const CallIndirectCode = 0x11;
+const DelegateCode     = 0x18;
 const DropCode         = 0x1a;
 const SelectCode       = 0x1b;
 const LocalGetCode     = 0x20;
@@ -150,9 +152,10 @@ const MozPrefix = 0xff;
 
 const definedOpcodes =
     [0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
-     ...(wasmExceptionsEnabled() ? [0x06, 0x07, 0x08] : []),
+     ...(wasmExceptionsEnabled() ? [0x06, 0x07, 0x08, 0x09] : []),
      0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
      0x10, 0x11,
+     ...(wasmExceptionsEnabled() ? [0x18, 0x19] : []),
      0x1a, 0x1b, 0x1c,
      0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
      0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
@@ -206,7 +209,6 @@ const TableCopyCode = 0x0e;     // Pending
 const StructNew = 0x00;         // UNOFFICIAL
 const StructGet = 0x03;         // UNOFFICIAL
 const StructSet = 0x06;         // UNOFFICIAL
-const StructNarrow = 0x07;      // UNOFFICIAL
 
 // DefinitionKind
 const FunctionCode     = 0x00;
@@ -289,9 +291,16 @@ function sigSection(sigs) {
         body.push(...varU32(sig.args.length));
         for (let arg of sig.args)
             body.push(...varU32(arg));
-        body.push(...varU32(sig.ret == VoidCode ? 0 : 1));
-        if (sig.ret != VoidCode)
+        if (sig.ret == VoidCode) {
+            body.push(...varU32(0));
+        } else if (typeof sig.ret == "number") {
+            body.push(...varU32(1));
             body.push(...varU32(sig.ret));
+        } else {
+            body.push(...varU32(sig.ret.length));
+            for (let r of sig.ret)
+                body.push(...varU32(r));
+        }
     }
     return { name: typeId, body };
 }

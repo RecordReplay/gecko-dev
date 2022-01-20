@@ -11,24 +11,23 @@ const TEST_URI = `data:text/html;charset=utf-8,<style>${encodeURIComponent(
 )}</style>`;
 
 add_task(async function() {
-  const target = await addTabTarget(TEST_URI);
+  const browser = await addTab(TEST_URI);
+  const tab = gBrowser.getTabForBrowser(browser);
 
-  const {
-    ResourceWatcher,
-  } = require("devtools/shared/resources/resource-watcher");
-  const { TargetList } = require("devtools/shared/resources/target-list");
-
-  const targetList = new TargetList(target.client.mainRoot, target);
-  await targetList.startListening();
-  const resourceWatcher = new ResourceWatcher(targetList);
+  const commands = await CommandsFactory.forTab(tab);
+  await commands.targetCommand.startListening();
+  const target = commands.targetCommand.targetFront;
 
   const styleSheetsFront = await target.getFront("stylesheets");
   ok(styleSheetsFront, "The StyleSheetsFront was created.");
 
   const sheets = [];
-  await resourceWatcher.watchResources([ResourceWatcher.TYPES.STYLESHEET], {
-    onAvailable: resources => sheets.push(...resources),
-  });
+  await commands.resourceCommand.watchResources(
+    [commands.resourceCommand.TYPES.STYLESHEET],
+    {
+      onAvailable: resources => sheets.push(...resources),
+    }
+  );
   is(sheets.length, 1, "watchResources returned the correct number of sheets");
 
   const { resourceId } = sheets[0];
@@ -46,7 +45,7 @@ add_task(async function() {
     "Stylesheet is now empty, as expected"
   );
 
-  await target.destroy();
+  await commands.destroy();
 });
 
 async function getStyleSheetText(styleSheetsFront, resourceId) {

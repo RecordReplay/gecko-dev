@@ -145,16 +145,27 @@ CK_NSS_MODULE_FUNCTIONS sftk_module_funcList = {
     NSC_ModuleDBFunc
 };
 
+static CK_RV
+nsc_NSSGetFIPSStatus(CK_SESSION_HANDLE hSession,
+                     CK_OBJECT_HANDLE hObject,
+                     CK_ULONG ulOperationType,
+                     CK_ULONG *pulFIPSStatus);
+CK_NSS_FIPS_FUNCTIONS sftk_fips_funcList = {
+    { 1, 0 },
+    nsc_NSSGetFIPSStatus
+};
+
 /*
  * Array is orderd by default first
  */
 static CK_INTERFACE nss_interfaces[] = {
     { (CK_UTF8CHAR_PTR) "PKCS 11", &sftk_funcList, NSS_INTERFACE_FLAGS },
     { (CK_UTF8CHAR_PTR) "PKCS 11", &sftk_funcList_v2, NSS_INTERFACE_FLAGS },
-    { (CK_UTF8CHAR_PTR) "Vendor NSS Module Interface", &sftk_module_funcList, NSS_INTERFACE_FLAGS }
+    { (CK_UTF8CHAR_PTR) "Vendor NSS Module Interface", &sftk_module_funcList, NSS_INTERFACE_FLAGS },
+    { (CK_UTF8CHAR_PTR) "Vendor NSS FIPS Interface", &sftk_fips_funcList, NSS_INTERFACE_FLAGS }
 };
 /* must match the count of interfaces in nss_interfaces above */
-#define NSS_INTERFACE_COUNT 3
+#define NSS_INTERFACE_COUNT 4
 
 /* List of DES Weak Keys */
 typedef unsigned char desKey[8];
@@ -318,6 +329,11 @@ static const struct mechanismList mechanisms[] = {
     { CKM_SHA256_RSA_PKCS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
     { CKM_SHA384_RSA_PKCS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
     { CKM_SHA512_RSA_PKCS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
+    { CKM_SHA1_RSA_PKCS_PSS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
+    { CKM_SHA224_RSA_PKCS_PSS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
+    { CKM_SHA256_RSA_PKCS_PSS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
+    { CKM_SHA384_RSA_PKCS_PSS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
+    { CKM_SHA512_RSA_PKCS_PSS, { RSA_MIN_MODULUS_BITS, CK_MAX, CKF_SN_VR }, PR_TRUE },
     /* ------------------------- DSA Operations --------------------------- */
     { CKM_DSA_KEY_PAIR_GEN, { DSA_MIN_P_BITS, DSA_MAX_P_BITS, CKF_GENERATE_KEY_PAIR }, PR_TRUE },
     { CKM_DSA, { DSA_MIN_P_BITS, DSA_MAX_P_BITS, CKF_SN_VR }, PR_TRUE },
@@ -1172,7 +1188,7 @@ sftk_handlePrivateKeyObject(SFTKSession *session, SFTKObject *object, CK_KEY_TYP
             crv = sftk_forceAttribute(object, CKA_NSS_DB,
                                       sftk_item_expand(&mod));
             if (mod.data)
-                PORT_Free(mod.data);
+                SECITEM_ZfreeItem(&mod, PR_FALSE);
             if (crv != CKR_OK)
                 return crv;
 
@@ -1492,7 +1508,7 @@ sftk_handleKeyObject(SFTKSession *session, SFTKObject *object)
         case CKO_SECRET_KEY:
             /* make sure the required fields exist */
             return sftk_handleSecretKeyObject(session, object, key_type,
-                                              (PRBool)(session->slot->slotID == FIPS_SLOT_ID));
+                                              (PRBool)(sftk_isFIPS(session->slot->slotID)));
         default:
             break;
     }
@@ -1934,7 +1950,7 @@ sftk_GetPubKey(SFTKObject *object, CK_KEY_TYPE key_type,
     }
     *crvp = crv;
     if (crv != CKR_OK) {
-        PORT_FreeArena(arena, PR_FALSE);
+        PORT_FreeArena(arena, PR_TRUE);
         return NULL;
     }
 
@@ -2094,7 +2110,7 @@ sftk_mkPrivKey(SFTKObject *object, CK_KEY_TYPE key_type, CK_RV *crvp)
     }
     *crvp = crv;
     if (crv != CKR_OK) {
-        PORT_FreeArena(arena, PR_FALSE);
+        PORT_FreeArena(arena, PR_TRUE);
         return NULL;
     }
     return privKey;
@@ -2599,7 +2615,7 @@ static PLHashTable *nscSlotHashTable[2] = { NULL, NULL };
 static unsigned int
 sftk_GetModuleIndex(CK_SLOT_ID slotID)
 {
-    if ((slotID == FIPS_SLOT_ID) || (slotID >= SFTK_MIN_FIPS_USER_SLOT_ID)) {
+    if (sftk_isFIPS(slotID)) {
         return NSC_FIPS_MODULE;
     }
     return NSC_NON_FIPS_MODULE;
@@ -2671,6 +2687,9 @@ sftk_RegisterSlot(SFTKSlot *slot, unsigned int moduleIndex)
         nscSlotList[index] = (CK_SLOT_ID *)PORT_Realloc(oldNscSlotList,
                                                         nscSlotListSize[index] * sizeof(CK_SLOT_ID));
         if (nscSlotList[index] == NULL) {
+            /* evidently coverity doesn't know realloc does not
+             * free var if it fails ! */
+            /* coverity [use_after_free : FALSE] */
             nscSlotList[index] = oldNscSlotList;
             nscSlotListSize[index] = oldNscSlotListSize;
             return CKR_HOST_MEMORY;
@@ -3841,50 +3860,10 @@ CK_RV
 sftk_MechAllowsOperation(CK_MECHANISM_TYPE type, CK_ATTRIBUTE_TYPE op)
 {
     CK_ULONG i;
-    CK_FLAGS flags;
+    CK_FLAGS flags = sftk_AttributeToFlags(op);
 
-    switch (op) {
-        case CKA_ENCRYPT:
-            flags = CKF_ENCRYPT;
-            break;
-        case CKA_DECRYPT:
-            flags = CKF_DECRYPT;
-            break;
-        case CKA_WRAP:
-            flags = CKF_WRAP;
-            break;
-        case CKA_UNWRAP:
-            flags = CKF_UNWRAP;
-            break;
-        case CKA_SIGN:
-            flags = CKF_SIGN;
-            break;
-        case CKA_SIGN_RECOVER:
-            flags = CKF_SIGN_RECOVER;
-            break;
-        case CKA_VERIFY:
-            flags = CKF_VERIFY;
-            break;
-        case CKA_VERIFY_RECOVER:
-            flags = CKF_VERIFY_RECOVER;
-            break;
-        case CKA_DERIVE:
-            flags = CKF_DERIVE;
-            break;
-        case CKA_NSS_MESSAGE | CKA_ENCRYPT:
-            flags = CKF_MESSAGE_ENCRYPT;
-            break;
-        case CKA_NSS_MESSAGE | CKA_DECRYPT:
-            flags = CKF_MESSAGE_DECRYPT;
-            break;
-        case CKA_NSS_MESSAGE | CKA_SIGN:
-            flags = CKF_MESSAGE_SIGN;
-            break;
-        case CKA_NSS_MESSAGE | CKA_VERIFY:
-            flags = CKF_MESSAGE_VERIFY;
-            break;
-        default:
-            return CKR_ARGUMENTS_BAD;
+    if (flags == 0) {
+        return CKR_ARGUMENTS_BAD;
     }
     for (i = 0; i < mechanismCount; i++) {
         if (type == mechanisms[i].type) {
@@ -4026,6 +4005,7 @@ NSC_InitPIN(CK_SESSION_HANDLE hSession,
     if (tokenRemoved) {
         sftk_CloseAllSessions(slot, PR_FALSE);
     }
+    PORT_Memset(newPinStr, 0, ulPinLen);
     sftk_freeDB(handle);
     handle = NULL;
 
@@ -4117,10 +4097,12 @@ NSC_SetPIN(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pOldPin,
     /* change the data base password */
     PR_Lock(slot->pwCheckLock);
     rv = sftkdb_ChangePassword(handle, oldPinStr, newPinStr, &tokenRemoved);
+    PORT_Memset(newPinStr, 0, ulNewLen);
+    PORT_Memset(oldPinStr, 0, ulOldLen);
     if (tokenRemoved) {
         sftk_CloseAllSessions(slot, PR_FALSE);
     }
-    if ((rv != SECSuccess) && (slot->slotID == FIPS_SLOT_ID)) {
+    if ((rv != SECSuccess) && (sftk_isFIPS(slot->slotID))) {
         PR_Sleep(loginWaitTime);
     }
     PR_Unlock(slot->pwCheckLock);
@@ -4356,6 +4338,7 @@ NSC_Login(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType,
 
     handle = sftk_getKeyDB(slot);
     if (handle == NULL) {
+        PORT_Memset(pinStr, 0, ulPinLen);
         return CKR_USER_TYPE_INVALID;
     }
 
@@ -4370,7 +4353,7 @@ NSC_Login(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType,
          * key database */
         if (((userType == CKU_SO) && (sessionFlags & CKF_RW_SESSION))
             /* fips always needs to authenticate, even if there isn't a db */
-            || (slot->slotID == FIPS_SLOT_ID)) {
+            || (sftk_isFIPS(slot->slotID))) {
             /* should this be a fixed password? */
             if (ulPinLen == 0) {
                 sftkdb_ClearPassword(handle);
@@ -4401,7 +4384,7 @@ NSC_Login(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType,
     if (tokenRemoved) {
         sftk_CloseAllSessions(slot, PR_FALSE);
     }
-    if ((rv != SECSuccess) && (slot->slotID == FIPS_SLOT_ID)) {
+    if ((rv != SECSuccess) && (sftk_isFIPS(slot->slotID))) {
         PR_Sleep(loginWaitTime);
     }
     PR_Unlock(slot->pwCheckLock);
@@ -4422,6 +4405,7 @@ NSC_Login(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType,
 
     crv = CKR_PIN_INCORRECT;
 done:
+    PORT_Memset(pinStr, 0, ulPinLen);
     if (handle) {
         sftk_freeDB(handle);
     }
@@ -4612,6 +4596,8 @@ NSC_CreateObject(CK_SESSION_HANDLE hSession,
     if (object == NULL) {
         return CKR_HOST_MEMORY;
     }
+    object->isFIPS = PR_FALSE; /* if we created the object on the fly,
+                                * it's not a FIPS object */
 
     /*
      * load the template values into the object
@@ -5284,4 +5270,107 @@ NSC_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot,
     CHECK_FORK();
 
     return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+static CK_RV
+nsc_NSSGetFIPSStatus(CK_SESSION_HANDLE hSession,
+                     CK_OBJECT_HANDLE hObject,
+                     CK_ULONG ulOperationType,
+                     CK_ULONG *pulFIPSStatus)
+{
+    CK_ULONG sessionState = CKS_NSS_UNINITIALIZED;
+    CK_ULONG objectState = CKS_NSS_UNINITIALIZED;
+    PRBool needSession = PR_FALSE;
+    PRBool needObject = PR_FALSE;
+    SFTKSession *session;
+    SFTKObject *object;
+
+    *pulFIPSStatus = CKS_NSS_FIPS_NOT_OK;
+
+    /* first determine what we need to look up */
+    switch (ulOperationType) {
+        case CKT_NSS_SESSION_CHECK:
+        case CKT_NSS_SESSION_LAST_CHECK:
+            needSession = PR_TRUE;
+            needObject = PR_FALSE;
+            break;
+        case CKT_NSS_OBJECT_CHECK:
+            needSession = PR_FALSE;
+            needObject = PR_TRUE;
+            break;
+        case CKT_NSS_BOTH_CHECK:
+            needSession = PR_TRUE;
+            needObject = PR_TRUE;
+            break;
+        default:
+            return CKR_ARGUMENTS_BAD;
+    }
+
+    /* we always need the session handle, the object handle is only
+     * meaningful if there is a session */
+    session = sftk_SessionFromHandle(hSession);
+    if (!session) {
+        return CKR_SESSION_HANDLE_INVALID;
+    }
+    if (needSession) {
+        if (CKT_NSS_SESSION_LAST_CHECK == ulOperationType) {
+            sessionState = session->lastOpWasFIPS ? CKS_NSS_FIPS_OK : CKS_NSS_FIPS_NOT_OK;
+        } else {
+            if (session->enc_context) {
+                sessionState = session->enc_context->isFIPS ? CKS_NSS_FIPS_OK : CKS_NSS_FIPS_NOT_OK;
+            }
+            if (sessionState != CKS_NSS_FIPS_NOT_OK && session->hash_context) {
+                sessionState = session->hash_context->isFIPS ? CKS_NSS_FIPS_OK : CKS_NSS_FIPS_NOT_OK;
+            }
+            /* sessionState is set to CKS_NSS_UNINITIALIZED if neither
+             * context exists */
+        }
+    }
+
+    if (needObject) {
+        object = sftk_ObjectFromHandle(hObject, session);
+        if (!object) {
+            sftk_FreeSession(session);
+            return CKR_OBJECT_HANDLE_INVALID;
+        }
+        objectState = object->isFIPS ? CKS_NSS_FIPS_OK : CKS_NSS_FIPS_NOT_OK;
+        sftk_FreeObject(object);
+    }
+
+    sftk_FreeSession(session);
+
+    /* If we didn't fetch the state, then it is uninitialized.
+     * The session state can also be uninitialized if there are no active
+     * crypto operations on the session. Turns out the rules for combining
+     * the states are the same whether or not the state was uninitialzed
+     * because we didn't fetch it or because there wasn't a state to fetch.
+     */
+
+    /* if the object State is uninitialized, return the state of the session. */
+    if (objectState == CKS_NSS_UNINITIALIZED) {
+        /* if they are both uninitalized, return CKS_FIPS_NOT_OK */
+        if (sessionState == CKS_NSS_UNINITIALIZED) {
+            /* *pulFIPSStatus already set to CKS_FIPS_NOT_OK */
+            return CKR_OK;
+        }
+        *pulFIPSStatus = sessionState;
+        return CKR_OK;
+    }
+    /* objectState is initialized, if sessionState is uninitialized, we can
+     * just return objectState */
+    if (sessionState == CKS_NSS_UNINITIALIZED) {
+        *pulFIPSStatus = objectState;
+        return CKR_OK;
+    }
+
+    /* they are are not equal, one must be CKS_FIPS_NOT_OK, so we return that
+     * value CKS_FIPS_NOT_OK */
+    if (objectState != sessionState) {
+        /* *pulFIPSStatus already set to CKS_FIPS_NOT_OK */
+        return CKR_OK;
+    }
+
+    /* objectState and sessionState or the same, so we can return either */
+    *pulFIPSStatus = sessionState;
+    return CKR_OK;
 }

@@ -19,6 +19,8 @@ static JSProtoKey ToProtoKey(BuiltinObjectKind kind) {
       return JSProto_Array;
     case BuiltinObjectKind::ArrayBuffer:
       return JSProto_ArrayBuffer;
+    case BuiltinObjectKind::Int32Array:
+      return JSProto_Int32Array;
     case BuiltinObjectKind::Iterator:
       return JSProto_Iterator;
     case BuiltinObjectKind::Promise:
@@ -27,6 +29,8 @@ static JSProtoKey ToProtoKey(BuiltinObjectKind kind) {
       return JSProto_RegExp;
     case BuiltinObjectKind::SharedArrayBuffer:
       return JSProto_SharedArrayBuffer;
+    case BuiltinObjectKind::Symbol:
+      return JSProto_Symbol;
 
     case BuiltinObjectKind::FunctionPrototype:
       return JSProto_Function;
@@ -37,9 +41,9 @@ static JSProtoKey ToProtoKey(BuiltinObjectKind kind) {
     case BuiltinObjectKind::StringPrototype:
       return JSProto_String;
 
-    case BuiltinObjectKind::DateTimeFormat:
+    case BuiltinObjectKind::DateTimeFormatPrototype:
       return JSProto_DateTimeFormat;
-    case BuiltinObjectKind::NumberFormat:
+    case BuiltinObjectKind::NumberFormatPrototype:
       return JSProto_NumberFormat;
 
     case BuiltinObjectKind::None:
@@ -52,10 +56,12 @@ static bool IsPrototype(BuiltinObjectKind kind) {
   switch (kind) {
     case BuiltinObjectKind::Array:
     case BuiltinObjectKind::ArrayBuffer:
+    case BuiltinObjectKind::Int32Array:
     case BuiltinObjectKind::Iterator:
     case BuiltinObjectKind::Promise:
     case BuiltinObjectKind::RegExp:
     case BuiltinObjectKind::SharedArrayBuffer:
+    case BuiltinObjectKind::Symbol:
       return false;
 
     case BuiltinObjectKind::FunctionPrototype:
@@ -64,9 +70,9 @@ static bool IsPrototype(BuiltinObjectKind kind) {
     case BuiltinObjectKind::StringPrototype:
       return true;
 
-    case BuiltinObjectKind::DateTimeFormat:
-    case BuiltinObjectKind::NumberFormat:
-      return false;
+    case BuiltinObjectKind::DateTimeFormatPrototype:
+    case BuiltinObjectKind::NumberFormatPrototype:
+      return true;
 
     case BuiltinObjectKind::None:
       break;
@@ -74,50 +80,54 @@ static bool IsPrototype(BuiltinObjectKind kind) {
   MOZ_CRASH("Unexpected builtin object kind");
 }
 
-using BuiltinName =
-    const js::frontend::ParserName* js::frontend::WellKnownParserAtoms::*;
-
-struct BuiltinObjectMap {
-  BuiltinName name;
-  BuiltinObjectKind kind;
-};
-
 BuiltinObjectKind js::BuiltinConstructorForName(
-    JSContext* cx, const js::frontend::ParserAtom* name) {
-  using WellKnownName = js::frontend::WellKnownParserAtoms;
-  static constexpr BuiltinObjectMap constructors[] = {
-      {&WellKnownName::Array, BuiltinObjectKind::Array},
-      {&WellKnownName::ArrayBuffer, BuiltinObjectKind::ArrayBuffer},
-      {&WellKnownName::Iterator, BuiltinObjectKind::Iterator},
-      {&WellKnownName::Promise, BuiltinObjectKind::Promise},
-      {&WellKnownName::RegExp, BuiltinObjectKind::RegExp},
-      {&WellKnownName::SharedArrayBuffer, BuiltinObjectKind::SharedArrayBuffer},
-      {&WellKnownName::DateTimeFormat, BuiltinObjectKind::DateTimeFormat},
-      {&WellKnownName::NumberFormat, BuiltinObjectKind::NumberFormat},
-  };
-
-  for (auto& builtin : constructors) {
-    if (name == cx->parserNames().*(builtin.name)) {
-      return builtin.kind;
-    }
+    frontend::TaggedParserAtomIndex name) {
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Array()) {
+    return BuiltinObjectKind::Array;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::ArrayBuffer()) {
+    return BuiltinObjectKind::ArrayBuffer;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Int32Array()) {
+    return BuiltinObjectKind::Int32Array;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Iterator()) {
+    return BuiltinObjectKind::Iterator;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Promise()) {
+    return BuiltinObjectKind::Promise;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::RegExp()) {
+    return BuiltinObjectKind::RegExp;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::SharedArrayBuffer()) {
+    return BuiltinObjectKind::SharedArrayBuffer;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Symbol()) {
+    return BuiltinObjectKind::Symbol;
   }
   return BuiltinObjectKind::None;
 }
 
 BuiltinObjectKind js::BuiltinPrototypeForName(
-    JSContext* cx, const js::frontend::ParserAtom* name) {
-  using WellKnownName = js::frontend::WellKnownParserAtoms;
-  static constexpr BuiltinObjectMap prototypes[] = {
-      {&WellKnownName::Function, BuiltinObjectKind::FunctionPrototype},
-      {&WellKnownName::Object, BuiltinObjectKind::ObjectPrototype},
-      {&WellKnownName::RegExp, BuiltinObjectKind::RegExpPrototype},
-      {&WellKnownName::String, BuiltinObjectKind::StringPrototype},
-  };
-
-  for (auto& builtin : prototypes) {
-    if (name == cx->parserNames().*(builtin.name)) {
-      return builtin.kind;
-    }
+    frontend::TaggedParserAtomIndex name) {
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Function()) {
+    return BuiltinObjectKind::FunctionPrototype;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::Object()) {
+    return BuiltinObjectKind::ObjectPrototype;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::RegExp()) {
+    return BuiltinObjectKind::RegExpPrototype;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::String()) {
+    return BuiltinObjectKind::StringPrototype;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::DateTimeFormat()) {
+    return BuiltinObjectKind::DateTimeFormatPrototype;
+  }
+  if (name == frontend::TaggedParserAtomIndex::WellKnown::NumberFormat()) {
+    return BuiltinObjectKind::NumberFormatPrototype;
   }
   return BuiltinObjectKind::None;
 }
@@ -145,6 +155,8 @@ const char* js::BuiltinObjectName(BuiltinObjectKind kind) {
       return "Array";
     case BuiltinObjectKind::ArrayBuffer:
       return "ArrayBuffer";
+    case BuiltinObjectKind::Int32Array:
+      return "Int32Array";
     case BuiltinObjectKind::Iterator:
       return "Iterator";
     case BuiltinObjectKind::Promise:
@@ -153,6 +165,8 @@ const char* js::BuiltinObjectName(BuiltinObjectKind kind) {
       return "RegExp";
     case BuiltinObjectKind::SharedArrayBuffer:
       return "SharedArrayBuffer";
+    case BuiltinObjectKind::Symbol:
+      return "Symbol";
 
     case BuiltinObjectKind::FunctionPrototype:
       return "Function.prototype";
@@ -163,10 +177,10 @@ const char* js::BuiltinObjectName(BuiltinObjectKind kind) {
     case BuiltinObjectKind::StringPrototype:
       return "String.prototype";
 
-    case BuiltinObjectKind::DateTimeFormat:
-      return "DateTimeFormat";
-    case BuiltinObjectKind::NumberFormat:
-      return "NumberFormat";
+    case BuiltinObjectKind::DateTimeFormatPrototype:
+      return "DateTimeFormat.prototype";
+    case BuiltinObjectKind::NumberFormatPrototype:
+      return "NumberFormat.prototype";
 
     case BuiltinObjectKind::None:
       break;

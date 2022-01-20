@@ -1,3 +1,8 @@
+const { AppConstants } = SpecialPowers.Cu.import(
+  "resource://gre/modules/AppConstants.jsm",
+  {}
+);
+
 // In each list of tests below, test file types that are not supported should
 // be ignored. To make sure tests respect that, we include a file of type
 // "bogus/duh" in each list.
@@ -415,6 +420,39 @@ var gPlayTests = [
   // Test playback of a WebM file with resolution changes.
   { name: "resolution-change.webm", type: "video/webm", duration: 6.533 },
 
+  // The following webm files test cases where the webm metadata dimensions do
+  // not match those in the stream. See bug 1695033 for more info.
+
+  // Reference file with correct dimensions (webm metadata matches stream
+  // resolution).
+  { name: "bipbop_short_vp8.webm", type: "video/webm", duration: 1.011 },
+
+  // The webm resolution is greater in both dimensions than the in stream
+  // resolution.
+  {
+    name: "bipbop_short_pixel_metadata_bigger_than_in_stream_vp8.webm",
+    type: "video/webm",
+    duration: 1.011,
+  },
+
+  // The webm resolution is correct for height, but is narrower than the stream
+  // resolution.
+  {
+    name: "bipbop_short_pixel_metadata_narrower_than_in_stream_vp8.webm",
+    type: "video/webm",
+    duration: 1.011,
+  },
+
+  // The webm resolution is smaller in both dimensions than the in stream
+  // resolution.
+  {
+    name: "bipbop_short_pixel_metadata_smaller_than_in_stream_vp8.webm",
+    type: "video/webm",
+    duration: 1.011,
+  },
+
+  // End of webm dimension clashing files.
+
   // A really short, low sample rate, single channel file. This tests whether
   // we can handle playing files when only push very little audio data to the
   // hardware.
@@ -466,9 +504,6 @@ var gPlayTests = [
   // Test playback of a MP4 file with a non-zero start time (and audio starting
   // a second later).
   { name: "bipbop-lateaudio.mp4", type: "video/mp4" },
-  // Ambisonics AAC, requires AAC extradata to be set when creating decoder (see bug 1431169)
-  // Also test 4.0 decoding.
-  { name: "ambisonics.mp4", type: "audio/mp4", duration: 16.48 },
   // Opus in MP4 channel mapping=0 sample file (content shorter due to preskip)
   {
     name: "opus-sample.mp4",
@@ -522,6 +557,15 @@ var gPlayTests = [
     height: 240,
     duration: 3.13,
   },
+  // A file that has no codec delay at the container level, but has a delay at
+  // the codec level.
+  {
+    name: "no-container-codec-delay.webm",
+    type: "video/webm",
+  },
+  // A file that has a codec delay at a container level of 0, but as a delay at
+  // the codec level that is non-zero.
+  { name: "invalid-preskip.webm", type: "audio/webm; codecs=opus" },
 
   // Invalid file
   { name: "bogus.duh", type: "bogus/duh", duration: Number.NaN },
@@ -532,6 +576,65 @@ const win32 =
   !SpecialPowers.Services.appinfo.is64Bit;
 if (!win32) {
   gPlayTests.push({ name: "av1.mp4", type: "video/mp4", duration: 1.0 });
+}
+
+// AAC files with different sample rates. We add these here as some are added
+// conditionally.
+gPlayTests.push(
+  {
+    name: "bipbop_audio_aac_8k.mp4",
+    type: "audio/mp4",
+    duration: 1.06,
+  },
+  {
+    name: "bipbop_audio_aac_22.05k.mp4",
+    type: "audio/mp4",
+    duration: 1.06,
+  },
+  {
+    name: "bipbop_audio_aac_44.1k.mp4",
+    type: "audio/mp4",
+    duration: 1.06,
+  },
+  {
+    name: "bipbop_audio_aac_48k.mp4",
+    type: "audio/mp4",
+    duration: 1.06,
+  }
+);
+if (AppConstants.platform != "win") {
+  // Windows WMF decoder doesn't do >48K everywhere. See bug 1698639.
+  gPlayTests.push(
+    {
+      name: "bipbop_audio_aac_88.2k.mp4",
+      type: "audio/mp4",
+      duration: 1.06,
+    },
+    {
+      name: "bipbop_audio_aac_96k.mp4",
+      type: "audio/mp4",
+      duration: 1.06,
+    }
+  );
+}
+
+// ambisonics.mp4 causes intermittents, so we conditionally add it until we fix
+// the root cause.
+const skipAmbisonics =
+  // Bug 1484451 - skip on mac debug
+  (AppConstants.platform == "macosx" && AppConstants.DEBUG) ||
+  // Bug 1483259 - skip on linux64 opt
+  (AppConstants.platform == "linux" &&
+    !AppConstants.DEBUG &&
+    SpecialPowers.Services.appinfo.is64Bit);
+if (!skipAmbisonics) {
+  // Ambisonics AAC, requires AAC extradata to be set when creating decoder (see bug 1431169)
+  // Also test 4.0 decoding.
+  gPlayTests.push({
+    name: "ambisonics.mp4",
+    type: "audio/mp4",
+    duration: 16.48,
+  });
 }
 
 var gSeekToNextFrameTests = [
@@ -617,7 +720,6 @@ var gInvalidTests = [
   { name: "invalid-cmap-s0c0.opus", type: "audio/ogg; codecs=opus" },
   { name: "invalid-cmap-s0c2.opus", type: "audio/ogg; codecs=opus" },
   { name: "invalid-cmap-s1c2.opus", type: "audio/ogg; codecs=opus" },
-  { name: "invalid-preskip.webm", type: "audio/webm; codecs=opus" },
 ];
 
 var gInvalidPlayTests = [

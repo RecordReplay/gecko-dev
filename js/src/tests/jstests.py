@@ -401,6 +401,10 @@ def parse_args():
     )
 
     op.add_argument("--js-shell", metavar="JS_SHELL", help="JS shell to run tests with")
+    op.add_argument(
+        "-z", "--gc-zeal", help="GC zeal mode to use when running the shell"
+    )
+
     options, args = op.parse_known_args()
 
     # Need a shell unless in a special mode.
@@ -571,7 +575,9 @@ def load_wpt_tests(xul_tester, requested_paths, excluded_paths, update_manifest=
             if tests:
                 yield item_type, path, tests
 
-    run_info_extras = products.load_product(kwargs["config"], "firefox")[-1](**kwargs)
+    run_info_extras = products.Product(kwargs["config"], "firefox").run_info_extras(
+        **kwargs
+    )
     run_info = wpttest.get_run_info(
         kwargs["run_info"],
         "firefox",
@@ -751,7 +757,7 @@ def main():
             return 1
 
     test_count, test_gen = load_tests(options, requested_paths, excluded_paths)
-    test_environment = get_environment_overlay(options.js_shell)
+    test_environment = get_environment_overlay(options.js_shell, options.gc_zeal)
 
     if test_count == 0:
         print("no tests selected")

@@ -710,12 +710,12 @@ void AudioContext::RemoveFromDecodeQueue(WebAudioDecodeJob* aDecodeJob) {
 
 void AudioContext::RegisterActiveNode(AudioNode* aNode) {
   if (!mCloseCalled) {
-    mActiveNodes.PutEntry(aNode);
+    mActiveNodes.Insert(aNode);
   }
 }
 
 void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
-  mActiveNodes.RemoveEntry(aNode);
+  mActiveNodes.Remove(aNode);
 }
 
 uint32_t AudioContext::MaxChannelCount() const {
@@ -912,8 +912,7 @@ void AudioContext::OnStateChanged(void* aPromise, AudioContextState aNewState) {
 
 nsTArray<RefPtr<mozilla::MediaTrack>> AudioContext::GetAllTracks() const {
   nsTArray<RefPtr<mozilla::MediaTrack>> tracks;
-  for (auto iter = mAllNodes.ConstIter(); !iter.Done(); iter.Next()) {
-    AudioNode* node = iter.Get()->GetKey();
+  for (AudioNode* node : mAllNodes) {
     mozilla::MediaTrack* t = node->GetTrack();
     if (t) {
       tracks.AppendElement(t);
@@ -1206,12 +1205,12 @@ void AudioContext::CloseInternal(void* aPromise,
 
 void AudioContext::RegisterNode(AudioNode* aNode) {
   MOZ_ASSERT(!mAllNodes.Contains(aNode));
-  mAllNodes.PutEntry(aNode);
+  mAllNodes.Insert(aNode);
 }
 
 void AudioContext::UnregisterNode(AudioNode* aNode) {
   MOZ_ASSERT(mAllNodes.Contains(aNode));
-  mAllNodes.RemoveEntry(aNode);
+  mAllNodes.Remove(aNode);
 }
 
 already_AddRefed<Promise> AudioContext::StartRendering(ErrorResult& aRv) {
@@ -1254,8 +1253,9 @@ void AudioContext::Unmute() const {
 
 void AudioContext::SetParamMapForWorkletName(
     const nsAString& aName, AudioParamDescriptorMap* aParamMap) {
-  MOZ_ASSERT(!mWorkletParamDescriptors.GetValue(aName));
-  Unused << mWorkletParamDescriptors.Put(aName, move(*aParamMap), fallible);
+  MOZ_ASSERT(!mWorkletParamDescriptors.Contains(aName));
+  Unused << mWorkletParamDescriptors.InsertOrUpdate(aName, move(*aParamMap),
+                                                    fallible);
 }
 
 size_t AudioContext::SizeOfIncludingThis(
@@ -1281,8 +1281,7 @@ AudioContext::CollectReports(nsIHandleReportCallback* aHandleReport,
                              nsISupports* aData, bool aAnonymize) {
   const nsLiteralCString nodeDescription(
       "Memory used by AudioNode DOM objects (Web Audio).");
-  for (auto iter = mAllNodes.ConstIter(); !iter.Done(); iter.Next()) {
-    AudioNode* node = iter.Get()->GetKey();
+  for (AudioNode* node : mAllNodes) {
     int64_t amount = node->SizeOfIncludingThis(MallocSizeOf);
     nsPrintfCString domNodePath("explicit/webaudio/audio-node/%s/dom-nodes",
                                 node->NodeType());

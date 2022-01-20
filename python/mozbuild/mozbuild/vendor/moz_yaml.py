@@ -59,6 +59,7 @@ VALID_LICENSES = [
     "Anti-Grain-Geometry",  # http://www.antigrain.com/license/index.html
     "JPNIC",  # https://www.nic.ad.jp/ja/idn/idnkit/download/index.html
     "Khronos",  # https://www.khronos.org/openmaxdl
+    "libpng",  # http://www.libpng.org/pub/png/src/libpng-LICENSE.txt
     "Unicode",  # http://www.unicode.org/copyright.html
 ]
 
@@ -112,17 +113,32 @@ origin:
 # optional
 updatebot:
 
-  # Whether or not updating this library is enabled
-  # Valid values are 'true', 'false'
-  enabled: false
-
   # TODO: allow multiple users to be specified
   # Phabricator username for a maintainer of the library, used for assigning
   # reviewers
-  maintainer_phab: tjr
+  maintainer-phab: tjr
 
   # Bugzilla email address for a maintainer of the library, used for needinfos
-  maintainer_bz: tom@mozilla.com
+  maintainer-bz: tom@mozilla.com
+
+  # Type of git reference (commit, tag) to track updates from.
+  # If omitted, will default to tracking commits.
+  tracking: commit
+
+  # The tasks that Updatebot can run. Only one of each task is currently permitted
+  # optional
+  tasks:
+    - type: commit-alert
+      branch: upstream-branch-name
+      cc: ["bugzilla@email.address", "another@example.com"]
+      needinfo: ["bugzilla@email.address", "another@example.com"]
+      enabled: True
+      filter: security
+      frequency: every
+    - type: vendoring
+      branch: master
+      enabled: False
+      frequency: 2 weeks
 
 # Configuration for the automated vendoring system.
 # optional
@@ -339,12 +355,38 @@ def _schema_1():
                 Required("license"): Msg(License(), msg="Unsupported License"),
                 "license-file": All(str, Length(min=1)),
                 Required("release"): All(str, Length(min=1)),
-                Required("revision"): Match(r"^[a-fA-F0-9]{12,40}$"),
+                # The following regex defines a valid git reference
+                # The first group [^ ~^:?*[\]] matches 0 or more times anything
+                # that isn't a Space, ~, ^, :, ?, *, or ]
+                # The second group [^ ~^:?*[\]\.]+ matches 1 or more times
+                # anything that isn't a Space, ~, ^, :, ?, *, [, ], or .
+                Required("revision"): Match(r"^[^ ~^:?*[\]]*[^ ~^:?*[\]\.]+$"),
             },
             "updatebot": {
-                Required("enabled"): Boolean(),
                 Required("maintainer-phab"): All(str, Length(min=1)),
                 Required("maintainer-bz"): All(str, Length(min=1)),
+                "tracking": All(str, Length(min=1)),
+                "tasks": All(
+                    UpdatebotTasks(),
+                    [
+                        {
+                            Required("type"): In(
+                                ["vendoring", "commit-alert"],
+                                msg="Invalid type specified in tasks",
+                            ),
+                            "branch": All(str, Length(min=1)),
+                            "enabled": Boolean(),
+                            "cc": Unique([str]),
+                            "needinfo": Unique([str]),
+                            "filter": In(
+                                ["none", "security", "source-extensions"],
+                                msg="Invalid filter value specified in tasks",
+                            ),
+                            "source-extensions": Unique([str]),
+                            "frequency": Match(r"^(every|release|[1-9][0-9]* weeks?)$"),
+                        }
+                    ],
+                ),
             },
             "vendoring": {
                 Required("url"): FqdnUrl(),
@@ -416,6 +458,28 @@ def _schema_1_additional(filename, manifest, require_license_file=True):
     if "vendoring" in manifest and "origin" not in manifest:
         raise ValueError('"vendoring" requires an "origin"')
 
+    # If there are Updatebot tasks, then certain fields must be present and
+    # defaults need to be set.
+    if "updatebot" in manifest and "tasks" in manifest["updatebot"]:
+        if "tracking" not in manifest["updatebot"]:
+            manifest["updatebot"]["tracking"] = "commit"
+        if (
+            manifest["updatebot"]["tracking"] != "commit"
+            and manifest["updatebot"]["tracking"] != "tag"
+        ):
+            raise ValueError(
+                "Only commit or tag is supported for git references to track, %s was given."
+                % manifest["updatebot"]["tracking"]
+            )
+        if "vendoring" not in manifest or "url" not in manifest["vendoring"]:
+            raise ValueError(
+                "If Updatebot tasks are specified, a vendoring url must be included."
+            )
+        if "origin" not in manifest or "revision" not in manifest["origin"]:
+            raise ValueError(
+                "If Updatebot tasks are specified, an origin revision must be specified."
+            )
+
     # Check for a simple YAML file
     with open(filename, "r") as f:
         has_schema = False
@@ -474,6 +538,36 @@ class UpdateActions(object):
 
     def __repr__(self):
         return "UpdateActions"
+
+
+class UpdatebotTasks(object):
+    """Voluptuous validator which verifies the updatebot task(s) are valid."""
+
+    def __call__(self, values):
+        seenTaskTypes = set()
+        for v in values:
+            if "type" not in v:
+                raise Invalid("All updatebot tasks must specify a valid type")
+
+            if v["type"] in seenTaskTypes:
+                raise Invalid("Only one type of each task is currently supported")
+            seenTaskTypes.add(v["type"])
+
+            if v["type"] == "vendoring":
+                if "filter" in v or "source-extensions" in v:
+                    raise Invalid(
+                        "'filter' and 'source-extensions' only valid for commit-alert task types"
+                    )
+            elif v["type"] == "commit-alert":
+                pass
+            else:
+                # This check occurs before the validator above, so the above is
+                # redundant but we leave it to be verbose.
+                raise Invalid("Supplied type " + v["type"] + " is invalid.")
+        return values
+
+    def __repr__(self):
+        return "UpdatebotTasks"
 
 
 class License(object):

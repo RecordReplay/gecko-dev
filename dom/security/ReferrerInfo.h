@@ -154,7 +154,7 @@ class ReferrerInfo : public nsIReferrerInfo {
 
   /**
    * Check whether the given referrer's scheme is allowed to be computed and
-   * sent. The allowlist schemes are: http, https, ftp.
+   * sent. The allowlist schemes are: http, https.
    */
   static bool IsReferrerSchemeAllowed(nsIURI* aReferrer);
 
@@ -219,16 +219,7 @@ class ReferrerInfo : public nsIReferrerInfo {
    */
   static ReferrerPolicyEnum GetDefaultReferrerPolicy(
       nsIHttpChannel* aChannel = nullptr, nsIURI* aURI = nullptr,
-      bool aPrivateBrowsing = false);
-
-  /**
-   * Return default referrer policy for third party which is controlled by user
-   * prefs:
-   * network.http.referer.defaultPolicy.trackers for regular mode
-   * network.http.referer.defaultPolicy.trackers.pbmode for private mode
-   */
-  static ReferrerPolicyEnum GetDefaultThirdPartyReferrerPolicy(
-      bool aPrivateBrowsing = false);
+      bool privateBrowsing = false);
 
   /*
    * Helper function to parse ReferrerPolicy from meta tag referrer content.
@@ -283,6 +274,16 @@ class ReferrerInfo : public nsIReferrerInfo {
   virtual ~ReferrerInfo() = default;
 
   ReferrerInfo(const ReferrerInfo& rhs);
+
+  /*
+   * Default referrer policy to use
+   */
+  enum DefaultReferrerPolicy : uint32_t {
+    eDefaultPolicyNoReferrer = 0,
+    eDefaultPolicySameOrgin = 1,
+    eDefaultPolicyStrictWhenXorigin = 2,
+    eDefaultPolicyNoReferrerWhenDownGrade = 3,
+  };
 
   /*
    * Trimming policy when compute referrer, indicate how much information in the
@@ -367,7 +368,7 @@ class ReferrerInfo : public nsIReferrerInfo {
   bool IsPolicyOverrided() { return mOverridePolicyByDefault; }
 
   /*
-   *  Get origin string from a given valid referrer URI (http, https, ftp)
+   *  Get origin string from a given valid referrer URI (http, https)
    *
    *  @aReferrer - the full referrer URI
    *  @aResult - the resulting aReferrer in string format.

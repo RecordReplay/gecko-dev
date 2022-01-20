@@ -11,7 +11,7 @@
 #include "GMPLog.h"
 #include "GMPParent.h"
 #include "GMPVideoDecoderParent.h"
-#include "GeckoChildProcessHost.h"
+#include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "base/task.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Logging.h"
@@ -32,6 +32,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
+#include "nsNetUtil.h"
 #include "nsHashKeys.h"
 #include "nsIFile.h"
 #include "nsIObserverService.h"
@@ -40,6 +41,10 @@
 #include "nsXPCOMPrivate.h"
 #include "prio.h"
 #include "runnable_utils.h"
+
+#ifdef DEBUG
+#  include "mozilla/dom/MediaKeys.h"  // MediaKeys::kMediaKeysRequestTopic
+#endif
 
 using mozilla::ipc::Transport;
 
@@ -103,8 +108,8 @@ nsresult GeckoMediaPluginServiceParent::Init() {
       obsService->AddObserver(this, NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID, false));
 
 #ifdef DEBUG
-  MOZ_ALWAYS_SUCCEEDS(
-      obsService->AddObserver(this, "mediakeys-request", false));
+  MOZ_ALWAYS_SUCCEEDS(obsService->AddObserver(
+      this, dom::MediaKeys::kMediaKeysRequestTopic, false));
 #endif
 
   nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
@@ -967,8 +972,8 @@ GeckoMediaPluginServiceParent::GetStorageDir(nsIFile** aOutFile) {
   return mStorageBaseDir->Clone(aOutFile);
 }
 
-static nsresult WriteToFile(nsIFile* aPath, const nsCString& aFileName,
-                            const nsCString& aData) {
+nsresult WriteToFile(nsIFile* aPath, const nsCString& aFileName,
+                     const nsCString& aData) {
   nsCOMPtr<nsIFile> path;
   nsresult rv = aPath->Clone(getter_AddRefs(path));
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1037,12 +1042,8 @@ nsresult ReadSalt(nsIFile* aPath, nsACString& aOutData) {
 
 already_AddRefed<GMPStorage> GeckoMediaPluginServiceParent::GetMemoryStorageFor(
     const nsACString& aNodeId) {
-  RefPtr<GMPStorage> s;
-  if (!mTempGMPStorage.Get(aNodeId, getter_AddRefs(s))) {
-    s = CreateGMPMemoryStorage();
-    mTempGMPStorage.Put(aNodeId, RefPtr{s});
-  }
-  return s.forget();
+  return do_AddRef(mTempGMPStorage.LookupOrInsertWith(
+      aNodeId, [] { return CreateGMPMemoryStorage(); }));
 }
 
 NS_IMETHODIMP
@@ -1081,7 +1082,7 @@ nsresult GeckoMediaPluginServiceParent::GetNodeId(
       return rv;
     }
     aOutId = salt;
-    mPersistentStorageAllowed.Put(salt, false);
+    mPersistentStorageAllowed.InsertOrUpdate(salt, false);
     return NS_OK;
   }
 
@@ -1093,20 +1094,24 @@ nsresult GeckoMediaPluginServiceParent::GetNodeId(
     // name, so that if the same origin pair is opened for the same GMP in this
     // session, it gets the same node id.
     const uint32_t pbHash = AddToHash(HashString(aGMPName), hash);
-    nsCString* salt = nullptr;
-    if (!(salt = mTempNodeIds.Get(pbHash))) {
-      // No salt stored, generate and temporarily store some for this id.
-      nsAutoCString newSalt;
-      rv = GenerateRandomPathName(newSalt, NodeIdSaltLength);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
+    return mTempNodeIds.WithEntryHandle(pbHash, [&](auto&& entry) {
+      if (!entry) {
+        // No salt stored, generate and temporarily store some for this id.
+        nsAutoCString newSalt;
+        rv = GenerateRandomPathName(newSalt, NodeIdSaltLength);
+        if (NS_WARN_IF(NS_FAILED(rv))) {
+          return rv;
+        }
+        auto salt = MakeUnique<nsCString>(newSalt);
+
+        mPersistentStorageAllowed.InsertOrUpdate(*salt, false);
+
+        entry.Insert(std::move(salt));
       }
-      salt = new nsCString(newSalt);
-      mTempNodeIds.Put(pbHash, salt);
-      mPersistentStorageAllowed.Put(*salt, false);
-    }
-    aOutId = *salt;
-    return NS_OK;
+
+      aOutId = *entry.Data();
+      return NS_OK;
+    });
   }
 
   // Otherwise, try to see if we've previously generated and stored salt
@@ -1196,7 +1201,7 @@ nsresult GeckoMediaPluginServiceParent::GetNodeId(
   }
 
   aOutId = salt;
-  mPersistentStorageAllowed.Put(salt, true);
+  mPersistentStorageAllowed.InsertOrUpdate(salt, true);
 
   return NS_OK;
 }
@@ -1244,37 +1249,55 @@ static bool ExtractHostName(const nsACString& aOrigin, nsACString& aOutData) {
   return true;
 }
 
+constexpr uint32_t kMaxDomainLength = 253;
+// http://en.wikipedia.org/wiki/Domain_Name_System#Domain_name_syntax
+
+constexpr std::array<nsLiteralCString, 2> kFileNames = {"origin"_ns,
+                                                        "topLevelOrigin"_ns};
+
 bool MatchOrigin(nsIFile* aPath, const nsACString& aSite,
                  const mozilla::OriginAttributesPattern& aPattern) {
-  // http://en.wikipedia.org/wiki/Domain_Name_System#Domain_name_syntax
-  static const uint32_t MaxDomainLength = 253;
-
   nsresult rv;
   nsCString str;
   nsCString originNoSuffix;
-  mozilla::OriginAttributes originAttributes;
+  for (const auto& fileName : kFileNames) {
+    rv = ReadFromFile(aPath, fileName, str, kMaxDomainLength);
+    mozilla::OriginAttributes originAttributes;
+    if (NS_FAILED(rv) ||
+        !originAttributes.PopulateFromOrigin(str, originNoSuffix)) {
+      // Fails on parsing the originAttributes, treat this as a non-match.
+      return false;
+    }
 
-  rv = ReadFromFile(aPath, "origin"_ns, str, MaxDomainLength);
-  if (!originAttributes.PopulateFromOrigin(str, originNoSuffix)) {
-    // Fails on parsing the originAttributes, treat this as a non-match.
-    return false;
+    if (ExtractHostName(originNoSuffix, str) && str.Equals(aSite) &&
+        aPattern.Matches(originAttributes)) {
+      return true;
+    }
   }
+  return false;
+}
 
-  if (NS_SUCCEEDED(rv) && ExtractHostName(originNoSuffix, str) &&
-      str.Equals(aSite) && aPattern.Matches(originAttributes)) {
-    return true;
-  }
-
-  mozilla::OriginAttributes topLevelOriginAttributes;
-  rv = ReadFromFile(aPath, "topLevelOrigin"_ns, str, MaxDomainLength);
-  if (!topLevelOriginAttributes.PopulateFromOrigin(str, originNoSuffix)) {
-    // Fails on paring the originAttributes, treat this as a non-match.
-    return false;
-  }
-
-  if (NS_SUCCEEDED(rv) && ExtractHostName(originNoSuffix, str) &&
-      str.Equals(aSite) && aPattern.Matches(topLevelOriginAttributes)) {
-    return true;
+bool MatchBaseDomain(nsIFile* aPath, const nsACString& aBaseDomain) {
+  nsresult rv;
+  nsCString fileContent;
+  nsCString originNoSuffix;
+  for (const auto& fileName : kFileNames) {
+    rv = ReadFromFile(aPath, fileName, fileContent, kMaxDomainLength);
+    mozilla::OriginAttributes originAttributes;
+    if (NS_FAILED(rv) ||
+        !originAttributes.PopulateFromOrigin(fileContent, originNoSuffix)) {
+      // Fails on parsing the originAttributes, treat this as a non-match.
+      return false;
+    }
+    nsCString originHostname;
+    if (!ExtractHostName(originNoSuffix, originHostname)) {
+      return false;
+    }
+    bool success;
+    rv = NS_HasRootDomain(originHostname, aBaseDomain, &success);
+    if (NS_SUCCEEDED(rv) && success) {
+      return true;
+    }
   }
   return false;
 }
@@ -1409,6 +1432,26 @@ void GeckoMediaPluginServiceParent::ForgetThisSiteOnGMPThread(
   ClearNodeIdAndPlugin(filter);
 }
 
+void GeckoMediaPluginServiceParent::ForgetThisBaseDomainOnGMPThread(
+    const nsACString& aBaseDomain) {
+  MOZ_ASSERT(mGMPThread->IsOnCurrentThread());
+  GMP_LOG_DEBUG("%s::%s: baseDomain=%s", __CLASS__, __FUNCTION__,
+                aBaseDomain.Data());
+
+  struct BaseDomainFilter : public DirectoryFilter {
+    explicit BaseDomainFilter(const nsACString& aBaseDomain)
+        : mBaseDomain(aBaseDomain) {}
+    bool operator()(nsIFile* aPath) override {
+      return MatchBaseDomain(aPath, mBaseDomain);
+    }
+
+   private:
+    const nsACString& mBaseDomain;
+  } filter(aBaseDomain);
+
+  ClearNodeIdAndPlugin(filter);
+}
+
 void GeckoMediaPluginServiceParent::ClearRecentHistoryOnGMPThread(
     PRTime aSince) {
   MOZ_ASSERT(mGMPThread->IsOnCurrentThread());
@@ -1498,6 +1541,24 @@ nsresult GeckoMediaPluginServiceParent::ForgetThisSiteNative(
           "gmp::GeckoMediaPluginServiceParent::ForgetThisSiteOnGMPThread", this,
           &GeckoMediaPluginServiceParent::ForgetThisSiteOnGMPThread,
           NS_ConvertUTF16toUTF8(aSite), aPattern));
+}
+
+NS_IMETHODIMP
+GeckoMediaPluginServiceParent::ForgetThisBaseDomain(
+    const nsAString& aBaseDomain) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  return ForgetThisBaseDomainNative(aBaseDomain);
+}
+
+nsresult GeckoMediaPluginServiceParent::ForgetThisBaseDomainNative(
+    const nsAString& aBaseDomain) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  return GMPDispatch(NewRunnableMethod<nsCString>(
+      "gmp::GeckoMediaPluginServiceParent::ForgetThisBaseDomainOnGMPThread",
+      this, &GeckoMediaPluginServiceParent::ForgetThisBaseDomainOnGMPThread,
+      NS_ConvertUTF16toUTF8(aBaseDomain)));
 }
 
 static bool IsNodeIdValid(GMPParent* aParent) {

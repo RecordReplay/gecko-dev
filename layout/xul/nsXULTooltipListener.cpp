@@ -28,6 +28,7 @@
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"  // for Event
 #include "mozilla/dom/MouseEvent.h"
@@ -112,9 +113,15 @@ void nsXULTooltipListener::MouseOut(Event* aEvent) {
     if (pm) {
       nsCOMPtr<nsINode> tooltipNode =
           pm->GetLastTriggerTooltipNode(currentTooltip->GetComposedDoc());
-      if (tooltipNode == targetNode) {
-        // if the target node is the current tooltip target node, the mouse
-        // left the node the tooltip appeared on, so close the tooltip.
+
+      // If the target node is the current tooltip target node, the mouse
+      // left the node the tooltip appeared on, so close the tooltip. However,
+      // don't do this if the mouse moved onto the tooltip in case the
+      // tooltip appears positioned near the mouse.
+      nsCOMPtr<EventTarget> relatedTarget =
+          aEvent->AsMouseEvent()->GetRelatedTarget();
+      nsCOMPtr<nsIContent> relatedContent = do_QueryInterface(relatedTarget);
+      if (tooltipNode == targetNode && relatedContent != currentTooltip) {
         HideTooltip();
         // reset special tree tracking
         if (mIsSourceTree) {
@@ -227,7 +234,7 @@ NS_IMETHODIMP
 nsXULTooltipListener::HandleEvent(Event* aEvent) {
   nsAutoString type;
   aEvent->GetType(type);
-  if (type.EqualsLiteral("DOMMouseScroll") || type.EqualsLiteral("mousedown") ||
+  if (type.EqualsLiteral("wheel") || type.EqualsLiteral("mousedown") ||
       type.EqualsLiteral("mouseup") || type.EqualsLiteral("dragstart")) {
     HideTooltip();
     return NS_OK;
@@ -392,7 +399,7 @@ nsresult nsXULTooltipListener::ShowTooltip() {
       currentTooltip->AddSystemEventListener(u"popuphiding"_ns, this, false,
                                              false);
 
-      // listen for mousedown, mouseup, keydown, and DOMMouseScroll events at
+      // listen for mousedown, mouseup, keydown, and mouse events at
       // document level
       Document* doc = sourceNode->GetComposedDoc();
       if (doc) {
@@ -401,7 +408,7 @@ nsresult nsXULTooltipListener::ShowTooltip() {
         // applications.  If we don't specify the aWantsUntrusted of
         // AddSystemEventListener(), the event target sets it to TRUE if the
         // target is in content.
-        doc->AddSystemEventListener(u"DOMMouseScroll"_ns, this, true);
+        doc->AddSystemEventListener(u"wheel"_ns, this, true);
         doc->AddSystemEventListener(u"mousedown"_ns, this, true);
         doc->AddSystemEventListener(u"mouseup"_ns, this, true);
 #ifndef XP_WIN
@@ -433,8 +440,10 @@ static void SetTitletipLabel(XULTreeElement* aTree, Element* aTooltip,
 #endif
 
 void nsXULTooltipListener::LaunchTooltip() {
-  nsCOMPtr<Element> currentTooltip = do_QueryReferent(mCurrentTooltip);
-  if (!currentTooltip) return;
+  RefPtr<Element> currentTooltip = do_QueryReferent(mCurrentTooltip);
+  if (!currentTooltip) {
+    return;
+  }
 
 #ifdef MOZ_XUL
   if (mIsSourceTree && mNeedTitletip) {
@@ -450,20 +459,30 @@ void nsXULTooltipListener::LaunchTooltip() {
   } else {
     currentTooltip->UnsetAttr(kNameSpaceID_None, nsGkAtoms::titletip, true);
   }
+
   if (!(currentTooltip = do_QueryReferent(mCurrentTooltip))) {
     // Because of mutation events, currentTooltip can be null.
     return;
   }
 
   nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
-  if (pm) {
-    nsCOMPtr<nsIContent> target = do_QueryReferent(mTargetNode);
-    pm->ShowTooltipAtScreen(currentTooltip, target, mMouseScreenX,
-                            mMouseScreenY);
-
-    // Clear the current tooltip if the popup was not opened successfully.
-    if (!pm->IsPopupOpen(currentTooltip)) mCurrentTooltip = nullptr;
+  if (!pm) {
+    return;
   }
+
+  auto cleanup = MakeScopeExit([&] {
+    // Clear the current tooltip if the popup was not opened successfully.
+    if (!pm->IsPopupOpen(currentTooltip)) {
+      mCurrentTooltip = nullptr;
+    }
+  });
+
+  RefPtr<Element> target = do_QueryReferent(mTargetNode);
+  if (!target) {
+    return;
+  }
+
+  pm->ShowTooltipAtScreen(currentTooltip, target, mMouseScreenX, mMouseScreenY);
 #endif
 }
 
@@ -620,7 +639,7 @@ nsresult nsXULTooltipListener::DestroyTooltip() {
     nsCOMPtr<Document> doc = currentTooltip->GetComposedDoc();
     if (doc) {
       // remove the mousedown and keydown listener from document
-      doc->RemoveSystemEventListener(u"DOMMouseScroll"_ns, this, true);
+      doc->RemoveSystemEventListener(u"wheel"_ns, this, true);
       doc->RemoveSystemEventListener(u"mousedown"_ns, this, true);
       doc->RemoveSystemEventListener(u"mouseup"_ns, this, true);
 #ifndef XP_WIN

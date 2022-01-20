@@ -11,14 +11,18 @@
 #include "HyperTextAccessibleWrap.h"
 #include "nsIWindowsRegKey.h"
 #include "nsWinUtils.h"
-#include "mozilla/a11y/ProxyAccessible.h"
+#include "mozilla/a11y/DocAccessibleParent.h"
+#include "mozilla/a11y/RemoteAccessible.h"
 #include "mozilla/mscom/ActivationContext.h"
 #include "mozilla/mscom/InterceptorLog.h"
 #include "mozilla/mscom/Registration.h"
 #include "mozilla/mscom/Utils.h"
+#include "mozilla/StaticPrefs_accessibility.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/WindowsVersion.h"
 #include "mozilla/WinHeaderOnlyUtils.h"
+#include "nsAccessibilityService.h"
+#include "nsComponentManagerUtils.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
 #include "ProxyWrappers.h"
@@ -68,22 +72,44 @@ void a11y::PlatformShutdown() {
   }
 }
 
-void a11y::ProxyCreated(ProxyAccessible* aProxy, uint32_t aInterfaces) {
-  AccessibleWrap* wrapper = nullptr;
-  if (aInterfaces & Interfaces::DOCUMENT) {
-    wrapper = new DocProxyAccessibleWrap(aProxy);
-  } else if (aInterfaces & Interfaces::HYPERTEXT) {
-    wrapper = new HyperTextProxyAccessibleWrap(aProxy);
-  } else {
-    wrapper = new ProxyAccessibleWrap(aProxy);
+void a11y::ProxyCreated(RemoteAccessible* aProxy) {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    MsaaAccessible* msaa = MsaaAccessible::Create(aProxy);
+    msaa->AddRef();
+    aProxy->SetWrapper(reinterpret_cast<uintptr_t>(msaa));
+    return;
   }
 
-  wrapper->SetProxyInterfaces(aInterfaces);
+  AccessibleWrap* wrapper = nullptr;
+  if (aProxy->IsDoc()) {
+    wrapper = new DocRemoteAccessibleWrap(aProxy);
+  } else if (aProxy->IsHyperText()) {
+    wrapper = new HyperTextRemoteAccessibleWrap(aProxy);
+  } else {
+    wrapper = new RemoteAccessibleWrap(aProxy);
+  }
+
   wrapper->AddRef();
   aProxy->SetWrapper(reinterpret_cast<uintptr_t>(wrapper));
 }
 
-void a11y::ProxyDestroyed(ProxyAccessible* aProxy) {
+void a11y::ProxyDestroyed(RemoteAccessible* aProxy) {
+  if (aProxy->IsDoc() && nsWinUtils::IsWindowEmulationStarted()) {
+    aProxy->AsDoc()->SetEmulatedWindowHandle(nullptr);
+  }
+
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    MsaaAccessible* msaa =
+        reinterpret_cast<MsaaAccessible*>(aProxy->GetWrapper());
+    if (!msaa) {
+      return;
+    }
+    msaa->MsaaShutdown();
+    aProxy->SetWrapper(0);
+    msaa->Release();
+    return;
+  }
+
   AccessibleWrap* wrapper =
       reinterpret_cast<AccessibleWrap*>(aProxy->GetWrapper());
 
@@ -91,26 +117,20 @@ void a11y::ProxyDestroyed(ProxyAccessible* aProxy) {
   // RecvPDocAccessibleConstructor failed then aProxy->GetWrapper() will be
   // null.
   if (!wrapper) return;
-
-  if (aProxy->IsDoc() && nsWinUtils::IsWindowEmulationStarted()) {
-    aProxy->AsDoc()->SetEmulatedWindowHandle(nullptr);
-  }
-
   wrapper->Shutdown();
   aProxy->SetWrapper(0);
   wrapper->Release();
 }
 
-void a11y::ProxyEvent(ProxyAccessible* aTarget, uint32_t aEventType) {
-  AccessibleWrap::FireWinEvent(WrapperFor(aTarget), aEventType);
+void a11y::ProxyEvent(RemoteAccessible* aTarget, uint32_t aEventType) {
+  MsaaAccessible::FireWinEvent(aTarget, aEventType);
 }
 
-void a11y::ProxyStateChangeEvent(ProxyAccessible* aTarget, uint64_t, bool) {
-  AccessibleWrap::FireWinEvent(WrapperFor(aTarget),
-                               nsIAccessibleEvent::EVENT_STATE_CHANGE);
+void a11y::ProxyStateChangeEvent(RemoteAccessible* aTarget, uint64_t, bool) {
+  MsaaAccessible::FireWinEvent(aTarget, nsIAccessibleEvent::EVENT_STATE_CHANGE);
 }
 
-void a11y::ProxyFocusEvent(ProxyAccessible* aTarget,
+void a11y::ProxyFocusEvent(RemoteAccessible* aTarget,
                            const LayoutDeviceIntRect& aCaretRect) {
   FocusManager* focusMgr = FocusMgr();
   if (focusMgr && focusMgr->FocusedAccessible()) {
@@ -125,20 +145,28 @@ void a11y::ProxyFocusEvent(ProxyAccessible* aTarget,
   }
 
   AccessibleWrap::UpdateSystemCaretFor(aTarget, aCaretRect);
-  AccessibleWrap::FireWinEvent(WrapperFor(aTarget),
-                               nsIAccessibleEvent::EVENT_FOCUS);
+  MsaaAccessible::FireWinEvent(aTarget, nsIAccessibleEvent::EVENT_FOCUS);
 }
 
-void a11y::ProxyCaretMoveEvent(ProxyAccessible* aTarget,
+void a11y::ProxyCaretMoveEvent(RemoteAccessible* aTarget,
                                const LayoutDeviceIntRect& aCaretRect) {
   AccessibleWrap::UpdateSystemCaretFor(aTarget, aCaretRect);
-  AccessibleWrap::FireWinEvent(WrapperFor(aTarget),
+  MsaaAccessible::FireWinEvent(aTarget,
                                nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED);
 }
 
-void a11y::ProxyTextChangeEvent(ProxyAccessible* aText, const nsString& aStr,
+void a11y::ProxyTextChangeEvent(RemoteAccessible* aText, const nsString& aStr,
                                 int32_t aStart, uint32_t aLen, bool aInsert,
                                 bool) {
+  uint32_t eventType = aInsert ? nsIAccessibleEvent::EVENT_TEXT_INSERTED
+                               : nsIAccessibleEvent::EVENT_TEXT_REMOVED;
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    // XXX Call ia2AccessibleText::UpdateTextChangeData once this works for
+    // RemoteAccessible.
+    MsaaAccessible::FireWinEvent(aText, eventType);
+    return;
+  }
+
   AccessibleWrap* wrapper = WrapperFor(aText);
   MOZ_ASSERT(wrapper);
   if (!wrapper) {
@@ -159,23 +187,19 @@ void a11y::ProxyTextChangeEvent(ProxyAccessible* aText, const nsString& aStr,
     ia2AccessibleText::UpdateTextChangeData(text, aInsert, aStr, aStart, aLen);
   }
 
-  uint32_t eventType = aInsert ? nsIAccessibleEvent::EVENT_TEXT_INSERTED
-                               : nsIAccessibleEvent::EVENT_TEXT_REMOVED;
-  AccessibleWrap::FireWinEvent(wrapper, eventType);
+  MsaaAccessible::FireWinEvent(wrapper, eventType);
 }
 
-void a11y::ProxyShowHideEvent(ProxyAccessible* aTarget, ProxyAccessible*,
+void a11y::ProxyShowHideEvent(RemoteAccessible* aTarget, RemoteAccessible*,
                               bool aInsert, bool) {
   uint32_t event =
       aInsert ? nsIAccessibleEvent::EVENT_SHOW : nsIAccessibleEvent::EVENT_HIDE;
-  AccessibleWrap* wrapper = WrapperFor(aTarget);
-  AccessibleWrap::FireWinEvent(wrapper, event);
+  MsaaAccessible::FireWinEvent(aTarget, event);
 }
 
-void a11y::ProxySelectionEvent(ProxyAccessible* aTarget, ProxyAccessible*,
+void a11y::ProxySelectionEvent(RemoteAccessible* aTarget, RemoteAccessible*,
                                uint32_t aType) {
-  AccessibleWrap* wrapper = WrapperFor(aTarget);
-  AccessibleWrap::FireWinEvent(wrapper, aType);
+  MsaaAccessible::FireWinEvent(aTarget, aType);
 }
 
 bool a11y::IsHandlerRegistered() {
@@ -265,8 +289,6 @@ static bool GetInstantiatorExecutable(const DWORD aPid,
   return NS_SUCCEEDED(rv);
 }
 
-#if defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
-
 /**
  * Appends version information in the format "|a.b.c.d".
  * If there is no version information, we append nothing.
@@ -299,14 +321,12 @@ static void AccumulateInstantiatorTelemetry(const nsAString& aValue) {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (!aValue.IsEmpty()) {
-#  if defined(MOZ_TELEMETRY_REPORTING)
+#if defined(MOZ_TELEMETRY_REPORTING)
     Telemetry::ScalarSet(Telemetry::ScalarID::A11Y_INSTANTIATORS, aValue);
-#  endif  // defined(MOZ_TELEMETRY_REPORTING)
-#  if defined(MOZ_CRASHREPORTER)
+#endif  // defined(MOZ_TELEMETRY_REPORTING)
     CrashReporter::AnnotateCrashReport(
         CrashReporter::Annotation::AccessibilityClient,
         NS_ConvertUTF16toUTF8(aValue));
-#  endif  // defined(MOZ_CRASHREPORTER)
   }
 }
 
@@ -330,15 +350,11 @@ static void GatherInstantiatorTelemetry(nsIFile* aClientExe) {
   NS_DispatchToMainThread(runnable.forget());
 }
 
-#endif  // defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
-
 void a11y::SetInstantiator(const uint32_t aPid) {
   nsCOMPtr<nsIFile> clientExe;
   if (!GetInstantiatorExecutable(aPid, getter_AddRefs(clientExe))) {
-#if defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
     AccumulateInstantiatorTelemetry(
         u"(Failed to retrieve client image name)"_ns);
-#endif  // defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
     return;
   }
 
@@ -356,7 +372,6 @@ void a11y::SetInstantiator(const uint32_t aPid) {
 
   gInstantiator = clientExe;
 
-#if defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
   nsCOMPtr<nsIRunnable> runnable(
       NS_NewRunnableFunction("a11y::GatherInstantiatorTelemetry",
                              [clientExe = std::move(clientExe)]() -> void {
@@ -366,7 +381,6 @@ void a11y::SetInstantiator(const uint32_t aPid) {
   DebugOnly<nsresult> rv =
       NS_DispatchBackgroundTask(runnable.forget(), NS_DISPATCH_EVENT_MAY_BLOCK);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
-#endif  // defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
 }
 
 bool a11y::GetInstantiator(nsIFile** aOutInstantiator) {

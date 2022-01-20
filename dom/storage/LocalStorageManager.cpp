@@ -99,7 +99,7 @@ nsAutoCString LocalStorageManager::CreateOrigin(
 
 LocalStorageCache* LocalStorageManager::GetCache(
     const nsACString& aOriginSuffix, const nsACString& aOriginNoSuffix) {
-  CacheOriginHashtable* table = mCaches.LookupOrAdd(aOriginSuffix);
+  CacheOriginHashtable* table = mCaches.GetOrInsertNew(aOriginSuffix);
   LocalStorageCacheHashKey* entry = table->GetEntry(aOriginNoSuffix);
   if (!entry) {
     return nullptr;
@@ -110,28 +110,23 @@ LocalStorageCache* LocalStorageManager::GetCache(
 
 already_AddRefed<StorageUsage> LocalStorageManager::GetOriginUsage(
     const nsACString& aOriginNoSuffix, const uint32_t aPrivateBrowsingId) {
-  RefPtr<StorageUsage> usage;
-  if (mUsages.Get(aOriginNoSuffix, &usage)) {
-    return usage.forget();
-  }
+  return do_AddRef(mUsages.LookupOrInsertWith(aOriginNoSuffix, [&] {
+    auto usage = MakeRefPtr<StorageUsage>(aOriginNoSuffix);
 
-  usage = new StorageUsage(aOriginNoSuffix);
+    StorageDBChild* storageChild =
+        StorageDBChild::GetOrCreate(aPrivateBrowsingId);
+    if (storageChild) {
+      storageChild->AsyncGetUsage(usage);
+    }
 
-  StorageDBChild* storageChild =
-      StorageDBChild::GetOrCreate(aPrivateBrowsingId);
-  if (storageChild) {
-    storageChild->AsyncGetUsage(usage);
-  }
-
-  mUsages.Put(aOriginNoSuffix, usage);
-
-  return usage.forget();
+    return usage;
+  }));
 }
 
 already_AddRefed<LocalStorageCache> LocalStorageManager::PutCache(
     const nsACString& aOriginSuffix, const nsACString& aOriginNoSuffix,
     const nsACString& aQuotaKey, nsIPrincipal* aPrincipal) {
-  CacheOriginHashtable* table = mCaches.LookupOrAdd(aOriginSuffix);
+  CacheOriginHashtable* table = mCaches.GetOrInsertNew(aOriginSuffix);
   LocalStorageCacheHashKey* entry = table->PutEntry(aOriginNoSuffix);
   RefPtr<LocalStorageCache> cache = entry->cache();
 
@@ -147,7 +142,7 @@ void LocalStorageManager::DropCache(LocalStorageCache* aCache) {
         "down?");
   }
 
-  CacheOriginHashtable* table = mCaches.LookupOrAdd(aCache->OriginSuffix());
+  CacheOriginHashtable* table = mCaches.GetOrInsertNew(aCache->OriginSuffix());
   table->RemoveEntry(aCache->OriginNoSuffix());
 }
 
@@ -326,16 +321,16 @@ LocalStorageManager::IsPreloaded(nsIPrincipal* aPrincipal, JSContext* aContext,
 void LocalStorageManager::ClearCaches(uint32_t aUnloadFlags,
                                       const OriginAttributesPattern& aPattern,
                                       const nsACString& aOriginScope) {
-  for (auto iter1 = mCaches.Iter(); !iter1.Done(); iter1.Next()) {
+  for (const auto& cacheEntry : mCaches) {
     OriginAttributes oa;
-    DebugOnly<bool> rv = oa.PopulateFromSuffix(iter1.Key());
+    DebugOnly<bool> rv = oa.PopulateFromSuffix(cacheEntry.GetKey());
     MOZ_ASSERT(rv);
     if (!aPattern.Matches(oa)) {
       // This table doesn't match the given origin attributes pattern
       continue;
     }
 
-    CacheOriginHashtable* table = iter1.UserData();
+    CacheOriginHashtable* table = cacheEntry.GetWeak();
 
     for (auto iter2 = table->Iter(); !iter2.Done(); iter2.Next()) {
       LocalStorageCache* cache = iter2.Get()->cache();
@@ -387,8 +382,9 @@ nsresult LocalStorageManager::Observe(const char* aTopic,
     return NS_OK;
   }
 
-  // Clear localStorage data beloging to an origin pattern
-  if (!strcmp(aTopic, "origin-attr-pattern-cleared")) {
+  // Clear localStorage data belonging to an origin pattern
+  if (!strcmp(aTopic, "clear-origin-attributes-data") ||
+      !strcmp(aTopic, "dom-storage:clear-origin-attributes-data")) {
     ClearCaches(LocalStorageCache::kUnloadComplete, pattern, ""_ns);
     return NS_OK;
   }

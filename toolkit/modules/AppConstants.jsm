@@ -23,13 +23,6 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
-  FENNEC_NIGHTLY:
-#ifdef FENNEC_NIGHTLY
-  true,
-#else
-  false,
-#endif
-
   RELEASE_OR_BETA:
 #ifdef RELEASE_OR_BETA
   true,
@@ -39,6 +32,13 @@ this.AppConstants = Object.freeze({
 
   EARLY_BETA_OR_EARLIER:
 #ifdef EARLY_BETA_OR_EARLIER
+  true,
+#else
+  false,
+#endif
+
+  IS_ESR:
+#ifdef MOZ_ESR
   true,
 #else
   false,
@@ -219,6 +219,13 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
+  MOZ_BACKGROUNDTASKS:
+#ifdef MOZ_BACKGROUNDTASKS
+  true,
+#else
+  false,
+#endif
+
   MOZ_UPDATE_AGENT:
 #ifdef MOZ_UPDATE_AGENT
   true,
@@ -300,6 +307,13 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
+  MOZ_WEBEXT_WEBIDL_ENABLED:
+#ifdef MOZ_WEBEXT_WEBIDL_ENABLED
+  true,
+#else
+  false,
+#endif
+
   MENUBAR_CAN_AUTOHIDE:
 #ifdef MENUBAR_CAN_AUTOHIDE
   true,
@@ -326,10 +340,15 @@ this.AppConstants = Object.freeze({
 
   MOZ_APP_NAME: "@MOZ_APP_NAME@",
   MOZ_APP_BASENAME: "@MOZ_APP_BASENAME@",
+  // N.b.: you almost certainly want brandShortName/brand-short-name:
+  // MOZ_APP_DISPLAYNAME should only be used for static user-visible
+  // fields (e.g., DLL properties, Mac Bundle name, or similar).
+  MOZ_APP_DISPLAYNAME_DO_NOT_USE: "@MOZ_APP_DISPLAYNAME@",
   MOZ_APP_VERSION: "@MOZ_APP_VERSION@",
   MOZ_APP_VERSION_DISPLAY: "@MOZ_APP_VERSION_DISPLAY@",
   MOZ_BUILDID: "@MOZ_BUILDID@",
   MOZ_BUILD_APP: "@MOZ_BUILD_APP@",
+  MOZ_MACBUNDLE_ID: "@MOZ_MACBUNDLE_ID@",
   MOZ_MACBUNDLE_NAME: "@MOZ_MACBUNDLE_NAME@",
   MOZ_UPDATE_CHANNEL: "@MOZ_UPDATE_CHANNEL@",
   MOZ_WIDGET_TOOLKIT: "@MOZ_WIDGET_TOOLKIT@",
@@ -392,15 +411,8 @@ this.AppConstants = Object.freeze({
     false,
 #endif
 
-  ENABLE_REMOTE_AGENT:
-#ifdef ENABLE_REMOTE_AGENT
-    true,
-#else
-    false,
-#endif
-
-  MOZ_RUST_FXA_CLIENT:
-#ifdef MOZ_RUST_FXA_CLIENT
+  ENABLE_WEBDRIVER:
+#ifdef ENABLE_WEBDRIVER
     true,
 #else
     false,
@@ -413,8 +425,8 @@ this.AppConstants = Object.freeze({
     true,
 #endif
 
-  MOZ_GLEAN:
-#ifdef MOZ_GLEAN
+  MOZ_GLEAN_ANDROID:
+#ifdef MOZ_GLEAN_ANDROID
     true,
 #else
     false,

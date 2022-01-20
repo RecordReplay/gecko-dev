@@ -155,7 +155,7 @@ nsresult ServiceWorkerPrivateImpl::Initialize() {
   }
 
   nsCOMPtr<nsICookieJarSettings> cookieJarSettings =
-      net::CookieJarSettings::Create();
+      net::CookieJarSettings::Create(principal);
   MOZ_ASSERT(cookieJarSettings);
 
   net::CookieJarSettings::Cast(cookieJarSettings)->SetPartitionKey(uri);
@@ -194,7 +194,7 @@ nsresult ServiceWorkerPrivateImpl::Initialize() {
   }
 
   auto remoteType = RemoteWorkerManager::GetRemoteType(
-      principal, WorkerType::WorkerTypeService);
+      principal, WorkerKind::WorkerKindService);
   if (NS_WARN_IF(remoteType.isErr())) {
     return remoteType.unwrapErr();
   }
@@ -827,7 +827,8 @@ nsresult ServiceWorkerPrivateImpl::SendFetchEvent(
   ServiceWorkerFetchEventOpArgs args(
       mOuter->mInfo->ScriptSpec(), std::move(request), nsString(aClientId),
       nsString(aResultingClientId),
-      nsContentUtils::IsNonSubresourceRequest(channel));
+      nsContentUtils::IsNonSubresourceRequest(channel),
+      mOuter->mInfo->TestingInjectCancellation());
 
   if (mOuter->mInfo->State() == ServiceWorkerState::Activating) {
     UniquePtr<PendingFunctionalEvent> pendingEvent =

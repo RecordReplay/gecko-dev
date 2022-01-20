@@ -247,14 +247,6 @@ enum class StyleShapeSourceType : uint8_t {
   Path,  // SVG path function
 };
 
-// text-justify
-enum class StyleTextJustify : uint8_t {
-  None,
-  Auto,
-  InterWord,
-  InterCharacter,
-};
-
 // user-focus
 enum class StyleUserFocus : uint8_t {
   None,
@@ -561,12 +553,6 @@ enum class StyleRubyAlign : uint8_t {
   SpaceAround,
 };
 
-// ruby-position, see nsStyleText
-enum class StyleRubyPosition : uint8_t {
-  Over,
-  Under,
-};
-
 // See nsStyleText
 enum class StyleTextSizeAdjust : uint8_t {
   None,
@@ -601,17 +587,6 @@ enum class StyleEmptyCells : uint8_t {
   Hide,
   Show,
 };
-
-// Constants for the caption-side property. Note that despite having "physical"
-// names, these are actually interpreted according to the table's writing-mode:
-// TOP and BOTTOM are treated as block-start and -end respectively, and LEFT
-// and RIGHT are treated as line-left and -right.
-#define NS_STYLE_CAPTION_SIDE_TOP 0
-#define NS_STYLE_CAPTION_SIDE_RIGHT 1
-#define NS_STYLE_CAPTION_SIDE_BOTTOM 2
-#define NS_STYLE_CAPTION_SIDE_LEFT 3
-#define NS_STYLE_CAPTION_SIDE_TOP_OUTSIDE 4
-#define NS_STYLE_CAPTION_SIDE_BOTTOM_OUTSIDE 5
 
 // constants for cell "scope" attribute
 #define NS_STYLE_CELL_SCOPE_ROW 0
@@ -657,6 +632,7 @@ enum class StyleWindowShadow : uint8_t {
   Menu,
   Tooltip,
   Sheet,
+  Cliprounded,  // clip border to popup border-radius
 };
 
 // dominant-baseline
@@ -780,9 +756,6 @@ enum class StyleMaskComposite : uint8_t {
   Intersect,
   Exclude
 };
-
-// See nsStyleText::mControlCharacterVisibility
-enum class StyleControlCharacterVisibility : uint8_t { Hidden = 0, Visible };
 
 // scroll-behavior
 enum class StyleScrollBehavior : uint8_t {

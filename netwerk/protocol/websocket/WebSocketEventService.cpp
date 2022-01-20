@@ -75,7 +75,7 @@ class WebSocketFrameRunnable final : public WebSocketBaseRunnable {
 
  private:
   virtual void DoWork(nsIWebSocketEventListener* aListener) override {
-    DebugOnly<nsresult> rv;
+    DebugOnly<nsresult> rv{};
     if (mFrameSent) {
       rv = aListener->FrameSent(mWebSocketSerialID, mFrame);
     } else {
@@ -339,8 +339,8 @@ void WebSocketEventService::AssociateWebSocketImplWithSerialID(
     nsIWebSocketImpl* aWebSocketImpl, uint32_t aWebSocketSerialID) {
   MOZ_ASSERT(NS_IsMainThread());
 
-  mWebSocketImplMap.Put(aWebSocketSerialID,
-                        do_GetWeakReference(aWebSocketImpl));
+  mWebSocketImplMap.InsertOrUpdate(aWebSocketSerialID,
+                                   do_GetWeakReference(aWebSocketImpl));
 }
 
 NS_IMETHODIMP
@@ -369,22 +369,25 @@ WebSocketEventService::AddListener(uint64_t aInnerWindowID,
 
   ++mCountListeners;
 
-  WindowListener* listener = mWindows.Get(aInnerWindowID);
-  if (!listener) {
-    listener = new WindowListener();
+  mWindows
+      .LookupOrInsertWith(
+          aInnerWindowID,
+          [&] {
+            auto listener = MakeUnique<WindowListener>();
 
-    if (IsChildProcess()) {
-      PWebSocketEventListenerChild* actor =
-          gNeckoChild->SendPWebSocketEventListenerConstructor(aInnerWindowID);
+            if (IsChildProcess()) {
+              PWebSocketEventListenerChild* actor =
+                  gNeckoChild->SendPWebSocketEventListenerConstructor(
+                      aInnerWindowID);
 
-      listener->mActor = static_cast<WebSocketEventListenerChild*>(actor);
-      MOZ_ASSERT(listener->mActor);
-    }
+              listener->mActor =
+                  static_cast<WebSocketEventListenerChild*>(actor);
+              MOZ_ASSERT(listener->mActor);
+            }
 
-    mWindows.Put(aInnerWindowID, listener);
-  }
-
-  listener->mListeners.AppendElement(aListener);
+            return listener;
+          })
+      ->mListeners.AppendElement(aListener);
 
   return NS_OK;
 }

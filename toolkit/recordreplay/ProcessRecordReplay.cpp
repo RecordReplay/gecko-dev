@@ -75,6 +75,8 @@ static InfallibleVector<JSFilter> gJSAsserts;
 
 static void (*gAttach)(const char* dispatch, const char* buildId);
 static void (*gSetApiKey)(const char* apiKey);
+static void (*gProfileExecution)(const char* path);
+static void (*gAddProfilerEvent)(const char* event, const char* json);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
 static void (*gRecordReplayBytes)(const char* why, void* buf, size_t size);
@@ -113,6 +115,14 @@ static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
 static void (*gInvalidateRecording)(const char* aFormat, ...);
 static void (*gSetCrashNote)(const char* aNote);
 static void (*gNotifyActivity)();
+static void (*gNewStableHashTable)(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate);
+static void (*gMoveStableHashTable)(const void* aTableSrc, const void* aTableDst);
+static void (*gDeleteStableHashTable)(const void* aTable);
+static uint32_t (*gLookupStableHashCode)(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
+                                         bool* aFoundMatch);
+static void (*gStableHashTableAddEntryForLastLookup)(const void* aTable, const void* aEntry);
+static void (*gStableHashTableMoveEntry)(const void* aTable, const void* aEntrySrc, const void* aEntryDst);
+static void (*gStableHashTableDeleteEntry)(const void* aTable, const void* aEntry);
 
 #ifndef XP_WIN
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
@@ -283,6 +293,26 @@ static const char* GetRecordingUnsupportedReason() {
 #endif
 }
 
+// If the profiler is enabled via the environment, start it.
+static void MaybeStartProfiling() {
+  const char* directory = getenv("RECORD_REPLAY_PROFILE_DIRECTORY");
+  if (!directory) {
+    return;
+  }
+
+  nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
+
+  gProfileExecution(path.get());
+  gIsProfiling = true;
+}
+
+// This can be set while recording to pretend we're not recording when other
+// places in gecko check to see if they need to change their behavior.
+// This is used with the record/replay profiler to understand the performance
+// effects of these changes to gecko's behavior. When this is set, the resulting
+// recording will not be usable.
+static bool gPretendNotRecording = false;
+
 extern "C" {
 
 MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
@@ -305,7 +335,9 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
       dispatchAddress.emplace(strcmp(arg, "*") ? arg : nullptr);
     }
   }
-  MOZ_RELEASE_ASSERT(dispatchAddress.isSome());
+  if (!dispatchAddress.isSome()) {
+    return;
+  }
 
   Maybe<std::string> apiKey;
   // this environment variable is set by server/actors/replay/connection.js
@@ -335,6 +367,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   LoadSymbol("RecordReplayAttach", gAttach);
   LoadSymbol("RecordReplaySetApiKey", gSetApiKey);
+  LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
+  LoadSymbol("RecordReplayAddProfilerEvent", gAddProfilerEvent);
   LoadSymbol("RecordReplayRecordCommandLineArguments",
              gRecordCommandLineArguments);
   LoadSymbol("RecordReplayValue", gRecordReplayValue);
@@ -374,6 +408,13 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayInvalidateRecording", gInvalidateRecording);
   LoadSymbol("RecordReplaySetCrashNote", gSetCrashNote, /* aOptional */ true);
   LoadSymbol("RecordReplayNotifyActivity", gNotifyActivity);
+  LoadSymbol("RecordReplayNewStableHashTable", gNewStableHashTable);
+  LoadSymbol("RecordReplayMoveStableHashTable", gMoveStableHashTable);
+  LoadSymbol("RecordReplayDeleteStableHashTable", gDeleteStableHashTable);
+  LoadSymbol("RecordReplayLookupStableHashCode", gLookupStableHashCode);
+  LoadSymbol("RecordReplayStableHashTableAddEntryForLastLookup", gStableHashTableAddEntryForLastLookup);
+  LoadSymbol("RecordReplayStableHashTableMoveEntry", gStableHashTableMoveEntry);
+  LoadSymbol("RecordReplayStableHashTableDeleteEntry", gStableHashTableDeleteEntry);
 
   if (apiKey) {
     gSetApiKey(apiKey->c_str());
@@ -405,9 +446,15 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   js::InitializeJS();
   InitializeGraphics();
 
-  gIsRecordingOrReplaying = true;
-  gIsRecording = !gRecordReplayIsReplaying();
-  gIsReplaying = gRecordReplayIsReplaying();
+  if (TestEnv("RECORD_REPLAY_PRETEND_NOT_RECORDING")) {
+    gPretendNotRecording = true;
+  }
+
+  if (!gPretendNotRecording) {
+    gIsRecordingOrReplaying = true;
+    gIsRecording = !gRecordReplayIsReplaying();
+    gIsReplaying = gRecordReplayIsReplaying();
+  }
 
   const char* logFile = getenv("RECORD_REPLAY_CRASH_LOG");
   if (logFile) {
@@ -434,7 +481,10 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
     gProcessRecording();
   }
 
-  ConfigureGecko();
+  if (!gPretendNotRecording) {
+    ConfigureGecko();
+  }
+  MaybeStartProfiling();
 }
 
 MOZ_EXPORT size_t
@@ -671,6 +721,12 @@ MOZ_EXPORT void RecordReplayInterface_InternalPopCrashNote() {
   }
 }
 
+MOZ_EXPORT void RecordReplayInterface_AddProfilerEvent(const char* aEvent, const char* aJSON) {
+  if (gIsProfiling) {
+    gAddProfilerEvent(aEvent, aJSON);
+  }
+}
+
 }  // extern "C"
 
 static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilters) {
@@ -735,7 +791,7 @@ static bool FilterMatches(const InfallibleVector<JSFilter>& aFilters,
 }
 
 const char* CurrentFirefoxVersion() {
-  return "86.0";
+  return "91.0";
 }
 
 static bool gHasCheckpoint = false;
@@ -887,6 +943,48 @@ static void RecordingIdCallback(const char* aRecordingId) {
   AutoPassThroughThreadEvents pt;
   const char* url = getenv("RECORD_REPLAY_URL");
   fprintf(stderr, "CreateRecording %s %s\n", aRecordingId, url ? url : "");
+}
+
+void NewStableHashTable(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate) {
+  if (IsRecordingOrReplaying()) {
+    gNewStableHashTable(aTable, aKeyEqualsEntry, aPrivate);
+  }
+}
+
+void MoveStableHashTable(const void* aTableSrc, const void* aTableDst) {
+  if (IsRecordingOrReplaying()) {
+    gMoveStableHashTable(aTableSrc, aTableDst);
+  }
+}
+
+void DeleteStableHashTable(const void* aTable) {
+  if (IsRecordingOrReplaying()) {
+    gDeleteStableHashTable(aTable);
+  }
+}
+
+uint32_t LookupStableHashCode(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
+                              bool* aFoundMatch) {
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
+  return gLookupStableHashCode(aTable, aKey, aUnstableHashCode, aFoundMatch);
+}
+
+void StableHashTableAddEntryForLastLookup(const void* aTable, const void* aEntry) {
+  if (IsRecordingOrReplaying()) {
+    gStableHashTableAddEntryForLastLookup(aTable, aEntry);
+  }
+}
+
+void StableHashTableMoveEntry(const void* aTable, const void* aEntrySrc, const void* aEntryDst) {
+  if (IsRecordingOrReplaying()) {
+    gStableHashTableMoveEntry(aTable, aEntrySrc, aEntryDst);
+  }
+}
+
+void StableHashTableDeleteEntry(const void* aTable, const void* aEntry) {
+  if (IsRecordingOrReplaying()) {
+    gStableHashTableDeleteEntry(aTable, aEntry);
+  }
 }
 
 }  // namespace recordreplay

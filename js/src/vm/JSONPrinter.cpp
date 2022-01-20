@@ -12,15 +12,9 @@
 
 #include <stdarg.h>
 
-#include "util/DoubleToString.h"
+#include "jsnum.h"
 
 using namespace js;
-
-JSONPrinter::~JSONPrinter() {
-  if (dtoaState_) {
-    DestroyDtoaState(dtoaState_);
-  }
-}
 
 void JSONPrinter::indent() {
   MOZ_ASSERT(indentLevel_ >= 0);
@@ -174,7 +168,7 @@ void JSONPrinter::property(const char* name, uint64_t value) {
   out_.printf("%" PRIu64, value);
 }
 
-#if defined(XP_DARWIN) || defined(__OpenBSD__)
+#if defined(XP_DARWIN) || defined(__OpenBSD__) || defined(__wasi__)
 void JSONPrinter::property(const char* name, size_t value) {
   propertyName(name);
   out_.printf("%zu", value);
@@ -189,21 +183,10 @@ void JSONPrinter::floatProperty(const char* name, double value,
     return;
   }
 
-  if (!dtoaState_) {
-    dtoaState_ = NewDtoaState();
-    if (!dtoaState_) {
-      out_.reportOutOfMemory();
-      return;
-    }
-  }
-
-  char buffer[DTOSTR_STANDARD_BUFFER_SIZE];
-  char* str = js_dtostr(dtoaState_, buffer, sizeof(buffer), DTOSTR_STANDARD,
-                        precision, value);
-  if (!str) {
-    out_.reportOutOfMemory();
-    return;
-  }
+  // Note: NumberToCString does not use the |cx| argument for base 10.
+  ToCStringBuf cbuf;
+  const char* str = NumberToCString(nullptr, &cbuf, value);
+  MOZ_ASSERT(str);
 
   property(name, str);
 }

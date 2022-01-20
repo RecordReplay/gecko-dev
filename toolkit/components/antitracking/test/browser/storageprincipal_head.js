@@ -19,18 +19,16 @@ this.StoragePrincipalHelper = {
       );
 
       await SpecialPowers.flushPrefEnv();
+      await setCookieBehaviorPref(BEHAVIOR_REJECT_TRACKER, runInPrivateWindow);
       await SpecialPowers.pushPrefEnv({
         set: [
           ["dom.storage_access.enabled", true],
-          [
-            "network.cookie.cookieBehavior",
-            Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
-          ],
           ["privacy.trackingprotection.enabled", false],
           ["privacy.trackingprotection.pbmode.enabled", false],
           ["privacy.trackingprotection.annotate_channels", true],
           ["privacy.storagePrincipal.enabledForTrackers", true],
           ["privacy.dynamic_firstparty.use_site", true],
+          ["dom.security.https_first_pbm", false],
           [
             "privacy.restrict3rdpartystorage.userInteractionRequiredForHosts",
             "tracking.example.org",

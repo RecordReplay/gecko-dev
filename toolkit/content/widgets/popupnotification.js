@@ -10,9 +10,9 @@
   class MozPopupNotification extends MozXULElement {
     static get inheritedAttributes() {
       return {
-        ".popup-notification-icon": "popupid,src=icon,class=iconclass",
+        ".popup-notification-icon": "popupid,src=icon,class=iconclass,hasicon",
         ".popup-notification-origin": "value=origin,tooltiptext=origin",
-        ".popup-notification-description": "popupid",
+        ".popup-notification-description": "popupid,id=descriptionid",
         ".popup-notification-description > span:first-of-type":
           "text=label,popupid",
         ".popup-notification-description > b:first-of-type":
@@ -30,7 +30,7 @@
           "onclick=learnmoreclick,href=learnmoreurl",
         ".popup-notification-warning": "hidden=warninghidden,text=warninglabel",
         ".popup-notification-button-container > .popup-notification-secondary-button":
-          "oncommand=secondarybuttoncommand,label=secondarybuttonlabel,accesskey=secondarybuttonaccesskey,hidden=secondarybuttonhidden",
+          "oncommand=secondarybuttoncommand,label=secondarybuttonlabel,accesskey=secondarybuttonaccesskey,hidden=secondarybuttonhidden,dropmarkerhidden",
         ".popup-notification-button-container > toolbarseparator":
           "hidden=dropmarkerhidden",
         ".popup-notification-dropmarker":

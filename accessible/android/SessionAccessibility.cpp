@@ -4,17 +4,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SessionAccessibility.h"
-#include "Accessible-inl.h"
+#include "LocalAccessible-inl.h"
 #include "AndroidUiThread.h"
 #include "DocAccessibleParent.h"
 #include "nsThreadUtils.h"
+#include "AccAttributes.h"
 #include "AccessibilityEvent.h"
 #include "HyperTextAccessible.h"
 #include "JavaBuiltins.h"
 #include "RootAccessibleWrap.h"
 #include "nsAccessibilityService.h"
 #include "nsViewManager.h"
-#include "nsIPersistentProperties2.h"
 
 #include "mozilla/PresShell.h"
 #include "mozilla/dom/BrowserParent.h"
@@ -161,7 +161,7 @@ void SessionAccessibility::Paste(int32_t aID) {
 }
 
 RefPtr<SessionAccessibility> SessionAccessibility::GetInstanceFor(
-    ProxyAccessible* aAccessible) {
+    RemoteAccessible* aAccessible) {
   auto tab =
       static_cast<dom::BrowserParent*>(aAccessible->Document()->Manager());
   dom::Element* frame = tab->GetOwnerElement();
@@ -170,12 +170,12 @@ RefPtr<SessionAccessibility> SessionAccessibility::GetInstanceFor(
     return nullptr;
   }
 
-  Accessible* chromeDoc = GetExistingDocAccessible(frame->OwnerDoc());
+  LocalAccessible* chromeDoc = GetExistingDocAccessible(frame->OwnerDoc());
   return chromeDoc ? GetInstanceFor(chromeDoc) : nullptr;
 }
 
 RefPtr<SessionAccessibility> SessionAccessibility::GetInstanceFor(
-    Accessible* aAccessible) {
+    LocalAccessible* aAccessible) {
   RootAccessible* rootAcc = aAccessible->RootAccessible();
   nsViewManager* vm = rootAcc->PresShellPtr()->GetViewManager();
   if (!vm) {
@@ -416,13 +416,11 @@ void SessionAccessibility::ReplaceFocusPathCache(
 
     if (aData.Length() == aAccessibles.Length()) {
       const BatchData& data = aData.ElementAt(i);
-      nsCOMPtr<nsIPersistentProperties> props =
-          AccessibleWrap::AttributeArrayToProperties(data.Attributes());
       auto bundle =
           acc->ToBundle(data.State(), data.Bounds(), data.ActionCount(),
                         data.Name(), data.TextValue(), data.DOMNodeID(),
                         data.Description(), data.CurValue(), data.MinValue(),
-                        data.MaxValue(), data.Step(), props);
+                        data.MaxValue(), data.Step(), data.Attributes());
       infos->SetElement(i, bundle);
     } else {
       infos->SetElement(i, acc->ToBundle());

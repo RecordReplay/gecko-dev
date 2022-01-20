@@ -13,6 +13,7 @@
 #include "mozilla/layers/RenderRootStateManager.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "imgIContainer.h"
+#include "ImageRegion.h"
 #include "nsContainerFrame.h"
 #include "nsIImageLoadingContent.h"
 #include "nsLayoutUtils.h"
@@ -20,6 +21,7 @@
 #include "SVGGeometryProperty.h"
 #include "SVGGeometryFrame.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_image.h"
 #include "mozilla/SVGContentUtils.h"
 #include "mozilla/SVGImageContext.h"
 #include "mozilla/SVGObserverUtils.h"
@@ -241,17 +243,21 @@ bool SVGImageFrame::GetIntrinsicImageDimensions(
     return false;
   }
 
+  ImageResolution resolution = mImageContainer->GetResolution();
+
   int32_t width, height;
   if (NS_FAILED(mImageContainer->GetWidth(&width))) {
     aSize.width = -1;
   } else {
     aSize.width = width;
+    resolution.ApplyXTo(aSize.width);
   }
 
   if (NS_FAILED(mImageContainer->GetHeight(&height))) {
     aSize.height = -1;
   } else {
     aSize.height = height;
+    resolution.ApplyYTo(aSize.height);
   }
 
   Maybe<AspectRatio> asp = mImageContainer->GetIntrinsicRatio();
@@ -272,6 +278,7 @@ bool SVGImageFrame::TransformContextForPainting(gfxContext* aGfxContext,
         nativeWidth == 0 || nativeHeight == 0) {
       return false;
     }
+    mImageContainer->GetResolution().ApplyTo(nativeWidth, nativeHeight);
     imageTransform = GetRasterImageTransform(nativeWidth, nativeHeight) *
                      ToMatrix(aTransform);
 
@@ -597,17 +604,22 @@ bool SVGImageFrame::CreateWebRenderCommands(
 
   Maybe<SVGImageContext> svgContext;
   if (mImageContainer->GetType() == imgIContainer::TYPE_VECTOR) {
+    if (StaticPrefs::image_svg_blob_image()) {
+      flags |= imgIContainer::FLAG_RECORD_BLOB;
+    }
     // Forward preserveAspectRatio to inner SVGs
     svgContext.emplace(Some(CSSIntSize::Truncate(width, height)),
                        Some(imgElem->mPreserveAspectRatio.GetAnimValue()));
   }
 
+  Maybe<ImageIntRegion> region;
   IntSize decodeSize = nsLayoutUtils::ComputeImageContainerDrawingParameters(
-      mImageContainer, this, destRect, aSc, flags, svgContext);
+      mImageContainer, this, destRect, clipRect, aSc, flags, svgContext,
+      region);
 
   RefPtr<layers::ImageContainer> container;
   ImgDrawResult drawResult = mImageContainer->GetImageContainerAtSize(
-      aManager->LayerManager(), decodeSize, svgContext, flags,
+      aManager->LayerManager(), decodeSize, svgContext, region, flags,
       getter_AddRefs(container));
 
   // While we got a container, it may not contain a fully decoded surface. If
@@ -634,8 +646,13 @@ bool SVGImageFrame::CreateWebRenderCommands(
     // failure will be due to resource constraints and fallback is unlikely to
     // help us. Hence we can ignore the return value from PushImage.
     if (container) {
-      aManager->CommandBuilder().PushImage(aItem, container, aBuilder,
-                                           aResources, aSc, destRect, clipRect);
+      if (flags & imgIContainer::FLAG_RECORD_BLOB) {
+        aManager->CommandBuilder().PushBlobImage(
+            aItem, container, aBuilder, aResources, destRect, clipRect);
+      } else {
+        aManager->CommandBuilder().PushImage(
+            aItem, container, aBuilder, aResources, aSc, destRect, clipRect);
+      }
     }
 
     nsDisplayItemGenericImageGeometry::UpdateDrawResult(aItem, drawResult);
@@ -674,6 +691,7 @@ nsIFrame* SVGImageFrame::GetFrameForPoint(const gfxPoint& aPoint) {
           nativeWidth == 0 || nativeHeight == 0) {
         return nullptr;
       }
+      mImageContainer->GetResolution().ApplyTo(nativeWidth, nativeHeight);
       Matrix viewBoxTM = SVGContentUtils::GetViewBoxTransform(
           rect.width, rect.height, 0, 0, nativeWidth, nativeHeight,
           element->mPreserveAspectRatio);

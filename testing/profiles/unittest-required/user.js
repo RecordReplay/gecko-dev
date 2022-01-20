@@ -92,7 +92,6 @@ user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);
 user_pref("dom.min_background_timeout_value", 1000);
 user_pref("dom.popup_maximum", -1);
 user_pref("dom.block_multiple_popups", false);
-user_pref("dom.presentation.testing.simulate-receiver", false);
 // Prevent connection to the push server for tests.
 user_pref("dom.push.connection.enabled", false);
 user_pref("dom.successive_dialog_time_limit", 0);
@@ -146,15 +145,10 @@ user_pref("identity.fxaccounts.remote.root", "https://{server}/");
 // Avoid idle-daily notifications, to avoid expensive operations that may
 // cause unexpected test timeouts.
 user_pref("idle.lastDailyNotification", -1);
-user_pref("javascript.options.showInConsole", true);
 // Make sure CSS error reporting is enabled for tests
 user_pref("layout.css.report_errors", true);
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
-// Disable all recommended Marionette preferences for Gecko tests.
-// The prefs recommended by Marionette are typically geared towards
-// consumer automation; not vendor testing.
-user_pref("marionette.prefs.recommended", false);
 user_pref("media.cache_size", 1000);
 user_pref("media.dormant-on-pause-timeout-ms", 0); // Enter dormant immediately without waiting for timeout.
 // Set the number of shmems the PChromiumCDM protocol pre-allocates to 0,
@@ -194,6 +188,10 @@ user_pref("network.sntp.pools", "{server}");
 // tests. This, like many things, will stop working correctly in 2038.
 user_pref("places.database.lastMaintenance", 2147483647);
 user_pref("privacy.trackingprotection.introURL", "http://{server}/trackingprotection/tour");
+// Disable all recommended Remote Protocol preferences for Gecko tests.
+// The prefs recommended by Remote Protocol are typically geared towards
+// consumer automation; not vendor testing.
+user_pref("remote.prefs.recommended", false);
 user_pref("security.default_personal_cert", "Select Automatically"); // Need to client auth test be w/o any dialogs
 // Existing tests don't wait for the notification button security delay
 user_pref("security.notification_enable_delay", 0);

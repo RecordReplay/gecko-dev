@@ -137,7 +137,8 @@ class CompositorWidget {
    */
   virtual already_AddRefed<gfx::DrawTarget> StartRemoteDrawing();
   virtual already_AddRefed<gfx::DrawTarget> StartRemoteDrawingInRegion(
-      LayoutDeviceIntRegion& aInvalidRegion, layers::BufferMode* aBufferMode) {
+      const LayoutDeviceIntRegion& aInvalidRegion,
+      layers::BufferMode* aBufferMode) {
     return StartRemoteDrawing();
   }
 
@@ -165,10 +166,10 @@ class CompositorWidget {
 
   /**
    * Some widgets (namely Gtk) may need clean up underlying surface
-   * before painting to draw transparent objects correctly.
+   * before painting to draw transparent objects correctly. Return
+   * the transparent region where this clearing is required.
    */
-  virtual void ClearBeforePaint(RefPtr<gfx::DrawTarget> aTarget,
-                                const LayoutDeviceIntRegion& aRegion) {}
+  virtual LayoutDeviceIntRegion GetTransparentRegion();
 
   /**
    * Called when shutting down the LayerManager to clean-up any cached
@@ -263,7 +264,7 @@ class CompositorWidget {
   virtual RefPtr<VsyncObserver> GetVsyncObserver() const;
 
   virtual WinCompositorWidget* AsWindows() { return nullptr; }
-  virtual GtkCompositorWidget* AsX11() { return nullptr; }
+  virtual GtkCompositorWidget* AsGTK() { return nullptr; }
   virtual AndroidCompositorWidget* AsAndroid() { return nullptr; }
 
   /**

@@ -102,6 +102,14 @@ static void ReleaseTemporarySurface(const void* aPixels, void* aContext) {
   }
 }
 
+static void ReleaseTemporaryMappedSurface(const void* aPixels, void* aContext) {
+  DataSourceSurface* surf = static_cast<DataSourceSurface*>(aContext);
+  if (surf) {
+    surf->Unmap();
+    surf->Release();
+  }
+}
+
 static void WriteRGBXFormat(uint8_t* aData, const IntSize& aSize,
                             const int32_t aStride, SurfaceFormat aFormat) {
   if (aFormat != SurfaceFormat::B8G8R8X8 || aSize.IsEmpty()) {
@@ -241,23 +249,42 @@ static sk_sp<SkImage> GetSkImageForSurface(SourceSurface* aSurface,
     return static_cast<SourceSurfaceSkia*>(aSurface)->GetImage(aLock);
   }
 
-  DataSourceSurface* surf = aSurface->GetDataSurface().take();
-  if (!surf) {
+  RefPtr<DataSourceSurface> dataSurface = aSurface->GetDataSurface();
+  if (!dataSurface) {
     gfxWarning() << "Failed getting DataSourceSurface for Skia image";
     return nullptr;
   }
 
+  DataSourceSurface::MappedSurface map;
+  SkImage::RasterReleaseProc releaseProc;
+  if (dataSurface->GetType() == SurfaceType::DATA_SHARED_WRAPPER) {
+    // Technically all surfaces should be mapped and unmapped explicitly but it
+    // appears SourceSurfaceSkia and DataSourceSurfaceWrapper have issues with
+    // this. For now, we just map SourceSurfaceSharedDataWrapper to ensure we
+    // don't unmap the data during the transaction (for blob images).
+    if (!dataSurface->Map(DataSourceSurface::MapType::READ, &map)) {
+      gfxWarning() << "Failed mapping DataSourceSurface for Skia image";
+      return nullptr;
+    }
+    releaseProc = ReleaseTemporaryMappedSurface;
+  } else {
+    map.mData = dataSurface->GetData();
+    map.mStride = dataSurface->Stride();
+    releaseProc = ReleaseTemporarySurface;
+  }
+
+  DataSourceSurface* surf = dataSurface.forget().take();
+
   // Skia doesn't support RGBX surfaces so ensure that the alpha value is opaque
   // white.
-  MOZ_ASSERT(VerifyRGBXCorners(surf->GetData(), surf->GetSize(), surf->Stride(),
+  MOZ_ASSERT(VerifyRGBXCorners(map.mData, surf->GetSize(), map.mStride,
                                surf->GetFormat(), aBounds, aMatrix));
 
   SkPixmap pixmap(MakeSkiaImageInfo(surf->GetSize(), surf->GetFormat()),
-                  surf->GetData(), surf->Stride());
-  sk_sp<SkImage> image =
-      SkImage::MakeFromRaster(pixmap, ReleaseTemporarySurface, surf);
+                  map.mData, map.mStride);
+  sk_sp<SkImage> image = SkImage::MakeFromRaster(pixmap, releaseProc, surf);
   if (!image) {
-    ReleaseTemporarySurface(nullptr, surf);
+    releaseProc(map.mData, surf);
     gfxDebug() << "Failed making Skia raster image for temporary surface";
   }
 
@@ -560,13 +587,25 @@ static void SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern,
 
       if (!pat.mSamplingRect.IsEmpty()) {
         image = ExtractSubset(image, pat.mSamplingRect);
+        if (!image) {
+          aPaint.setColor(SK_ColorTRANSPARENT);
+          break;
+        }
         mat.preTranslate(pat.mSamplingRect.X(), pat.mSamplingRect.Y());
       }
 
       SkTileMode xTile = ExtendModeToTileMode(pat.mExtendMode, Axis::X_AXIS);
       SkTileMode yTile = ExtendModeToTileMode(pat.mExtendMode, Axis::Y_AXIS);
 
-      aPaint.setShader(image->makeShader(xTile, yTile, &mat));
+      sk_sp<SkShader> shader = image->makeShader(xTile, yTile, &mat);
+      if (shader) {
+        aPaint.setShader(shader);
+      } else {
+        gfxDebug() << "Failed creating Skia surface shader: x-tile="
+                   << (int)xTile << " y-tile=" << (int)yTile
+                   << " matrix=" << (mat.isFinite() ? "finite" : "non-finite");
+        aPaint.setColor(SK_ColorTRANSPARENT);
+      }
 
       if (pat.mSamplingFilter == SamplingFilter::POINT) {
         aPaint.setFilterQuality(kNone_SkFilterQuality);
@@ -679,7 +718,7 @@ void DrawTargetSkia::DrawSurface(SourceSurface* aSurface, const Rect& aDest,
   }
 
   SkRect destRect = RectToSkRect(aDest);
-  SkRect sourceRect = RectToSkRect(aSource);
+  SkRect sourceRect = RectToSkRect(aSource - aSurface->GetRect().TopLeft());
   bool forceGroup =
       image->isAlphaOnly() && aOptions.mCompositionOp != CompositionOp::OP_OVER;
 
@@ -1247,7 +1286,7 @@ bool DrawTargetSkia::FillGlyphsWithCG(ScaledFont* aFont,
 
   // Calculate the area of the text we just drew
   auto* bboxes = new CGRect[aBuffer.mNumGlyphs];
-  CTFontGetBoundingRectsForGlyphs(macFont->mCTFont, kCTFontDefaultOrientation,
+  CTFontGetBoundingRectsForGlyphs(macFont->mCTFont, kCTFontOrientationDefault,
                                   glyphs.begin(), bboxes, aBuffer.mNumGlyphs);
   CGRect extents =
       ComputeGlyphsExtents(bboxes, positions.begin(), aBuffer.mNumGlyphs, 1.0f);
@@ -1576,7 +1615,7 @@ already_AddRefed<DrawTarget> DrawTargetSkia::CreateSimilarDrawTarget(
 bool DrawTargetSkia::CanCreateSimilarDrawTarget(const IntSize& aSize,
                                                 SurfaceFormat aFormat) const {
   auto minmaxPair = std::minmax(aSize.width, aSize.height);
-  return minmaxPair.first >= 0 &&
+  return minmaxPair.first > 0 &&
          size_t(minmaxPair.second) < GetMaxSurfaceSize();
 }
 

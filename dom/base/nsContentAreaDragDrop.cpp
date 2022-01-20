@@ -80,8 +80,8 @@ class MOZ_STACK_CLASS DragDataProducer {
                                             nsIContent** outImageOrLinkNode,
                                             bool* outDragSelectedText);
   static already_AddRefed<nsIContent> FindParentLinkNode(nsIContent* inNode);
-  static MOZ_MUST_USE nsresult GetAnchorURL(nsIContent* inNode,
-                                            nsAString& outURL);
+  [[nodiscard]] static nsresult GetAnchorURL(nsIContent* inNode,
+                                             nsAString& outURL);
   static void GetNodeString(nsIContent* inNode, nsAString& outNodeString);
   static void CreateLinkText(const nsAString& inURL, const nsAString& inText,
                              nsAString& outLinkText);
@@ -588,7 +588,8 @@ nsresult DragDataProducer::Produce(DataTransfer* aDataTransfer, bool* aCanDrag,
       // Note that while <object> elements implement nsIFormControl, we should
       // really allow dragging them if they happen to be images.
       nsCOMPtr<nsIFormControl> form(do_QueryInterface(mTarget));
-      if (form && !mIsAltKeyPressed && form->ControlType() != NS_FORM_OBJECT) {
+      if (form && !mIsAltKeyPressed &&
+          form->ControlType() != FormControlType::Object) {
         *aCanDrag = false;
         return NS_OK;
       }

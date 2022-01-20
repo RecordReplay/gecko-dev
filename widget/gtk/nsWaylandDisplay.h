@@ -14,8 +14,11 @@
 #include "mozilla/widget/gbm.h"
 #include "mozilla/widget/gtk-primary-selection-client-protocol.h"
 #include "mozilla/widget/idle-inhibit-unstable-v1-client-protocol.h"
+#include "mozilla/widget/relative-pointer-unstable-v1-client-protocol.h"
+#include "mozilla/widget/pointer-constraints-unstable-v1-client-protocol.h"
 #include "mozilla/widget/linux-dmabuf-unstable-v1-client-protocol.h"
 #include "mozilla/widget/primary-selection-unstable-v1-client-protocol.h"
+#include "mozilla/widget/viewporter-client-protocol.h"
 
 namespace mozilla {
 namespace widget {
@@ -48,7 +51,7 @@ class nsWaylandDisplay {
   wl_data_device_manager* GetDataDeviceManager(void) {
     return mDataDeviceManager;
   };
-  wl_seat* GetSeat(void) { return mSeat; };
+  wl_seat* GetSeat(void);
   wl_shm* GetShm(void) { return mShm; };
   gtk_primary_selection_device_manager* GetPrimarySelectionDeviceManagerGtk(
       void) {
@@ -61,6 +64,13 @@ class nsWaylandDisplay {
   zwp_idle_inhibit_manager_v1* GetIdleInhibitManager(void) {
     return mIdleInhibitManager;
   }
+  wp_viewporter* GetViewporter(void) { return mViewporter; };
+  zwp_relative_pointer_manager_v1* GetRelativePointerManager(void) {
+    return mRelativePointerManager;
+  }
+  zwp_pointer_constraints_v1* GetPointerConstraints(void) {
+    return mPointerConstraints;
+  }
 
   bool IsMainThreadDisplay() { return mEventQueue == nullptr; }
 
@@ -68,12 +78,15 @@ class nsWaylandDisplay {
   void SetCompositor(wl_compositor* aCompositor);
   void SetSubcompositor(wl_subcompositor* aSubcompositor);
   void SetDataDeviceManager(wl_data_device_manager* aDataDeviceManager);
-  void SetSeat(wl_seat* aSeat);
   void SetPrimarySelectionDeviceManager(
       gtk_primary_selection_device_manager* aPrimarySelectionDeviceManager);
   void SetPrimarySelectionDeviceManager(
       zwp_primary_selection_device_manager_v1* aPrimarySelectionDeviceManager);
   void SetIdleInhibitManager(zwp_idle_inhibit_manager_v1* aIdleInhibitManager);
+  void SetViewporter(wp_viewporter* aViewporter);
+  void SetRelativePointerManager(
+      zwp_relative_pointer_manager_v1* aRelativePointerManager);
+  void SetPointerConstraints(zwp_pointer_constraints_v1* aPointerConstraints);
 
   bool IsExplicitSyncEnabled() { return mExplicitSync; }
 
@@ -86,13 +99,15 @@ class nsWaylandDisplay {
   wl_data_device_manager* mDataDeviceManager;
   wl_compositor* mCompositor;
   wl_subcompositor* mSubcompositor;
-  wl_seat* mSeat;
   wl_shm* mShm;
   wl_callback* mSyncCallback;
   gtk_primary_selection_device_manager* mPrimarySelectionDeviceManagerGtk;
   zwp_primary_selection_device_manager_v1* mPrimarySelectionDeviceManagerZwpV1;
   zwp_idle_inhibit_manager_v1* mIdleInhibitManager;
+  zwp_relative_pointer_manager_v1* mRelativePointerManager;
+  zwp_pointer_constraints_v1* mPointerConstraints;
   wl_registry* mRegistry;
+  wp_viewporter* mViewporter;
   bool mExplicitSync;
 };
 

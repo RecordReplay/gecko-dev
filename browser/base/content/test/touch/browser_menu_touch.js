@@ -130,6 +130,12 @@ add_task(async function test_main_menu_touch() {
 add_task(async function test_page_action_panel_touch() {
   // The page action menu only appears on a web page.
   await BrowserTestUtils.withNewTab("https://example.com", async function() {
+    // The page actions button is not normally visible, so we must
+    // unhide it.
+    BrowserPageActions.mainButtonNode.style.visibility = "visible";
+    registerCleanupFunction(() => {
+      BrowserPageActions.mainButtonNode.style.removeProperty("visibility");
+    });
     let target = document.getElementById("pageActionButton");
     await openAndCheckLazyMenu("pageActionPanel", target);
   });

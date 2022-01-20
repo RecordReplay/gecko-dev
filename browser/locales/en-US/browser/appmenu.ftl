@@ -4,15 +4,45 @@
 
 ## App Menu
 
-appmenuitem-update-banner =
+appmenuitem-update-banner3 =
     .label-update-downloading = Downloading { -brand-shorter-name } update
-appmenuitem-protection-dashboard-title = Protections Dashboard
-appmenuitem-customize-mode =
-    .label = Customize…
+    .label-update-available = Update available — download now
+    .label-update-manual = Update available — download now
+    .label-update-unsupported = Unable to update — system incompatible
+    .label-update-restart = Update available — restart now
+
+appmenuitem-protection-dashboard-title = Protections dashboard
+appmenuitem-new-tab =
+    .label = New tab
 appmenuitem-new-window =
-    .label = New Window
+    .label = New window
 appmenuitem-new-private-window =
-    .label = New Private Window
+    .label = New private window
+appmenuitem-passwords =
+    .label = Passwords
+appmenuitem-addons-and-themes =
+    .label = Add-ons and themes
+appmenuitem-find-in-page =
+    .label = Find in page…
+appmenuitem-more-tools =
+    .label = More tools
+appmenuitem-exit2 =
+    .label =
+        { PLATFORM() ->
+            [linux] Quit
+           *[other] Exit
+        }
+appmenu-menu-button-closed2 =
+    .tooltiptext = Open Application Menu
+    .label = { -brand-short-name }
+appmenu-menu-button-opened2 =
+    .tooltiptext = Close Application Menu
+    .label = { -brand-short-name }
+
+# Settings is now used to access the browser settings across all platforms,
+# instead of Options or Preferences.
+appmenuitem-settings =
+    .label = Settings
 
 ## Zoom and Fullscreen Controls
 
@@ -21,15 +51,31 @@ appmenuitem-zoom-enlarge =
 appmenuitem-zoom-reduce =
   .label = Zoom out
 appmenuitem-fullscreen =
-  .label = Full Screen
+  .label = Full screen
 
 ## Firefox Account toolbar button and Sync panel in App menu.
 
-fxa-toolbar-sync-now =
-    .label = Sync Now
+appmenu-remote-tabs-sign-into-sync =
+  .label = Sign in to sync…
+appmenu-remote-tabs-turn-on-sync =
+  .label = Turn on sync…
+
+appmenuitem-fxa-toolbar-sync-now2 = Sync now
+appmenuitem-fxa-manage-account = Manage account
+appmenu-fxa-header2 = { -fxaccount-brand-name(capitalization: "sentence") }
+# Variables
+# $time (string) - Localized relative time since last sync (e.g. 1 second ago,
+# 3 hours ago, etc.)
+appmenu-fxa-last-sync = Last synced { $time }
+    .label = Last synced { $time }
+appmenu-fxa-sync-and-save-data2 = Sync and save data
+appmenu-fxa-signed-in-label = Sign In
+appmenu-fxa-setup-sync =
+    .label = Turn On Syncing…
+appmenu-fxa-show-more-tabs = Show More Tabs
 
 appmenuitem-save-page =
-    .label = Save Page As…
+    .label = Save page as…
 
 ## What's New panel in App menu.
 
@@ -97,51 +143,68 @@ profiler-popup-capture-shortcut =
      *[other] Ctrl+Shift+2
   }
 
+## History panel
+
+appmenu-manage-history =
+    .label = Manage history
+appmenu-reopen-all-tabs = Reopen all tabs
+appmenu-reopen-all-windows = Reopen all windows
+appmenu-restore-session =
+    .label = Restore previous session
+appmenu-clear-history =
+    .label = Clear recent history…
+appmenu-recent-history-subheader = Recent history
+appmenu-recently-closed-tabs =
+    .label = Recently closed tabs
+appmenu-recently-closed-windows =
+    .label = Recently closed windows
+
 ## Help panel
 
+appmenu-help-header =
+    .title = { -brand-shorter-name } help
 appmenu-about =
     .label = About { -brand-shorter-name }
     .accesskey = A
-appmenu-help-product =
-    .label = { -brand-shorter-name } Help
-    .accesskey = H
-appmenu-help-show-tour =
-    .label = { -brand-shorter-name } Tour
-    .accesskey = o
-appmenu-help-import-from-another-browser =
-    .label = Import From Another Browser…
-    .accesskey = I
-appmenu-help-keyboard-shortcuts =
-    .label = Keyboard Shortcuts
-    .accesskey = K
-appmenu-help-troubleshooting-info =
-    .label = Troubleshooting Information
-    .accesskey = T
+appmenu-get-help =
+    .label = Get help
+    .accesskey = h
+appmenu-help-more-troubleshooting-info =
+    .label = More troubleshooting information
+    .accesskey = t
+appmenu-help-report-site-issue =
+    .label = Report site issue…
 appmenu-help-feedback-page =
-    .label = Submit Feedback…
+    .label = Submit feedback…
     .accesskey = S
 
-## appmenu-help-safe-mode-without-addons and appmenu-help-safe-mode-without-addons
+## appmenu-help-enter-troubleshoot-mode and appmenu-help-exit-troubleshoot-mode
 ## are mutually exclusive, so it's possible to use the same accesskey for both.
 
-appmenu-help-safe-mode-without-addons =
-    .label = Restart With Add-ons Disabled…
-    .accesskey = R
-appmenu-help-safe-mode-with-addons =
-    .label = Restart With Add-ons Enabled
-    .accesskey = R
+appmenu-help-enter-troubleshoot-mode2 =
+    .label = Troubleshoot Mode…
+    .accesskey = M
+appmenu-help-exit-troubleshoot-mode =
+    .label = Turn Troubleshoot Mode off
+    .accesskey = M
 
 ## appmenu-help-report-deceptive-site and appmenu-help-not-deceptive
 ## are mutually exclusive, so it's possible to use the same accesskey for both.
 
 appmenu-help-report-deceptive-site =
-    .label = Report Deceptive Site…
-    .accesskey = D
+    .label = Report deceptive site…
+    .accesskey = d
 appmenu-help-not-deceptive =
-    .label = This Isn’t a Deceptive Site…
-    .accesskey = D
+    .label = This isn’t a deceptive site…
+    .accesskey = d
 
-##
+## More Tools
 
-appmenu-help-check-for-update =
-    .label = Check for Updates…
+appmenu-customizetoolbar =
+    .label = Customize toolbar…
+appmenu-taskmanager =
+    .label = Task Manager
+
+appmenu-developer-tools-subheader = Browser tools
+appmenu-developer-tools-extensions =
+    .label = Extensions for developers

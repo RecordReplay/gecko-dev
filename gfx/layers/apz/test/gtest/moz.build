@@ -7,10 +7,12 @@
 UNIFIED_SOURCES += [
     "TestBasic.cpp",
     "TestEventRegions.cpp",
+    "TestEventResult.cpp",
     "TestFlingAcceleration.cpp",
     "TestGestureDetector.cpp",
     "TestHitTesting.cpp",
     "TestInputQueue.cpp",
+    "TestOverscroll.cpp",
     "TestPanning.cpp",
     "TestPinching.cpp",
     "TestScrollHandoff.cpp",

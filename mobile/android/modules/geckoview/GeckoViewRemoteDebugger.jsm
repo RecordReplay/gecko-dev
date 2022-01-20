@@ -53,16 +53,6 @@ var GeckoViewRemoteDebugger = {
     debug`onInit`;
     this._isEnabled = false;
     this._usbDebugger = new USBRemoteDebugger();
-
-    // This lets Marionette start listening (when it's enabled).  Both
-    // GeckoView and Marionette do most of their initialization in
-    // "profile-after-change", and there is no order enforced between
-    // them.  Therefore we defer asking Marionette to startup until
-    // after all "profile-after-change" handlers (including this one)
-    // have completed.
-    Services.tm.dispatchToMainThread(() => {
-      Services.obs.notifyObservers(null, "marionette-startup-requested");
-    });
   },
 
   onEnable() {

@@ -116,11 +116,16 @@ android {
         // This makes no sense for GeckoView and should be removed as soon as possible.
         buildConfigField 'boolean', 'MOZ_CRASHREPORTER', mozconfig.substs.MOZ_CRASHREPORTER ? 'true' : 'false';
 
+        buildConfigField 'int', 'MOZ_ANDROID_CONTENT_SERVICE_COUNT', mozconfig.substs.MOZ_ANDROID_CONTENT_SERVICE_COUNT;
+
         // Official corresponds, roughly, to whether this build is performed on
         // Mozilla's continuous integration infrastructure. You should disable
         // developer-only functionality when this flag is set.
         // This makes no sense for GeckoView and should be removed as soon as possible.
         buildConfigField 'boolean', 'MOZILLA_OFFICIAL', mozconfig.substs.MOZILLA_OFFICIAL ? 'true' : 'false';
+
+        // This env variable signifies whether we are running an isolated process build.
+        buildConfigField 'boolean', 'MOZ_ANDROID_CONTENT_SERVICE_ISOLATED_PROCESS', mozconfig.substs.MOZ_ANDROID_CONTENT_SERVICE_ISOLATED_PROCESS ? 'true' : 'false';
     }
 
     project.configureProductFlavors.delegate = it
@@ -231,7 +236,6 @@ dependencies {
 
     implementation "androidx.annotation:annotation:1.1.0"
     implementation "androidx.legacy:legacy-support-v4:1.0.0"
-    implementation "androidx.palette:palette:1.0.0"
 
     implementation "com.google.android.gms:play-services-fido:18.1.0"
     implementation "org.yaml:snakeyaml:1.24:android"

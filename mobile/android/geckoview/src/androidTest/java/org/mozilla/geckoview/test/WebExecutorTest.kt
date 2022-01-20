@@ -130,7 +130,7 @@ class WebExecutorTest {
         assertThat("Headers should match", body.getJSONObject("headers").getString("Header1"), equalTo("Value"))
         assertThat("Headers should match", body.getJSONObject("headers").getString("Header2"), equalTo("Value1, Value2"))
         assertThat("Headers should match", body.getJSONObject("headers").getString("Content-Type"), equalTo("text/plain"))
-        assertThat("Referrer should match", body.getJSONObject("headers").getString("Referer"), equalTo(referrer))
+        assertThat("Referrer should match", body.getJSONObject("headers").getString("Referer"), equalTo("http://foo/"))
         assertThat("Data should match", body.getString("data"), equalTo(bodyString));
     }
 
@@ -443,6 +443,23 @@ class WebExecutorTest {
                 assertThat("Message should match",
                         e.message,
                         equalTo("Unsupported URI scheme: $truncated"))
+            }
+        }
+
+        val legal = listOf(
+            "http://$TEST_ENDPOINT\n",
+            "http://$TEST_ENDPOINT/🥲",
+            "http://$TEST_ENDPOINT/abc"
+        )
+
+        for (uri in legal) {
+            try {
+                fetch(WebRequest(uri))
+                throw IllegalStateException("fetch() should have thrown")
+            } catch (e: WebRequestError) {
+                assertThat("Request should pass initial validation.",
+                        true,
+                        equalTo(true))
             }
         }
     }

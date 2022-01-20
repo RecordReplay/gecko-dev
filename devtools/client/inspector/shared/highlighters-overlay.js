@@ -118,9 +118,8 @@ class HighlightersOverlay {
    */
   constructor(inspector) {
     this.inspector = inspector;
-    this.inspectorFront = this.inspector.inspectorFront;
     this.store = this.inspector.store;
-    this.target = this.inspector.currentTarget;
+
     this.telemetry = this.inspector.telemetry;
     this.maxGridHighlighters = Services.prefs.getIntPref(
       "devtools.gridinspector.maxHighlighters"
@@ -213,13 +212,12 @@ class HighlightersOverlay {
     // Add inspector events, not specific to a given view.
     this.inspector.on("markupmutation", this.onMarkupMutation);
 
-    this.resourceWatcher = this.inspector.toolbox.resourceWatcher;
-    this.resourceWatcher.watchResources(
-      [this.resourceWatcher.TYPES.ROOT_NODE],
+    this.resourceCommand = this.inspector.toolbox.resourceCommand;
+    this.resourceCommand.watchResources(
+      [this.resourceCommand.TYPES.ROOT_NODE],
       { onAvailable: this._onResourceAvailable }
     );
 
-    this.target.on("will-navigate", this.onWillNavigate);
     this.walkerEventListener = new WalkerEventListener(this.inspector, {
       "display-change": this.onDisplayChange,
     });
@@ -227,6 +225,12 @@ class HighlightersOverlay {
     EventEmitter.decorate(this);
   }
 
+  get inspectorFront() {
+    return this.inspector.inspectorFront;
+  }
+  get target() {
+    return this.inspector.currentTarget;
+  }
   // FIXME: Shim for HighlightersOverlay.parentGridHighlighters
   // Remove after updating tests to stop accessing this map directly. Bug 1683153
   get parentGridHighlighters() {
@@ -1367,8 +1371,7 @@ class HighlightersOverlay {
       return;
     }
 
-    const inspectorFront = await this.target.getFront("inspector");
-    const nodeFront = await inspectorFront.walker.findNodeFront(selectors);
+    const nodeFront = await this.inspectorFront.walker.findNodeFront(selectors);
 
     if (nodeFront) {
       await showFunction(nodeFront, options);
@@ -1741,7 +1744,12 @@ class HighlightersOverlay {
    */
   async _onResourceAvailable(resources) {
     for (const resource of resources) {
-      if (resource.resourceType !== this.resourceWatcher.TYPES.ROOT_NODE) {
+      if (
+        resource.resourceType !== this.resourceCommand.TYPES.ROOT_NODE ||
+        // It might happen that the ROOT_NODE resource (which is a Front) is already
+        // destroyed, and in such case we want to ignore it.
+        resource.isDestroyed()
+      ) {
         // Only handle root-node resources.
         // Note that we could replace this with DOCUMENT_EVENT resources, since
         // the actual root-node resource is not used here.
@@ -1883,12 +1891,11 @@ class HighlightersOverlay {
    */
   destroy() {
     this.inspector.off("markupmutation", this.onMarkupMutation);
-    this.resourceWatcher.unwatchResources(
-      [this.resourceWatcher.TYPES.ROOT_NODE],
+    this.resourceCommand.unwatchResources(
+      [this.resourceCommand.TYPES.ROOT_NODE],
       { onAvailable: this._onResourceAvailable }
     );
 
-    this.target.off("will-navigate", this.onWillNavigate);
     this.walkerEventListener.destroy();
     this.walkerEventListener = null;
 
@@ -1898,10 +1905,8 @@ class HighlightersOverlay {
     this._lastHovered = null;
 
     this.inspector = null;
-    this.inspectorFront = null;
     this.state = null;
     this.store = null;
-    this.target = null;
     this.telemetry = null;
 
     this.geometryEditorHighlighterShown = null;

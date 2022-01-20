@@ -47,11 +47,6 @@
 
 #include "nsWrapperCacheInlines.h"
 
-// XXX(Bug 1674080) Remove this and let Codegen.py generate it instead when
-// needed.
-#include "mozilla/BasePrincipal.h"
-#include "nsJSPrincipals.h"
-
 class nsGlobalWindowInner;
 class nsGlobalWindowOuter;
 class nsIInterfaceRequestor;
@@ -95,7 +90,7 @@ inline bool IsDOMClass(const JSClass* clasp) {
 
 // Return true if the JSClass is used for non-proxy DOM objects.
 inline bool IsNonProxyDOMClass(const JSClass* clasp) {
-  return IsDOMClass(clasp) && !clasp->isProxy();
+  return IsDOMClass(clasp) && clasp->isNativeObject();
 }
 
 // Returns true if the JSClass is used for DOM interface and interface
@@ -672,7 +667,7 @@ struct JSNativeHolder {
   const NativePropertyHooks* mPropertyHooks;
 };
 
-struct NamedConstructor {
+struct LegacyFactoryFunction {
   const char* mName;
   const JSNativeHolder mHolder;
   unsigned mNargs;
@@ -712,6 +707,14 @@ struct NamedConstructor {
  *                  on objects in chrome compartments. This must be null if the
  *                  interface doesn't have any ChromeOnly properties or if the
  *                  object is being created in non-chrome compartment.
+ * name the name to use for 1) the WebIDL class string, which is the value
+ *      that's used for @@toStringTag, 2) the name property for interface
+ *      objects and 3) the property on the global object that would be set to
+ *      the interface object. In general this is the interface identifier.
+ *      LegacyNamespace would expect something different for 1), but we don't
+ *      support that. The class string for default iterator objects is not
+ *      usable as 2) or 3), but default iterator objects don't have an interface
+ *      object.
  * defineOnGlobal controls whether properties should be defined on the given
  *                global for the interface object (if any) and named
  *                constructors (if any) for this interface.  This can be
@@ -732,19 +735,16 @@ struct NamedConstructor {
  * |name|, which must also be non-null.
  */
 // clang-format on
-void CreateInterfaceObjects(JSContext* cx, JS::Handle<JSObject*> global,
-                            JS::Handle<JSObject*> protoProto,
-                            const JSClass* protoClass,
-                            JS::Heap<JSObject*>* protoCache,
-                            JS::Handle<JSObject*> interfaceProto,
-                            const JSClass* constructorClass, unsigned ctorNargs,
-                            const NamedConstructor* namedConstructors,
-                            JS::Heap<JSObject*>* constructorCache,
-                            const NativeProperties* regularProperties,
-                            const NativeProperties* chromeOnlyProperties,
-                            const char* name, bool defineOnGlobal,
-                            const char* const* unscopableNames, bool isGlobal,
-                            const char* const* legacyWindowAliases);
+void CreateInterfaceObjects(
+    JSContext* cx, JS::Handle<JSObject*> global,
+    JS::Handle<JSObject*> protoProto, const JSClass* protoClass,
+    JS::Heap<JSObject*>* protoCache, JS::Handle<JSObject*> constructorProto,
+    const JSClass* constructorClass, unsigned ctorNargs,
+    const LegacyFactoryFunction* namedConstructors,
+    JS::Heap<JSObject*>* constructorCache, const NativeProperties* properties,
+    const NativeProperties* chromeOnlyProperties, const char* name,
+    bool defineOnGlobal, const char* const* unscopableNames, bool isGlobal,
+    const char* const* legacyWindowAliases, bool isNamespace);
 
 /**
  * Define the properties (regular and chrome-only) on obj.
@@ -764,16 +764,18 @@ bool DefineProperties(JSContext* cx, JS::Handle<JSObject*> obj,
                       const NativeProperties* chromeOnlyProperties);
 
 /*
- * Define the unforgeable methods on an object.
+ * Define the legacy unforgeable methods on an object.
  */
-bool DefineUnforgeableMethods(JSContext* cx, JS::Handle<JSObject*> obj,
-                              const Prefable<const JSFunctionSpec>* props);
+bool DefineLegacyUnforgeableMethods(
+    JSContext* cx, JS::Handle<JSObject*> obj,
+    const Prefable<const JSFunctionSpec>* props);
 
 /*
- * Define the unforgeable attributes on an object.
+ * Define the legacy unforgeable attributes on an object.
  */
-bool DefineUnforgeableAttributes(JSContext* cx, JS::Handle<JSObject*> obj,
-                                 const Prefable<const JSPropertySpec>* props);
+bool DefineLegacyUnforgeableAttributes(
+    JSContext* cx, JS::Handle<JSObject*> obj,
+    const Prefable<const JSPropertySpec>* props);
 
 #define HAS_MEMBER_TYPEDEFS \
  private:                   \
@@ -1769,8 +1771,6 @@ static inline bool AtomizeAndPinJSString(JSContext* cx, jsid& id,
   return false;
 }
 
-bool InitIds(JSContext* cx, const NativeProperties* properties);
-
 void GetInterfaceImpl(JSContext* aCx, nsIInterfaceRequestor* aRequestor,
                       nsWrapperCache* aCache, JS::Handle<JS::Value> aIID,
                       JS::MutableHandle<JS::Value> aRetval,
@@ -1860,9 +1860,9 @@ static inline bool ConvertJSValueToString(
   return ConvertJSValueToString(cx, v, eStringify, eStringify, result);
 }
 
-MOZ_MUST_USE bool NormalizeUSVString(nsAString& aString);
+[[nodiscard]] bool NormalizeUSVString(nsAString& aString);
 
-MOZ_MUST_USE bool NormalizeUSVString(
+[[nodiscard]] bool NormalizeUSVString(
     binding_detail::FakeString<char16_t>& aString);
 
 template <typename T>
@@ -1884,11 +1884,11 @@ static inline bool ConvertJSValueToUSVString(
 template <typename T>
 inline bool ConvertIdToString(JSContext* cx, JS::HandleId id, T& result,
                               bool& isSymbol) {
-  if (MOZ_LIKELY(JSID_IS_STRING(id))) {
-    if (!AssignJSString(cx, result, JSID_TO_STRING(id))) {
+  if (MOZ_LIKELY(id.isString())) {
+    if (!AssignJSString(cx, result, id.toString())) {
       return false;
     }
-  } else if (JSID_IS_SYMBOL(id)) {
+  } else if (id.isSymbol()) {
     isSymbol = true;
     return true;
   } else {
@@ -2211,10 +2211,11 @@ bool Constructor(JSContext* cx, unsigned argc, JS::Value* vp);
  * obj is the target object of the Xray, a binding's instance object or a
  *     interface or interface prototype object.
  */
-bool XrayResolveOwnProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
-                            JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
-                            JS::MutableHandle<JS::PropertyDescriptor> desc,
-                            bool& cacheOnHolder);
+bool XrayResolveOwnProperty(
+    JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<JSObject*> obj,
+    JS::Handle<jsid> id,
+    JS::MutableHandle<mozilla::Maybe<JS::PropertyDescriptor>> desc,
+    bool& cacheOnHolder);
 
 /**
  * Define a property on obj through an Xray wrapper.
@@ -2302,6 +2303,20 @@ bool XrayDeleteNamedProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
                              JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
                              JS::ObjectOpResult& opresult);
 
+namespace binding_detail {
+
+// Default implementations of the NativePropertyHooks' mResolveOwnProperty and
+// mEnumerateOwnProperties for WebIDL bindings implemented as proxies.
+bool ResolveOwnProperty(
+    JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<JSObject*> obj,
+    JS::Handle<jsid> id,
+    JS::MutableHandle<mozilla::Maybe<JS::PropertyDescriptor>> desc);
+bool EnumerateOwnProperties(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                            JS::Handle<JSObject*> obj,
+                            JS::MutableHandleVector<jsid> props);
+
+}  // namespace binding_detail
+
 /**
  * Get the object which should be used to cache the return value of a property
  * getter in the case of a [Cached] or [StoreInSlot] property.  `obj` is the
@@ -2345,7 +2360,7 @@ inline bool UseDOMXray(JSObject* obj) {
 
 inline bool IsDOMConstructor(JSObject* obj) {
   if (JS_IsNativeFunction(obj, dom::Constructor)) {
-    // NamedConstructor, like Image
+    // LegacyFactoryFunction, like Image
     return true;
   }
 
@@ -2597,14 +2612,15 @@ inline size_t BindingJSObjectMallocBytes(void* aNativePtr) { return 0; }
 
 // The BindingJSObjectCreator class is supposed to be used by a caller that
 // wants to create and initialise a binding JSObject. After initialisation has
-// been successfully completed it should call ForgetObject().
-// The BindingJSObjectCreator object will root the JSObject until ForgetObject()
-// is called on it. If the native object for the binding is refcounted it will
-// also hold a strong reference to it, that reference is transferred to the
-// JSObject (which holds the native in a slot) when ForgetObject() is called. If
-// the BindingJSObjectCreator object is destroyed and ForgetObject() was never
-// called on it then the JSObject's slot holding the native will be set to
-// undefined, and for a refcounted native the strong reference will be released.
+// been successfully completed it should call InitializationSucceeded().
+// The BindingJSObjectCreator object will root the JSObject until
+// InitializationSucceeded() is called on it. If the native object for the
+// binding is refcounted it will also hold a strong reference to it, that
+// reference is transferred to the JSObject (which holds the native in a slot)
+// when InitializationSucceeded() is called. If the BindingJSObjectCreator
+// object is destroyed and InitializationSucceeded() was never called on it then
+// the JSObject's slot holding the native will be set to undefined, and for a
+// refcounted native the strong reference will be released.
 template <class T>
 class MOZ_STACK_CLASS BindingJSObjectCreator {
  public:
@@ -2902,7 +2918,7 @@ bool CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
   }
 
   JS::Handle<JSObject*> proto = GetProto(aCx);
-  if (!proto || !JS_SplicePrototype(aCx, aGlobal, proto)) {
+  if (!proto || !JS_SetPrototype(aCx, aGlobal, proto)) {
     NS_WARNING("Failed to set proto");
     return false;
   }
@@ -3138,7 +3154,6 @@ namespace binding_detail {
 // reviewed by someone who is sufficiently devious and has a very good
 // understanding of all the code that will run while we're using the return
 // value, including the SpiderMonkey parts.
-JSObject* UnprivilegedJunkScopeOrWorkerGlobal();
 JSObject* UnprivilegedJunkScopeOrWorkerGlobal(const fallible_t&);
 
 // Implementation of the [HTMLConstructor] extended attribute.

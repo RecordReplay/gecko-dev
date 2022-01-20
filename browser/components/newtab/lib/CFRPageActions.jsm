@@ -31,8 +31,6 @@ XPCOMUtils.defineLazyPreferenceGetter(
 );
 
 const POPUP_NOTIFICATION_ID = "contextual-feature-recommendation";
-const ANIMATION_BUTTON_ID = "cfr-notification-footer-animation-button";
-const ANIMATION_LABEL_ID = "cfr-notification-footer-animation-label";
 const SUMO_BASE_URL = Services.urlFormatter.formatURLPref(
   "app.support.baseURL"
 );
@@ -112,13 +110,6 @@ class PageAction {
         message_id: recommendation.id,
         bucket_id: recommendation.content.bucket_id,
         event: "IMPRESSION",
-        ...(recommendation.personalizedModelVersion
-          ? {
-              event_context: {
-                modelVersion: recommendation.personalizedModelVersion,
-              },
-            }
-          : {}),
       });
     }
   }
@@ -235,15 +226,6 @@ class PageAction {
       ) {
         this.urlbarinput.setAttribute("cfr-recommendation-state", "collapsed");
       }
-    }
-
-    // TODO: FIXME: find a nicer way of cleaning this up. Maybe listening to "popuphidden"?
-    // Remove click listener on pause button;
-    if (this.onAnimationButtonClick) {
-      this.window.document
-        .getElementById(ANIMATION_BUTTON_ID)
-        .removeEventListener("click", this.onAnimationButtonClick);
-      delete this.onAnimationButtonClick;
     }
   }
 
@@ -420,19 +402,16 @@ class PageAction {
           args: { total: users },
         })
       );
-      footerUsers.removeAttribute("hidden");
+      footerUsers.hidden = false;
     } else {
       // Prevent whitespace around empty label from affecting other spacing
-      footerUsers.setAttribute("hidden", true);
+      footerUsers.hidden = true;
       footerUsers.removeAttribute("value");
     }
 
     // Spacer pushes the link to the opposite end when there's other content
-    if (rating || users) {
-      footerSpacer.removeAttribute("hidden");
-    } else {
-      footerSpacer.setAttribute("hidden", true);
-    }
+
+    footerSpacer.hidden = !rating && !users;
   }
 
   _createElementAndAppend({ type, id }, parent) {
@@ -444,94 +423,13 @@ class PageAction {
     return element;
   }
 
-  async _renderPinTabAnimation() {
-    const ANIMATION_CONTAINER_ID =
-      "cfr-notification-footer-pintab-animation-container";
-    const footer = this.window.document.getElementById(
-      "cfr-notification-footer"
-    );
-    let animationContainer = this.window.document.getElementById(
-      ANIMATION_CONTAINER_ID
-    );
-    if (!animationContainer) {
-      animationContainer = this._createElementAndAppend(
-        { type: "vbox", id: ANIMATION_CONTAINER_ID },
-        footer
-      );
-
-      let controlsContainer = this._createElementAndAppend(
-        { type: "hbox", id: "cfr-notification-footer-animation-controls" },
-        animationContainer
-      );
-
-      // spacer
-      this._createElementAndAppend(
-        { type: "vbox" },
-        controlsContainer
-      ).setAttribute("flex", 1);
-
-      let animationButton = this._createElementAndAppend(
-        { type: "hbox", id: ANIMATION_BUTTON_ID },
-        controlsContainer
-      );
-
-      // animation button label
-      this._createElementAndAppend(
-        { type: "label", id: ANIMATION_LABEL_ID },
-        animationButton
-      );
-    }
-
-    animationContainer.toggleAttribute(
-      "animate",
-      !this.window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    );
-    animationContainer.removeAttribute("paused");
-
-    this.window.document.getElementById(
-      ANIMATION_LABEL_ID
-    ).textContent = await this.getStrings({
-      string_id: "cfr-doorhanger-pintab-animation-pause",
-    });
-
-    if (!this.onAnimationButtonClick) {
-      let animationButton = this.window.document.getElementById(
-        ANIMATION_BUTTON_ID
-      );
-      this.onAnimationButtonClick = async () => {
-        let animationLabel = this.window.document.getElementById(
-          ANIMATION_LABEL_ID
-        );
-        if (animationContainer.toggleAttribute("paused")) {
-          animationLabel.textContent = await this.getStrings({
-            string_id: "cfr-doorhanger-pintab-animation-resume",
-          });
-        } else {
-          animationLabel.textContent = await this.getStrings({
-            string_id: "cfr-doorhanger-pintab-animation-pause",
-          });
-        }
-      };
-      animationButton.addEventListener("click", this.onAnimationButtonClick);
-    }
-  }
-
   async _renderMilestonePopup(message, browser) {
     this.maybeLoadCustomElement(this.window);
 
     let { content, id } = message;
     let { primary, secondary } = content.buttons;
-
-    let dateFormat = new Services.intl.DateTimeFormat(
-      this.window.gBrowser.ownerGlobal.navigator.language,
-      {
-        month: "long",
-        year: "numeric",
-      }
-    ).format;
-
     let earliestDate = await TrackingDBService.getEarliestRecordedDate();
-    let monthName = dateFormat(new Date(earliestDate));
+    let timestamp = new Date().getTime(earliestDate);
     let panelTitle = "";
     let headerLabel = this.window.document.getElementById(
       "cfr-notification-header-label"
@@ -551,7 +449,7 @@ class PageAction {
         content: message.content.heading_text,
         attributes: {
           blockedCount: reachedMilestone,
-          date: monthName,
+          date: timestamp,
         },
       })
     );
@@ -661,7 +559,7 @@ class PageAction {
   async _renderPopup(message, browser) {
     this.maybeLoadCustomElement(this.window);
 
-    const { id, content, modelVersion } = message;
+    const { id, content } = message;
 
     const headerLabel = this.window.document.getElementById(
       "cfr-notification-header-label"
@@ -697,7 +595,6 @@ class PageAction {
         message_id: id,
         bucket_id: content.bucket_id,
         event: "RATIONALE",
-        ...(modelVersion ? { event_context: { modelVersion } } : {}),
       });
     // Use the message layout as a CSS selector to hide different parts of the
     // notification template markup
@@ -729,7 +626,6 @@ class PageAction {
             message_id: id,
             bucket_id: content.bucket_id,
             event: "ENABLE",
-            ...(modelVersion ? { event_context: { modelVersion } } : {}),
           });
           RecommendationMap.delete(browser);
         };
@@ -752,50 +648,6 @@ class PageAction {
           learnMoreURL,
           ...options,
         };
-        break;
-      case "message_and_animation":
-        footerText.textContent = await this.getStrings(content.text);
-        const stepsContainerId = "cfr-notification-feature-steps";
-        let stepsContainer = this.window.document.getElementById(
-          stepsContainerId
-        );
-        primaryActionCallback = () => {
-          this._blockMessage(id);
-          this.dispatchUserAction(primary.action);
-          this.hideAddressBarNotifier();
-          this._sendTelemetry({
-            message_id: id,
-            bucket_id: content.bucket_id,
-            event: "PIN",
-            ...(modelVersion ? { event_context: { modelVersion } } : {}),
-          });
-          RecommendationMap.delete(browser);
-        };
-        panelTitle = await this.getStrings(content.heading_text);
-
-        if (content.descriptionDetails) {
-          if (stepsContainer) {
-            // If it exists we need to empty it
-            stepsContainer.remove();
-            stepsContainer = stepsContainer.cloneNode(false);
-          } else {
-            stepsContainer = this.window.document.createXULElement("vbox");
-            stepsContainer.setAttribute("id", stepsContainerId);
-          }
-          footerText.parentNode.appendChild(stepsContainer);
-          for (let step of content.descriptionDetails.steps) {
-            // This li is a generic xul element with custom styling
-            const li = this.window.document.createXULElement("li");
-            li.appendChild(
-              RemoteL10n.createElement(this.window.document, "span", {
-                content: step,
-              })
-            );
-            stepsContainer.appendChild(li);
-          }
-        }
-
-        await this._renderPinTabAnimation();
         break;
       default:
         panelTitle = await this.getStrings(content.addon.title);
@@ -820,7 +672,6 @@ class PageAction {
             message_id: id,
             bucket_id: content.bucket_id,
             event: "LEARN_MORE",
-            ...(modelVersion ? { event_context: { modelVersion } } : {}),
           });
 
         primaryActionCallback = async () => {
@@ -835,7 +686,6 @@ class PageAction {
             message_id: id,
             bucket_id: content.bucket_id,
             event: "INSTALL",
-            ...(modelVersion ? { event_context: { modelVersion } } : {}),
           });
           RecommendationMap.delete(browser);
         };
@@ -868,7 +718,6 @@ class PageAction {
             message_id: id,
             bucket_id: content.bucket_id,
             event,
-            ...(modelVersion ? { event_context: { modelVersion } } : {}),
           });
           // We want to collapse if needed when we dismiss
           this._collapse();
@@ -949,13 +798,12 @@ class PageAction {
       return;
     }
     const message = RecommendationMap.get(browser);
-    const { id, content, modelVersion } = message;
+    const { id, content } = message;
 
     this._sendTelemetry({
       message_id: id,
       bucket_id: content.bucket_id,
       event: "CLICK_DOORHANGER",
-      ...(modelVersion ? { event_context: { modelVersion } } : {}),
     });
 
     if (this.shouldShowDoorhanger(message)) {
@@ -1080,12 +928,11 @@ const CFRPageActions = {
   async forceRecommendation(browser, recommendation, dispatchCFRAction) {
     // If we are forcing via the Admin page, the browser comes in a different format
     const win = browser.ownerGlobal;
-    const { id, content, personalizedModelVersion } = recommendation;
+    const { id, content } = recommendation;
     RecommendationMap.set(browser, {
       id,
       content,
       retain: true,
-      modelVersion: personalizedModelVersion,
     });
     if (!PageActionMap.has(win)) {
       PageActionMap.set(win, new PageAction(win, dispatchCFRAction));
@@ -1129,13 +976,12 @@ const CFRPageActions = {
       // Don't replace an existing message
       return false;
     }
-    const { id, content, personalizedModelVersion } = recommendation;
+    const { id, content } = recommendation;
     RecommendationMap.set(browser, {
       id,
       host,
       content,
       retain: true,
-      modelVersion: personalizedModelVersion,
     });
     if (!PageActionMap.has(win)) {
       PageActionMap.set(win, new PageAction(win, dispatchCFRAction));

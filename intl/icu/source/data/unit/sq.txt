@@ -1,7 +1,7 @@
 ﻿// © 2016 and later: Unicode, Inc. and others.
-// License & terms of use: http://www.unicode.org/copyright.html#License
+// License & terms of use: http://www.unicode.org/copyright.html
+// Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 sq{
-    Version{"37"}
     durationUnits{
         hm{"h:mm"}
         hms{"h:mm:ss"}
@@ -105,7 +105,59 @@ sq{
             }
         }
         compound{
+            1024p1{"kibi{0}"}
+            1024p2{"mebi{0}"}
+            1024p3{"gibi{0}"}
+            1024p4{"tebi{0}"}
+            1024p5{"pebi{0}"}
+            1024p6{"eksbi{0}"}
+            1024p7{"zebi{0}"}
+            1024p8{"jobe{0}"}
+            10p-1{"deci{0}"}
+            10p-12{"piko{0}"}
+            10p-15{"femto{0}"}
+            10p-18{"ato{0}"}
+            10p-2{"centi{0}"}
+            10p-21{"zepto{0}"}
+            10p-24{"josto{0}"}
+            10p-3{"mili{0}"}
+            10p-6{"mikro{0}"}
+            10p-9{"nano{0}"}
+            10p1{"deka{0}"}
+            10p12{"tera{0}"}
+            10p15{"peta{0}"}
+            10p18{"ekza{0}"}
+            10p2{"hekto{0}"}
+            10p21{"zeta{0}"}
+            10p24{"jota{0}"}
+            10p3{"kilo{0}"}
+            10p6{"mega{0}"}
+            10p9{"giga{0}"}
             per{"{0} në {1}"}
+            power2{
+                one{
+                    _{
+                        _{"{0} katror"}
+                    }
+                }
+                other{
+                    _{
+                        _{"{0} katror"}
+                    }
+                }
+            }
+            power3{
+                one{
+                    _{
+                        _{"{0} kub"}
+                    }
+                }
+                other{
+                    _{
+                        _{"{0} kub"}
+                    }
+                }
+            }
         }
         concentr{
             karat{
@@ -113,7 +165,7 @@ sq{
                 one{"{0} karat"}
                 other{"{0} karatë"}
             }
-            milligram-per-deciliter{
+            milligram-ofglucose-per-deciliter{
                 dnam{"miligramë për decilitër"}
                 one{"{0} miligram për decilitër"}
                 other{"{0} miligramë për decilitër"}
@@ -408,6 +460,11 @@ sq{
             }
         }
         graphics{
+            dot{
+                dnam{"pika"}
+                one{"{0} pikë"}
+                other{"{0} pika"}
+            }
             dot-per-centimeter{
                 dnam{"pika për centimetër"}
                 one{"{0} pikë për centimetër"}
@@ -460,6 +517,11 @@ sq{
                 dnam{"decimetra"}
                 one{"{0} decimetër"}
                 other{"{0} decimetra"}
+            }
+            earth-radius{
+                dnam{"rreze toke"}
+                one{"{0} rreze toke"}
+                other{"{0} rreze toke"}
             }
             foot{
                 dnam{"këmbë"}
@@ -547,6 +609,16 @@ sq{
             }
         }
         light{
+            candela{
+                dnam{"kandela"}
+                one{"{0} kandelë"}
+                other{"{0} kandela"}
+            }
+            lumen{
+                dnam{"lumen"}
+                one{"{0} lumen"}
+                other{"{0} lumenë"}
+            }
             lux{
                 dnam{"luks"}
                 one{"{0} luks"}
@@ -831,6 +903,11 @@ sq{
                 dnam{"decilitra"}
                 one{"{0} decilitër"}
                 other{"{0} decilitra"}
+            }
+            dram{
+                dnam{"drahma të lëngshme"}
+                one{"{0} drahmë i lëngshëm"}
+                other{"{0} drahma të lëngshme"}
             }
             fluid-ounce{
                 dnam{"onsë të lëngshëm"}
@@ -1287,7 +1364,7 @@ sq{
                 one{"{0} kt"}
                 other{"{0} kt"}
             }
-            milligram-per-deciliter{
+            milligram-ofglucose-per-deciliter{
                 dnam{"mg/dL"}
                 one{"{0} mg/dL"}
                 other{"{0} mg/dL"}
@@ -1566,6 +1643,9 @@ sq{
                 one{"{0} dm"}
                 other{"{0} dm"}
             }
+            fathom{
+                dnam{"fth"}
+            }
             foot{
                 dnam{"këmbë"}
                 one{"{0} ft"}
@@ -1596,9 +1676,9 @@ sq{
                 per{"{0}/m"}
             }
             micrometer{
-                dnam{"µm"}
-                one{"{0} µm"}
-                other{"{0} µm"}
+                dnam{"μm"}
+                one{"{0} μm"}
+                other{"{0} μm"}
             }
             mile{
                 dnam{"mi"}
@@ -1677,9 +1757,9 @@ sq{
                 other{"{0} t"}
             }
             microgram{
-                dnam{"µg"}
-                one{"{0} µg"}
-                other{"{0} µg"}
+                dnam{"μg"}
+                one{"{0} μg"}
+                other{"{0} μg"}
             }
             milligram{
                 dnam{"mg"}
@@ -1753,7 +1833,6 @@ sq{
                 other{"{0} hPa"}
             }
             inch-ofhg{
-                dnam{"inHg"}
                 one{"{0} inHg"}
                 other{"{0} inHg"}
             }

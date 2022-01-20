@@ -42,12 +42,11 @@ var SessionHistory = Object.freeze({
     return SessionHistoryInternal.collect(docShell, aFromIdx);
   },
 
-  collectFromParent(uri, body, history, userContextId, aFromIdx = -1) {
+  collectFromParent(uri, documentHasChildNodes, history, aFromIdx = -1) {
     return SessionHistoryInternal.collectCommon(
       uri,
-      body,
+      documentHasChildNodes,
       history,
-      userContextId,
       aFromIdx
     );
   },
@@ -103,25 +102,21 @@ var SessionHistoryInternal = {
    * @return An object reprereseting a partial global history update.
    */
   collect(docShell, aFromIdx = -1) {
-    let loadContext = docShell.QueryInterface(Ci.nsILoadContext);
     let webNavigation = docShell.QueryInterface(Ci.nsIWebNavigation);
     let uri = webNavigation.currentURI.displaySpec;
     let body = webNavigation.document.body;
     let history = webNavigation.sessionHistory;
-    let userContextId = loadContext.originAttributes.userContextId;
     return this.collectCommon(
       uri,
-      body,
+      body && body.hasChildNodes(),
       history.legacySHistory,
-      userContextId,
       aFromIdx
     );
   },
 
-  collectCommon(uri, body, shistory, userContextId, aFromIdx) {
+  collectCommon(uri, documentHasChildNodes, shistory, aFromIdx) {
     let data = {
       entries: [],
-      userContextId,
       requestedIndex: shistory.requestedIndex + 1,
     };
 
@@ -157,7 +152,7 @@ var SessionHistoryInternal = {
       // or it's a blank tab that was modified (like a custom newtab page),
       // record it. For about:blank we explicitly want an empty array without
       // an 'index' property to denote that there are no history entries.
-      if (uri != "about:blank" || (body && body.hasChildNodes())) {
+      if (uri != "about:blank" || documentHasChildNodes) {
         data.entries.push({
           url: uri,
           triggeringPrincipal_base64: E10SUtils.SERIALIZED_SYSTEMPRINCIPAL,
@@ -226,11 +221,8 @@ var SessionHistoryInternal = {
       entry.loadReplace2 = shEntry.loadReplace;
     }
 
-    if (shEntry.srcdocData) {
-      entry.srcdocData = shEntry.srcdocData;
-    }
-
     if (shEntry.isSrcdocEntry) {
+      entry.srcdocData = shEntry.srcdocData;
       entry.isSrcdocEntry = shEntry.isSrcdocEntry;
     }
 
@@ -308,14 +300,6 @@ var SessionHistoryInternal = {
         let child = shEntry.GetChildAt(i);
 
         if (child) {
-          // Don't try to restore framesets containing wyciwyg URLs.
-          // (cf. bug 424689 and bug 450595).  Note that these may be left
-          // over from pre-wyciwyg-removal profiles.
-          if (child.URI.schemeIs("wyciwyg")) {
-            children.length = 0;
-            break;
-          }
-
           children.push(this.serializeEntry(child));
         }
       }

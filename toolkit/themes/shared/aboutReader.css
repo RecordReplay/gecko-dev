@@ -56,19 +56,19 @@ body.sepia {
 }
 
 body.dark {
-  --main-background: #333;
+  --main-background: rgb(28, 27, 34);
   --main-foreground: #eee;
   --toolbar-border: #4a4a4b;
   --toolbar-box-shadow: black;
   --toolbar-button-hover: var(--grey-90-a30);
   --toolbar-button-active: var(--grey-90-a80);
   --popup-button-active: hsla(0,0%,70%,.6);
-  --popup-bgcolor: #4c4a50;
+  --popup-bgcolor: rgb(66,65,77);
   --popup-button: #5c5c61;
-  --popup-line: #5c5c61;
+  --popup-line: rgb(82, 82, 94);
   --selected-background: #3E6D9A;
   --link-foreground: #45a1ff;
-  --visited-link-foreground: rgba(255, 26, 217, 0.3);
+  --visited-link-foreground: #e675fd;
   --link-selected-foreground: #fff;
   --opaque-popup-border: #434146;
   --font-value-border: #656468;
@@ -153,7 +153,7 @@ body.dark blockquote {
 
 .dark-button {
   color: #eeeeee;
-  background-color: #333333;
+  background-color: #1c1b22;
 }
 
 .sepia-button {
@@ -349,14 +349,16 @@ body.dark blockquote {
   border-radius: 2px;
   visibility: hidden;
   pointer-events: none;
+  /* Put above .dropdown .dropdown-popup, which has z-index: 1000. */
+  z-index: 1001;
 }
 
 /* Show the hover tooltip on non-dropdown buttons. */
 .button:not(.dropdown-toggle):hover > .hover-label,
 .button:not(.dropdown-toggle):-moz-focusring > .hover-label,
-/* Show the hover tooltip for dropdown buttons unless dropdowns are open. */
-:not(.dropdown-open) > .dropdown > li > .button:hover > .hover-label,
-:not(.dropdown-open) > .dropdown > li > .button:-moz-focusring > .hover-label {
+/* Show the hover tooltip for dropdown buttons unless its dropdown is open. */
+:not(.open) > li > .dropdown-toggle:hover > .hover-label,
+:not(.open) > li > .dropdown-toggle:-moz-focusring > .hover-label {
   visibility: visible;
 }
 
@@ -398,7 +400,7 @@ button:disabled {
   visibility: hidden;
   border-radius: 4px;
   border: 1px solid var(--popup-border);
-  box-shadow: 0 4px 6px 0 var(--popup-shadow);
+  box-shadow: 0 0px 10px 0 var(--popup-shadow);
   border-bottom-width: 0;
   top: 0;
 }
@@ -577,7 +579,7 @@ button:disabled {
 
 .close-button {
   -moz-context-properties: fill;
-  background-image: url("chrome://global/skin/reader/close-16.svg");
+  background-image: url("chrome://global/skin/icons/close.svg");
 }
 
 .style-button {
@@ -758,7 +760,6 @@ button:disabled {
 
 .moz-reader-content ol {
   padding-inline-start: 30px;
-  list-style: decimal;
 }
 
 table,

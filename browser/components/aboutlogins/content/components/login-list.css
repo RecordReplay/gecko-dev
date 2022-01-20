@@ -3,8 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 :host {
-  --in-content-box-background-hover: var(--in-content-page-background);
-  border-inline-end: 1px solid var(--in-content-box-border-color);
+  border-inline-end: 1px solid var(--in-content-border-color);
   background-color: var(--in-content-box-background);
   display: flex;
   flex-direction: column;
@@ -15,7 +14,7 @@
   display: flex;
   align-items: center;
   padding: 9px 16px;
-  border-bottom: 1px solid var(--in-content-box-border-color);
+  border-bottom: 1px solid var(--in-content-border-color);
   background-color: var(--in-content-box-background);
   color: var(--in-content-deemphasized-text);
   font-size: 0.8em;
@@ -41,12 +40,6 @@
 
 #login-sort > option {
   font-weight: normal;
-}
-
-#login-sort:-moz-focusring { /* This is a workaround due to Bug 1580935 */
-  color: transparent !important;
-  fill: var(--in-content-text-color);
-  text-shadow: 0 0 0 var(--in-content-text-color);
 }
 
 .count {
@@ -100,7 +93,7 @@ ol {
 }
 
 .create-login-button-container {
-  border-top: 1px solid var(--in-content-box-border-color);
+  border-top: 1px solid var(--in-content-border-color);
   display: flex;
   flex-direction: column;
 }
@@ -118,22 +111,25 @@ ol {
   border-top: 1px solid var(--in-content-border-color);
 }
 
-.login-list-item:hover {
-  background-color: var(--in-content-box-background-hover);
+@media (-moz-proton) {
+.login-list-item:not(.selected):hover {
+  background-color: var(--in-content-button-background-hover);
+  color: var(--in-content-button-text-color-hover);
 }
 
-.login-list-item:hover:active {
-  background-color: var(--in-content-box-background-active);
+.login-list-item:not(.selected):hover:active {
+  background-color: var(--in-content-button-background-active);
 }
+} /*** END proton ***/
 
 .login-list-item.keyboard-selected {
-  border-inline-start-color: var(--in-content-border-active-shadow);
-  background-color: var(--in-content-box-background-odd);
+  border-inline-start-color: var(--in-content-border-color);
+  background-color: var(--in-content-button-background-hover);
 }
 
 .login-list-item.selected {
-  border-inline-start-color: var(--in-content-border-highlight);
-  background-color: var(--in-content-box-background-hover);
+  border-inline-start-color: var(--in-content-accent-color);
+  background-color: var(--in-content-page-background);
 }
 
 .login-list-item.selected .title {
@@ -160,7 +156,7 @@ ol {
 .favicon-wrapper {
   height: 16px;
   width: 16px;
-  background-image: url("chrome://mozapps/skin/places/defaultFavicon.svg");
+  background-image: url("chrome://global/skin/icons/defaultFavicon.svg");
   background-repeat: no-repeat;
   margin-inline-end: 12px;
   -moz-context-properties: fill, fill-opacity;
@@ -190,7 +186,9 @@ ol {
   fill-opacity: 0.75;
 }
 
-.breached > .alert-icon {
-  fill: var(--red-60);
-  fill-opacity: 1;
+@media not (prefers-contrast) {
+  .breached > .alert-icon {
+    fill: var(--red-60);
+    fill-opacity: 1;
+  }
 }

@@ -15,6 +15,7 @@ import random
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -200,6 +201,11 @@ class XPCShellTestThread(Thread):
         self.extraPrefs = kwargs.get("extraPrefs")
         self.verboseIfFails = kwargs.get("verboseIfFails")
         self.headless = kwargs.get("headless")
+        self.runFailures = kwargs.get("runFailures")
+        self.timeoutAsPass = kwargs.get("timeoutAsPass")
+        self.crashAsPass = kwargs.get("crashAsPass")
+        if self.runFailures:
+            retry = False
 
         # Default the test prefsFile to the rootPrefsFile.
         self.prefsFile = self.rootPrefsFile
@@ -314,7 +320,19 @@ class XPCShellTestThread(Thread):
             popen_func = psutil.Popen
         else:
             popen_func = Popen
-        proc = popen_func(cmd, stdout=stdout, stderr=stderr, env=env, cwd=cwd)
+
+        cleanup_hack = None
+        if mozinfo.isWin and sys.version_info[0] == 3 and sys.version_info < (3, 7, 5):
+            # Hack to work around https://bugs.python.org/issue37380
+            cleanup_hack = subprocess._cleanup
+
+        try:
+            if cleanup_hack:
+                subprocess._cleanup = lambda: None
+            proc = popen_func(cmd, stdout=stdout, stderr=stderr, env=env, cwd=cwd)
+        finally:
+            if cleanup_hack:
+                subprocess._cleanup = cleanup_hack
         return proc
 
     def checkForCrashes(self, dump_directory, symbols_path, test_name=None):
@@ -322,8 +340,12 @@ class XPCShellTestThread(Thread):
         Simple wrapper to check for crashes.
         On a remote system, this is more complex and we need to overload this function.
         """
+        quiet = False
+        if self.crashAsPass:
+            quiet = True
+
         return mozcrash.log_crashes(
-            self.log, dump_directory, symbols_path, test=test_name
+            self.log, dump_directory, symbols_path, test=test_name, quiet=quiet
         )
 
     def logCommand(self, name, completeCmd, testdir):
@@ -387,10 +409,14 @@ class XPCShellTestThread(Thread):
                 message="Test timed out",
             )
         else:
+            result = "TIMEOUT"
+            if self.timeoutAsPass:
+                expected = "FAIL"
+                result = "FAIL"
             self.failCount = 1
             self.log.test_end(
                 self.test_object["id"],
-                "TIMEOUT",
+                result,
                 expected=expected,
                 message="Test timed out",
             )
@@ -638,7 +664,10 @@ class XPCShellTestThread(Thread):
     def fix_text_output(self, line):
         line = cleanup_encoding(line)
         if self.stack_fixer_function is not None:
-            return self.stack_fixer_function(line)
+            line = self.stack_fixer_function(line)
+
+        if isinstance(line, bytes):
+            line = line.decode("utf-8")
         return line
 
     def log_line(self, line):
@@ -1185,8 +1214,6 @@ class XPCShellTests(object):
         # compatible with the sandbox.
         self.env["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
 
-        self.env["MOZ_DISABLE_SOCKET_PROCESS_SANDBOX"] = "1"
-
         if self.mozInfo.get("socketprocess_networking"):
             self.env["MOZ_FORCE_USE_SOCKET_PROCESS"] = "1"
         else:
@@ -1509,16 +1536,7 @@ class XPCShellTests(object):
 
         self.mozInfo["fission"] = prefs.get("fission.autostart", False)
 
-        # Until the test harness can understand default pref values,
-        # (https://bugzilla.mozilla.org/show_bug.cgi?id=1577912) this value
-        # should by synchronized with the default pref value indicated in
-        # StaticPrefList.yaml.
-        #
-        # Currently for automation, the pref defaults to true (but can be
-        # overridden with --setpref).
-        self.mozInfo["serviceworker_e10s"] = prefs.get(
-            "dom.serviceWorkers.parent_intercept", True
-        )
+        self.mozInfo["serviceworker_e10s"] = True
 
         self.mozInfo["verify"] = options.get("verify", False)
         self.mozInfo["webrender"] = self.enable_webrender
@@ -1643,6 +1661,8 @@ class XPCShellTests(object):
         self.enable_webrender = options.get("enable_webrender")
         self.headless = options.get("headless")
         self.runFailures = options.get("runFailures")
+        self.timeoutAsPass = options.get("timeoutAsPass")
+        self.crashAsPass = options.get("crashAsPass")
 
         self.testCount = 0
         self.passCount = 0
@@ -1743,6 +1763,9 @@ class XPCShellTests(object):
             "extraPrefs": options.get("extraPrefs") or [],
             "verboseIfFails": self.verboseIfFails,
             "headless": self.headless,
+            "runFailures": self.runFailures,
+            "timeoutAsPass": self.timeoutAsPass,
+            "crashAsPass": self.crashAsPass,
         }
 
         if self.sequential:
@@ -1899,6 +1922,12 @@ class XPCShellTests(object):
 
         return status
 
+    def start_test(self, test):
+        test.start()
+
+    def test_ended(self, test):
+        pass
+
     def runTestList(
         self, tests_queue, sequential_tests, testClass, mobileArgs, **kwargs
     ):
@@ -1940,7 +1969,7 @@ class XPCShellTests(object):
             ):
                 test = tests_queue.popleft()
                 running_tests.add(test)
-                test.start()
+                self.start_test(test)
 
             # queue is full (for now) or no more new tests,
             # process the finished tests so far
@@ -1953,6 +1982,7 @@ class XPCShellTests(object):
             done_tests = set()
             for test in running_tests:
                 if test.done:
+                    self.test_ended(test)
                     done_tests.add(test)
                     test.join(
                         1
@@ -1988,8 +2018,9 @@ class XPCShellTests(object):
                     break
                 # we don't want to retry these tests
                 test.retry = False
-                test.start()
+                self.start_test(test)
                 test.join()
+                self.test_ended(test)
                 self.addTestResults(test)
                 # did the test encounter any exception?
                 if test.exception:
@@ -2009,8 +2040,9 @@ class XPCShellTests(object):
                 mobileArgs=mobileArgs,
                 **kwargs
             )
-            test.start()
+            self.start_test(test)
             test.join()
+            self.test_ended(test)
             self.addTestResults(test)
             # did the test encounter any exception?
             if test.exception:
@@ -2042,6 +2074,13 @@ class XPCShellTests(object):
             self.log.error("No tests run. Did you pass an invalid --test-path?")
             self.failCount = 1
 
+        # doing this allows us to pass the mozharness parsers that
+        # report an orange job for failCount>0
+        if self.runFailures:
+            passed = self.passCount
+            self.passCount = self.failCount
+            self.failCount = passed
+
         self.log.info("INFO | Result summary:")
         self.log.info("INFO | Passed: %d" % self.passCount)
         self.log.info("INFO | Failed: %d" % self.failCount)
@@ -2057,7 +2096,7 @@ class XPCShellTests(object):
             return False
 
         self.log.suite_end()
-        return self.failCount == 0
+        return self.runFailures or self.failCount == 0
 
 
 def main():

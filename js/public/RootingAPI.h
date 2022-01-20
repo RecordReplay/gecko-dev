@@ -28,7 +28,6 @@
 #include "js/Realm.h"
 #include "js/TypeDecls.h"
 #include "js/UniquePtr.h"
-#include "js/Utility.h"
 
 /*
  * [SMDOC] Stack Rooting
@@ -152,13 +151,8 @@ JS_FOR_EACH_PUBLIC_GC_POINTER_TYPE(DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE)
 JS_FOR_EACH_PUBLIC_TAGGED_GC_POINTER_TYPE(DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE)
 #undef DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE
 
-template <typename T, typename Wrapper>
-class PersistentRootedBase : public MutableWrappedPtrOperations<T, Wrapper> {};
-
 namespace gc {
 struct Cell;
-template <typename T>
-struct PersistentRootedMarker;
 } /* namespace gc */
 
 // Important: Return a reference so passing a Rooted<T>, etc. to
@@ -201,20 +195,20 @@ struct PersistentRootedMarker;
 
 namespace JS {
 
-JS_FRIEND_API void HeapObjectPostWriteBarrier(JSObject** objp, JSObject* prev,
+JS_PUBLIC_API void HeapObjectPostWriteBarrier(JSObject** objp, JSObject* prev,
                                               JSObject* next);
-JS_FRIEND_API void HeapStringPostWriteBarrier(JSString** objp, JSString* prev,
+JS_PUBLIC_API void HeapStringPostWriteBarrier(JSString** objp, JSString* prev,
                                               JSString* next);
-JS_FRIEND_API void HeapBigIntPostWriteBarrier(JS::BigInt** bip,
+JS_PUBLIC_API void HeapBigIntPostWriteBarrier(JS::BigInt** bip,
                                               JS::BigInt* prev,
                                               JS::BigInt* next);
-JS_FRIEND_API void HeapObjectWriteBarriers(JSObject** objp, JSObject* prev,
+JS_PUBLIC_API void HeapObjectWriteBarriers(JSObject** objp, JSObject* prev,
                                            JSObject* next);
-JS_FRIEND_API void HeapStringWriteBarriers(JSString** objp, JSString* prev,
+JS_PUBLIC_API void HeapStringWriteBarriers(JSString** objp, JSString* prev,
                                            JSString* next);
-JS_FRIEND_API void HeapBigIntWriteBarriers(JS::BigInt** bip, JS::BigInt* prev,
+JS_PUBLIC_API void HeapBigIntWriteBarriers(JS::BigInt** bip, JS::BigInt* prev,
                                            JS::BigInt* next);
-JS_FRIEND_API void HeapScriptWriteBarriers(JSScript** objp, JSScript* prev,
+JS_PUBLIC_API void HeapScriptWriteBarriers(JSScript** objp, JSScript* prev,
                                            JSScript* next);
 
 /**
@@ -255,8 +249,8 @@ inline T SafelyInitialized() {
  * For generational GC, assert that an object is in the tenured generation as
  * opposed to being in the nursery.
  */
-extern JS_FRIEND_API void AssertGCThingMustBeTenured(JSObject* obj);
-extern JS_FRIEND_API void AssertGCThingIsNotNurseryAllocable(
+extern JS_PUBLIC_API void AssertGCThingMustBeTenured(JSObject* obj);
+extern JS_PUBLIC_API void AssertGCThingIsNotNurseryAllocable(
     js::gc::Cell* cell);
 #else
 inline void AssertGCThingMustBeTenured(JSObject* obj) {}
@@ -312,12 +306,13 @@ class MOZ_NON_MEMMOVABLE Heap : public js::HeapBase<T, Heap<T>> {
   explicit Heap(const T& p) { init(p); }
 
   /*
-   * For Heap, move semantics are equivalent to copy semantics. In C++, a
-   * copy constructor taking const-ref is the way to get a single function
-   * that will be used for both lvalue and rvalue copies, so we can simply
-   * omit the rvalue variant.
+   * For Heap, move semantics are equivalent to copy semantics. However, we want
+   * the copy constructor to be explicit, and an explicit move constructor
+   * breaks common usage of move semantics, so we need to define both, even
+   * though they are equivalent.
    */
   explicit Heap(const Heap<T>& other) { init(other.ptr); }
+  Heap(Heap<T>&& other) { init(other.ptr); }
 
   Heap& operator=(Heap<T>&& other) {
     set(other.unbarrieredGet());
@@ -583,6 +578,8 @@ class MOZ_NONHEAP_CLASS Handle : public js::HandleBase<T, Handle<T>> {
  public:
   using ElementType = T;
 
+  Handle(const Handle<T>&) = default;
+
   /* Creates a handle from a handle of a type convertible to T. */
   template <typename S>
   MOZ_IMPLICIT Handle(
@@ -687,6 +684,7 @@ class MOZ_STACK_CLASS MutableHandle
   MutableHandle(decltype(nullptr)) = delete;
 
  public:
+  MutableHandle(const MutableHandle<T>&) = default;
   void set(const T& v) {
     *ptr = v;
     MOZ_ASSERT(GCPolicy<T>::isValid(*ptr));
@@ -938,6 +936,13 @@ struct MapTypeToRootKind<detail::RootListEntry*> {
   static const RootKind kind = RootKind::Traceable;
 };
 
+// Workaround MSVC issue where GCPolicy is needed even though this dummy type is
+// never instantiated. Ideally, RootListEntry is removed in the future and an
+// appropriate class hierarchy for the Rooted<T> types.
+template <>
+struct GCPolicy<detail::RootListEntry*>
+    : public IgnoreGCPolicy<detail::RootListEntry*> {};
+
 using RootedListHeads =
     mozilla::EnumeratedArray<RootKind, RootKind::Limit,
                              Rooted<detail::RootListEntry*>*>;
@@ -993,6 +998,14 @@ class RootingContext {
   /* Limit pointer for checking native stack consumption. */
   uintptr_t nativeStackLimit[StackKindCount];
 
+#ifdef __wasi__
+  // For WASI we can't catch call-stack overflows with stack-pointer checks, so
+  // we count recursion depth with RAII based AutoCheckRecursionLimit.
+  uint32_t wasiRecursionDepth = 0u;
+
+  static constexpr uint32_t wasiRecursionDepthLimit = 100u;
+#endif  // __wasi__
+
   static const RootingContext* get(const JSContext* cx) {
     return reinterpret_cast<const RootingContext*>(cx);
   }
@@ -1042,6 +1055,26 @@ class JS_PUBLIC_API AutoGCRooter {
   AutoGCRooter(AutoGCRooter& ida) = delete;
   void operator=(AutoGCRooter& ida) = delete;
 } JS_HAZ_ROOTED_BASE;
+
+/**
+ * Custom rooting behavior for internal and external clients.
+ *
+ * Deprecated. Where possible, use Rooted<> instead.
+ */
+class MOZ_RAII JS_PUBLIC_API CustomAutoRooter : private AutoGCRooter {
+ public:
+  template <typename CX>
+  explicit CustomAutoRooter(const CX& cx)
+      : AutoGCRooter(cx, AutoGCRooter::Kind::Custom) {}
+
+  friend void AutoGCRooter::trace(JSTracer* trc);
+
+ protected:
+  virtual ~CustomAutoRooter() = default;
+
+  /** Supplied by derived class to trace roots. */
+  virtual void trace(JSTracer* trc) = 0;
+};
 
 namespace detail {
 
@@ -1490,7 +1523,7 @@ class MutableWrappedPtrOperations<UniquePtr<T, D>, Container>
   UniquePtr<T, D>& uniquePtr() { return static_cast<Container*>(this)->get(); }
 
  public:
-  MOZ_MUST_USE typename UniquePtr<T, D>::Pointer release() {
+  [[nodiscard]] typename UniquePtr<T, D>::Pointer release() {
     return uniquePtr().release();
   }
   void reset(T* ptr = T()) { uniquePtr().reset(ptr); }

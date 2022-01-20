@@ -14,10 +14,10 @@ struct HashMap;
 struct String;
 
 macro_rules! box_database {
-    ($($boxenum:ident $boxtype:expr),*,) => {
+    ($($(#[$attr:meta])* $boxenum:ident $boxtype:expr),*,) => {
         #[derive(Clone, Copy, PartialEq)]
         pub enum BoxType {
-            $($boxenum),*,
+            $($(#[$attr])* $boxenum),*,
             UnknownBox(u32),
         }
 
@@ -25,28 +25,29 @@ macro_rules! box_database {
             fn from(t: u32) -> BoxType {
                 use self::BoxType::*;
                 match t {
-                    $($boxtype => $boxenum),*,
+                    $($(#[$attr])* $boxtype => $boxenum),*,
                     _ => UnknownBox(t),
                 }
             }
         }
 
-        impl Into<u32> for BoxType {
-            fn into(self) -> u32 {
+        impl From<BoxType> for u32 {
+            fn from(b: BoxType) -> u32 {
                 use self::BoxType::*;
-                match self {
-                    $($boxenum => $boxtype),*,
+                match b {
+                    $($(#[$attr])* $boxenum => $boxtype),*,
                     UnknownBox(t) => t,
                 }
             }
         }
 
-        impl fmt::Debug for BoxType {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                let fourcc: FourCC = From::from(self.clone());
-                fourcc.fmt(f)
-            }
-        }
+    }
+}
+
+impl fmt::Debug for BoxType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let fourcc: FourCC = From::from(*self);
+        fourcc.fmt(f)
     }
 }
 
@@ -115,13 +116,17 @@ box_database!(
     MediaHeaderBox                    0x6d64_6864, // "mdhd"
     HandlerBox                        0x6864_6c72, // "hdlr"
     MediaInformationBox               0x6d69_6e66, // "minf"
-    ImageReferenceBox                 0x6972_6566, // "iref"
-    ImagePropertiesBox                0x6970_7270, // "iprp"
+    ItemReferenceBox                  0x6972_6566, // "iref"
+    ItemPropertiesBox                 0x6970_7270, // "iprp"
     ItemPropertyContainerBox          0x6970_636f, // "ipco"
     ItemPropertyAssociationBox        0x6970_6d61, // "ipma"
     ColorInformationBox               0x636f_6c72, // "colr"
+    ImageSpatialExtentsProperty       0x6973_7065, // "ispe"
     PixelInformationBox               0x7069_7869, // "pixi"
     AuxiliaryTypeProperty             0x6175_7843, // "auxC"
+    CleanApertureBox                  0x636c_6170, // "clap"
+    ImageRotation                     0x6972_6f74, // "irot"
+    ImageMirror                       0x696d_6972, // "imir"
     SampleTableBox                    0x7374_626c, // "stbl"
     SampleDescriptionBox              0x7374_7364, // "stsd"
     TimeToSampleBox                   0x7374_7473, // "stts"
@@ -133,8 +138,16 @@ box_database!(
     AVCSampleEntry                    0x6176_6331, // "avc1"
     AVC3SampleEntry                   0x6176_6333, // "avc3" - Need to check official name in spec.
     AVCConfigurationBox               0x6176_6343, // "avcC"
+    H263SampleEntry                   0x7332_3633, // "s263"
+    H263SpecificBox                   0x6432_3633, // "d263"
     MP4AudioSampleEntry               0x6d70_3461, // "mp4a"
     MP4VideoSampleEntry               0x6d70_3476, // "mp4v"
+    #[cfg(feature = "3gpp")]
+    AMRNBSampleEntry                  0x7361_6d72, // "samr" - AMR narrow-band
+    #[cfg(feature = "3gpp")]
+    AMRWBSampleEntry                  0x7361_7762, // "sawb" - AMR wide-band
+    #[cfg(feature = "3gpp")]
+    AMRSpecificBox                    0x6461_6d72, // "damr"
     ESDBox                            0x6573_6473, // "esds"
     VP8SampleEntry                    0x7670_3038, // "vp08"
     VP9SampleEntry                    0x7670_3039, // "vp09"
@@ -167,6 +180,10 @@ box_database!(
     MetadataItemListEntry             0x696c_7374, // "ilst"
     MetadataItemDataEntry             0x6461_7461, // "data"
     MetadataItemNameBox               0x6e61_6d65, // "name"
+    #[cfg(feature = "meta-xml")]
+    MetadataXMLBox                    0x786d_6c20, // "xml "
+    #[cfg(feature = "meta-xml")]
+    MetadataBXMLBox                   0x6278_6d6c, // "bxml"
     UserdataBox                       0x7564_7461, // "udta"
     AlbumEntry                        0xa961_6c62, // "©alb"
     ArtistEntry                       0xa941_5254, // "©ART"

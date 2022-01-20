@@ -697,6 +697,12 @@ class Log final {
         case SurfaceType::DATA_ALIGNED:
           mMessage << "SurfaceType::DATA_ALIGNED";
           break;
+        case SurfaceType::DATA_SHARED_WRAPPER:
+          mMessage << "SurfaceType::DATA_SHARED_WRAPPER";
+          break;
+        case SurfaceType::DATA_MAPPED:
+          mMessage << "SurfaceType::DATA_MAPPED";
+          break;
         default:
           mMessage << "Invalid SurfaceType (" << (int)aType << ")";
           break;

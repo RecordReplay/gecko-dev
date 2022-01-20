@@ -17,6 +17,7 @@ settings are available.
 from __future__ import absolute_import, unicode_literals
 
 import collections
+import collections.abc
 import os
 import sys
 import six
@@ -146,7 +147,7 @@ def reraise_attribute_error(func):
     return _
 
 
-class ConfigSettings(collections.Mapping):
+class ConfigSettings(collections.abc.Mapping):
     """Interface for configuration settings.
 
     This is the main interface to the configuration.
@@ -192,7 +193,7 @@ class ConfigSettings(collections.Mapping):
     will result in exceptions being raised.
     """
 
-    class ConfigSection(collections.MutableMapping, object):
+    class ConfigSection(collections.abc.MutableMapping, object):
         """Represents an individual config section."""
 
         def __init__(self, config, name, settings):
@@ -317,27 +318,12 @@ class ConfigSettings(collections.Mapping):
         self._config.write(fh)
 
     @classmethod
-    def _format_metadata(
-        cls,
-        provider,
-        section,
-        option,
-        type_cls,
-        description,
-        default=DefaultValue,
-        extra=None,
-    ):
+    def _format_metadata(cls, type_cls, description, default=DefaultValue, extra=None):
         """Formats and returns the metadata for a setting.
 
         Each setting must have:
 
-            section -- str section to which the setting belongs. This is how
-                settings are grouped.
-
-            option -- str id for the setting. This must be unique within the
-                section it appears.
-
-            type -- a ConfigType-derived type defining the type of the setting.
+            type_cls -- a ConfigType-derived type defining the type of the setting.
 
             description -- str describing how to use the setting and where it
                 applies.
@@ -353,10 +339,7 @@ class ConfigSettings(collections.Mapping):
         if isinstance(type_cls, string_types):
             type_cls = TYPE_CLASSES[type_cls]
 
-        meta = {
-            "description": description,
-            "type_cls": type_cls,
-        }
+        meta = {"description": description, "type_cls": type_cls}
 
         if default != DefaultValue:
             meta["default"] = default
@@ -385,7 +368,7 @@ class ConfigSettings(collections.Mapping):
                     "Setting has already been registered: %s.%s" % (section, option)
                 )
 
-            meta = self._format_metadata(provider, section, option, *setting[1:])
+            meta = self._format_metadata(*setting[1:])
             config_settings[section][option] = meta
 
         for section_name, settings in config_settings.items():

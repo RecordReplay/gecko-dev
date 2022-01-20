@@ -12,7 +12,6 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/TextUtils.h"
-#include "mozilla/Unused.h"
 #include "mozilla/Vector.h"
 #include "mozilla/WrappingOperations.h"
 
@@ -826,7 +825,7 @@ bool CDataArrayProxyHandler::set(JSContext* cx, HandleObject proxy, HandleId id,
 }
 
 static JSObject* MaybeUnwrapArrayWrapper(JSObject* obj) {
-  if (IsProxy(obj) &&
+  if (obj->is<ProxyObject>() &&
       obj->as<ProxyObject>().handler() == &CDataArrayProxyHandler::singleton) {
     return obj->as<ProxyObject>().target();
   }
@@ -1259,8 +1258,8 @@ static bool ArgumentLengthError(JSContext* cx, const char* fun,
   return false;
 }
 
-static bool ArrayLengthMismatch(JSContext* cx, unsigned expectedLength,
-                                HandleObject arrObj, unsigned actualLength,
+static bool ArrayLengthMismatch(JSContext* cx, size_t expectedLength,
+                                HandleObject arrObj, size_t actualLength,
                                 HandleValue actual, ConversionType convType) {
   MOZ_ASSERT(arrObj && CType::IsCType(arrObj));
 
@@ -1851,8 +1850,8 @@ static bool VariadicArgumentTypeError(JSContext* cx, uint32_t index,
   return false;
 }
 
-MOZ_MUST_USE JSObject* GetThisObject(JSContext* cx, const CallArgs& args,
-                                     const char* msg) {
+[[nodiscard]] JSObject* GetThisObject(JSContext* cx, const CallArgs& args,
+                                      const char* msg) {
   if (!args.thisv().isObject()) {
     IncompatibleThisProto(cx, msg, args.thisv());
     return nullptr;
@@ -3642,15 +3641,15 @@ static bool ImplicitConvert(JSContext* cx, HandleValue val,
           // Check that array is consistent with type, then
           // copy the array.
           const bool bufferShared = cls == ESClass::SharedArrayBuffer;
-          uint32_t sourceLength =
-              bufferShared ? JS::GetSharedArrayBufferByteLength(valObj)
-                           : JS::GetArrayBufferByteLength(valObj);
+          size_t sourceLength = bufferShared
+                                    ? JS::GetSharedArrayBufferByteLength(valObj)
+                                    : JS::GetArrayBufferByteLength(valObj);
           size_t elementSize = CType::GetSize(baseType);
           size_t arraySize = elementSize * targetLength;
-          if (arraySize != size_t(sourceLength)) {
+          if (arraySize != sourceLength) {
             MOZ_ASSERT(!funObj);
-            return ArrayLengthMismatch(cx, arraySize, targetType,
-                                       size_t(sourceLength), val, convType);
+            return ArrayLengthMismatch(cx, arraySize, targetType, sourceLength,
+                                       val, convType);
           }
           SharedMem<void*> target = SharedMem<void*>::unshared(buffer);
           JS::AutoCheckCannotGC nogc;
@@ -3673,13 +3672,13 @@ static bool ImplicitConvert(JSContext* cx, HandleValue val,
                              arrObj, arrIndex);
           }
 
-          uint32_t sourceLength = JS_GetTypedArrayByteLength(valObj);
+          size_t sourceLength = JS_GetTypedArrayByteLength(valObj);
           size_t elementSize = CType::GetSize(baseType);
           size_t arraySize = elementSize * targetLength;
-          if (arraySize != size_t(sourceLength)) {
+          if (arraySize != sourceLength) {
             MOZ_ASSERT(!funObj);
-            return ArrayLengthMismatch(cx, arraySize, targetType,
-                                       size_t(sourceLength), val, convType);
+            return ArrayLengthMismatch(cx, arraySize, targetType, sourceLength,
+                                       val, convType);
           }
           SharedMem<void*> target = SharedMem<void*>::unshared(buffer);
           JS::AutoCheckCannotGC nogc;
@@ -4111,9 +4110,9 @@ static void BuildTypeSource(JSContext* cx, JSObject* typeObj_, bool makeShort,
 // resulting string can ImplicitConvert successfully if passed to another data
 // constructor. (This is important when called recursively, since fields of
 // structs and arrays are converted with ImplicitConvert.)
-static MOZ_MUST_USE bool BuildDataSource(JSContext* cx, HandleObject typeObj,
-                                         void* data, bool isImplicit,
-                                         AutoString& result) {
+[[nodiscard]] static bool BuildDataSource(JSContext* cx, HandleObject typeObj,
+                                          void* data, bool isImplicit,
+                                          AutoString& result) {
   TypeCode type = CType::GetTypeCode(typeObj);
   switch (type) {
     case TYPE_bool:
@@ -5652,7 +5651,7 @@ bool ArrayType::Getter(JSContext* cx, HandleObject obj, HandleId idval,
   size_t length = GetLength(typeObj);
   bool ok = jsidToSize(cx, idval, true, &index);
   int32_t dummy;
-  if (!ok && JSID_IS_SYMBOL(idval)) {
+  if (!ok && idval.isSymbol()) {
     return true;
   }
   bool dummy2;
@@ -5699,7 +5698,7 @@ bool ArrayType::Setter(JSContext* cx, HandleObject obj, HandleId idval,
   size_t length = GetLength(typeObj);
   bool ok = jsidToSize(cx, idval, true, &index);
   int32_t dummy;
-  if (!ok && JSID_IS_SYMBOL(idval)) {
+  if (!ok && idval.isSymbol()) {
     return true;
   }
   bool dummy2;
@@ -5999,8 +5998,7 @@ bool StructType::DefineInternal(JSContext* cx, JSObject* typeObj_,
 
       if (!JS_DefineUCProperty(cx, prototype, nameChars.twoByteChars(),
                                name->length(), getterObj, setterObj,
-                               JSPROP_ENUMERATE | JSPROP_PERMANENT |
-                                   JSPROP_GETTER | JSPROP_SETTER)) {
+                               JSPROP_ENUMERATE | JSPROP_PERMANENT)) {
         return false;
       }
 
@@ -7932,7 +7930,7 @@ bool CData::ReadStringReplaceMalformed(JSContext* cx, unsigned argc,
                           js::StringBufferArena);
 }
 
-using TypedArrayConstructor = JSObject* (*)(JSContext*, uint32_t);
+using TypedArrayConstructor = JSObject* (*)(JSContext*, size_t);
 
 template <typename Type>
 TypedArrayConstructor GetTypedArrayConstructorImpl() {

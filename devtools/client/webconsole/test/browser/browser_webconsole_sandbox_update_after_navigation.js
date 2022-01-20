@@ -13,6 +13,12 @@ const TEST_URI1 = "http://example.com/" + BASE_URI;
 const TEST_URI2 = "http://example.org/" + BASE_URI;
 
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   await pushPref("devtools.webconsole.persistlog", false);
 
   const hud = await openNewTabAndConsole(TEST_URI1);
@@ -44,8 +50,8 @@ add_task(async function() {
   // continuing the test or it might destroy messages we wait later on (Bug
   // 1270234).
   const promises = [hud.ui.once("messages-cleared")];
-  if (isFissionEnabled() && isTargetSwitchingEnabled()) {
-    promises.push(hud.targetList.once("switched-target"));
+  if (isFissionEnabled()) {
+    promises.push(hud.commands.targetCommand.once("switched-target"));
   }
 
   gBrowser.goBack();

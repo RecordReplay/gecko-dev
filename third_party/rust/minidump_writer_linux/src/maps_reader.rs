@@ -1,18 +1,19 @@
 use crate::auxv_reader::AuxvType;
+use crate::errors::MapsReaderError;
 use crate::thread_info::Pid;
-use crate::Result;
 use byteorder::{NativeEndian, ReadBytesExt};
 use goblin::elf;
-use memmap::{Mmap, MmapOptions};
+use memmap2::{Mmap, MmapOptions};
 use std::convert::TryInto;
 use std::fs::File;
 use std::mem::size_of;
 use std::path::PathBuf;
 
-pub const LINUX_GATE_LIBRARY_NAME: &'static str = "linux-gate.so";
-pub const DELETED_SUFFIX: &'static str = " (deleted)";
-pub const MOZILLA_IPC_PREFIX: &'static str = "org.mozilla.ipc.";
-pub const RESERVED_FLAGS: &'static str = " ---p";
+pub const LINUX_GATE_LIBRARY_NAME: &str = "linux-gate.so";
+pub const DELETED_SUFFIX: &str = " (deleted)";
+pub const RESERVED_FLAGS: &str = "---p";
+
+type Result<T> = std::result::Result<T, MapsReaderError>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SystemMappingInfo {
@@ -57,17 +58,9 @@ pub enum MappingInfoParsingResult {
     Success(MappingInfo),
 }
 
-fn is_ipc_shared_memory_segment(pathname: Option<&str>) -> bool {
-    if let Some(name) = pathname {
-        name.contains(MOZILLA_IPC_PREFIX) && name.contains(DELETED_SUFFIX)
-    } else {
-        false
-    }
-}
-
 fn is_mapping_a_path(pathname: Option<&str>) -> bool {
     match pathname {
-        Some(x) => x.contains("/"),
+        Some(x) => x.contains('/'),
         None => false,
     }
 }
@@ -98,12 +91,24 @@ impl MappingInfo {
             })
             .map(str::trim);
 
-        let address = splits.next().ok_or("maps malformed: No address found")?;
-        let perms = splits.next().ok_or("maps malformed: No perms found")?;
-        let mut offset =
-            usize::from_str_radix(splits.next().ok_or("maps malformed: No offset found")?, 16)?;
-        let _dev = splits.next().ok_or("maps malformed: No dev found")?;
-        let _inode = splits.next().ok_or("maps malformed: No inode found")?;
+        let address = splits
+            .next()
+            .ok_or(MapsReaderError::MapEntryMalformed("address"))?;
+        let perms = splits
+            .next()
+            .ok_or(MapsReaderError::MapEntryMalformed("permissions"))?;
+        let mut offset = usize::from_str_radix(
+            splits
+                .next()
+                .ok_or(MapsReaderError::MapEntryMalformed("offset"))?,
+            16,
+        )?;
+        let _dev = splits
+            .next()
+            .ok_or(MapsReaderError::MapEntryMalformed("dev"))?;
+        let _inode = splits
+            .next()
+            .ok_or(MapsReaderError::MapEntryMalformed("inode"))?;
         let mut pathname = splits.next(); // Optional
 
         // Due to our ugly `splitn_whitespace()` hack from above, we might have
@@ -118,7 +123,7 @@ impl MappingInfo {
         let start_address = usize::from_str_radix(addresses.next().unwrap(), 16)?;
         let end_address = usize::from_str_radix(addresses.next().unwrap(), 16)?;
 
-        let executable = perms.contains("x");
+        let executable = perms.contains('x');
 
         // Only copy name if the name is a valid path name, or if
         // it's the VDSO image.
@@ -127,11 +132,6 @@ impl MappingInfo {
         if !is_path && linux_gate_loc != 0 && start_address == linux_gate_loc.try_into()? {
             pathname = Some(LINUX_GATE_LIBRARY_NAME);
             offset = 0;
-        }
-
-        if is_ipc_shared_memory_segment(pathname) {
-            // Skip shared memory segments used for IPC
-            return Ok(MappingInfoParsingResult::SkipLine);
         }
 
         match (pathname, last_mapping) {
@@ -156,8 +156,8 @@ impl MappingInfo {
                 if (start_address == module_end_address)
                     && module.executable
                     && is_mapping_a_path(module.name.as_deref())
-                    && offset == 0
-                    || offset == module_end_address && perms == RESERVED_FLAGS
+                    && (offset == 0 || offset == module_end_address)
+                    && perms == RESERVED_FLAGS
                 {
                     module.size = end_address - module.start_address;
                     return Ok(MappingInfoParsingResult::SkipLine);
@@ -186,22 +186,23 @@ impl MappingInfo {
 
     pub fn get_mmap(name: &Option<String>, offset: usize) -> Result<Mmap> {
         if !MappingInfo::is_mapped_file_safe_to_open(&name) {
-            return Err("Not safe to open mapping".into());
+            return Err(MapsReaderError::NotSafeToOpenMapping(
+                name.clone().unwrap_or_default(),
+            ));
         }
 
         // Not doing this as root_prefix is always "" at the moment
         //   if (!dumper.GetMappingAbsolutePath(mapping, filename))
-        let filename = name.clone().unwrap_or(String::new());
+        let filename = name.clone().unwrap_or_default();
         let mapped_file = unsafe {
             MmapOptions::new()
-                .offset(offset.try_into()?)
+                .offset(offset.try_into()?) // try_into() to work for both 32 and 64 bit
                 .map(&File::open(filename)?)?
         };
 
         if mapped_file.is_empty() || mapped_file.len() < elf::header::SELFMAG {
-            return Err("mmap failed".into());
+            return Err(MapsReaderError::MmapSanityCheckFailed);
         }
-
         Ok(mapped_file)
     }
 
@@ -221,7 +222,10 @@ impl MappingInfo {
         //   return false;
 
         if link_path != PathBuf::from(path) {
-            return Err("symlink does not match".into());
+            return Err(MapsReaderError::SymlinkError(
+                PathBuf::from(path),
+                link_path,
+            ));
         }
 
         // Check to see if someone actually named their executable 'foo (deleted)'.
@@ -232,7 +236,7 @@ impl MappingInfo {
         //         return Err("".into());
         //     }
         // }
-        return Ok(exe_link);
+        Ok(exe_link)
     }
 
     pub fn stack_has_pointer_to_mapping(&self, stack_copy: &[u8], sp_offset: usize) -> bool {
@@ -289,12 +293,14 @@ impl MappingInfo {
 
         let elf_obj = elf::Elf::parse(&mapped_file)?;
 
-        let soname = elf_obj.soname.ok_or("No soname found")?;
+        let soname = elf_obj.soname.ok_or_else(|| {
+            MapsReaderError::NoSoName(self.name.clone().unwrap_or_else(|| "None".to_string()))
+        })?;
         Ok(soname.to_string())
     }
 
     pub fn get_mapping_effective_name_and_path(&self) -> Result<(String, String)> {
-        let mut file_path = self.name.clone().unwrap_or(String::new());
+        let mut file_path = self.name.clone().unwrap_or_default();
         let file_name;
 
         // Tools such as minidump_stackwalk use the name of the module to look up
@@ -308,7 +314,7 @@ impl MappingInfo {
             Err(_) => {
                 //   file_path := /path/to/libname.so
                 //   file_name := libname.so
-                let split: Vec<_> = file_path.rsplitn(2, "/").collect();
+                let split: Vec<_> = file_path.rsplitn(2, '/').collect();
                 file_name = split.first().unwrap().to_string();
                 return Ok((file_path, file_name));
             }
@@ -367,6 +373,7 @@ impl MappingInfo {
 }
 
 #[cfg(test)]
+#[cfg(target_pointer_width = "64")] // All addresses are 64 bit and I'm currently too lazy to adjust it to work for both
 mod tests {
     use super::*;
 
@@ -388,7 +395,7 @@ mod tests {
 "7efd96d85000-7efd96d86000 ---p 001c1000 00:31 4996104                    /lib64/libc-2.32.so",
 "7efd96d86000-7efd96d89000 r--p 001c1000 00:31 4996104                    /lib64/libc-2.32.so",
 "7efd96d89000-7efd96d8c000 rw-p 001c4000 00:31 4996104                    /lib64/libc-2.32.so",
-"7efd96d8c000-7efd96d92000 rw-p 00000000 00:00 0",
+"7efd96d8c000-7efd96d92000 ---p 00000000 00:00 0",
 "7efd96da0000-7efd96da1000 r--p 00000000 00:31 5004379                    /usr/lib/locale/en_US.utf8/LC_NUMERIC",
 "7efd96da1000-7efd96da2000 r--p 00000000 00:31 5004382                    /usr/lib/locale/en_US.utf8/LC_TIME",
 "7efd96da2000-7efd96da3000 r--p 00000000 00:31 5004377                    /usr/lib/locale/en_US.utf8/LC_MONETARY",
@@ -602,7 +609,7 @@ mod tests {
             match MappingInfo::parse_from_line(&line, linux_gate_loc, mappings.last_mut()) {
                 Ok(MappingInfoParsingResult::Success(map)) => mappings.push(map),
                 Ok(MappingInfoParsingResult::SkipLine) => continue,
-                Err(x) => panic!(format!("{:?}", x)),
+                Err(x) => panic!("{:?}", x),
             }
         }
         assert_eq!(mappings.len(), 1);

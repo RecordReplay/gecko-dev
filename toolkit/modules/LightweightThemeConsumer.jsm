@@ -7,6 +7,8 @@ var EXPORTED_SYMBOLS = ["LightweightThemeConsumer"];
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const DEFAULT_THEME_ID = "default-theme@mozilla.org";
+const LIGHT_THEME_ID = "firefox-compact-light@mozilla.org";
+const DARK_THEME_ID = "firefox-compact-dark@mozilla.org";
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -94,7 +96,7 @@ const toolkitVariableMap = [
         );
         element.style.setProperty(
           descriptionColorVariable,
-          `rgba(${r}, ${g}, ${b}, 0.65)`
+          `rgba(${r}, ${g}, ${b}, 0.7)`
         );
         return `rgba(${r}, ${g}, ${b}, ${a})`;
       },
@@ -193,10 +195,8 @@ const toolkitVariableMap = [
       lwtProperty: "toolbar_field_highlight",
       processColor(rgbaChannels, element) {
         if (!rgbaChannels) {
-          element.removeAttribute("lwt-selection");
           return null;
         }
-        element.setAttribute("lwt-selection", "true");
         const { r, g, b, a } = rgbaChannels;
         return `rgba(${r}, ${g}, ${b}, ${a})`;
       },
@@ -217,11 +217,8 @@ function LightweightThemeConsumer(aDocument) {
 
   Services.obs.addObserver(this, "lightweight-theme-styling-update");
 
-  // In Linux, the default theme picks up the right colors from dark GTK themes.
-  if (AppConstants.platform != "linux") {
-    this.darkThemeMediaQuery = this._win.matchMedia("(-moz-system-dark-theme)");
-    this.darkThemeMediaQuery.addListener(this);
-  }
+  this.darkThemeMediaQuery = this._win.matchMedia("(-moz-system-dark-theme)");
+  this.darkThemeMediaQuery.addListener(this);
 
   const { LightweightThemeManager } = ChromeUtils.import(
     "resource://gre/modules/LightweightThemeManager.jsm"
@@ -266,17 +263,17 @@ LightweightThemeConsumer.prototype = {
     }
   },
 
-  get darkMode() {
-    return this.darkThemeMediaQuery && this.darkThemeMediaQuery.matches;
-  },
-
   _update(themeData) {
     this._lastData = themeData;
 
-    let theme = themeData.theme;
-    if (themeData.darkTheme && this.darkMode) {
-      theme = themeData.darkTheme;
-    }
+    // In Linux, the default theme picks up the right colors from dark GTK themes.
+    const useDarkTheme =
+      themeData.darkTheme &&
+      this.darkThemeMediaQuery?.matches &&
+      (themeData.darkTheme.id != DEFAULT_THEME_ID ||
+        AppConstants.platform != "linux");
+
+    let theme = useDarkTheme ? themeData.darkTheme : themeData.theme;
     if (!theme) {
       theme = { id: DEFAULT_THEME_ID };
     }
@@ -291,6 +288,12 @@ LightweightThemeConsumer.prototype = {
       root.removeAttribute("lwtheme-image");
     }
 
+    root.toggleAttribute(
+      "lwtheme-mozlightdark",
+      theme.id == DEFAULT_THEME_ID ||
+        theme.id == LIGHT_THEME_ID ||
+        theme.id == DARK_THEME_ID
+    );
     this._setExperiment(active, themeData.experiment, theme.experimental);
     _setImage(root, active, "--lwt-header-image", theme.headerURL);
     _setImage(
@@ -301,13 +304,13 @@ LightweightThemeConsumer.prototype = {
     );
     _setProperties(root, active, theme);
 
-    if (theme.id != DEFAULT_THEME_ID || this.darkMode) {
+    if (theme.id != DEFAULT_THEME_ID || useDarkTheme) {
       root.setAttribute("lwtheme", "true");
     } else {
       root.removeAttribute("lwtheme");
       root.removeAttribute("lwthemetextcolor");
     }
-    if (theme.id == DEFAULT_THEME_ID && this.darkMode) {
+    if (theme.id == DEFAULT_THEME_ID && useDarkTheme) {
       root.setAttribute("lwt-default-theme-in-dark-mode", "true");
     } else {
       root.removeAttribute("lwt-default-theme-in-dark-mode");
@@ -473,6 +476,7 @@ function _rgbaToString(parsedColor) {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
 
+// There is a second copy of this in ThemeVariableMap.jsm.
 function _isColorDark(r, g, b) {
-  return 0.2125 * r + 0.7154 * g + 0.0721 * b <= 110;
+  return 0.2125 * r + 0.7154 * g + 0.0721 * b <= 127;
 }

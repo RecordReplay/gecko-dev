@@ -15,6 +15,8 @@
 #include "TSFTextStore.h"
 
 #include "OSKInputPaneManager.h"
+#include "OSKTabTipManager.h"
+#include "OSKVRManager.h"
 #include "nsLookAndFeel.h"
 #include "nsWindow.h"
 #include "WinUtils.h"
@@ -32,10 +34,8 @@
 #include "cfgmgr32.h"
 
 #include "FxRWindowManager.h"
-#include "VRShMem.h"
 #include "moz_external_vr.h"
 
-const char* kOskPathPrefName = "ui.osk.on_screen_keyboard_path";
 const char* kOskEnabled = "ui.osk.enabled";
 const char* kOskDetectPhysicalKeyboard = "ui.osk.detect_physical_keyboard";
 const char* kOskRequireWin10 = "ui.osk.require_win10";
@@ -716,22 +716,15 @@ void IMEHandler::AppendInputScopeFromType(const nsAString& aHTMLInputType,
 }
 
 // static
-void IMEHandler::MaybeShowOnScreenKeyboard(nsWindow* aWindow,
-                                           const InputContext& aInputContext) {
-  if (aInputContext.mHTMLInputInputmode.EqualsLiteral("none")) {
-    return;
-  }
+bool IMEHandler::IsOnScreenKeyboardSupported() {
 #ifdef NIGHTLY_BUILD
   if (FxRWindowManager::GetInstance()->IsFxRWindow(sFocusedWindow)) {
-    mozilla::gfx::VRShMem shmem(nullptr, true /*aRequiresMutex*/);
-    shmem.SendIMEState(FxRWindowManager::GetInstance()->GetWindowID(),
-                       mozilla::gfx::VRFxEventState::FOCUS);
-    return;
+    return true;
   }
 #endif  // NIGHTLY_BUILD
   if (!IsWin8OrLater() || !Preferences::GetBool(kOskEnabled, true) ||
-      GetOnScreenKeyboardWindow() || !IMEHandler::NeedOnScreenKeyboard()) {
-    return;
+      !IMEHandler::NeedOnScreenKeyboard()) {
+    return false;
   }
 
   // On Windows 10 we require tablet mode, unless the user has set the relevant
@@ -739,9 +732,23 @@ void IMEHandler::MaybeShowOnScreenKeyboard(nsWindow* aWindow,
   // We might be disabled specifically on Win8(.1), so we check that afterwards.
   if (IsWin10OrLater()) {
     if (!IsInTabletMode() && !AutoInvokeOnScreenKeyboardInDesktopMode()) {
-      return;
+      return false;
     }
   } else if (Preferences::GetBool(kOskRequireWin10, true)) {
+    return false;
+  }
+
+  return true;
+}
+
+// static
+void IMEHandler::MaybeShowOnScreenKeyboard(nsWindow* aWindow,
+                                           const InputContext& aInputContext) {
+  if (aInputContext.mHTMLInputInputmode.EqualsLiteral("none")) {
+    return;
+  }
+
+  if (!IsOnScreenKeyboardSupported()) {
     return;
   }
 
@@ -752,9 +759,7 @@ void IMEHandler::MaybeShowOnScreenKeyboard(nsWindow* aWindow,
 void IMEHandler::MaybeDismissOnScreenKeyboard(nsWindow* aWindow, Sync aSync) {
 #ifdef NIGHTLY_BUILD
   if (FxRWindowManager::GetInstance()->IsFxRWindow(aWindow)) {
-    mozilla::gfx::VRShMem shmem(nullptr, true /*aRequiresMutex*/);
-    shmem.SendIMEState(FxRWindowManager::GetInstance()->GetWindowID(),
-                       mozilla::gfx::VRFxEventState::BLUR);
+    OSKVRManager::DismissOnScreenKeyboard();
   }
 #endif  // NIGHTLY_BUILD
   if (!IsWin8OrLater()) {
@@ -1001,74 +1006,19 @@ bool IMEHandler::AutoInvokeOnScreenKeyboardInDesktopMode() {
 // Based on DisplayVirtualKeyboard() in Chromium's base/win/win_util.cc.
 // static
 void IMEHandler::ShowOnScreenKeyboard(nsWindow* aWindow) {
+#ifdef NIGHTLY_BUILD
+  if (FxRWindowManager::GetInstance()->IsFxRWindow(sFocusedWindow)) {
+    OSKVRManager::ShowOnScreenKeyboard();
+    return;
+  }
+#endif  // NIGHTLY_BUILD
+
   if (IsWin10AnniversaryUpdateOrLater()) {
     OSKInputPaneManager::ShowOnScreenKeyboard(aWindow->GetWindowHandle());
     return;
   }
 
-  nsAutoString cachedPath;
-  nsresult result = Preferences::GetString(kOskPathPrefName, cachedPath);
-  if (NS_FAILED(result) || cachedPath.IsEmpty()) {
-    wchar_t path[MAX_PATH];
-    // The path to TabTip.exe is defined at the following registry key.
-    // This is pulled out of the 64-bit registry hive directly.
-    const wchar_t kRegKeyName[] =
-        L"Software\\Classes\\CLSID\\"
-        L"{054AAE20-4BEA-4347-8A35-64A533254A9D}\\LocalServer32";
-    if (!WinUtils::GetRegistryKey(HKEY_LOCAL_MACHINE, kRegKeyName, nullptr,
-                                  path, sizeof path)) {
-      return;
-    }
-
-    std::wstring wstrpath(path);
-    // The path provided by the registry will often contain
-    // %CommonProgramFiles%, which will need to be replaced if it is present.
-    size_t commonProgramFilesOffset = wstrpath.find(L"%CommonProgramFiles%");
-    if (commonProgramFilesOffset != std::wstring::npos) {
-      // The path read from the registry contains the %CommonProgramFiles%
-      // environment variable prefix. On 64 bit Windows the
-      // SHGetKnownFolderPath function returns the common program files path
-      // with the X86 suffix for the FOLDERID_ProgramFilesCommon value.
-      // To get the correct path to TabTip.exe we first read the environment
-      // variable CommonProgramW6432 which points to the desired common
-      // files path. Failing that we fallback to the SHGetKnownFolderPath API.
-
-      // We then replace the %CommonProgramFiles% value with the actual common
-      // files path found in the process.
-      std::wstring commonProgramFilesPath;
-      std::vector<wchar_t> commonProgramFilesPathW6432;
-      DWORD bufferSize =
-          ::GetEnvironmentVariableW(L"CommonProgramW6432", nullptr, 0);
-      if (bufferSize) {
-        commonProgramFilesPathW6432.resize(bufferSize);
-        ::GetEnvironmentVariableW(L"CommonProgramW6432",
-                                  commonProgramFilesPathW6432.data(),
-                                  bufferSize);
-        commonProgramFilesPath =
-            std::wstring(commonProgramFilesPathW6432.data());
-      } else {
-        PWSTR path = nullptr;
-        HRESULT hres = SHGetKnownFolderPath(FOLDERID_ProgramFilesCommon, 0,
-                                            nullptr, &path);
-        if (FAILED(hres) || !path) {
-          return;
-        }
-        commonProgramFilesPath =
-            static_cast<const wchar_t*>(nsDependentString(path).get());
-        ::CoTaskMemFree(path);
-      }
-      wstrpath.replace(commonProgramFilesOffset,
-                       wcslen(L"%CommonProgramFiles%"), commonProgramFilesPath);
-    }
-
-    cachedPath.Assign(wstrpath.data());
-    Preferences::SetString(kOskPathPrefName, cachedPath);
-  }
-
-  const char16_t* cachedPathPtr;
-  cachedPath.GetData(&cachedPathPtr);
-  ShellExecuteW(nullptr, L"", char16ptr_t(cachedPathPtr), nullptr, nullptr,
-                SW_SHOW);
+  OSKTabTipManager::ShowOnScreenKeyboard();
 }
 
 // Based on DismissVirtualKeyboard() in Chromium's base/win/win_util.cc.
@@ -1080,20 +1030,7 @@ void IMEHandler::DismissOnScreenKeyboard(nsWindow* aWindow) {
     return;
   }
 
-  HWND osk = GetOnScreenKeyboardWindow();
-  if (osk) {
-    ::PostMessage(osk, WM_SYSCOMMAND, SC_CLOSE, 0);
-  }
-}
-
-// static
-HWND IMEHandler::GetOnScreenKeyboardWindow() {
-  const wchar_t kOSKClassName[] = L"IPTip_Main_Window";
-  HWND osk = ::FindWindowW(kOSKClassName, nullptr);
-  if (::IsWindow(osk) && ::IsWindowEnabled(osk) && ::IsWindowVisible(osk)) {
-    return osk;
-  }
-  return nullptr;
+  OSKTabTipManager::DismissOnScreenKeyboard();
 }
 
 bool IMEHandler::MaybeCreateNativeCaret(nsWindow* aWindow) {

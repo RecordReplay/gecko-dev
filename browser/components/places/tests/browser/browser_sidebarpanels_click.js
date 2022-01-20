@@ -154,7 +154,7 @@ async function testPlacesPanel(testInfo) {
 
 function promiseAlertDialogObserved() {
   return new Promise(resolve => {
-    function observer(subject) {
+    async function observer(subject) {
       info("alert dialog observed as expected");
       Services.obs.removeObserver(observer, "common-dialog-loaded");
       Services.obs.removeObserver(observer, "tabmodal-dialog-loaded");

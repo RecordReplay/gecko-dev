@@ -218,6 +218,8 @@ TEST(TestAudioTrackGraph, ErrorCallback)
       MediaTrackGraph::SYSTEM_THREAD_DRIVER, /*window*/ nullptr,
       MediaTrackGraph::REQUEST_DEFAULT_SAMPLE_RATE, nullptr);
 
+  const CubebUtils::AudioDeviceID deviceId = (void*)1;
+
   // Dummy track to make graph rolling. Add it and remove it to remove the
   // graph from the global hash table and let it shutdown.
   //
@@ -234,7 +236,8 @@ TEST(TestAudioTrackGraph, ErrorCallback)
     inputTrack->SetInputProcessing(listener);
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StartInputProcessing>(inputTrack, listener));
-    inputTrack->OpenAudioInput((void*)1, listener);
+    inputTrack->OpenAudioInput(deviceId, listener);
+    EXPECT_EQ(inputTrack->DeviceId().value(), deviceId);
     return graph->NotifyWhenDeviceStarted(inputTrack);
   });
 
@@ -260,9 +263,7 @@ TEST(TestAudioTrackGraph, ErrorCallback)
   DispatchFunction([&] {
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StopInputProcessing>(listener));
-    Maybe<CubebUtils::AudioDeviceID> id =
-        Some(reinterpret_cast<CubebUtils::AudioDeviceID>(1));
-    inputTrack->CloseAudioInput(id);
+    inputTrack->CloseAudioInput();
     inputTrack->Destroy();
   });
   WaitFor(cubeb->StreamDestroyEvent());
@@ -282,6 +283,8 @@ TEST(TestAudioTrackGraph, AudioInputTrack)
       MediaTrackGraph::SYSTEM_THREAD_DRIVER, /*window*/ nullptr,
       MediaTrackGraph::REQUEST_DEFAULT_SAMPLE_RATE, nullptr);
 
+  const CubebUtils::AudioDeviceID deviceId = (void*)1;
+
   RefPtr<AudioInputTrack> inputTrack;
   RefPtr<ProcessedMediaTrack> outputTrack;
   RefPtr<MediaInputPort> port;
@@ -300,7 +303,7 @@ TEST(TestAudioTrackGraph, AudioInputTrack)
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StartInputProcessing>(inputTrack, listener));
     // Device id does not matter. Ignore.
-    inputTrack->OpenAudioInput((void*)1, listener);
+    inputTrack->OpenAudioInput(deviceId, listener);
     return graph->NotifyWhenDeviceStarted(inputTrack);
   });
 
@@ -329,9 +332,7 @@ TEST(TestAudioTrackGraph, AudioInputTrack)
     port->Destroy();
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StopInputProcessing>(listener));
-    Maybe<CubebUtils::AudioDeviceID> id =
-        Some(reinterpret_cast<CubebUtils::AudioDeviceID>(1));
-    inputTrack->CloseAudioInput(id);
+    inputTrack->CloseAudioInput();
     inputTrack->Destroy();
   });
 
@@ -371,6 +372,8 @@ TEST(TestAudioTrackGraph, ReOpenAudioInput)
   MediaTrackGraph* graph = MediaTrackGraph::GetInstance(
       MediaTrackGraph::SYSTEM_THREAD_DRIVER, /*window*/ nullptr, rate, nullptr);
 
+  const CubebUtils::AudioDeviceID deviceId = (void*)1;
+
   RefPtr<AudioInputTrack> inputTrack;
   RefPtr<ProcessedMediaTrack> outputTrack;
   RefPtr<MediaInputPort> port;
@@ -385,7 +388,7 @@ TEST(TestAudioTrackGraph, ReOpenAudioInput)
     inputTrack->SetInputProcessing(listener);
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StartInputProcessing>(inputTrack, listener));
-    inputTrack->OpenAudioInput((void*)1, listener);
+    inputTrack->OpenAudioInput(deviceId, listener);
     return graph->NotifyWhenDeviceStarted(inputTrack);
   });
 
@@ -415,11 +418,7 @@ TEST(TestAudioTrackGraph, ReOpenAudioInput)
   cubeb->DontGoFaster();
 
   // Close the input to see that no asserts go off due to bad state.
-  DispatchFunction([&] {
-    // Device id does not matter. Ignore.
-    auto id = Some((CubebUtils::AudioDeviceID)1);
-    inputTrack->CloseAudioInput(id);
-  });
+  DispatchFunction([&] { inputTrack->CloseAudioInput(); });
 
   stream = WaitFor(cubeb->StreamInitEvent());
   EXPECT_FALSE(stream->mHasInput);
@@ -442,7 +441,7 @@ TEST(TestAudioTrackGraph, ReOpenAudioInput)
   // Re-open the input to again see that no asserts go off due to bad state.
   DispatchFunction([&] {
     // Device id does not matter. Ignore.
-    inputTrack->OpenAudioInput((void*)1, listener);
+    inputTrack->OpenAudioInput(deviceId, listener);
   });
 
   stream = WaitFor(cubeb->StreamInitEvent());
@@ -470,9 +469,7 @@ TEST(TestAudioTrackGraph, ReOpenAudioInput)
     port->Destroy();
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StopInputProcessing>(listener));
-    Maybe<CubebUtils::AudioDeviceID> id =
-        Some(reinterpret_cast<CubebUtils::AudioDeviceID>(1));
-    inputTrack->CloseAudioInput(id);
+    inputTrack->CloseAudioInput();
     inputTrack->Destroy();
   });
 
@@ -501,6 +498,23 @@ TEST(TestAudioTrackGraph, ReOpenAudioInput)
   EXPECT_LE(nrDiscontinuities, 1U);
 }
 
+// Sum the signal to mono and compute the root mean square, in float32,
+// regardless of the input format.
+float rmsf32(AudioDataValue* aSamples, uint32_t aChannels, uint32_t aFrames) {
+  float downmixed;
+  float rms = 0.;
+  uint32_t readIdx = 0;
+  for (uint32_t i = 0; i < aFrames; i++) {
+    downmixed = 0.;
+    for (uint32_t j = 0; j < aChannels; j++) {
+      downmixed += AudioSampleToFloat(aSamples[readIdx++]);
+    }
+    rms += downmixed * downmixed;
+  }
+  rms = rms / aFrames;
+  return sqrt(rms);
+}
+
 TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
 {
   MockCubeb* cubeb = new MockCubeb();
@@ -509,6 +523,8 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
   MediaTrackGraph* graph = MediaTrackGraph::GetInstance(
       MediaTrackGraph::SYSTEM_THREAD_DRIVER, /*window*/ nullptr,
       MediaTrackGraph::REQUEST_DEFAULT_SAMPLE_RATE, nullptr);
+
+  const CubebUtils::AudioDeviceID deviceId = (void*)1;
 
   RefPtr<AudioInputTrack> inputTrack;
   RefPtr<ProcessedMediaTrack> outputTrack;
@@ -525,7 +541,7 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<SetPassThrough>(inputTrack, listener, true));
     inputTrack->SetInputProcessing(listener);
-    inputTrack->OpenAudioInput((void*)1, listener);
+    inputTrack->OpenAudioInput(deviceId, listener);
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StartInputProcessing>(inputTrack, listener));
     return graph->NotifyWhenDeviceStarted(inputTrack);
@@ -537,19 +553,12 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
 
   stream->SetOutputRecordingEnabled(true);
 
-  // Wait for a second worth of audio data. GoFaster is dispatched through a
-  // ControlMessage so that it is called in the first audio driver iteration.
-  // Otherwise the audio driver might be going very fast while the fallback
-  // system clock driver is still in an iteration.
-  DispatchFunction([&] {
-    inputTrack->GraphImpl()->AppendMessage(MakeUnique<GoFaster>(cubeb));
-  });
+  // Wait for a second worth of audio data.
   uint32_t totalFrames = 0;
   WaitUntil(stream->FramesProcessedEvent(), [&](uint32_t aFrames) {
     totalFrames += aFrames;
     return totalFrames > static_cast<uint32_t>(graph->GraphRate());
   });
-  cubeb->DontGoFaster();
 
   const uint32_t ITERATION_COUNT = 5;
   uint32_t iterations = ITERATION_COUNT;
@@ -564,7 +573,6 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
       } else {
         currentMode = DisabledTrackMode::SILENCE_BLACK;
       }
-      inputTrack->GraphImpl()->AppendMessage(MakeUnique<GoFaster>(cubeb));
     });
 
     totalFrames = 0;
@@ -572,7 +580,6 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
       totalFrames += aFrames;
       return totalFrames > static_cast<uint32_t>(graph->GraphRate());
     });
-    cubeb->DontGoFaster();
   }
 
   // Clean up.
@@ -582,9 +589,7 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
     port->Destroy();
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StopInputProcessing>(listener));
-    Maybe<CubebUtils::AudioDeviceID> id =
-        Some(reinterpret_cast<CubebUtils::AudioDeviceID>(1));
-    inputTrack->CloseAudioInput(id);
+    inputTrack->CloseAudioInput();
     inputTrack->Destroy();
   });
 
@@ -594,23 +599,28 @@ TEST(TestAudioTrackGraph, AudioInputTrackDisabling)
   Tie(preSilenceSamples, estimatedFreq, nrDiscontinuities) =
       WaitFor(stream->OutputVerificationEvent());
 
-  const char* dir = getenv("MOZ_UPLOAD_DIR");
-  if (dir && nrDiscontinuities != ITERATION_COUNT) {
-    WavDumper dumper;
-    char uploadPath[256];
-    SprintfLiteral(
-        uploadPath, "%s/%s.wav", dir,
-        ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    printf("Writing debug WAV to %s\n", uploadPath);
-    dumper.OpenExplicit(uploadPath, 1, graph->GraphRate());
-    auto data = stream->TakeRecordedOutput();
-    dumper.Write(data.Elements(), data.Length());
+  auto data = stream->TakeRecordedOutput();
+
+  // check that there is non-silence and silence at the expected time in the
+  // stereo recording, while allowing for a bit of scheduling uncertainty, by
+  // checking half a second after the theoretical muting/unmuting.
+  // non-silence starts around: 0s, 2s, 4s
+  // silence start around: 1s, 3s, 5s
+  // To detect silence or non-silence, we compute the RMS of the signal for
+  // 100ms.
+  float noisyTime_s[] = {0.5, 2.5, 4.5};
+  float silenceTime_s[] = {1.5, 3.5, 5.5};
+
+  uint32_t rate = graph->GraphRate();
+  for (float& time : noisyTime_s) {
+    uint32_t startIdx = time * rate * 2 /* stereo */;
+    EXPECT_NE(rmsf32(&(data[startIdx]), 2, rate / 10), 0.0);
   }
 
-  // We're enabling/disabling the track ITERATION_COUNT times, so we expect the
-  // same number of discontinuities.
-  std::cerr << "nrDiscontinuities" << nrDiscontinuities << std::endl;
-  EXPECT_EQ(nrDiscontinuities, ITERATION_COUNT);
+  for (float& time : silenceTime_s) {
+    uint32_t startIdx = time * rate * 2 /* stereo */;
+    EXPECT_EQ(rmsf32(&(data[startIdx]), 2, rate / 10), 0.0);
+  }
 }
 
 void TestCrossGraphPort(uint32_t aInputRate, uint32_t aOutputRate,
@@ -636,6 +646,8 @@ void TestCrossGraphPort(uint32_t aInputRate, uint32_t aOutputRate,
       MediaTrackGraph::SYSTEM_THREAD_DRIVER, /*window*/ nullptr, aOutputRate,
       /*OutputDeviceID*/ reinterpret_cast<cubeb_devid>(1));
 
+  const CubebUtils::AudioDeviceID deviceId = (void*)1;
+
   RefPtr<AudioInputTrack> inputTrack;
   RefPtr<AudioInputProcessing> listener;
   auto primaryStarted = Invoke([&] {
@@ -647,7 +659,7 @@ void TestCrossGraphPort(uint32_t aInputRate, uint32_t aOutputRate,
     inputTrack->SetInputProcessing(listener);
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StartInputProcessing>(inputTrack, listener));
-    inputTrack->OpenAudioInput((void*)1, listener);
+    inputTrack->OpenAudioInput(deviceId, listener);
     return primary->NotifyWhenDeviceStarted(inputTrack);
   });
 
@@ -714,9 +726,7 @@ void TestCrossGraphPort(uint32_t aInputRate, uint32_t aOutputRate,
     port->Destroy();
     inputTrack->GraphImpl()->AppendMessage(
         MakeUnique<StopInputProcessing>(listener));
-    Maybe<CubebUtils::AudioDeviceID> id =
-        Some(reinterpret_cast<CubebUtils::AudioDeviceID>(1));
-    inputTrack->CloseAudioInput(id);
+    inputTrack->CloseAudioInput();
     inputTrack->Destroy();
   });
 

@@ -8,8 +8,9 @@
 #define mozilla_glean_GleanCounter_h
 
 #include "mozilla/Maybe.h"
+#include "mozilla/Result.h"
 #include "nsIGleanMetrics.h"
-#include "mozilla/glean/fog_ffi_generated.h"
+#include "nsString.h"
 
 namespace mozilla::glean {
 
@@ -24,7 +25,7 @@ class CounterMetric {
    *
    * @param aAmount The amount to increase by. Should be positive.
    */
-  void Add(int32_t aAmount = 1) const { fog_counter_add(mId, aAmount); }
+  void Add(int32_t aAmount = 1) const;
 
   /**
    * **Test-only API**
@@ -43,12 +44,8 @@ class CounterMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<int32_t> TestGetValue(const nsACString& aPingName = nsCString()) const {
-    if (!fog_counter_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    return Some(fog_counter_test_get_value(mId, &aPingName));
-  }
+  Result<Maybe<int32_t>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;

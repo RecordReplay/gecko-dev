@@ -1117,7 +1117,8 @@
       "../node_modules/babel-loader/lib/index.js??ref--1!../../../shared/platform/stack.js": 965,
       "../node_modules/babel-loader/lib/index.js??ref--1!../../../shared/ThreadSafeDevToolsUtils.js": 966,
       "../node_modules/babel-loader/lib/index.js??ref--1!../../../shared/webconsole/network-helper.js": 967,
-      "../node_modules/babel-loader/lib/index.js??ref--1!utils/environment.js": 968
+      "../node_modules/babel-loader/lib/index.js??ref--1!utils/environment.js": 968,
+      "../node_modules/pretty-fast/node_modules/acorn/dist/acorn.mjs": 969
     },
     "usedIds": {
       "0": 0,
@@ -2088,7 +2089,8 @@
       "965": 965,
       "966": 966,
       "967": 967,
-      "968": 968
+      "968": 968,
+      "969": 969
     }
   },
   "chunks": {

@@ -4,13 +4,19 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["TelemetryReportingPolicy"];
+var EXPORTED_SYMBOLS = ["TelemetryReportingPolicy", "Policy"];
 
-ChromeUtils.import("resource://gre/modules/Log.jsm", this);
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
-ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
-ChromeUtils.import("resource://services-common/observers.js", this);
-ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", this);
+const { Log } = ChromeUtils.import("resource://gre/modules/Log.jsm");
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { clearTimeout, setTimeout } = ChromeUtils.import(
+  "resource://gre/modules/Timer.jsm"
+);
+const { Observers } = ChromeUtils.import(
+  "resource://services-common/observers.js"
+);
+const { TelemetryUtils } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryUtils.jsm"
+);
 
 ChromeUtils.defineModuleGetter(
   this,

@@ -151,14 +151,24 @@ let DownloadsViewableInternally = {
       extension: "avif",
       mimeTypes: ["image/avif"],
       initAvailable() {
-        // NOTE: This does not handle MOZ_AV1, which determines whether
-        // the browser is built with AV1, and therefore AVIF, support.
-        // When image.avif.enabled is set true by default in
-        // StaticPrefList.yaml, it should be wrapped in #ifdef MOZ_AV1
         XPCOMUtils.defineLazyPreferenceGetter(
           this,
           "available",
           "image.avif.enabled",
+          false,
+          () => DownloadsViewableInternally._updateHandler(this)
+        );
+      },
+      // available getter is set by initAvailable()
+    },
+    {
+      extension: "jxl",
+      mimeTypes: ["image/jxl"],
+      initAvailable() {
+        XPCOMUtils.defineLazyPreferenceGetter(
+          this,
+          "available",
+          "image.jxl.enabled",
           false,
           () => DownloadsViewableInternally._updateHandler(this)
         );

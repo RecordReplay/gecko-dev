@@ -10,7 +10,6 @@
 #include "nsIWebNavigation.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIDocumentLoaderFactory.h"
-#include "nsIPluginHost.h"
 #include "nsIDocShell.h"
 #include "nsContentUtils.h"
 #include "imgLoader.h"
@@ -52,40 +51,7 @@ uint32_t nsWebNavigationInfo::IsTypeSupported(const nsACString& aType,
   }
 
   const nsCString& flatType = PromiseFlatCString(aType);
-  uint32_t result = IsTypeSupportedInternal(flatType);
-  if (result != nsIWebNavigationInfo::UNSUPPORTED) {
-    return result;
-  }
-
-  // As of FF 52, we only support flash and test plugins, so if the mime types
-  // don't match for that, exit before we start loading plugins.
-  if (!nsPluginHost::CanUsePluginForMIMEType(aType)) {
-    return nsIWebNavigationInfo::UNSUPPORTED;
-  }
-
-  // If this request is for a docShell that isn't going to allow plugins,
-  // there's no need to try and find a plugin to handle it.
-  if (!aPluginsAllowed) {
-    return nsIWebNavigationInfo::UNSUPPORTED;
-  }
-
-  // Try reloading plugins in case they've changed.
-  nsCOMPtr<nsIPluginHost> pluginHost =
-      do_GetService(MOZ_PLUGIN_HOST_CONTRACTID);
-  if (pluginHost) {
-    // false will ensure that currently running plugins will not
-    // be shut down
-    nsresult rv = pluginHost->ReloadPlugins();
-    if (NS_SUCCEEDED(rv)) {
-      // OK, we reloaded plugins and there were new ones
-      // (otherwise NS_ERROR_PLUGINS_PLUGINSNOTCHANGED would have
-      // been returned).  Try checking whether we can handle the
-      // content now.
-      return IsTypeSupportedInternal(flatType);
-    }
-  }
-
-  return nsIWebNavigationInfo::UNSUPPORTED;
+  return IsTypeSupportedInternal(flatType);
 }
 
 uint32_t nsWebNavigationInfo::IsTypeSupportedInternal(const nsCString& aType) {
@@ -98,8 +64,8 @@ uint32_t nsWebNavigationInfo::IsTypeSupportedInternal(const nsCString& aType) {
     case nsContentUtils::TYPE_UNSUPPORTED:
       return nsIWebNavigationInfo::UNSUPPORTED;
 
-    case nsContentUtils::TYPE_PLUGIN:
-      return nsIWebNavigationInfo::PLUGIN;
+    case nsContentUtils::TYPE_FALLBACK:
+      return nsIWebNavigationInfo::FALLBACK;
 
     case nsContentUtils::TYPE_UNKNOWN:
       return nsIWebNavigationInfo::OTHER;
@@ -108,11 +74,10 @@ uint32_t nsWebNavigationInfo::IsTypeSupportedInternal(const nsCString& aType) {
       // XXXbz we only need this because images register for the same
       // contractid as documents, so we can't tell them apart based on
       // contractid.
-      if (imgLoader::SupportImageWithMimeType(aType.get())) {
+      if (imgLoader::SupportImageWithMimeType(aType)) {
         return nsIWebNavigationInfo::IMAGE;
-      } else {
-        return nsIWebNavigationInfo::OTHER;
       }
+      return nsIWebNavigationInfo::OTHER;
   }
 
   return nsIWebNavigationInfo::UNSUPPORTED;

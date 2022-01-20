@@ -15,6 +15,7 @@
 #include "nsSplittableFrame.h"
 #include "nsFrameList.h"
 #include "nsLineBox.h"
+#include "nsTHashSet.h"
 
 class nsOverflowContinuationTracker;
 
@@ -211,10 +212,22 @@ class nsContainerFrame : public nsSplittableFrame {
                                  nsIWidget* aWidget, const nsSize& aMinSize,
                                  const nsSize& aMaxSize);
 
-  // Used by both nsInlineFrame and nsFirstLetterFrame.
-  void DoInlineIntrinsicISize(gfxContext* aRenderingContext,
-                              InlineIntrinsicISizeData* aData,
-                              mozilla::IntrinsicISizeType aType);
+  /**
+   * Helper for calculating intrinsic inline size for inline containers.
+   *
+   * @param aData the intrinsic inline size data, either an InlineMinISizeData
+   *  or an InlinePrefISizeData
+   * @param aHandleChildren a callback function invoked for each in-flow
+   *  continuation, with the continuation frame and the intrinsic inline size
+   *  data passed into it.
+   */
+  template <typename ISizeData, typename F>
+  void DoInlineIntrinsicISize(ISizeData* aData, F& aHandleChildren);
+
+  void DoInlineMinISize(gfxContext* aRenderingContext,
+                        InlineMinISizeData* aData);
+  void DoInlinePrefISize(gfxContext* aRenderingContext,
+                         InlinePrefISizeData* aData);
 
   /**
    * This is the CSS block concept of computing 'auto' widths, which most
@@ -225,6 +238,7 @@ class nsContainerFrame : public nsSplittableFrame {
       const mozilla::LogicalSize& aCBSize, nscoord aAvailableISize,
       const mozilla::LogicalSize& aMargin,
       const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
       mozilla::ComputeSizeFlags aFlags) override;
 
   /**
@@ -761,7 +775,7 @@ class nsContainerFrame : public nsSplittableFrame {
    *
    * @return true if any items are moved; false otherwise.
    */
-  using FrameHashtable = nsTHashtable<nsPtrHashKey<nsIFrame>>;
+  using FrameHashtable = nsTHashSet<nsIFrame*>;
   bool PushIncompleteChildren(const FrameHashtable& aPushedItems,
                               const FrameHashtable& aIncompleteItems,
                               const FrameHashtable& aOverflowIncompleteItems);
@@ -872,6 +886,7 @@ class nsContainerFrame : public nsSplittableFrame {
       const mozilla::AspectRatio& aAspectRatio,
       const mozilla::LogicalSize& aCBSize, const mozilla::LogicalSize& aMargin,
       const mozilla::LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
       mozilla::ComputeSizeFlags aFlags);
 
   // Compute tight bounds assuming this frame honours its border, background

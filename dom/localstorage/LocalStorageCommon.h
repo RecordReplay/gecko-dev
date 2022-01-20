@@ -189,30 +189,6 @@
  * interface.
  */
 
-// LocalStorage equivalents of QM_TRY.
-#define LS_TRY_GLUE(...)                                             \
-  QM_TRY_META(mozilla::dom::localstorage, MOZ_UNIQUE_VAR(tryResult), \
-              ##__VA_ARGS__)
-#define LS_TRY(...) LS_TRY_GLUE(__VA_ARGS__)
-
-// LocalStorage equivalents of QM_TRY_UNWRAP and QM_TRY_INSPECT.
-#define LS_TRY_ASSIGN_GLUE(accessFunction, ...)                             \
-  QM_TRY_ASSIGN_META(mozilla::dom::localstorage, MOZ_UNIQUE_VAR(tryResult), \
-                     accessFunction, ##__VA_ARGS__)
-#define LS_TRY_UNWRAP(...) LS_TRY_ASSIGN_GLUE(unwrap, __VA_ARGS__)
-#define LS_TRY_INSPECT(...) LS_TRY_ASSIGN_GLUE(inspect, __VA_ARGS__)
-
-// LocalStorage equivalents of QM_TRY_RETURN.
-#define LS_TRY_RETURN_GLUE(...)                                             \
-  QM_TRY_RETURN_META(mozilla::dom::localstorage, MOZ_UNIQUE_VAR(tryResult), \
-                     ##__VA_ARGS__)
-#define LS_TRY_RETURN(...) LS_TRY_RETURN_GLUE(__VA_ARGS__)
-
-// LocalStorage equivalents of QM_FAIL.
-#define LS_FAIL_GLUE(...) \
-  QM_FAIL_META(mozilla::dom::localstorage, ##__VA_ARGS__)
-#define LS_FAIL(...) LS_FAIL_GLUE(__VA_ARGS__)
-
 namespace mozilla {
 
 class LogModule;
@@ -250,15 +226,26 @@ class MOZ_STACK_CLASS LSNotifyInfo {
   nsString& oldValue() { return mOldValue; }
 };
 
+void MaybeEnableNextGenLocalStorage();
+
 /**
  * A check of LSNG being enabled, the value is latched once initialized so
- * changing the preference during runtime has no effect.
- * May be called on any thread in the parent process, but you should call
+ * changing the preference during runtime has no effect. May be called on any
+ * thread in the parent process, but you should call
  * CachedNextGenLocalStorageEnabled if you know that NextGenLocalStorageEnabled
- * was already called because it is faster.
- * May be called on the main thread only in a content process.
+ * was already called because it is faster. May be called on any thread in
+ * content processes, but you should call CachedNextGenLocalStorageEnabled
+ * directly if you know you are in a content process because it is slightly
+ * faster.
  */
 bool NextGenLocalStorageEnabled();
+
+/**
+ * Called by ContentChild during content process initialization to initialize
+ * the global variable in the content process with the latched value in the
+ * parent process."
+ */
+void RecvInitNextGenLocalStorageEnabled(const bool aEnabled);
 
 /**
  * Cached any-thread version of NextGenLocalStorageEnabled().
@@ -273,12 +260,6 @@ Result<std::pair<nsCString, nsCString>, nsresult> GenerateOriginKey2(
     const mozilla::ipc::PrincipalInfo& aPrincipalInfo);
 
 LogModule* GetLocalStorageLogger();
-
-namespace localstorage {
-
-QM_META_HANDLE_ERROR("LocalStorage"_ns)
-
-}  // namespace localstorage
 
 }  // namespace dom
 }  // namespace mozilla

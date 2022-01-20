@@ -68,17 +68,6 @@ interface FrameLoader {
   void deactivateRemoteFrame();
 
   /**
-   * @see nsIDOMWindowUtils sendMouseEvent.
-   */
-  [Throws]
-  void sendCrossProcessMouseEvent(DOMString aType,
-                                  float aX,
-                                  float aY,
-                                  long aButton,
-                                  long aClickCount,
-                                  long aModifiers);
-
-  /**
    * Activate event forwarding from client (remote frame) to parent.
    */
   [Throws]
@@ -102,9 +91,11 @@ interface FrameLoader {
 
   /**
    * Force a TabStateFlush from native sessionStoreListeners.
-   * Return true if the flush requires async ipc call.
+   * Returns a promise that resolves when all session store data has been
+   * flushed.
    */
-  boolean requestTabStateFlush(unsigned long aFlushId);
+  [Throws]
+  Promise<void> requestTabStateFlush();
 
   /**
    * Force Epoch update in native sessionStoreListeners.
@@ -114,7 +105,7 @@ interface FrameLoader {
   /**
    * Request a session history update in native sessionStoreListeners.
    */
-  void requestSHistoryUpdate(boolean aImmediately);
+  void requestSHistoryUpdate();
 
   /**
    * Creates a print preview document in this frame, or updates the existing
@@ -122,34 +113,25 @@ interface FrameLoader {
    *
    * @param aPrintSettings The print settings to use to layout the print
    *   preview document.
-   * @param aSourceOuterWindowID Optionally, the ID of the nsGlobalWindowOuter
-   *   that contains the document from which the print preview is to be
-   *   generated.  This should only be passed on the first call.  It should not
-   *   be passed for any subsequent calls that are made to update the existing
-   *   print preview document with a new print settings object.
+   * @param aSourceBrowsingContext Optionally, the browsing context that
+   *   contains the document from which the print preview is to be generated,
+   *   which must be in the same process as the browsing context of the frame
+   *   loader itself.
+   *
+   *   This should only be passed on the first call.  It should not be passed
+   *   for any subsequent calls that are made to update the existing print
+   *   preview document with a new print settings object.
    * @return A Promise that resolves with a PrintPreviewSuccessInfo on success.
    */
   [ChromeOnly, Throws]
   Promise<unsigned long> printPreview(nsIPrintSettings aPrintSettings,
-                                      optional unsigned long long aSourceOuterWindowID);
+                                      BrowsingContext? aSourceBrowsingContext);
 
   /**
    * Inform the print preview document that we're done with it.
    */
   [ChromeOnly]
   void exitPrintPreview();
-
-  /**
-   * Print the current document.
-   *
-   * @param aOuterWindowID the ID of the outer window to print
-   * @param aPrintSettings optional print settings to use; printSilent can be
-   *                       set to prevent prompting.
-   * @return A Promise that resolves once printing is finished.
-   */
-  [Throws]
-  Promise<void> print(unsigned long long aOuterWindowID,
-                      nsIPrintSettings aPrintSettings);
 
   /**
    * The element which owns this frame loader.

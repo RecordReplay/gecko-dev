@@ -66,6 +66,12 @@ const test = new SearchConfigTest({
           matches: ["en-US"],
         },
       },
+      {
+        regions: ["gb"],
+        locales: {
+          matches: ["sco"],
+        },
+      },
     ],
   },
   suggestionUrlBase: "https://autosug.ebay.com/autosug",
@@ -74,7 +80,7 @@ const test = new SearchConfigTest({
       // Note: These should be based on region, but we don't currently enforce that.
       // Note: the order here is important. A region/locale match higher up in the
       // list will override a region/locale match lower down.
-      domain: "befr.ebay.be",
+      domain: "www.befr.ebay.be",
       telemetryId: "ebay-be",
       included: [
         {
@@ -88,7 +94,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=23",
     },
     {
-      domain: "ebay.at",
+      domain: "www.ebay.at",
       telemetryId: "ebay-at",
       included: [
         {
@@ -100,7 +106,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=16",
     },
     {
-      domain: "ebay.ca",
+      domain: "www.ebay.ca",
       telemetryId: "ebay-ca",
       included: [
         {
@@ -129,7 +135,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=2",
     },
     {
-      domain: "ebay.ch",
+      domain: "www.ebay.ch",
       telemetryId: "ebay-ch",
       included: [
         {
@@ -157,7 +163,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=193",
     },
     {
-      domain: "ebay.com",
+      domain: "www.ebay.com",
       telemetryId: "ebay",
       included: [
         {
@@ -169,7 +175,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=0",
     },
     {
-      domain: "ebay.com.au",
+      domain: "www.ebay.com.au",
       telemetryId: "ebay-au",
       included: [
         {
@@ -181,7 +187,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=15",
     },
     {
-      domain: "ebay.ie",
+      domain: "www.ebay.ie",
       telemetryId: "ebay-ie",
       included: [
         {
@@ -196,14 +202,14 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=205",
     },
     {
-      domain: "ebay.co.uk",
+      domain: "www.ebay.co.uk",
       telemetryId: "ebay-uk",
       included: [
         {
           locales: { matches: DOMAIN_LOCALES["ebay-uk"] },
         },
         {
-          locales: { matches: ["unknown", "en-US"] },
+          locales: { matches: ["unknown", "en-US", "sco"] },
           regions: ["gb"],
         },
       ],
@@ -212,7 +218,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=3",
     },
     {
-      domain: "ebay.de",
+      domain: "www.ebay.de",
       telemetryId: "ebay-de",
       included: [
         {
@@ -224,7 +230,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=77",
     },
     {
-      domain: "ebay.es",
+      domain: "www.ebay.es",
       telemetryId: "ebay-es",
       included: [
         {
@@ -237,7 +243,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=186",
     },
     {
-      domain: "ebay.fr",
+      domain: "www.ebay.fr",
       telemetryId: "ebay-fr",
       included: [
         {
@@ -249,7 +255,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=71",
     },
     {
-      domain: "ebay.it",
+      domain: "www.ebay.it",
       telemetryId: "ebay-it",
       included: [
         {
@@ -260,7 +266,7 @@ const test = new SearchConfigTest({
       suggestUrlCode: "sId=101",
     },
     {
-      domain: "ebay.nl",
+      domain: "www.ebay.nl",
       telemetryId: "ebay-nl",
       included: [
         {

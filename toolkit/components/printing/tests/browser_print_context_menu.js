@@ -26,12 +26,13 @@ add_task(async function testPrintFrame() {
     );
     await popupShownPromise;
 
-    let frameContextMenu = document.getElementById("frame");
+    let frameItem = document.getElementById("frame");
+    let frameContextMenu = frameItem.menupopup;
     popupShownPromise = BrowserTestUtils.waitForEvent(
       frameContextMenu,
       "popupshown"
     );
-    EventUtils.synthesizeMouseAtCenter(frameContextMenu, {});
+    frameItem.openMenu(true);
     await popupShownPromise;
 
     let popupHiddenPromise = BrowserTestUtils.waitForEvent(
@@ -39,22 +40,24 @@ add_task(async function testPrintFrame() {
       "popuphidden"
     );
     let item = document.getElementById("context-printframe");
-    EventUtils.synthesizeMouseAtCenter(item, {});
+    frameContextMenu.activateItem(item);
     await popupHiddenPromise;
 
-    await BrowserTestUtils.waitForCondition(
-      () => !!document.querySelector(".printPreviewBrowser")
-    );
-
-    let previewBrowser = document.querySelector(
-      ".printPreviewBrowser[previewtype='primary']"
-    );
     let helper = new PrintHelper(browser);
 
-    let textContent = await TestUtils.waitForCondition(() =>
-      SpecialPowers.spawn(previewBrowser, [], function() {
-        return content.document.body.textContent;
-      })
+    await helper.waitForDialog();
+
+    let previewBrowser = helper.currentPrintPreviewBrowser;
+    is(
+      previewBrowser.getAttribute("previewtype"),
+      "source",
+      "Source preview was rendered"
+    );
+
+    let textContent = await SpecialPowers.spawn(
+      previewBrowser,
+      [],
+      () => content.document.body.textContent
     );
 
     is(textContent, "Inner frame", "Correct content loaded");

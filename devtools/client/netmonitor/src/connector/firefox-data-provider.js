@@ -26,19 +26,21 @@ class FirefoxDataProvider {
   /**
    * Constructor for data provider
    *
-   * @param {Object} webConsoleFront represents the client object for Console actor.
+   * @param {Object} commands Object defined from devtools/shared/commands to interact with the devtools backend
    * @param {Object} actions set of actions fired during data fetching process.
    * @param {Object} owner all events are fired on this object.
-   * @param {Object} resourceWatcher enables checking for watcher support
    */
-  constructor({ webConsoleFront, actions, owner, resourceWatcher }) {
+  constructor({ commands, actions, owner }) {
     // Options
-    this.webConsoleFront = webConsoleFront;
+    this.commands = commands;
     this.actions = actions || {};
     this.actionsEnabled = true;
     this.owner = owner;
-    this.resourceWatcher = resourceWatcher;
-    // Map of all stacktrace resources keyed by network event's resourceId
+
+    // This holds stacktraces infomation temporarily. Stacktrace resources
+    // can come before or after (out of order) their related network events.
+    // This will hold stacktrace related info from the NETWORK_EVENT_STACKTRACE resource
+    // for the NETWORK_EVENT resource and vice versa.
     this.stackTraces = new Map();
     // Map of the stacktrace information keyed by the actor id's
     this.stackTraceRequestInfoByActorID = new Map();
@@ -286,11 +288,13 @@ class FirefoxDataProvider {
    *         A promise that is resolved when the full string contents
    *         are available, or rejected if something goes wrong.
    */
-  getLongString(stringGrip) {
-    return this.webConsoleFront.getString(stringGrip).then(payload => {
-      this.emitForTests(TEST_EVENTS.LONGSTRING_RESOLVED, { payload });
-      return payload;
-    });
+  async getLongString(stringGrip) {
+    const webConsoleFront = await this.commands.targetCommand.targetFront.getFront(
+      "console"
+    );
+    const payload = await webConsoleFront.getString(stringGrip);
+    this.emitForTests(TEST_EVENTS.LONGSTRING_RESOLVED, { payload });
+    return payload;
   }
 
   /**
@@ -318,8 +322,30 @@ class FirefoxDataProvider {
    * using requestData.
    * @param {object} resource The network event stacktrace resource
    */
-  onStackTraceAvailable(resource) {
-    this.stackTraces.set(resource.resourceId, resource);
+  async onStackTraceAvailable(resource) {
+    if (!this.stackTraces.has(resource.resourceId)) {
+      // If no stacktrace info exists, this means the network event
+      // has not fired yet, lets store useful info for the NETWORK_EVENT
+      // resource.
+      this.stackTraces.set(resource.resourceId, resource);
+    } else {
+      // If stacktrace info exists, this means the network event has already
+      // fired, so lets just update the reducer with the necessary stacktrace info.
+      const request = this.stackTraces.get(resource.resourceId);
+      request.cause.stacktraceAvailable = resource.stacktraceAvailable;
+      request.cause.lastFrame = resource.lastFrame;
+
+      this.stackTraces.delete(resource.resourceId);
+
+      this.stackTraceRequestInfoByActorID.set(request.actor, {
+        targetFront: resource.targetFront,
+        stacktraceResourceId: resource.resourceId,
+      });
+
+      if (this.actionsEnabled && this.actions.updateRequest) {
+        await this.actions.updateRequest(request.actor, request, true);
+      }
+    }
   }
 
   /**
@@ -328,11 +354,9 @@ class FirefoxDataProvider {
    * @param {object} resource The network event resource
    */
   async onNetworkResourceAvailable(resource) {
-    const { actor, stacktraceResourceId } = resource;
+    const { actor, stacktraceResourceId, cause } = resource;
 
-    // Check if a stacktrace resource exists for this network resource.
-    // The stacktrace event is expected to happen before the network
-    // event so any neccesary stacktrace info should be available.
+    // Check if a stacktrace resource already exists for this network resource.
     if (this.stackTraces.has(stacktraceResourceId)) {
       const {
         stacktraceAvailable,
@@ -353,6 +377,12 @@ class FirefoxDataProvider {
         targetFront,
         stacktraceResourceId,
       });
+    } else if (cause) {
+      // If the stacktrace for this request is not available, and we
+      // expect that this request should have a stacktrace, lets store
+      // some useful info for when the NETWORK_EVENT_STACKTRACE resource
+      // finally comes.
+      this.stackTraces.set(stacktraceResourceId, { actor, cause });
     }
     await this.addRequest(actor, resource);
     this.emitForTests(TEST_EVENTS.NETWORK_EVENT, resource);
@@ -518,43 +548,36 @@ class FirefoxDataProvider {
     // Emit event that tell we just start fetching some data
     this.emitForTests(EVENTS[updatingEventName], actor);
 
+    // Make sure we fetch the real actor data instead of cloned actor
+    // e.g. CustomRequestPanel will clone a request with additional '-clone' actor id
+    const actorID = actor.replace("-clone", "");
+
+    // 'getStackTrace' is the only one to be fetched via the NetworkContent actor in content process
+    // while all other attributes are fetched from the NetworkEvent actors, running in the parent process
     let response;
     if (
       clientMethodName == "getStackTrace" &&
-      this.resourceWatcher.hasResourceWatcherSupport(
-        this.resourceWatcher.TYPES.NETWORK_EVENT_STACKTRACE
+      this.commands.resourceCommand.hasResourceCommandSupport(
+        this.commands.resourceCommand.TYPES.NETWORK_EVENT_STACKTRACE
       )
     ) {
-      const requestInfo = this.stackTraceRequestInfoByActorID.get(
-        actor.replace("-clone", "")
-      );
+      const requestInfo = this.stackTraceRequestInfoByActorID.get(actorID);
       const { stacktrace } = await this._getStackTraceFromWatcher(requestInfo);
       response = { from: actor, stacktrace };
     } else {
-      response = await new Promise((resolve, reject) => {
-        // Do a RDP request to fetch data from the actor.
-        if (typeof this.webConsoleFront[clientMethodName] === "function") {
-          // Make sure we fetch the real actor data instead of cloned actor
-          // e.g. CustomRequestPanel will clone a request with additional '-clone' actor id
-          this.webConsoleFront[clientMethodName](
-            actor.replace("-clone", ""),
-            res => {
-              if (res.error) {
-                reject(
-                  new Error(
-                    `Error while calling method ${clientMethodName}: ${res.message}`
-                  )
-                );
-              }
-              resolve(res);
-            }
-          );
-        } else {
-          reject(
-            new Error(`Error: No such client method '${clientMethodName}'!`)
-          );
-        }
-      });
+      // We don't create fronts for NetworkEvent actors,
+      // so that we have to do the request manually via DevToolsClient.request()
+      try {
+        const packet = {
+          to: actorID,
+          type: clientMethodName,
+        };
+        response = await this.commands.client.request(packet);
+      } catch (e) {
+        throw new Error(
+          `Error while calling method ${clientMethodName}: ${e.message}`
+        );
+      }
     }
 
     // Restore clone actor id

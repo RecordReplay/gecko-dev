@@ -25,13 +25,11 @@ ChromeUtils.defineModuleGetter(
   "PlacesDBUtils",
   "resource://gre/modules/PlacesDBUtils.jsm"
 );
-
-function showThirdPartyModules() {
-  return (
-    AppConstants.platform == "win" &&
-    Services.prefs.getBoolPref("browser.enableAboutThirdParty")
-  );
-}
+ChromeUtils.defineModuleGetter(
+  this,
+  "ProcessType",
+  "resource://gre/modules/ProcessType.jsm"
+);
 
 window.addEventListener("load", function onload(event) {
   try {
@@ -43,10 +41,6 @@ window.addEventListener("load", function onload(event) {
     });
     populateActionBox();
     setupEventListeners();
-    if (showThirdPartyModules()) {
-      $("third-party-modules").hidden = false;
-      $("third-party-modules-table").hidden = false;
-    }
   } catch (e) {
     Cu.reportError(
       "stack of load error for about:support: " + e + ": " + e.stack
@@ -144,6 +138,7 @@ var snapshotFormatters = {
       enabledByUserPref: "fission-status-enabled-by-user-pref",
       disabledByUserPref: "fission-status-disabled-by-user-pref",
       disabledByE10sOther: "fission-status-disabled-by-e10s-other",
+      enabledByRollout: "fission-status-enabled-by-rollout",
     };
 
     let statusTextId = STATUS_STRINGS[data.fissionDecisionStatus];
@@ -328,11 +323,8 @@ var snapshotFormatters = {
 
   async processes(data) {
     async function buildEntry(name, value) {
-      let entryName =
-        (await document.l10n.formatValue(
-          `process-type-${name.toLowerCase()}`
-        )) || name;
-
+      const fluentName = ProcessType.fluentNameFromProcessTypeString(name);
+      let entryName = (await document.l10n.formatValue(fluentName)) || name;
       $("processes-tbody").appendChild(
         $.new("tr", [$.new("td", entryName), $.new("td", value)])
       );
@@ -1036,7 +1028,7 @@ var snapshotFormatters = {
   },
 
   remoteAgent(data) {
-    if (!AppConstants.ENABLE_REMOTE_AGENT) {
+    if (!AppConstants.ENABLE_WEBDRIVER) {
       return;
     }
     $("remote-debugging-accepting-connections").textContent = data.listening;
@@ -1173,192 +1165,49 @@ var snapshotFormatters = {
     );
   },
 
-  thirdPartyModules(aData) {
-    if (!showThirdPartyModules()) {
+  normandy(data) {
+    if (!data) {
       return;
     }
 
-    if (!aData || !aData.length) {
-      $("third-party-modules-no-data").hidden = false;
-      return;
-    }
-
-    const createElementWithLabel = (tag, label) =>
-      label
-        ? $.new(tag, label)
-        : $.new(tag, "", "", {
-            "data-l10n-id": "support-third-party-modules-no-value",
-          });
-    const createLoadStatusElement = (tag, status) => {
-      const labelLoadStatus = [
-        "support-third-party-modules-status-loaded",
-        "support-third-party-modules-status-blocked",
-        "support-third-party-modules-status-redirected",
-      ];
-      return status >= 0 && status < labelLoadStatus.length
-        ? $.new(tag, "", "", { "data-l10n-id": labelLoadStatus[status] })
-        : $.new(tag, status);
-    };
-
-    const iconUp = "chrome://global/skin/icons/arrow-up-12.svg";
-    const iconDown = "chrome://global/skin/icons/arrow-dropdown-12.svg";
-    const iconFolder = "chrome://global/skin/icons/findFile.svg";
-    const iconUnsigned =
-      "chrome://global/skin/icons/connection-mixed-active-loaded.svg";
-    const outerTHead = $("third-party-modules-thead");
-    const outerTBody = $("third-party-modules-tbody");
-
-    outerTBody.addEventListener("click", event => {
-      const btnOpenDir = event.target.closest("button");
-      if (!btnOpenDir || !btnOpenDir.fileObj) {
-        return;
-      }
-      btnOpenDir.fileObj.reveal();
-    });
-
-    for (const module of aData) {
-      const btnOpenDir = $.new(
-        "button",
-        [
-          $.new("img", "", "third-party-svg-common", {
-            src: iconFolder,
-            "data-l10n-id": "support-third-party-modules-folder-icon",
-          }),
-        ],
-        "third-party-button third-party-button-open-dir",
-        {
-          "data-l10n-id": "support-third-party-modules-button-open",
-        }
-      );
-      btnOpenDir.fileObj = module.dllFile;
-
-      const innerTBody = $.new("tbody", [], null);
-      for (const event of module.events) {
-        innerTBody.appendChild(
-          $.new("tr", [
-            $.new("td", event.processIdAndType),
-            createElementWithLabel("td", event.threadName),
-            $.new("td", event.baseAddress),
-            $.new("td", event.processUptimeMS),
-            // loadDurationMS can be empty (not zero) when a module is loaded
-            // very early in the process.  processUptimeMS always has a value.
-            createElementWithLabel("td", event.loadDurationMS),
-            createLoadStatusElement("td", event.loadStatus),
-          ])
-        );
-      }
-
-      const detailRow = $.new(
-        "tr",
-        [
-          $.new(
-            "td",
-            [
-              $.new("table", [
-                $.new("thead", [
-                  $.new("th", "", "", {
-                    "data-l10n-id": "support-third-party-modules-process",
-                  }),
-                  $.new("th", "", "", {
-                    "data-l10n-id": "support-third-party-modules-thread",
-                  }),
-                  $.new("th", "", "", {
-                    "data-l10n-id": "support-third-party-modules-base",
-                  }),
-                  $.new("th", "", "", {
-                    "data-l10n-id": "support-third-party-modules-uptime",
-                  }),
-                  $.new("th", "", "", {
-                    "data-l10n-id": "support-third-party-modules-duration",
-                  }),
-                  $.new("th", "", "", {
-                    "data-l10n-id": "support-third-party-modules-status",
-                  }),
-                ]),
-                innerTBody,
-              ]),
-            ],
-            "",
-            { colspan: outerTHead.children.length + 1 }
-          ),
-        ],
-        "",
-        { hidden: true }
-      );
-
-      const imgUpDown = $.new("img", "", "third-party-svg-common", {
-        src: iconDown,
-        "data-l10n-id": "support-third-party-modules-down-icon",
-      });
-      const btnExpandCollapse = $.new(
-        "button",
-        [imgUpDown],
-        "third-party-button",
-        {
-          "data-l10n-id": "support-third-party-modules-expand",
-        }
-      );
-      btnExpandCollapse.addEventListener("click", () => {
-        if (detailRow.hidden) {
-          detailRow.hidden = false;
-          imgUpDown.src = iconUp;
-          document.l10n.setAttributes(
-            imgUpDown,
-            "support-third-party-modules-up-icon"
-          );
-          document.l10n.setAttributes(
-            btnExpandCollapse,
-            "support-third-party-modules-collapse"
-          );
-        } else {
-          detailRow.hidden = true;
-          imgUpDown.src = iconDown;
-          document.l10n.setAttributes(
-            imgUpDown,
-            "support-third-party-modules-down-icon"
-          );
-          document.l10n.setAttributes(
-            btnExpandCollapse,
-            "support-third-party-modules-expand"
-          );
-        }
-      });
-
-      const vendorInfoCell = $.new("td", [
-        createElementWithLabel("span", module.signedBy || module.companyName),
-      ]);
-      if (!module.signedBy) {
-        vendorInfoCell.prepend(
-          $.new(
-            "img",
-            "",
-            "third-party-svg-common third-party-image-unsigned",
-            {
-              src: iconUnsigned,
-              "data-l10n-id": "support-third-party-modules-unsigned-icon",
-            }
-          )
-        );
-      }
-
-      outerTBody.appendChild(
+    const {
+      prefStudies,
+      addonStudies,
+      prefRollouts,
+      nimbusExperiments,
+      remoteConfigs,
+    } = data;
+    $.append(
+      $("remote-features-tbody"),
+      prefRollouts.map(({ slug, state }) =>
         $.new("tr", [
-          $.new("td", [
-            document.createTextNode(module.dllFile.leafName),
-            btnOpenDir,
-          ]),
-          createElementWithLabel("td", module.fileVersion),
-          vendorInfoCell,
-          $.new(
-            "td",
-            module.events.length,
-            "third-party-modules-column-occurrence"
-          ),
-          $.new("td", [btnExpandCollapse], "third-party-modules-column-expand"),
+          $.new("td", [document.createTextNode(slug)]),
+          $.new("td", [document.createTextNode(state)]),
         ])
-      );
-      outerTBody.appendChild(detailRow);
-    }
+      )
+    );
+
+    $.append(
+      $("remote-features-tbody"),
+      remoteConfigs.map(({ featureId, slug }) =>
+        $.new("tr", [
+          $.new("td", [document.createTextNode(featureId)]),
+          $.new("td", [document.createTextNode(`(${slug})`)]),
+        ])
+      )
+    );
+
+    $.append(
+      $("remote-experiments-tbody"),
+      [addonStudies, prefStudies, nimbusExperiments]
+        .flat()
+        .map(({ userFacingName, branch }) =>
+          $.new("tr", [
+            $.new("td", [document.createTextNode(userFacingName)]),
+            $.new("td", [document.createTextNode(branch?.slug || branch)]),
+          ])
+        )
+    );
   },
 };
 
@@ -1451,7 +1300,7 @@ function copyRawDataToClipboard(button) {
       ].createInstance(Ci.nsITransferable);
       transferable.init(getLoadContext());
       transferable.addDataFlavor("text/unicode");
-      transferable.setTransferData("text/unicode", str, str.data.length * 2);
+      transferable.setTransferData("text/unicode", str);
       Services.clipboard.setData(
         transferable,
         null,
@@ -1501,12 +1350,12 @@ async function copyContentsToClipboard() {
   // Add the HTML flavor.
   transferable.addDataFlavor("text/html");
   ssHtml.data = dataHtml;
-  transferable.setTransferData("text/html", ssHtml, dataHtml.length * 2);
+  transferable.setTransferData("text/html", ssHtml);
 
   // Add the plain text flavor.
   transferable.addDataFlavor("text/unicode");
   ssText.data = dataText;
-  transferable.setTransferData("text/unicode", ssText, dataText.length * 2);
+  transferable.setTransferData("text/unicode", ssText);
 
   // Store the data into the clipboard.
   Services.clipboard.setData(
@@ -1558,7 +1407,7 @@ Serializer.prototype = {
   },
 
   set _currentLine(val) {
-    return (this._lines[this._lines.length - 1] = val);
+    this._lines[this._lines.length - 1] = val;
   },
 
   _serializeElement(elem) {
@@ -1771,8 +1620,8 @@ function setupEventListeners() {
         promptBody,
         restartButtonLabel,
       ] = await document.l10n.formatValues([
-        { id: "startup-cache-dialog-title" },
-        { id: "startup-cache-dialog-body" },
+        { id: "startup-cache-dialog-title2" },
+        { id: "startup-cache-dialog-body2" },
         { id: "restart-button-label" },
       ]);
       const buttonFlags =
@@ -1780,7 +1629,7 @@ function setupEventListeners() {
         Services.prompt.BUTTON_POS_1 * Services.prompt.BUTTON_TITLE_CANCEL +
         Services.prompt.BUTTON_POS_0_DEFAULT;
       const result = Services.prompt.confirmEx(
-        window,
+        window.docShell.chromeEventHandler.ownerGlobal,
         promptTitle,
         promptBody,
         buttonFlags,
@@ -1807,7 +1656,10 @@ function setupEventListeners() {
           .enumerateObservers("restart-in-safe-mode")
           .hasMoreElements()
       ) {
-        Services.obs.notifyObservers(null, "restart-in-safe-mode");
+        Services.obs.notifyObservers(
+          window.docShell.chromeEventHandler.ownerGlobal,
+          "restart-in-safe-mode"
+        );
       } else {
         safeModeRestart();
       }

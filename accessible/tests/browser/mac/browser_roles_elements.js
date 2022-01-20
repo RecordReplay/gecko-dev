@@ -93,6 +93,7 @@ addAccessibleTask(
   <dl id="dl"><dt id="dt">term</dt><dd id="dd">definition</dd></dl>
   <hr id="hr" />
   <ins id="insertion">Inserted text</ins>
+  <meter id="meter" min="0" max="100" value="24">meter text here</meter>
 
   <!-- Some SVG stuff -->
   <svg xmlns="http://www.w3.org/2000/svg" version="1.1" id="svg"
@@ -183,7 +184,7 @@ addAccessibleTask(
 
     // Text boxes
     testRoleAndSubRole(accDoc, "textbox_multiline", "AXTextArea");
-    testRoleAndSubRole(accDoc, "textbox_singleline", "AXTextArea");
+    testRoleAndSubRole(accDoc, "textbox_singleline", "AXTextField");
     testRoleAndSubRole(accDoc, "textArea", "AXTextArea");
     testRoleAndSubRole(accDoc, "textInput", "AXTextField");
 
@@ -203,6 +204,13 @@ addAccessibleTask(
     testRoleAndSubRole(accDoc, "dd", "AXGroup", "AXDescription");
     testRoleAndSubRole(accDoc, "hr", "AXSplitter", "AXContentSeparator");
     testRoleAndSubRole(accDoc, "insertion", "AXGroup", "AXInsertStyleGroup");
+    testRoleAndSubRole(
+      accDoc,
+      "meter",
+      "AXLevelIndicator",
+      null,
+      "level indicator"
+    );
 
     // Some SVG stuff
     testRoleAndSubRole(accDoc, "svg", "AXImage");

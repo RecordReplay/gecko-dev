@@ -327,6 +327,20 @@ Function un.OpenRefreshHelpURL
   ExecShell "open" "${URLProfileRefreshHelp}"
 FunctionEnd
 
+; Returns the common directory (typically "C:\ProgramData\Mozilla") on the stack.
+Function un.GetCommonDirectory
+  Push $0   ; Save $0
+
+  ; This gets C:\ProgramData or the equivalent.
+  ; 0x23 is CSIDL_COMMON_APPDATA, see CreateUpdateDir in common.nsh.
+  System::Call "Shell32::SHGetSpecialFolderPathW(p 0, t.r0, i 0x23, i 0)"
+  ; Add our subdirectory, this is hardcoded as grandparent of the update directory in
+  ; several other places.
+  StrCpy $0 "$0\Mozilla"
+
+  Exch $0   ; Restore original $0 and put our $0 on the stack.
+FunctionEnd
+
 Function un.SendUninstallPing
   ${If} $AppUserModelID == ""
     Return
@@ -340,12 +354,8 @@ Function un.SendUninstallPing
   Push $5   ; $5 = URL, POST result
   Push $6   ; $6 = Full path to the ping file
 
-  ; This gets C:\ProgramData or the equivalent.
-  ; 0x23 is CSIDL_COMMON_APPDATA, see CreateUpdateDir in common.nsh.
-  System::Call "Shell32::SHGetSpecialFolderPathW(p 0, t.r2, i 0x23, i 0)"
-  ; Add our subdirectory, this is hardcoded as grandparent of the update directory in
-  ; several other places.
-  StrCpy $2 "$2\Mozilla"
+  Call un.GetCommonDirectory
+  Pop $2
 
   ; The ping ID is in the file name, so that we can get it for the submission URL
   ; without having to parse the ping. Since we don't know the exact name, use FindFirst
@@ -441,6 +451,13 @@ Section "Uninstall"
     ApplicationID::UninstallJumpLists "$AppUserModelID"
   ${EndIf}
 
+  ; Remove the update sync manager's multi-instance lock file
+  ${If} "$AppUserModelID" != ""
+    Call un.GetCommonDirectory
+    Pop $0
+    Delete /REBOOTOK "$0\UpdateLock-$AppUserModelID"
+  ${EndIf}
+
   ; Remove the updates directory
   ${un.CleanUpdateDirectories} "Mozilla\Firefox" "Mozilla\updates"
 
@@ -464,11 +481,6 @@ Section "Uninstall"
 
   ${un.RegCleanAppHandler} "FirefoxURL-$AppUserModelID"
   ${un.RegCleanAppHandler} "FirefoxHTML-$AppUserModelID"
-!ifndef NIGHTLY_BUILD
-  ; Keep the compile-time conditional synchronized with the
-  ; "network.ftp.enabled" compile-time conditional.
-  ${un.RegCleanProtocolHandler} "ftp"
-!endif ; NIGHTLY_BUILD
   ${un.RegCleanProtocolHandler} "http"
   ${un.RegCleanProtocolHandler} "https"
   ${un.RegCleanProtocolHandler} "mailto"
@@ -588,6 +600,9 @@ Section "Uninstall"
     ${UnregisterDLL} "$INSTDIR\AccessibleHandler.dll"
   ${EndIf}
 
+  ; Remove the Windows Reporter Module entry
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\Windows Error Reporting\RuntimeExceptionHelperModules" "$INSTDIR\mozwer.dll"
+
 !ifdef MOZ_LAUNCHER_PROCESS
   DeleteRegValue HKCU ${MOZ_LAUNCHER_SUBKEY} "$INSTDIR\${FileMainEXE}|Launcher"
   DeleteRegValue HKCU ${MOZ_LAUNCHER_SUBKEY} "$INSTDIR\${FileMainEXE}|Browser"
@@ -595,8 +610,12 @@ Section "Uninstall"
   DeleteRegValue HKCU ${MOZ_LAUNCHER_SUBKEY} "$INSTDIR\${FileMainEXE}|Telemetry"
 !endif
 
-  ; Uninstall the default browser agent scheduled task.
-  ; This also removes the registry entries it creates.
+  ; Uninstall the default browser agent scheduled task and all other scheduled
+  ; tasks registered by Firefox.
+  ; This also removes the registry entries that the WDBA creates.
+  ; One of the scheduled tasks that this will remove is the Background Update
+  ; Task. Ideally, this will eventually be changed so that it doesn't rely on
+  ; the WDBA. See Bug 1710143.
   ExecWait '"$INSTDIR\default-browser-agent.exe" uninstall $AppUserModelID'
   ${RemoveDefaultBrowserAgentShortcut}
 
@@ -616,6 +635,9 @@ Section "Uninstall"
   ${EndIf}
   ${If} ${FileExists} "$INSTDIR\update-settings.ini"
     Delete /REBOOTOK "$INSTDIR\update-settings.ini"
+  ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\installation_telemetry.json"
+    Delete /REBOOTOK "$INSTDIR\installation_telemetry.json"
   ${EndIf}
 
   ; Explicitly remove empty webapprt dir in case it exists (bug 757978).

@@ -17,17 +17,18 @@
     <link rel="stylesheet" href="chrome://mozapps/content/extensions/aboutaddons.css">
     <link rel="stylesheet" href="chrome://mozapps/content/extensions/shortcuts.css">
 
+    <link rel="shortcut icon" href="chrome://mozapps/skin/extensions/extension.svg">
+
     <link rel="localization" href="branding/brand.ftl">
     <link rel="localization" href="toolkit/about/aboutAddons.ftl">
     <link rel="localization" href="toolkit/about/abuseReports.ftl">
 
     <!-- Defer scripts so all the templates are loaded by the time they run. -->
-    <script defer src="chrome://mozapps/content/extensions/named-deck.js"></script>
     <script defer src="chrome://mozapps/content/extensions/aboutaddonsCommon.js"></script>
-    <script defer src="chrome://mozapps/content/extensions/message-bar.js"></script>
     <script defer src="chrome://mozapps/content/extensions/abuse-reports.js"></script>
     <script defer src="chrome://mozapps/content/extensions/shortcuts.js"></script>
     <script defer src="chrome://mozapps/content/extensions/drag-drop-addon-installer.js"></script>
+    <script defer src="chrome://mozapps/content/extensions/view-controller.js"></script>
     <script defer src="chrome://mozapps/content/extensions/aboutaddons.js"></script>
   </head>
   <body>
@@ -110,7 +111,6 @@
 
     <template name="plugin-options">
       <panel-list>
-        <panel-item data-l10n-id="ask-to-activate-button" action="ask-to-activate"></panel-item>
         <panel-item data-l10n-id="always-activate-button" action="always-activate"></panel-item>
         <panel-item data-l10n-id="never-activate-button" action="never-activate"></panel-item>
         <panel-item-separator></panel-item-separator>
@@ -199,7 +199,7 @@
         <h3 class="disco-addon-name"></h3>
         <span class="disco-addon-author"><a data-l10n-name="author" target="_blank"></a></span>
       </div>
-      <button class="disco-cta-button primary" action="install-addon"></button>
+      <button class="disco-cta-button" action="install-addon"></button>
       <button class="disco-cta-button" data-l10n-id="manage-addon-button" action="manage-addon"></button>
     </template>
 
@@ -215,10 +215,10 @@
 
     <template name="addon-details">
       <button-group class="tab-group">
-        <button is="named-deck-button" deck="details-deck" name="details" data-l10n-id="details-addon-button" class="tab-button"></button>
-        <button is="named-deck-button" deck="details-deck" name="preferences" data-l10n-id="preferences-addon-button" class="tab-button"></button>
-        <button is="named-deck-button" deck="details-deck" name="permissions" data-l10n-id="permissions-addon-button" class="tab-button"></button>
-        <button is="named-deck-button" deck="details-deck" name="release-notes" data-l10n-id="release-notes-addon-button" class="tab-button"></button>
+        <button is="named-deck-button" deck="details-deck" name="details" data-l10n-id="details-addon-button" class="tab-button ghost-button"></button>
+        <button is="named-deck-button" deck="details-deck" name="preferences" data-l10n-id="preferences-addon-button" class="tab-button ghost-button"></button>
+        <button is="named-deck-button" deck="details-deck" name="permissions" data-l10n-id="permissions-addon-button" class="tab-button ghost-button"></button>
+        <button is="named-deck-button" deck="details-deck" name="release-notes" data-l10n-id="release-notes-addon-button" class="tab-button ghost-button"></button>
       </button-group>
       <named-deck id="details-deck">
         <section name="details">
@@ -234,17 +234,17 @@
           </div>
           <div class="addon-detail-row addon-detail-row-updates">
             <label data-l10n-id="addon-detail-updates-label"></label>
-            <div>
+            <div class="addon-detail-actions">
               <button class="button-link" data-l10n-id="addon-detail-update-check-label" action="update-check" hidden></button>
-              <label>
+              <label class="radio-container-with-text">
                 <input type="radio" name="autoupdate" value="1" data-telemetry-value="default">
                 <span data-l10n-id="addon-detail-updates-radio-default"></span>
               </label>
-              <label>
+              <label class="radio-container-with-text">
                 <input type="radio" name="autoupdate" value="2" data-telemetry-value="enabled">
                 <span data-l10n-id="addon-detail-updates-radio-on"></span>
               </label>
-              <label>
+              <label class="radio-container-with-text">
                 <input type="radio" name="autoupdate" value="0" data-telemetry-value="">
                 <span data-l10n-id="addon-detail-updates-radio-off"></span>
               </label>
@@ -252,12 +252,12 @@
           </div>
           <div class="addon-detail-row addon-detail-row-has-help addon-detail-row-private-browsing" hidden>
             <label data-l10n-id="detail-private-browsing-label"></label>
-            <div>
-              <label>
+            <div class="addon-detail-actions">
+              <label class="radio-container-with-text">
                 <input type="radio" name="private-browsing" value="1" data-telemetry-value="on">
                 <span data-l10n-id="addon-detail-private-browsing-allow"></span>
               </label>
-              <label>
+              <label class="radio-container-with-text">
                 <input type="radio" name="private-browsing" value="0" data-telemetry-value="off">
                 <span data-l10n-id="addon-detail-private-browsing-disallow"></span>
               </label>
@@ -329,7 +329,10 @@
       <message-bar class="discopane-notice" dismissable>
         <div class="discopane-notice-content">
           <span data-l10n-id="discopane-notice-recommendations"></span>
-          <button data-l10n-id="discopane-notice-learn-more" action="notice-learn-more"></button>
+          <a is="support-link"
+             support-page="personalized-addons"
+             data-l10n-id="discopane-notice-learn-more"
+             action="notice-learn-more"></a>
         </div>
       </message-bar>
     </template>

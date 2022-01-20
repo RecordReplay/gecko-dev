@@ -66,6 +66,7 @@ jobs:
                 - linux64-nasm
                 - linux64-node
                 - linux64-lucetc
+                - linux64-sysroot
                 - wasi-sysroot
 
     win64-st-autotest/debug:
@@ -78,7 +79,7 @@ jobs:
         worker-type: b-win2012
         worker:
             env:
-                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
         run:
             config:
                 - builds/releng_base_firefox.py
@@ -91,7 +92,7 @@ jobs:
         use-sccache: true
         fetches:
             toolchain:
-                - win64-clang-cl
+                - win64-clang
                 - win64-rust
                 - win64-sccache
                 - win64-cbindgen

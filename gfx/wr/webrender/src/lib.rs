@@ -57,8 +57,6 @@ macro_rules! matches {
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
-extern crate cfg_if;
-#[macro_use]
 extern crate cstr;
 #[macro_use]
 extern crate lazy_static;
@@ -75,6 +73,8 @@ extern crate tracy_rs;
 extern crate derive_more;
 extern crate malloc_size_of;
 extern crate svg_fmt;
+#[cfg(target_os = "macos")]
+extern crate foreign_types;
 
 #[macro_use]
 mod profiler;
@@ -88,16 +88,14 @@ mod clip;
 mod space;
 mod spatial_tree;
 mod composite;
+mod compositor;
 mod debug_colors;
 mod debug_font_data;
 mod debug_item;
-#[cfg(feature = "debugger")]
-mod debug_server;
 mod device;
 mod ellipse;
 mod filterdata;
 mod frame_builder;
-mod frame_graph;
 mod freelist;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod gamma_lut;
@@ -132,6 +130,9 @@ mod util;
 mod visibility;
 mod api_resources;
 mod image_tiling;
+mod image_source;
+mod rectangle_occlusion;
+
 ///
 pub mod intern;
 ///
@@ -188,17 +189,9 @@ extern crate plane_split;
 extern crate rayon;
 #[cfg(feature = "ron")]
 extern crate ron;
-#[cfg(feature = "debugger")]
-extern crate serde_json;
 #[macro_use]
 extern crate smallvec;
 extern crate time;
-#[cfg(feature = "debugger")]
-extern crate ws;
-#[cfg(feature = "debugger")]
-extern crate image_loader;
-#[cfg(feature = "debugger")]
-extern crate base64;
 #[cfg(all(feature = "capture", feature = "png"))]
 extern crate png;
 #[cfg(test)]
@@ -210,6 +203,7 @@ extern crate webrender_build;
 #[doc(hidden)]
 pub use crate::composite::{CompositorConfig, Compositor, CompositorCapabilities, CompositorSurfaceTransform};
 pub use crate::composite::{NativeSurfaceId, NativeTileId, NativeSurfaceInfo, PartialPresentCompositor};
+pub use crate::composite::{MappableCompositor, MappedTileInfo, SWGLCompositeSurfaceInfo};
 pub use crate::device::{UploadMethod, VertexUsageHint, get_gl_target, get_unoptimized_shader_source};
 pub use crate::device::{ProgramBinary, ProgramCache, ProgramCacheObserver, FormatDesc};
 pub use crate::device::Device;
@@ -219,7 +213,7 @@ pub use crate::profiler::{ProfilerHooks, set_profiler_hooks};
 pub use crate::renderer::{
     AsyncPropertySampler, CpuProfile, DebugFlags, GpuProfile, GraphicsApi,
     GraphicsApiInfo, PipelineInfo, Renderer, RendererError, RendererOptions, RenderResults,
-    RendererStats, SceneBuilderHooks, Shaders, SharedShaders, ThreadListener, ShaderPrecacheFlags,
+    RendererStats, SceneBuilderHooks, Shaders, SharedShaders, ShaderPrecacheFlags,
     MAX_VERTEX_TEXTURE_WIDTH, ONE_TIME_USAGE_HINT,
 };
 pub use crate::hit_test::SharedHitTester;
@@ -234,3 +228,6 @@ pub use crate::picture::{TileNode, TileNodeKind, TileSerializer, TileCacheInstan
 pub use crate::intern::ItemUid;
 pub use crate::render_api::*;
 pub use crate::tile_cache::{PictureCacheDebugInfo, DirtyTileDebugInfo, TileDebugInfo, SliceDebugInfo};
+
+#[cfg(feature = "sw_compositor")]
+pub use crate::compositor::sw_compositor;

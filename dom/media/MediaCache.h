@@ -453,7 +453,7 @@ class MediaCacheStream : public DecoderDoctorLifeLogger<MediaCacheStream> {
   int64_t GetNextCachedDataInternal(AutoLock&, int64_t aOffset);
   // Used by |NotifyDataEnded| to write |mPartialBlock| to disk.
   // If |aNotifyAll| is true, this function will wake up readers who may be
-  // waiting on the media cache monitor. Called on the main thread only.
+  // waiting on the media cache monitor. Called on the media cache thread only.
   void FlushPartialBlockInternal(AutoLock&, bool aNotifyAll);
 
   void NotifyDataStartedInternal(uint32_t aLoadID, int64_t aOffset,
@@ -525,8 +525,6 @@ class MediaCacheStream : public DecoderDoctorLifeLogger<MediaCacheStream> {
   nsresult mNotifyDataEndedStatus;
   // The last reported read mode
   ReadMode mCurrentMode = MODE_METADATA;
-  // True if some data in mPartialBlockBuffer has been read as metadata
-  bool mMetadataInPartialBlockBuffer;
   // The load ID of the current channel. Used to check whether the data is
   // coming from an old channel and should be discarded.
   uint32_t mLoadID = 0;

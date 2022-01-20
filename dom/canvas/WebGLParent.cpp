@@ -6,7 +6,6 @@
 #include "WebGLParent.h"
 
 #include "WebGLChild.h"
-#include "mozilla/dom/WebGLCrossProcessCommandQueue.h"
 #include "mozilla/layers/LayerTransactionParent.h"
 #include "mozilla/layers/TextureClientSharedSurface.h"
 #include "ImageContainer.h"
@@ -16,20 +15,8 @@
 namespace mozilla::dom {
 
 mozilla::ipc::IPCResult WebGLParent::RecvInitialize(
-    const webgl::InitContextDesc& desc,
-    UniquePtr<HostWebGLCommandSinkP>&& aSinkP,
-    UniquePtr<HostWebGLCommandSinkI>&& aSinkI,
-    webgl::InitContextResult* const out) {
-  auto remotingData = Some(HostWebGLContext::RemotingData{
-      *this, {},  // std::move(commandSink),
-  });
-
-  mHost = HostWebGLContext::Create(
-      {
-          {},
-          std::move(remotingData),
-      },
-      desc, out);
+    const webgl::InitContextDesc& desc, webgl::InitContextResult* const out) {
+  mHost = HostWebGLContext::Create({nullptr, this}, desc, out);
 
   if (!mHost && !out->error.size()) {
     return IPC_FAIL(this, "Abnormally failed to create HostWebGLContext.");
@@ -59,13 +46,28 @@ IPCResult WebGLParent::RecvDispatchCommands(Shmem&& rawShmem,
       Range<const uint8_t>{shmemBytes.begin(), shmemBytes.begin() + byteSize};
   auto view = webgl::RangeConsumerView{cmdsBytes};
 
+  if (kIsDebug) {
+    const auto initialOffset =
+        AlignmentOffset(kUniversalAlignment, cmdsBytes.begin().get());
+    MOZ_ALWAYS_TRUE(!initialOffset);
+  }
+
   while (true) {
     view.AlignTo(kUniversalAlignment);
     size_t id = 0;
     const auto status = view.ReadParam(&id);
     if (status != QueueStatus::kSuccess) break;
 
-    WebGLMethodDispatcher<0>::DispatchCommand(*mHost, id, view);
+    const auto ok = WebGLMethodDispatcher<0>::DispatchCommand(*mHost, id, view);
+    if (!ok) {
+      const nsPrintfCString cstr(
+          "DispatchCommand(id: %i) failed. Please file a bug!", int(id));
+      const auto str = ToString(cstr);
+      gfxCriticalError() << str;
+      mHost->JsWarning(str);
+      mHost->OnContextLoss(webgl::ContextLossReason::None);
+      break;
+    }
   }
 
   return IPC_OK();
@@ -86,22 +88,29 @@ IPCResult WebGLParent::RecvGetFrontBufferSnapshot(
     webgl::FrontBufferSnapshotIpc* const ret) {
   *ret = {};
 
-  const auto surfSize = mHost->GetFrontBufferSize();
-  const auto byteSize = 4 * surfSize.x * surfSize.y;
+  const auto maybeSize = mHost->FrontBufferSnapshotInto({});
+  if (maybeSize) {
+    const auto& surfSize = *maybeSize;
+    const auto byteSize = 4 * surfSize.x * surfSize.y;
 
-  auto shmem = webgl::RaiiShmem::Alloc(
-      this, byteSize, mozilla::ipc::SharedMemory::SharedMemoryType::TYPE_BASIC);
-  if (!shmem) {
-    NS_WARNING("Failed to alloc shmem for RecvGetFrontBufferSnapshot.");
-    return IPC_FAIL(this, "Failed to allocate shmem for result");
-  }
+    auto shmem = webgl::RaiiShmem::Alloc(
+        this, byteSize,
+        mozilla::ipc::SharedMemory::SharedMemoryType::TYPE_BASIC);
+    if (!shmem) {
+      NS_WARNING("Failed to alloc shmem for RecvGetFrontBufferSnapshot.");
+      return IPC_FAIL(this, "Failed to allocate shmem for result");
+    }
 
-  const auto range = shmem.ByteRange();
-  auto retSize = surfSize;
-  if (!mHost->FrontBufferSnapshotInto(range)) {
-    retSize = {0, 0};  // Zero means failure.
+    const auto range = shmem.ByteRange();
+    auto retSize = surfSize;
+    if (!mHost->FrontBufferSnapshotInto(Some(range))) {
+      gfxCriticalNote << "WebGLParent::RecvGetFrontBufferSnapshot: "
+                         "FrontBufferSnapshotInto(some) failed after "
+                         "FrontBufferSnapshotInto(none)";
+      retSize = {0, 0};  // Zero means failure.
+    }
+    *ret = {retSize, shmem.Extract()};
   }
-  *ret = {retSize, shmem.Extract()};
   return IPC_OK();
 }
 

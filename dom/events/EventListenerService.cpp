@@ -374,12 +374,11 @@ void EventListenerService::NotifyAboutMainThreadListenerChangeInternal(
   }
 
   RefPtr<EventListenerChange> changes =
-      mPendingListenerChangesSet.LookupForAdd(aTarget).OrInsert(
-          [this, aTarget]() {
-            EventListenerChange* c = new EventListenerChange(aTarget);
-            mPendingListenerChanges->AppendElement(c);
-            return c;
-          });
+      mPendingListenerChangesSet.LookupOrInsertWith(aTarget, [&] {
+        auto c = MakeRefPtr<EventListenerChange>(aTarget);
+        mPendingListenerChanges->AppendElement(c);
+        return c;
+      });
   changes->AddChangedListenerName(aName);
 }
 

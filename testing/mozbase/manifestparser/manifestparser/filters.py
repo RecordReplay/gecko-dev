@@ -12,7 +12,12 @@ from __future__ import absolute_import, division
 
 import itertools
 import os
-from collections import defaultdict, MutableSequence
+from collections import defaultdict
+
+try:
+    from collections.abc import MutableSequence
+except ImportError:
+    from collections import MutableSequence
 
 import six
 from six import string_types
@@ -460,7 +465,11 @@ class failures(InstanceFilter):
                 if key not in test:
                     continue
 
-                matched = [self.keyword in e for e in test[key].splitlines() if e]
+                matched = [
+                    self.keyword in e and parse(e, **values)
+                    for e in test[key].splitlines()
+                    if e
+                ]
                 if any(matched):
                     test["expected"] = "fail"
                     yield test

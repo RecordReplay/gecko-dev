@@ -21,12 +21,13 @@
 #include "nsPrimitiveHelpers.h"
 #include "nsImageToPixbuf.h"
 #include "nsStringStream.h"
+#include "nsIFileURL.h"
 #include "nsIObserverService.h"
 #include "mozilla/Services.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/TimeStamp.h"
-#include "gfxPlatformGtk.h"
+#include "WidgetUtilsGtk.h"
 
 #include "imgIContainer.h"
 
@@ -44,6 +45,8 @@ const int kClipboardTimeout = 500000;
 // detect the HTML as UTF-8 encoded.
 static const char kHTMLMarkupPrefix[] =
     R"(<meta http-equiv="content-type" content="text/html; charset=utf-8">)";
+
+static const char kURIListMime[] = "text/uri-list";
 
 // Callback when someone asks us for the data
 void clipboard_get_cb(GtkClipboard* aGtkClipboard,
@@ -72,8 +75,8 @@ int GetGeckoClipboardType(GtkClipboard* aGtkClipboard) {
     return nsClipboard::kSelectionClipboard;
   else if (aGtkClipboard == gtk_clipboard_get(GDK_SELECTION_CLIPBOARD))
     return nsClipboard::kGlobalClipboard;
-  else
-    return -1;  // THAT AIN'T NO CLIPBOARD I EVER HEARD OF
+
+  return -1;  // THAT AIN'T NO CLIPBOARD I EVER HEARD OF
 }
 
 nsClipboard::nsClipboard() = default;
@@ -92,14 +95,16 @@ nsClipboard::~nsClipboard() {
 NS_IMPL_ISUPPORTS(nsClipboard, nsIClipboard, nsIObserver)
 
 nsresult nsClipboard::Init(void) {
-  if (gfxPlatformGtk::GetPlatform()->IsX11Display()) {
+  if (widget::GdkIsX11Display()) {
     mContext = MakeUnique<nsRetrievalContextX11>();
 #if defined(MOZ_WAYLAND)
-  } else {
+  } else if (widget::GdkIsWaylandDisplay()) {
     mContext = MakeUnique<nsRetrievalContextWayland>();
 #endif
+  } else {
+    NS_WARNING("Missing nsRetrievalContext for nsClipboard!");
+    return NS_OK;
   }
-  NS_ASSERTION(mContext, "Missing nsRetrievalContext for nsClipboard!");
 
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   if (os) {
@@ -118,6 +123,7 @@ nsClipboard::Observe(nsISupports* aSubject, const char* aTopic,
   return SchedulerGroup::Dispatch(
       TaskCategory::Other,
       NS_NewRunnableFunction("gtk_clipboard_store()", []() {
+        LOGCLIP(("nsClipboard storing clipboard content\n"));
         gtk_clipboard_store(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD));
       }));
 }
@@ -153,10 +159,11 @@ nsClipboard::SetData(nsITransferable* aTransferable, nsIClipboardOwner* aOwner,
   bool imagesAdded = false;
   for (uint32_t i = 0; i < flavors.Length(); i++) {
     nsCString& flavorStr = flavors[i];
+    LOGCLIP(("    processing target %s\n", flavorStr.get()));
 
     // Special case text/unicode since we can handle all of the string types.
     if (flavorStr.EqualsLiteral(kUnicodeMime)) {
-      LOGCLIP(("    text targets\n"));
+      LOGCLIP(("    adding TEXT targets\n"));
       gtk_target_list_add_text_targets(list, 0);
       continue;
     }
@@ -165,7 +172,7 @@ nsClipboard::SetData(nsITransferable* aTransferable, nsIClipboardOwner* aOwner,
       // Don't bother adding image targets twice
       if (!imagesAdded) {
         // accept any writable image type
-        LOGCLIP(("    image targets\n"));
+        LOGCLIP(("    adding IMAGE targets\n"));
         gtk_target_list_add_image_targets(list, 0, TRUE);
         imagesAdded = true;
       }
@@ -173,6 +180,7 @@ nsClipboard::SetData(nsITransferable* aTransferable, nsIClipboardOwner* aOwner,
     }
 
     // Add this to our list of valid targets
+    LOGCLIP(("    adding OTHER target %s\n", flavorStr.get()));
     GdkAtom atom = gdk_atom_intern(flavorStr.get(), FALSE);
     gtk_target_list_add(list, atom, 0, 0);
   }
@@ -184,14 +192,17 @@ nsClipboard::SetData(nsITransferable* aTransferable, nsIClipboardOwner* aOwner,
   gint numTargets;
   GtkTargetEntry* gtkTargets =
       gtk_target_table_new_from_list(list, &numTargets);
-
-  LOGCLIP(("    gtk_target_table_new_from_list() = %p\n", (void*)gtkTargets));
+  if (!gtkTargets) {
+    LOGCLIP(("    gtk_clipboard_set_with_data() failed!\n"));
+    // Clear references to the any old data and let GTK know that it is no
+    // longer available.
+    EmptyClipboard(aWhichClipboard);
+    return NS_ERROR_FAILURE;
+  }
 
   // Set getcallback and request to store data after an application exit
-  if (gtkTargets &&
-      gtk_clipboard_set_with_data(gtkClipboard, gtkTargets, numTargets,
+  if (gtk_clipboard_set_with_data(gtkClipboard, gtkTargets, numTargets,
                                   clipboard_get_cb, clipboard_clear_cb, this)) {
-    LOGCLIP(("    gtk_clipboard_set_with_data() is ok\n"));
     // We managed to set-up the clipboard so update internal state
     // We have to set it now because gtk_clipboard_set_with_data() calls
     // clipboard_clear_cb() which reset our internal state
@@ -207,8 +218,6 @@ nsClipboard::SetData(nsITransferable* aTransferable, nsIClipboardOwner* aOwner,
     rv = NS_OK;
   } else {
     LOGCLIP(("    gtk_clipboard_set_with_data() failed!\n"));
-    // Clear references to the any old data and let GTK know that it is no
-    // longer available.
     EmptyClipboard(aWhichClipboard);
     rv = NS_ERROR_FAILURE;
   }
@@ -233,10 +242,12 @@ void nsClipboard::SetTransferableData(nsITransferable* aTransferable,
 
 NS_IMETHODIMP
 nsClipboard::GetData(nsITransferable* aTransferable, int32_t aWhichClipboard) {
-  if (!aTransferable) return NS_ERROR_FAILURE;
-
   LOGCLIP(("nsClipboard::GetData (%s)\n",
            aWhichClipboard == kSelectionClipboard ? "primary" : "clipboard"));
+
+  if (!aTransferable || !mContext) {
+    return NS_ERROR_FAILURE;
+  }
 
   // Get a list of flavors this transferable can import
   nsTArray<nsCString> flavors;
@@ -310,6 +321,36 @@ nsClipboard::GetData(nsITransferable* aTransferable, int32_t aWhichClipboard) {
       free((void*)unicodeData);
 
       LOGCLIP(("    got unicode data, length %d\n", ucs2string.Length()));
+
+      mContext->ReleaseClipboardData(clipboardData);
+      return NS_OK;
+    }
+
+    if (flavorStr.EqualsLiteral(kFileMime)) {
+      LOGCLIP(("    Getting %s file clipboard data\n", flavorStr.get()));
+
+      uint32_t clipboardDataLength;
+      const char* clipboardData = mContext->GetClipboardData(
+          kURIListMime, aWhichClipboard, &clipboardDataLength);
+      if (!clipboardData) {
+        LOGCLIP(("    text/uri-list type is missing\n"));
+        continue;
+      }
+
+      nsDependentCSubstring data(clipboardData, clipboardDataLength);
+      nsTArray<nsCString> uris = mozilla::widget::ParseTextURIList(data);
+      if (!uris.IsEmpty()) {
+        nsCOMPtr<nsIURI> fileURI;
+        NS_NewURI(getter_AddRefs(fileURI), uris[0]);
+        if (nsCOMPtr<nsIFileURL> fileURL = do_QueryInterface(fileURI, &rv)) {
+          nsCOMPtr<nsIFile> file;
+          rv = fileURL->GetFile(getter_AddRefs(file));
+          if (NS_SUCCEEDED(rv)) {
+            aTransferable->SetTransferData(flavorStr.get(), file);
+            LOGCLIP(("    successfully set file to clipboard\n"));
+          }
+        }
+      }
 
       mContext->ReleaseClipboardData(clipboardData);
       return NS_OK;
@@ -412,12 +453,32 @@ nsClipboard::HasDataMatchingFlavors(const nsTArray<nsCString>& aFlavorList,
 
   *_retval = false;
 
+  if (!mContext) {
+    return NS_ERROR_FAILURE;
+  }
+
   int targetNums;
   GdkAtom* targets = mContext->GetTargets(aWhichClipboard, &targetNums);
   if (!targets) {
     LOGCLIP(("    no targes at clipboard (null)\n"));
     return NS_OK;
   }
+
+#ifdef MOZ_LOGGING
+  LOGCLIP(("    Clipboard content (target nums %d):\n", targetNums));
+  for (int32_t j = 0; j < targetNums; j++) {
+    gchar* atom_name = gdk_atom_name(targets[j]);
+    if (!atom_name) {
+      LOGCLIP(("        failed to get MIME\n"));
+      continue;
+    }
+    LOGCLIP(("        MIME %s\n", atom_name));
+  }
+  LOGCLIP(("    Asking for content:\n"));
+  for (auto& flavor : aFlavorList) {
+    LOGCLIP(("        MIME %s\n", flavor.get()));
+  }
+#endif
 
   // Walk through the provided types and try to match it to a
   // provided type.
@@ -445,6 +506,12 @@ nsClipboard::HasDataMatchingFlavors(const nsTArray<nsCString>& aFlavorList,
         *_retval = true;
         LOGCLIP(("    has image/jpg\n"));
       }
+      // application/x-moz-file should be treated like text/uri-list
+      else if (flavor.EqualsLiteral(kFileMime) &&
+               !strcmp(atom_name, kURIListMime)) {
+        *_retval = true;
+        LOGCLIP(("    has text/uri-list treating as application/x-moz-file"));
+      }
 
       g_free(atom_name);
 
@@ -464,7 +531,7 @@ nsClipboard::HasDataMatchingFlavors(const nsTArray<nsCString>& aFlavorList,
 
 NS_IMETHODIMP
 nsClipboard::SupportsSelectionClipboard(bool* _retval) {
-  *_retval = mContext->HasSelectionSupport();
+  *_retval = mContext ? mContext->HasSelectionSupport() : false;
   return NS_OK;
 }
 
@@ -722,56 +789,55 @@ bool ConvertHTMLtoUCS2(const char* data, int32_t dataLength, nsCString& charset,
            outUnicodeLen * sizeof(char16_t));
     (*unicodeData)[outUnicodeLen] = '\0';
     return true;
-  } else if (charset.EqualsLiteral("UNKNOWN")) {
+  }
+  if (charset.EqualsLiteral("UNKNOWN")) {
     outUnicodeLen = 0;
     return false;
-  } else {
-    // app which use "text/html" to copy&paste
-    // get the decoder
-    auto encoding = Encoding::ForLabelNoReplacement(charset);
-    if (!encoding) {
-      LOGCLIP(("ConvertHTMLtoUCS2: get unicode decoder error\n"));
-      outUnicodeLen = 0;
-      return false;
-    }
-
-    auto dataSpan = Span(data, dataLength);
-    // Remove kHTMLMarkupPrefix again, it won't necessarily cause any
-    // issues, but might confuse other users.
-    const size_t prefixLen = ArrayLength(kHTMLMarkupPrefix) - 1;
-    if (dataSpan.Length() >= prefixLen &&
-        Substring(data, prefixLen).EqualsLiteral(kHTMLMarkupPrefix)) {
-      dataSpan = dataSpan.From(prefixLen);
-    }
-
-    auto decoder = encoding->NewDecoder();
-    CheckedInt<size_t> needed =
-        decoder->MaxUTF16BufferLength(dataSpan.Length());
-    if (!needed.isValid() || needed.value() > INT32_MAX) {
-      outUnicodeLen = 0;
-      return false;
-    }
-
-    outUnicodeLen = 0;
-    if (needed.value()) {
-      *unicodeData = reinterpret_cast<char16_t*>(
-          moz_xmalloc((needed.value() + 1) * sizeof(char16_t)));
-      uint32_t result;
-      size_t read;
-      size_t written;
-      bool hadErrors;
-      Tie(result, read, written, hadErrors) = decoder->DecodeToUTF16(
-          AsBytes(dataSpan), Span(*unicodeData, needed.value()), true);
-      MOZ_ASSERT(result == kInputEmpty);
-      MOZ_ASSERT(read == size_t(dataSpan.Length()));
-      MOZ_ASSERT(written <= needed.value());
-      Unused << hadErrors;
-      outUnicodeLen = written;
-      // null terminate.
-      (*unicodeData)[outUnicodeLen] = '\0';
-      return true;
-    }  // if valid length
   }
+  // app which use "text/html" to copy&paste
+  // get the decoder
+  auto encoding = Encoding::ForLabelNoReplacement(charset);
+  if (!encoding) {
+    LOGCLIP(("ConvertHTMLtoUCS2: get unicode decoder error\n"));
+    outUnicodeLen = 0;
+    return false;
+  }
+
+  auto dataSpan = Span(data, dataLength);
+  // Remove kHTMLMarkupPrefix again, it won't necessarily cause any
+  // issues, but might confuse other users.
+  const size_t prefixLen = ArrayLength(kHTMLMarkupPrefix) - 1;
+  if (dataSpan.Length() >= prefixLen &&
+      Substring(data, prefixLen).EqualsLiteral(kHTMLMarkupPrefix)) {
+    dataSpan = dataSpan.From(prefixLen);
+  }
+
+  auto decoder = encoding->NewDecoder();
+  CheckedInt<size_t> needed = decoder->MaxUTF16BufferLength(dataSpan.Length());
+  if (!needed.isValid() || needed.value() > INT32_MAX) {
+    outUnicodeLen = 0;
+    return false;
+  }
+
+  outUnicodeLen = 0;
+  if (needed.value()) {
+    *unicodeData = reinterpret_cast<char16_t*>(
+        moz_xmalloc((needed.value() + 1) * sizeof(char16_t)));
+    uint32_t result;
+    size_t read;
+    size_t written;
+    bool hadErrors;
+    Tie(result, read, written, hadErrors) = decoder->DecodeToUTF16(
+        AsBytes(dataSpan), Span(*unicodeData, needed.value()), true);
+    MOZ_ASSERT(result == kInputEmpty);
+    MOZ_ASSERT(read == size_t(dataSpan.Length()));
+    MOZ_ASSERT(written <= needed.value());
+    Unused << hadErrors;
+    outUnicodeLen = written;
+    // null terminate.
+    (*unicodeData)[outUnicodeLen] = '\0';
+    return true;
+  }  // if valid length
   return false;
 }
 

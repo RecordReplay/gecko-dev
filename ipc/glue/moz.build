@@ -10,6 +10,7 @@ EXPORTS += [
 ]
 
 EXPORTS.mozilla.ipc += [
+    "AutoTransportDescriptor.h",
     "BackgroundChild.h",
     "BackgroundParent.h",
     "BackgroundUtils.h",
@@ -42,11 +43,16 @@ EXPORTS.mozilla.ipc += [
     "LibrarySandboxPreload.h",
     "MessageChannel.h",
     "MessageLink.h",
+    "MessagePump.h",
     "Neutering.h",
+    "NodeChannel.h",
+    "NodeController.h",
     "ProcessChild.h",
+    "ProcessUtils.h",
     "ProtocolMessageUtils.h",
     "ProtocolUtils.h",
     "ProtocolUtilsFwd.h",
+    "ScopedPort.h",
     "ScopedXREEmbed.h",
     "SerializedStructuredCloneBuffer.h",
     "SharedMemory.h",
@@ -149,6 +155,7 @@ EXPORTS.ipc += [
 ]
 
 UNIFIED_SOURCES += [
+    "AutoTransportDescriptor.cpp",
     "BackgroundImpl.cpp",
     "BackgroundUtils.cpp",
     "BrowserProcessSubThread.cpp",
@@ -160,6 +167,7 @@ UNIFIED_SOURCES += [
     "IdleSchedulerParent.cpp",
     "InputStreamUtils.cpp",
     "IPCMessageUtils.cpp",
+    "IPCMessageUtilsSpecializations.cpp",
     "IPCStreamChild.cpp",
     "IPCStreamDestination.cpp",
     "IPCStreamParent.cpp",
@@ -169,9 +177,12 @@ UNIFIED_SOURCES += [
     "MessageChannel.cpp",
     "MessageLink.cpp",
     "MessagePump.cpp",
+    "NodeChannel.cpp",
+    "NodeController.cpp",
     "ProcessChild.cpp",
     "ProcessUtils_common.cpp",
     "ProtocolUtils.cpp",
+    "ScopedPort.cpp",
     "ScopedXREEmbed.cpp",
     "SharedMemory.cpp",
     "Shmem.cpp",

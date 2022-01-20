@@ -9,6 +9,10 @@ Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/devtools/client/shared/test/shared-head.js",
   this
 );
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/devtools/client/inspector/test/shared-head.js",
+  this
+);
 
 const EventEmitter = require("devtools/shared/event-emitter");
 
@@ -116,20 +120,23 @@ function createScript(url) {
 function waitForSourceLoad(toolbox, url) {
   info(`Waiting for source ${url} to be available...`);
   return new Promise(resolve => {
-    const { resourceWatcher } = toolbox;
+    const { resourceCommand } = toolbox;
 
     function onAvailable(sources) {
       for (const source of sources) {
         if (source.url === url) {
-          resourceWatcher.unwatchResources([resourceWatcher.TYPES.SOURCE], {
+          resourceCommand.unwatchResources([resourceCommand.TYPES.SOURCE], {
             onAvailable,
           });
           resolve();
         }
       }
     }
-    resourceWatcher.watchResources([resourceWatcher.TYPES.SOURCE], {
+    resourceCommand.watchResources([resourceCommand.TYPES.SOURCE], {
       onAvailable,
+      // Ignore the cached resources as we always listen *before*
+      // the action creating a source.
+      ignoreExistingResources: true,
     });
   });
 }
@@ -153,8 +160,6 @@ DevToolPanel.prototype = {
   open: function() {
     return new Promise(resolve => {
       executeSoon(() => {
-        this._isReady = true;
-        this.emit("ready");
         resolve(this);
       });
     });
@@ -171,12 +176,6 @@ DevToolPanel.prototype = {
   get toolbox() {
     return this._toolbox;
   },
-
-  get isReady() {
-    return this._isReady;
-  },
-
-  _isReady: false,
 
   destroy: function() {
     return Promise.resolve(null);

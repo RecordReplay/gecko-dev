@@ -472,7 +472,7 @@ nsresult nsStringBundleBase::ParseProperties(nsIPersistentProperties** aProps) {
 nsresult nsStringBundle::LoadProperties() {
   // Something such as Necko might use string bundle after ClearOnShutdown is
   // called. LocaleService etc is already down, so we cannot get bundle data.
-  if (PastShutdownPhase(ShutdownPhase::Shutdown)) {
+  if (PastShutdownPhase(ShutdownPhase::XPCOMShutdown)) {
     return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
   }
 
@@ -504,7 +504,7 @@ nsresult SharedStringBundle::LoadProperties() {
   // our string bundles come from). Since shared string bundles won't be
   // useful after shutdown has started anyway (and we almost certainly got
   // here from a pre-load attempt in an idle task), just bail out.
-  if (PastShutdownPhase(ShutdownPhase::Shutdown)) {
+  if (PastShutdownPhase(ShutdownPhase::XPCOMShutdown)) {
     return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
   }
 
@@ -739,9 +739,9 @@ nsresult nsStringBundleService::Init() {
 size_t nsStringBundleService::SizeOfIncludingThis(
     mozilla::MallocSizeOf aMallocSizeOf) const {
   size_t n = mBundleMap.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto iter = mBundleMap.ConstIter(); !iter.Done(); iter.Next()) {
-    n += aMallocSizeOf(iter.Data());
-    n += iter.Data()->mHashKey.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+  for (const auto& data : mBundleMap.Values()) {
+    n += aMallocSizeOf(data);
+    n += data->mHashKey.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
   }
   return aMallocSizeOf(this) + n;
 }
@@ -909,7 +909,7 @@ bundleCacheEntry_t* nsStringBundleService::insertIntoCache(
   cacheEntry->mHashKey = aHashKey;
   cacheEntry->mBundle = aBundle;
 
-  mBundleMap.Put(cacheEntry->mHashKey, cacheEntry.get());
+  mBundleMap.InsertOrUpdate(cacheEntry->mHashKey, cacheEntry.get());
 
   return cacheEntry.release();
 }

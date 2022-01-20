@@ -37,8 +37,7 @@ void CoalescedMouseData::Coalesce(const WidgetMouseEvent& aEvent,
     mCoalescedInputEvent->AssignPointerHelperData(aEvent);
   }
 
-  if (aEvent.mMessage == eMouseMove &&
-      StaticPrefs::dom_w3c_pointer_events_enabled()) {
+  if (aEvent.mMessage == eMouseMove) {
     // PointerEvent::getCoalescedEvents is only applied to pointermove events.
     if (!mCoalescedInputEvent->mCoalescedWidgetEvents) {
       mCoalescedInputEvent->mCoalescedWidgetEvents =
@@ -70,47 +69,14 @@ bool CoalescedMouseData::CanCoalesce(const WidgetMouseEvent& aEvent,
           mInputBlockId == aInputBlockId);
 }
 
+CoalescedMouseMoveFlusher::CoalescedMouseMoveFlusher(
+    BrowserChild* aBrowserChild)
+    : CoalescedInputFlusher(aBrowserChild) {}
+
 void CoalescedMouseMoveFlusher::WillRefresh(mozilla::TimeStamp aTime) {
   MOZ_ASSERT(mRefreshDriver);
   mBrowserChild->FlushAllCoalescedMouseData();
   mBrowserChild->ProcessPendingCoalescedMouseDataAndDispatchEvents();
 }
 
-void CoalescedMouseMoveFlusher::StartObserver() {
-  nsRefreshDriver* refreshDriver = GetRefreshDriver();
-  if (mRefreshDriver && mRefreshDriver == refreshDriver) {
-    // Nothing to do if we already added an observer and it's same refresh
-    // driver.
-    return;
-  }
-  RemoveObserver();
-  if (refreshDriver) {
-    mRefreshDriver = refreshDriver;
-    mRefreshDriver->AddRefreshObserver(this, FlushType::Event,
-                                       "Coalesced mouse move flusher");
-  }
-}
-
-void CoalescedMouseMoveFlusher::RemoveObserver() {
-  if (mRefreshDriver) {
-    mRefreshDriver->RemoveRefreshObserver(this, FlushType::Event);
-    mRefreshDriver = nullptr;
-  }
-}
-
-CoalescedMouseMoveFlusher::CoalescedMouseMoveFlusher(
-    BrowserChild* aBrowserChild)
-    : mBrowserChild(aBrowserChild) {
-  MOZ_ASSERT(mBrowserChild);
-}
-
 CoalescedMouseMoveFlusher::~CoalescedMouseMoveFlusher() { RemoveObserver(); }
-
-nsRefreshDriver* CoalescedMouseMoveFlusher::GetRefreshDriver() {
-  PresShell* presShell = mBrowserChild->GetTopLevelPresShell();
-  if (!presShell || !presShell->GetPresContext() ||
-      !presShell->GetPresContext()->RefreshDriver()) {
-    return nullptr;
-  }
-  return presShell->GetPresContext()->RefreshDriver();
-}

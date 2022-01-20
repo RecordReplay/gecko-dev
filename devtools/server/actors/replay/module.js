@@ -97,12 +97,7 @@ const gAllGlobals = [];
 
 function considerScript(script) {
   return script.format == "js" &&
-    RecordReplayControl.shouldUpdateProgressCounter(script.url) &&
-    // Ignore default class constructors. These are cloned from self hosted
-    // scripts and then marked as not self hosted so the debugger can see them.
-    // They won't have instrumentation, though, and we need instrumentation
-    // for script enters/exits to be consistent with the stack contents.
-    !script.isDefaultClassConstructor;
+    RecordReplayControl.shouldUpdateProgressCounter(script.url);
 }
 
 // Call the callback for each frame, starting at the oldest to the newest.
@@ -652,6 +647,7 @@ const commands = {
   "Target.topFrameLocation": Target_topFrameLocation,
   "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
   "Target.getCurrentNetworkStreamData": Target_getCurrentNetworkStreamData,
+  "Target.getPossibleBreakpointsForMultipleSources": Target_getPossibleBreakpointsForMultipleSources,
 };
 
 function OnProtocolCommand(method, params) {
@@ -929,7 +925,7 @@ function sourceToProtocolSourceId(source) {
   return String(id);
 }
 
-function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
+function getPossibleBreakpoints({sourceId, begin, end}) {
   const source = protocolSourceIdToSource(sourceId);
 
   const lineLocations = new ArrayMap();
@@ -950,6 +946,20 @@ function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
       return { line, columns };
     });
   }
+}
+function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
+  return getPossibleBreakpoints({source, begin, end});
+}
+
+function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
+  return {
+    possibleBreakpoints: sourceIds.map((sourceId => {
+      const { lineLocations } = getPossibleBreakpoints({sourceId});
+      return {
+        sourceId, lineLocations
+      };
+    }))
+  };
 }
 
 function functionIdToScript(functionId) {

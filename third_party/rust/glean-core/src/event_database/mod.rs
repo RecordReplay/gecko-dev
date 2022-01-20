@@ -8,13 +8,13 @@ use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
-use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 
+use crate::coverage::record_coverage;
 use crate::CommonMetricData;
 use crate::Glean;
 use crate::Result;
@@ -85,8 +85,8 @@ impl EventDatabase {
     ///
     /// * `data_path` - The directory to store events in. A new directory
     /// * `events` - will be created inside of this directory.
-    pub fn new(data_path: &str) -> Result<Self> {
-        let path = Path::new(data_path).join("events");
+    pub fn new(data_path: &Path) -> Result<Self> {
+        let path = data_path.join("events");
         create_dir_all(&path)?;
 
         Ok(Self {
@@ -160,15 +160,7 @@ impl EventDatabase {
 
         let mut ping_sent = false;
         for store_name in store_names {
-            if let Err(err) = glean.submit_ping_by_name(&store_name, Some("startup")) {
-                log::warn!(
-                    "Error flushing existing events to the '{}' ping: {}",
-                    store_name,
-                    err
-                );
-            } else {
-                ping_sent = true;
-            }
+            ping_sent |= glean.submit_ping_by_name(&store_name, Some("startup"));
         }
 
         ping_sent
@@ -224,14 +216,7 @@ impl EventDatabase {
         // If any of the event stores reached maximum size, submit the pings
         // containing those events immediately.
         for store_name in stores_to_submit {
-            if let Err(err) = glean.submit_ping_by_name(store_name, Some("max_capacity")) {
-                log::warn!(
-                    "Got more than {} events, but could not send {} ping: {}",
-                    glean.get_max_events(),
-                    store_name,
-                    err
-                );
-            }
+            glean.submit_ping_by_name(store_name, Some("max_capacity"));
         }
     }
 
@@ -276,9 +261,11 @@ impl EventDatabase {
                     // in a single location.
                     store.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
                     let first_timestamp = store[0].timestamp;
-                    Some(JsonValue::from_iter(
-                        store.iter().map(|e| e.serialize_relative(first_timestamp)),
-                    ))
+                    let snapshot = store
+                        .iter()
+                        .map(|e| e.serialize_relative(first_timestamp))
+                        .collect();
+                    Some(snapshot)
                 } else {
                     log::warn!("Unexpectly got empty event store for '{}'", store_name);
                     None
@@ -326,6 +313,8 @@ impl EventDatabase {
     ///
     /// This doesn't clear the stored value.
     pub fn test_has_value<'a>(&'a self, meta: &'a CommonMetricData, store_name: &str) -> bool {
+        record_coverage(&meta.base_identifier());
+
         self.event_stores
             .read()
             .unwrap() // safe unwrap, only error case is poisoning
@@ -346,6 +335,8 @@ impl EventDatabase {
         meta: &'a CommonMetricData,
         store_name: &str,
     ) -> Option<Vec<RecordedEvent>> {
+        record_coverage(&meta.base_identifier());
+
         let value: Vec<RecordedEvent> = self
             .event_stores
             .read()
@@ -375,7 +366,7 @@ mod test {
         let t = tempfile::tempdir().unwrap();
 
         {
-            let db = EventDatabase::new(&t.path().display().to_string()).unwrap();
+            let db = EventDatabase::new(&t.path()).unwrap();
             db.write_event_to_disk("events", "{\"timestamp\": 500");
             db.write_event_to_disk("events", "{\"timestamp\"");
             db.write_event_to_disk(
@@ -385,7 +376,7 @@ mod test {
         }
 
         {
-            let db = EventDatabase::new(&t.path().display().to_string()).unwrap();
+            let db = EventDatabase::new(&t.path()).unwrap();
             db.load_events_from_disk().unwrap();
             let events = &db.event_stores.read().unwrap()["events"];
             assert_eq!(1, events.len());
@@ -467,7 +458,7 @@ mod test {
     #[test]
     fn doesnt_record_when_upload_is_disabled() {
         let (mut glean, dir) = new_glean(None);
-        let db = EventDatabase::new(dir.path().to_str().unwrap()).unwrap();
+        let db = EventDatabase::new(dir.path()).unwrap();
 
         let test_storage = "test-storage";
         let test_category = "category";

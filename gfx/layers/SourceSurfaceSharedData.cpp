@@ -7,8 +7,11 @@
 #include "SourceSurfaceSharedData.h"
 
 #include "mozilla/Likely.h"
+#include "mozilla/StaticPrefs_image.h"
 #include "mozilla/Types.h"  // for decltype
 #include "mozilla/layers/SharedSurfacesChild.h"
+#include "mozilla/layers/SharedSurfacesParent.h"
+#include "nsDebug.h"  // for NS_ABORT_OOM
 
 #include "base/process_util.h"
 
@@ -27,7 +30,7 @@ using namespace mozilla::layers;
 namespace mozilla {
 namespace gfx {
 
-bool SourceSurfaceSharedDataWrapper::Init(
+void SourceSurfaceSharedDataWrapper::Init(
     const IntSize& aSize, int32_t aStride, SurfaceFormat aFormat,
     const SharedMemoryBasic::Handle& aHandle, base::ProcessId aCreatorPid) {
   MOZ_ASSERT(!mBuf);
@@ -38,15 +41,29 @@ bool SourceSurfaceSharedDataWrapper::Init(
 
   size_t len = GetAlignedDataLength();
   mBuf = MakeAndAddRef<SharedMemoryBasic>();
-  if (NS_WARN_IF(
-          !mBuf->SetHandle(aHandle, ipc::SharedMemory::RightsReadOnly)) ||
-      NS_WARN_IF(!mBuf->Map(len))) {
-    mBuf = nullptr;
-    return false;
+  if (!mBuf->SetHandle(aHandle, ipc::SharedMemory::RightsReadOnly)) {
+    MOZ_CRASH("Invalid shared memory handle!");
   }
 
-  mBuf->CloseHandle();
-  return true;
+  bool mapped = EnsureMapped(len);
+  if ((sizeof(uintptr_t) <= 4 ||
+       StaticPrefs::image_mem_shared_unmap_force_enabled_AtStartup()) &&
+      len / 1024 >
+          StaticPrefs::image_mem_shared_unmap_min_threshold_kb_AtStartup()) {
+    mHandleLock.emplace("SourceSurfaceSharedDataWrapper::mHandleLock");
+
+    if (mapped) {
+      // Tracking at the initial mapping, and not just after the first use of
+      // the surface means we might get unmapped again before the next frame
+      // gets rendered if a low virtual memory condition persists.
+      SharedSurfacesParent::AddTracking(this);
+    }
+  } else if (!mapped) {
+    // We don't support unmapping for this surface, and we failed to map it.
+    NS_ABORT_OOM(len);
+  } else {
+    mBuf->CloseHandle();
+  }
 }
 
 void SourceSurfaceSharedDataWrapper::Init(SourceSurfaceSharedData* aSurface) {
@@ -57,6 +74,69 @@ void SourceSurfaceSharedDataWrapper::Init(SourceSurfaceSharedData* aSurface) {
   mFormat = aSurface->mFormat;
   mCreatorPid = base::GetCurrentProcId();
   mBuf = aSurface->mBuf;
+}
+
+bool SourceSurfaceSharedDataWrapper::EnsureMapped(size_t aLength) {
+  MOZ_ASSERT(!GetData());
+
+  while (!mBuf->Map(aLength)) {
+    nsTArray<RefPtr<SourceSurfaceSharedDataWrapper>> expired;
+    if (!SharedSurfacesParent::AgeOneGeneration(expired)) {
+      return false;
+    }
+    MOZ_ASSERT(!expired.Contains(this));
+    SharedSurfacesParent::ExpireMap(expired);
+  }
+
+  return true;
+}
+
+bool SourceSurfaceSharedDataWrapper::Map(MapType,
+                                         MappedSurface* aMappedSurface) {
+  uint8_t* dataPtr;
+
+  if (mHandleLock) {
+    MutexAutoLock lock(*mHandleLock);
+    dataPtr = GetData();
+    if (mMapCount == 0) {
+      SharedSurfacesParent::RemoveTracking(this);
+      if (!dataPtr) {
+        size_t len = GetAlignedDataLength();
+        if (!EnsureMapped(len)) {
+          NS_ABORT_OOM(len);
+        }
+        dataPtr = GetData();
+      }
+    }
+    ++mMapCount;
+  } else {
+    dataPtr = GetData();
+    ++mMapCount;
+  }
+
+  MOZ_ASSERT(dataPtr);
+  aMappedSurface->mData = dataPtr;
+  aMappedSurface->mStride = mStride;
+  return true;
+}
+
+void SourceSurfaceSharedDataWrapper::Unmap() {
+  if (mHandleLock) {
+    MutexAutoLock lock(*mHandleLock);
+    if (--mMapCount == 0) {
+      SharedSurfacesParent::AddTracking(this);
+    }
+  } else {
+    --mMapCount;
+  }
+  MOZ_ASSERT(mMapCount >= 0);
+}
+
+void SourceSurfaceSharedDataWrapper::ExpireMap() {
+  MutexAutoLock lock(*mHandleLock);
+  if (mMapCount == 0) {
+    mBuf->Unmap();
+  }
 }
 
 bool SourceSurfaceSharedData::Init(const IntSize& aSize, int32_t aStride,

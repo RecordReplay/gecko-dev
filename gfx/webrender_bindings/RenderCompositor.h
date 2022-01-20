@@ -32,14 +32,15 @@ class CompositorWidget;
 
 namespace wr {
 
+class RenderCompositorLayersSWGL;
 class RenderCompositorD3D11SWGL;
 
 class RenderCompositor {
  public:
   static UniquePtr<RenderCompositor> Create(
-      RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError);
+      const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError);
 
-  RenderCompositor(RefPtr<widget::CompositorWidget>&& aWidget);
+  RenderCompositor(const RefPtr<widget::CompositorWidget>& aWidget);
   virtual ~RenderCompositor();
 
   virtual bool BeginFrame() = 0;
@@ -93,6 +94,10 @@ class RenderCompositor {
     return nullptr;
   }
 
+  virtual RenderCompositorLayersSWGL* AsRenderCompositorLayersSWGL() {
+    return nullptr;
+  }
+
   // True if AttachExternalImage supports being used with an external
   // image that maps to a RenderBufferTextureHost
   virtual bool SupportsExternalBufferTextures() const { return false; }
@@ -108,7 +113,6 @@ class RenderCompositor {
   virtual bool SupportAsyncScreenshot() { return true; }
 
   virtual bool ShouldUseNativeCompositor() { return false; }
-  virtual uint32_t GetMaxUpdateRects() { return 0; }
 
   // Interface for wr::Compositor
   virtual void CompositorBeginFrame() {}
@@ -138,13 +142,16 @@ class RenderCompositor {
                           wr::ImageRendering aImageRendering) {}
   // Called in the middle of a frame after all surfaces have been added but
   // before tiles are updated to signal that early compositing can start
-  virtual void StartCompositing(const wr::DeviceIntRect* aDirtyRects,
+  virtual void StartCompositing(wr::ColorF aClearColor,
+                                const wr::DeviceIntRect* aDirtyRects,
                                 size_t aNumDirtyRects,
                                 const wr::DeviceIntRect* aOpaqueRects,
                                 size_t aNumOpaqueRects) {}
   virtual void EnableNativeCompositor(bool aEnable) {}
   virtual void DeInit() {}
-  virtual CompositorCapabilities GetCompositorCapabilities() = 0;
+  // Overrides any of the default compositor capabilities for behavior this
+  // compositor might require.
+  virtual void GetCompositorCapabilities(CompositorCapabilities* aCaps);
 
   // Interface for partial present
   virtual bool UsePartialPresent() { return false; }

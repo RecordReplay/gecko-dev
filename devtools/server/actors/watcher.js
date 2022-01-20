@@ -5,7 +5,6 @@
 "use strict";
 const protocol = require("devtools/shared/protocol");
 const { watcherSpec } = require("devtools/shared/specs/watcher");
-const Services = require("Services");
 
 const Resources = require("devtools/server/actors/resources/index");
 const {
@@ -43,6 +42,18 @@ loader.lazyRequireGetter(
   this,
   "BreakpointListActor",
   "devtools/server/actors/breakpoint-list",
+  true
+);
+loader.lazyRequireGetter(
+  this,
+  "TargetConfigurationActor",
+  "devtools/server/actors/target-configuration",
+  true
+);
+loader.lazyRequireGetter(
+  this,
+  "ThreadConfigurationActor",
+  "devtools/server/actors/thread-configuration",
   true
 );
 
@@ -107,11 +118,6 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
   },
 
   form() {
-    const enableServerWatcher = Services.prefs.getBoolPref(
-      "devtools.testing.enableServerWatcherSupport",
-      false
-    );
-
     const hasBrowserElement = !!this.browserElement;
 
     return {
@@ -137,24 +143,29 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
           //
           // New server-side resources can be gated behind
           // `devtools.testing.enableServerWatcherSupport` if needed.
-          [Resources.TYPES.CONSOLE_MESSAGE]: hasBrowserElement,
+          [Resources.TYPES.CONSOLE_MESSAGE]: true,
           [Resources.TYPES.CSS_CHANGE]: hasBrowserElement,
-          [Resources.TYPES.CSS_MESSAGE]: hasBrowserElement,
+          [Resources.TYPES.CSS_MESSAGE]: true,
           [Resources.TYPES.DOCUMENT_EVENT]: hasBrowserElement,
-          [Resources.TYPES.ERROR_MESSAGE]: hasBrowserElement,
+          [Resources.TYPES.CACHE_STORAGE]: hasBrowserElement,
+          [Resources.TYPES.COOKIE]: hasBrowserElement,
+          [Resources.TYPES.ERROR_MESSAGE]: true,
+          [Resources.TYPES.INDEXED_DB]: hasBrowserElement,
           [Resources.TYPES.LOCAL_STORAGE]: hasBrowserElement,
           [Resources.TYPES.SESSION_STORAGE]: hasBrowserElement,
           [Resources.TYPES.PLATFORM_MESSAGE]: true,
           [Resources.TYPES.NETWORK_EVENT]: hasBrowserElement,
           [Resources.TYPES.NETWORK_EVENT_STACKTRACE]: hasBrowserElement,
-          [Resources.TYPES.STYLESHEET]:
-            enableServerWatcher && hasBrowserElement,
+          [Resources.TYPES.REFLOW]: true,
+          [Resources.TYPES.STYLESHEET]: hasBrowserElement,
           [Resources.TYPES.SOURCE]: hasBrowserElement,
+          [Resources.TYPES.THREAD_STATE]: hasBrowserElement,
+          [Resources.TYPES.SERVER_SENT_EVENT]: hasBrowserElement,
+          [Resources.TYPES.WEBSOCKET]: hasBrowserElement,
         },
-        // @backward-compat { version 85 } When removing this trait, consumers using
-        // the TargetList to retrieve the Breakpoints front should still be careful to check
-        // that the Watcher is available
-        "set-breakpoints": true,
+        // @backward-compat { version 91 } DOCUMENT_EVENT's will-navigate start being notified,
+        //                                 to replace target actor's will-navigate event
+        supportsDocumentEventWillNavigate: true,
       },
     };
   },
@@ -274,17 +285,19 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
   /**
    * Try to retrieve a parent process TargetActor:
    * - either when debugging a parent process page (when browserElement is set to the page's tab),
-   * - or when debugging the main process (when browserElement is null).
+   * - or when debugging the main process (when browserElement is null), including xpcshell tests
    *
    * See comment in `watchResources`, this will handle targets which are ignored by Frame and Process
    * target helpers. (and only those which are ignored)
    */
   _getTargetActorInParentProcess() {
-    return this.browserElement
-      ? // Note: if any, the BrowsingContextTargetActor returned here is created for a parent process
-        // page and lives in the parent process.
-        TargetActorRegistry.getTargetActor(this.browserId)
-      : TargetActorRegistry.getParentProcessTargetActor();
+    if (this.browserElement) {
+      // Note: if any, the BrowsingContextTargetActor returned here is created for a parent process
+      // page and lives in the parent process.
+      return TargetActorRegistry.getTargetActor(this.browserId);
+    }
+
+    return TargetActorRegistry.getParentProcessTargetActor();
   },
 
   /**
@@ -449,7 +462,11 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
    *        The network actor.
    */
   getNetworkParentActor() {
-    return new NetworkParentActor(this);
+    if (!this._networkParentActor) {
+      this._networkParentActor = new NetworkParentActor(this);
+    }
+
+    return this._networkParentActor;
   },
 
   /**
@@ -459,7 +476,37 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
    *        The breakpoint list actor.
    */
   getBreakpointListActor() {
-    return new BreakpointListActor(this);
+    if (!this._breakpointListActor) {
+      this._breakpointListActor = new BreakpointListActor(this);
+    }
+
+    return this._breakpointListActor;
+  },
+
+  /**
+   * Returns the target configuration actor.
+   *
+   * @return {Object} actor
+   *        The configuration actor.
+   */
+  getTargetConfigurationActor() {
+    if (!this._targetConfigurationListActor) {
+      this._targetConfigurationListActor = new TargetConfigurationActor(this);
+    }
+    return this._targetConfigurationListActor;
+  },
+
+  /**
+   * Returns the thread configuration actor.
+   *
+   * @return {Object} actor
+   *        The configuration actor.
+   */
+  getThreadConfigurationActor() {
+    if (!this._threadConfigurationListActor) {
+      this._threadConfigurationListActor = new ThreadConfigurationActor(this);
+    }
+    return this._threadConfigurationListActor;
   },
 
   /**
@@ -477,8 +524,15 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
 
     await Promise.all(
       Object.values(Targets.TYPES)
-        .filter(targetType =>
-          WatcherRegistry.isWatchingTargets(this, targetType)
+        .filter(
+          targetType =>
+            // We process frame targets even if we aren't watching them,
+            // because frame target helper codepath handles the top level target, if it runs in the *content* process.
+            // It will do another check to `isWatchingTargets(FRAME)` internally.
+            // Note that the workaround at the end of this method, using TargetActorRegistry
+            // is specific to top level target running in the *parent* process.
+            WatcherRegistry.isWatchingTargets(this, targetType) ||
+            targetType === Targets.TYPES.FRAME
         )
         .map(async targetType => {
           const targetHelperModule = TARGET_HELPERS[targetType];
@@ -511,7 +565,12 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
     WatcherRegistry.removeWatcherDataEntry(this, type, entries);
 
     Object.values(Targets.TYPES)
-      .filter(targetType => WatcherRegistry.isWatchingTargets(this, targetType))
+      .filter(
+        targetType =>
+          // See comment in addDataEntry
+          WatcherRegistry.isWatchingTargets(this, targetType) ||
+          targetType === Targets.TYPES.FRAME
+      )
       .forEach(targetType => {
         const targetHelperModule = TARGET_HELPERS[targetType];
         targetHelperModule.removeWatcherDataEntry({
@@ -521,10 +580,20 @@ exports.WatcherActor = protocol.ActorClassWithSpec(watcherSpec, {
         });
       });
 
-    // See comment in watchResources
+    // See comment in addDataEntry
     const targetActor = this._getTargetActorInParentProcess();
     if (targetActor) {
       targetActor.removeWatcherDataEntry(type, entries);
     }
+  },
+
+  /**
+   * Retrieve the current watched data for the provided type.
+   *
+   * @param {String} type
+   *        Data type to retrieve.
+   */
+  getWatchedData(type) {
+    return this.watchedData?.[type];
   },
 });

@@ -37,6 +37,11 @@
   direction: rtl;
 }
 
+/* XUL doesn't show outlines by default */
+:focus-visible {
+  outline: initial;
+}
+
 /*
  * Native anonymous popups and tooltips in html are document-level, which means
  * that they don't inherit from the root, so this is needed.
@@ -106,6 +111,15 @@ vbox {
 }
 
 /********** label **********/
+
+label {
+  display: inline-block;
+}
+
+description {
+  display: flow-root;
+}
+
 label.text-link, label[onclick] {
   -moz-user-focus: normal;
 }
@@ -248,6 +262,9 @@ tooltip {
 tooltip {
   -moz-box-orient: vertical;
   white-space: pre-wrap;
+}
+
+tooltip:not([position]) {
   margin-top: 21px;
 }
 
@@ -556,6 +573,15 @@ wizard {
   height: 30em;
 }
 
+wizard > wizardpage {
+  grid-area: 1 / 1;
+  min-height: 0;
+}
+
+wizard > wizardpage:not(.selected) {
+  visibility: hidden;
+}
+
 wizardpage {
   -moz-box-orient: vertical;
   overflow: auto;
@@ -574,7 +600,7 @@ findbar {
 }
 
 /* Some elements that in HTML blocks should be inline-level by default */
-label, button, image {
+button, image {
   display: -moz-inline-box;
 }
 

@@ -50,6 +50,10 @@ class Front extends Pool {
     // These listeners are register via Front.before function.
     // Map(Event Name[string] => Event Listener[function])
     this._beforeListeners = new Map();
+
+    // This flag allows to check if the `initialize` method has resolved.
+    // Used to avoid notifying about initialized fronts in `watchFronts`.
+    this._initializeResolved = false;
   }
 
   /**
@@ -103,16 +107,13 @@ class Front extends Pool {
       super.destroy();
       this.actorID = null;
     }
+    this._isDestroyed = true;
 
     this.targetFront = null;
     this.parentFront = null;
     this._frontCreationListeners = null;
     this._frontDestructionListeners = null;
     this._beforeListeners = null;
-  }
-
-  isDestroyed() {
-    return this.actorID === null;
   }
 
   async manage(front, form, ctx) {
@@ -130,10 +131,7 @@ class Front extends Pool {
         `${this.actorID} (${this.typeName}) can't manage ${front.actorID}
         (${front.typeName}) since it has a different parentFront ${
           front.parentFront
-            ? front.parentFront.actordID +
-              "(" +
-              front.parentFront.typeName +
-              ")"
+            ? front.parentFront.actorID + "(" + front.parentFront.typeName + ")"
             : "<no parentFront>"
         }`
       );
@@ -144,6 +142,7 @@ class Front extends Pool {
     if (typeof front.initialize == "function") {
       await front.initialize();
     }
+    front._initializeResolved = true;
 
     // Ensure calling form() *before* notifying about this front being just created.
     // We exprect the front to be fully initialized, especially via its form attributes.
@@ -191,9 +190,11 @@ class Front extends Pool {
     }
 
     if (onAvailable) {
-      // First fire the callback on already instantiated fronts
+      // First fire the callback on fronts with the correct type and which have
+      // been initialized. If initialize() is still in progress, the front will
+      // be emitted via _frontCreationListeners shortly after.
       for (const front of this.poolChildren()) {
-        if (front.typeName == typeName) {
+        if (front.typeName == typeName && front._initializeResolved) {
           onAvailable(front);
         }
       }

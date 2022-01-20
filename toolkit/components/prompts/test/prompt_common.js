@@ -1,12 +1,28 @@
 const { Cc, Ci, Cu: ChromeUtils } = SpecialPowers;
 
-const { propBagToObject } = ChromeUtils.import(
-  "resource://gre/modules/BrowserUtils.jsm"
-).BrowserUtils;
+/**
+ * Converts a property bag to object.
+ * @param {nsIPropertyBag} bag - The property bag to convert
+ * @returns {Object} - The object representation of the nsIPropertyBag
+ */
+function propBagToObject(bag) {
+  if (!(bag instanceof Ci.nsIPropertyBag)) {
+    throw new TypeError("Not a property bag");
+  }
+  let result = {};
+  for (let { name, value } of bag.enumerator) {
+    result[name] = value;
+  }
+  return result;
+}
 
 var modalType;
 var tabSubDialogsEnabled = SpecialPowers.Services.prefs.getBoolPref(
   "prompts.tabChromePromptSubDialog",
+  false
+);
+var contentSubDialogsEnabled = SpecialPowers.Services.prefs.getBoolPref(
+  "prompts.contentPromptSubDialog",
   false
 );
 var isSelectDialog = false;
@@ -184,12 +200,25 @@ function checkPromptState(promptState, expectedState) {
   info(`checkPromptState: Expected: ${expectedState.msg}`);
   // XXX check title? OS X has title in content
   is(promptState.msg, expectedState.msg, "Checking expected message");
-  if (
-    isOSX &&
-    (modalType === Ci.nsIPrompt.MODAL_TYPE_WINDOW ||
-      (tabSubDialogsEnabled && modalType === Ci.nsIPrompt.MODAL_TYPE_TAB))
+
+  let isOldContentPrompt =
+    !promptState.isSubDialogPrompt &&
+    modalType === Ci.nsIPrompt.MODAL_TYPE_CONTENT;
+
+  if (isOldContentPrompt && !promptState.showCallerOrigin) {
+    ok(
+      promptState.titleHidden,
+      "The title should be hidden for content prompts opened with tab modal prompt."
+    );
+  } else if (
+    isOSX ||
+    promptState.isSubDialogPrompt ||
+    promptState.showCallerOrigin
   ) {
-    ok(!promptState.titleHidden, "Checking title always visible on OS X");
+    ok(
+      !promptState.titleHidden,
+      "Checking title always visible on OS X or when opened with common dialog"
+    );
   } else {
     is(
       promptState.titleHidden,
@@ -278,7 +307,8 @@ function checkPromptState(promptState, expectedState) {
   if (
     isOSX &&
     expectedState.focused &&
-    expectedState.focused.startsWith("button")
+    expectedState.focused.startsWith("button") &&
+    !promptState.infoRowHidden
   ) {
     is(
       promptState.focused,
@@ -390,7 +420,10 @@ function PrompterProxy(chromeScript) {
             .then(val => {
               result = val;
             });
-          SpecialPowers.Services.tm.spinEventLoopUntil(() => result);
+          SpecialPowers.Services.tm.spinEventLoopUntil(
+            "Test(prompt_common.js:get)",
+            () => result
+          );
 
           for (let outParam of outParams) {
             // Copy the out or inout param value over the original

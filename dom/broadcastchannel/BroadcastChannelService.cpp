@@ -81,9 +81,7 @@ void BroadcastChannelService::RegisterActor(
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(aParent);
 
-  const auto& parents = mAgents.LookupForAdd(aOriginChannelKey).OrInsert([]() {
-    return new nsTArray<BroadcastChannelParent*>();
-  });
+  auto* const parents = mAgents.GetOrInsertNew(aOriginChannelKey);
 
   MOZ_ASSERT(!parents->Contains(aParent));
   parents->AppendElement(aParent);

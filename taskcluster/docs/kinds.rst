@@ -310,18 +310,9 @@ release-flatpak-repackage
 -------------------------
 Generate an installer using Flathub's Flatpak format.
 
-release-snap-push
------------------
-Pushes Snap repackage on Snap store.
-
 release-flatpak-push
 --------------------
 Pushes Flatpak repackage on Flathub
-
-release-secondary-snap-push
----------------------------
-Performs the same function as `release-snap-push`, except for the beta channel as part of RC
-Releases.
 
 release-secondary-flatpak-push
 ------------------------------
@@ -580,11 +571,6 @@ repo-update
 Repo-Update tasks are tasks that perform some action on the project repo itself,
 in order to update its state in some way.
 
-python-dependency-update
-------------------------
-Python-dependency-update runs `pip-compile --generate-hashes` against the specified `requirements.in` and
-submits patches to Phabricator.
-
 partials
 --------
 Partials takes the complete.mar files produced in previous tasks and generates partial
@@ -705,6 +691,10 @@ merge-automation
 ----------------
 Hook-driven tasks that automate "Merge Day" tasks during the release cycle.
 
+sentry
+------
+Interact with Sentry, such as by publishing new project releases.
+
 system-symbols
 --------------
 Generate missing macOS and windows system symbols from crash reports.
@@ -725,3 +715,14 @@ fuzzing
 -------
 
 Performs fuzzing smoke tests
+
+startup-test
+------------
+
+Runs Firefox for a short period of time to see if it crashes
+
+l10n-cross-channel
+------------------
+
+Compiles a set of en-US strings from all shipping release trains and pushes to
+the quarantine strings repo.

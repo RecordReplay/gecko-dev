@@ -9,6 +9,12 @@ const ALL_CHANNELS = Ci.nsITelemetry.DATASET_ALL_CHANNELS;
  * Test the filters_changed telemetry event.
  */
 add_task(async function() {
+  // Disable bfcache for Fission for now.
+  // If Fission is disabled, the pref is no-op.
+  await SpecialPowers.pushPrefEnv({
+    set: [["fission.bfcacheInParent", false]],
+  });
+
   const { monitor } = await initNetMonitor(SIMPLE_URL, { requestCount: 1 });
   info("Starting test... ");
 
@@ -33,7 +39,7 @@ add_task(async function() {
   await wait;
 
   info("Click on the 'HTML' filter");
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "click" },
     document.querySelector(".requests-list-filter-html-button")
   );
@@ -50,7 +56,7 @@ add_task(async function() {
   );
 
   info("Click on the 'CSS' filter");
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "click" },
     document.querySelector(".requests-list-filter-css-button")
   );

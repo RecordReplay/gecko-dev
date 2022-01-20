@@ -155,10 +155,9 @@ class APZCPinchLockingTester : public APZCPinchTester {
     apzc->SetFrameMetrics(GetPinchableFrameMetrics());
     MakeApzcZoomable();
 
-    apzc->ReceiveInputEvent(
-        CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_START, mFocus,
-                                mSpan, mSpan, mcc->Time()),
-        nullptr);
+    auto event = CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_START,
+                                         mFocus, mSpan, mSpan, mcc->Time());
+    apzc->ReceiveInputEvent(event);
     mcc->AdvanceBy(TimeDuration::FromMilliseconds(51));
   }
 
@@ -169,10 +168,9 @@ class APZCPinchLockingTester : public APZCPinchTester {
 
     mFocus = ScreenIntPoint((int)(mFocus.x + panDistance), (int)(mFocus.y));
 
-    apzc->ReceiveInputEvent(
-        CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE, mFocus,
-                                mSpan, mSpan, mcc->Time()),
-        nullptr);
+    auto event = CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE,
+                                         mFocus, mSpan, mSpan, mcc->Time());
+    apzc->ReceiveInputEvent(event);
     mcc->AdvanceBy(TimeDuration::FromMilliseconds(51));
   }
 
@@ -183,10 +181,9 @@ class APZCPinchLockingTester : public APZCPinchTester {
 
     float newSpan = mSpan + pinchDistance;
 
-    apzc->ReceiveInputEvent(
-        CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE, mFocus,
-                                newSpan, mSpan, mcc->Time()),
-        nullptr);
+    auto event = CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE,
+                                         mFocus, newSpan, mSpan, mcc->Time());
+    apzc->ReceiveInputEvent(event);
     mcc->AdvanceBy(TimeDuration::FromMilliseconds(51));
     mSpan = newSpan;
   }
@@ -198,10 +195,10 @@ class APZCPinchLockingTester : public APZCPinchTester {
     float pinchDistance =
         StaticPrefs::apz_pinch_lock_span_breakout_threshold() * 0.8 *
         tm->GetDPI();
-    apzc->ReceiveInputEvent(
+    auto event =
         CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE, mFocus,
-                                mSpan + pinchDistance, mSpan, mcc->Time()),
-        nullptr);
+                                mSpan + pinchDistance, mSpan, mcc->Time());
+    apzc->ReceiveInputEvent(event);
 
     FrameMetrics result = apzc->GetFrameMetrics();
     bool lockActive = originalMetrics.GetZoom() == result.GetZoom() &&
@@ -513,7 +510,7 @@ TEST_F(APZCPinchGestureDetectorTester, Pinch_NoSpan) {
       MultiTouchInput(MultiTouchInput::MULTITOUCH_START, 0, mcc->Time(), 0);
   mtiStart.mTouches.AppendElement(CreateSingleTouchData(inputId, focus));
   mtiStart.mTouches.AppendElement(CreateSingleTouchData(inputId + 1, focus));
-  apzc->ReceiveInputEvent(mtiStart, nullptr);
+  apzc->ReceiveInputEvent(mtiStart);
   mcc->AdvanceBy(TIME_BETWEEN_TOUCH_EVENT);
 
   focus.y -= 35 + 1;  // this is to get over the PINCH_START_THRESHOLD in
@@ -522,7 +519,7 @@ TEST_F(APZCPinchGestureDetectorTester, Pinch_NoSpan) {
       MultiTouchInput(MultiTouchInput::MULTITOUCH_MOVE, 0, mcc->Time(), 0);
   mtiMove1.mTouches.AppendElement(CreateSingleTouchData(inputId, focus));
   mtiMove1.mTouches.AppendElement(CreateSingleTouchData(inputId + 1, focus));
-  apzc->ReceiveInputEvent(mtiMove1, nullptr);
+  apzc->ReceiveInputEvent(mtiMove1);
   mcc->AdvanceBy(TIME_BETWEEN_TOUCH_EVENT);
 
   focus.y -= 100;  // do a two-finger scroll of 100 screen pixels
@@ -530,14 +527,14 @@ TEST_F(APZCPinchGestureDetectorTester, Pinch_NoSpan) {
       MultiTouchInput(MultiTouchInput::MULTITOUCH_MOVE, 0, mcc->Time(), 0);
   mtiMove2.mTouches.AppendElement(CreateSingleTouchData(inputId, focus));
   mtiMove2.mTouches.AppendElement(CreateSingleTouchData(inputId + 1, focus));
-  apzc->ReceiveInputEvent(mtiMove2, nullptr);
+  apzc->ReceiveInputEvent(mtiMove2);
   mcc->AdvanceBy(TIME_BETWEEN_TOUCH_EVENT);
 
   MultiTouchInput mtiEnd =
       MultiTouchInput(MultiTouchInput::MULTITOUCH_END, 0, mcc->Time(), 0);
   mtiEnd.mTouches.AppendElement(CreateSingleTouchData(inputId, focus));
   mtiEnd.mTouches.AppendElement(CreateSingleTouchData(inputId + 1, focus));
-  apzc->ReceiveInputEvent(mtiEnd, nullptr);
+  apzc->ReceiveInputEvent(mtiEnd);
 
   // Done, check the metrics to make sure we scrolled by 100 screen pixels,
   // which is 50 CSS pixels for the pinchable frame metrics.
@@ -567,15 +564,14 @@ TEST_F(APZCPinchTester, Pinch_TwoFinger_APZZoom_Disabled_Bug1354185) {
   ScreenIntPoint aFocus(250, 350);
   ScreenIntPoint aSecondFocus(200, 300);
   float aScale = 10;
-  apzc->ReceiveInputEvent(
-      CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_START, aFocus,
-                              10.0, 10.0, mcc->Time()),
-      nullptr);
+  auto event = CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_START,
+                                       aFocus, 10.0, 10.0, mcc->Time());
+  apzc->ReceiveInputEvent(event);
 
-  apzc->ReceiveInputEvent(
+  event =
       CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE,
-                              aSecondFocus, 10.0 * aScale, 10.0, mcc->Time()),
-      nullptr);
+                              aSecondFocus, 10.0f * aScale, 10.0, mcc->Time());
+  apzc->ReceiveInputEvent(event);
 }
 
 TEST_F(APZCPinchLockingTester, Pinch_Locking_Free) {

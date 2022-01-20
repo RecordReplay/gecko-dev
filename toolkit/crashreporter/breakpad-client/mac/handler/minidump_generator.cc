@@ -35,6 +35,7 @@
 #include <mach/vm_statistics.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach-o/getsect.h>
 #include <sys/sysctl.h>
 #include <sys/resource.h>
 
@@ -228,6 +229,8 @@ bool MinidumpGenerator::Write(const char *path) {
     &MinidumpGenerator::WriteModuleListStream,
     &MinidumpGenerator::WriteMiscInfoStream,
     &MinidumpGenerator::WriteBreakpadInfoStream,
+    &MinidumpGenerator::WriteCrashInfoStream,
+    &MinidumpGenerator::WriteThreadNamesStream,
     // Exception stream needs to be the last entry in this array as it may
     // be omitted in the case where the minidump is written without an
     // exception.
@@ -1640,6 +1643,297 @@ bool MinidumpGenerator::WriteBreakpadInfoStream(
     info_ptr->validity = MD_BREAKPAD_INFO_VALID_DUMP_THREAD_ID;
     info_ptr->dump_thread_id = handler_thread_;
     info_ptr->requesting_thread_id = 0;
+  }
+
+  return true;
+}
+
+bool MinidumpGenerator::WriteCrashInfoRecord(MDLocationDescriptor *location,
+                                             const char *module_path,
+                                             const char *crash_info,
+                                             unsigned long crash_info_size,
+                                             bool out_of_process,
+                                             bool in_dyld_shared_cache) {
+  TypedMDRVA<MDRawMacCrashInfoRecord> info(&writer_);
+
+  // Only write crash info records for modules that actually have
+  // __DATA,__crash_info sections.
+  if (!crash_info || !crash_info_size) {
+    return false;
+  }
+  // We generally don't have access to modules in another process's memory
+  // space if they're not in the dyld shared cache.
+  if (out_of_process && !in_dyld_shared_cache) {
+    return false;
+  }
+
+  // If 'crash_info_size' is larger than we expect, 'crash_info' probably
+  // contains fields we don't recognize (added by Apple since we last updated
+  // this code). In that case only copy the fields we do recognize. If it's
+  // smaller than we expect, we're probably running on an older version of
+  // macOS, whose __crash_info sections don't contain all the fields we
+  // recognize. In that case make sure the "missing" fields are zeroed in
+  // 'raw_crash_info'.
+  crashreporter_annotations_t raw_crash_info;
+  bzero(&raw_crash_info, sizeof(raw_crash_info));
+  if (crash_info_size > sizeof(raw_crash_info)) {
+    crash_info_size = sizeof(raw_crash_info);
+  }
+  memcpy(&raw_crash_info, crash_info, crash_info_size);
+
+  // Don't write crash info records that are empty of useful data (see
+  // definition of crashreporter_annotations_t in mach_vm_compat.h).
+  bool is_empty = true;
+  if (raw_crash_info.message ||
+      raw_crash_info.signature_string ||
+      raw_crash_info.backtrace ||
+      raw_crash_info.message2 ||
+      raw_crash_info.thread ||
+      raw_crash_info.dialog_mode ||
+      ((raw_crash_info.version > 4) && raw_crash_info.abort_cause)) {
+    is_empty = false;
+  }
+  if (is_empty) {
+    return false;
+  }
+
+  string message;
+  string signature_string;
+  string backtrace;
+  string message2;
+
+  const char *message_ptr = NULL;
+  const char *signature_string_ptr = NULL;
+  const char *backtrace_ptr = NULL;
+  const char *message2_ptr = NULL;
+
+  if (out_of_process) {
+    if (raw_crash_info.message) {
+      message = ReadTaskString(crashing_task_, raw_crash_info.message);
+      message_ptr = message.c_str();
+    }
+    if (raw_crash_info.signature_string) {
+      signature_string =
+        ReadTaskString(crashing_task_, raw_crash_info.signature_string);
+      signature_string_ptr = signature_string.c_str();
+    }
+    if (raw_crash_info.backtrace) {
+      backtrace = ReadTaskString(crashing_task_, raw_crash_info.backtrace);
+      backtrace_ptr = backtrace.c_str();
+    }
+    if (raw_crash_info.message2) {
+      message2 = ReadTaskString(crashing_task_, raw_crash_info.message2);
+      message2_ptr = message2.c_str();
+    }
+  } else {
+    message_ptr = reinterpret_cast<const char *>(raw_crash_info.message);
+    signature_string_ptr =
+      reinterpret_cast<const char *>(raw_crash_info.signature_string);
+    backtrace_ptr = reinterpret_cast<const char *>(raw_crash_info.backtrace);
+    message2_ptr = reinterpret_cast<const char *>(raw_crash_info.message2);
+  }
+
+  const char* data_strings[] = { module_path, message_ptr,
+                                 signature_string_ptr, backtrace_ptr,
+                                 message2_ptr };
+
+  // Compute the total size of the strings we'll be copying to
+  // (MDRawMacCrashInfoRecord).data, including their terminal nulls.
+  size_t data_size = 0;
+  for (auto src : data_strings) {
+    if (!src) {
+      src = "";
+    }
+    // Always include the terminal null, even for an empty string.
+    size_t copy_length = strlen(src) + 1;
+    // A "string" that's too large is a sign of data corruption.
+    if (copy_length > MACCRASHINFO_STRING_MAXSIZE) {
+      return false;
+    }
+    data_size += copy_length;
+  }
+
+  if (!info.AllocateObjectAndArray(data_size, sizeof(uint8_t)))
+    return false;
+
+  // Now copy 'module_path' and the __crash_info strings in order to
+  // (MDRawMacCrashInfoRecord).data, including their terminal nulls.
+  size_t offset = 0;
+  for (auto src : data_strings) {
+    if (!src) {
+      src = "";
+    }
+    // Always include the terminal null, even for an empty string.
+    size_t copy_length = strlen(src) + 1;
+    // We can't use CopyIndexAfterObject() here. Calling that method multiple
+    // times only works for objects in an array (which are all the same size).
+    if (!info.Copy(info.position() + sizeof(MDRawMacCrashInfoRecord) + offset,
+                   src, copy_length)) {
+      return false;
+    }
+    offset += copy_length;
+  }
+
+  *location = info.location();
+  MDRawMacCrashInfoRecord *info_ptr = info.get();
+  info_ptr->stream_type = MOZ_MACOS_CRASH_INFO_STREAM;
+  info_ptr->version = raw_crash_info.version;
+  info_ptr->thread = raw_crash_info.thread;
+  info_ptr->dialog_mode = raw_crash_info.dialog_mode;
+  info_ptr->abort_cause = raw_crash_info.abort_cause;
+
+  return true;
+}
+
+bool MinidumpGenerator::WriteCrashInfoStream(
+    MDRawDirectory *crash_info_stream) {
+  TypedMDRVA<MDRawMacCrashInfo> list(&writer_);
+
+  if (!list.Allocate())
+    return false;
+
+  crash_info_stream->stream_type = MOZ_MACOS_CRASH_INFO_STREAM;
+  crash_info_stream->location = list.location();
+
+  MDRawMacCrashInfo *list_ptr = list.get();
+  bzero(list_ptr, sizeof(MDRawMacCrashInfo));
+  list_ptr->stream_type = MOZ_MACOS_CRASH_INFO_STREAM;
+  list_ptr->record_start_size = sizeof(MDRawMacCrashInfoRecord);
+
+  uint32_t image_count = dynamic_images_ ?
+                         dynamic_images_->GetImageCount() :
+                         _dyld_image_count();
+  uint32_t crash_info_count = 0;
+  for (uint32_t i = 0; (i < image_count) &&
+                       (crash_info_count < MAC_CRASH_INFOS_MAX); ++i) {
+    if (dynamic_images_) {
+      // We're in a different process than the crashed process
+      DynamicImage *image = dynamic_images_->GetImage(i);
+      if (!image) {
+        continue;
+      }
+
+      MDLocationDescriptor location;
+      string module_path = image->GetFilePath();
+      // WriteCrashInfoRecord() fails if a module doesn't contain a
+      // __DATA,__crash_info section, or if it's empty of useful data.
+      if (WriteCrashInfoRecord(&location,
+                               module_path.c_str(),
+                               reinterpret_cast<const char *>
+                                 (image->GetCrashInfo()),
+                               image->GetCrashInfoSize(),
+                               /* out_of_process */ true,
+                               image->GetInDyldSharedCache())) {
+        list_ptr->records[crash_info_count] = location;
+        ++crash_info_count;
+      }
+    } else {
+      // Getting crash info in the crashed process
+      const breakpad_mach_header *header =
+        (breakpad_mach_header*) _dyld_get_image_header(i);
+      if (!header) {
+        continue;
+      }
+#ifdef __LP64__
+      if (header->magic != MH_MAGIC_64) {
+        continue;
+      }
+#else
+      if (header->magic != MH_MAGIC) {
+        continue;
+      }
+#endif
+
+      bool in_dyld_shared_cache = ((header->flags & MH_SHAREDCACHE) != 0);
+      unsigned long slide = _dyld_get_image_vmaddr_slide(i);
+      const char *module_path = _dyld_get_image_name(i);
+
+      getsectdata_size_type crash_info_size = 0;
+      const char *crash_info =
+        getsectdatafromheader_func(header, "__DATA", "__crash_info",
+                                   &crash_info_size);
+      if (crash_info) {
+        crash_info += slide;
+      }
+      MDLocationDescriptor location;
+      // WriteCrashInfoRecord() fails if a module doesn't contain a
+      // __DATA,__crash_info section, or if it's empty of useful data.
+      if (WriteCrashInfoRecord(&location, module_path, crash_info,
+                               crash_info_size, /* out_of_process */ false,
+                               in_dyld_shared_cache)) {
+        list_ptr->records[crash_info_count] = location;
+        ++crash_info_count;
+      }
+    }
+  }
+
+  list_ptr->record_count = crash_info_count;
+
+  return true;
+}
+
+bool MinidumpGenerator::WriteThreadName(
+    mach_port_t thread_id,
+    MDRawThreadName *thread_name) {
+  MDLocationDescriptor string_location;
+
+  thread_extended_info_data_t thread_extended_info;
+  mach_msg_type_number_t thread_extended_info_count =
+    THREAD_EXTENDED_INFO_COUNT;
+  kern_return_t res = thread_info(thread_id, THREAD_EXTENDED_INFO,
+                                  (thread_info_t)&thread_extended_info,
+                                  &thread_extended_info_count);
+
+  if (res != KERN_SUCCESS)
+    return false;
+
+  if (!writer_.WriteString(thread_extended_info.pth_name, 0, &string_location))
+    return false;
+
+  thread_name->thread_id = thread_id;
+  thread_name->rva_of_thread_name = string_location.rva;
+  return true;
+}
+
+bool MinidumpGenerator::WriteThreadNamesStream(
+    MDRawDirectory *thread_names_stream) {
+  TypedMDRVA<MDRawThreadNamesList> list(&writer_);
+  thread_act_port_array_t threads_for_task;
+  mach_msg_type_number_t thread_count;
+
+  if (task_threads(crashing_task_, &threads_for_task, &thread_count))
+    return false;
+
+  int non_generator_thread_count;
+
+  // Don't include the generator thread
+  if (handler_thread_ != MACH_PORT_NULL)
+    non_generator_thread_count = thread_count - 1;
+  else
+    non_generator_thread_count = thread_count;
+
+  if (!list.AllocateObjectAndArray(non_generator_thread_count,
+                                   sizeof(MDRawThreadName))) {
+    return false;
+  }
+
+  thread_names_stream->stream_type = MD_THREAD_NAMES_STREAM;
+  thread_names_stream->location = list.location();
+
+  list.get()->number_of_thread_names = non_generator_thread_count;
+
+  MDRawThreadName thread_name;
+  int thread_idx = 0;
+
+  for (unsigned int i = 0; i < thread_count; ++i) {
+    memset(&thread_name, 0, sizeof(MDRawThreadName));
+
+    if (threads_for_task[i] != handler_thread_) {
+      if (WriteThreadName(threads_for_task[i], &thread_name)) {
+        list.CopyIndexAfterObject(thread_idx++, &thread_name,
+                                sizeof(MDRawThreadName));
+      }
+    }
   }
 
   return true;

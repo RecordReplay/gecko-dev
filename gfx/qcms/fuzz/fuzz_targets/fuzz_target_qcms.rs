@@ -8,13 +8,13 @@ extern crate libc;
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use qcms::c_bindings::{qcms_profile, icSigRgbData, qcms_profile_is_bogus, icSigGrayData};
+use qcms::c_bindings::{qcms_profile, icSigRgbData, icSigCmykData, icSigGrayData, qcms_profile_is_bogus};
 use qcms::c_bindings::{qcms_profile_get_color_space, qcms_profile_get_rendering_intent, qcms_profile_from_memory, qcms_profile_release, qcms_profile_sRGB, qcms_transform_create};
 use qcms::c_bindings::{qcms_profile_precache_output_transform, qcms_transform_data, qcms_transform_release, qcms_enable_iccv4};
 
 use qcms::DataType::*;
 
- unsafe fn transform(src_profile: *mut qcms_profile, dst_profile: *mut qcms_profile, size: usize)
+ unsafe fn transform(src_profile: *const qcms_profile, dst_profile: *mut qcms_profile, size: usize)
  {
    // qcms supports GRAY and RGB profiles as input, and RGB as output.
  
@@ -22,6 +22,8 @@ use qcms::DataType::*;
    let mut src_type = if (size & 1) != 0 { RGBA8 } else { RGB8 };
    if src_color_space == icSigGrayData {
      src_type = if (size & 1) != 0 { GrayA8 } else { Gray8 };
+   } else if src_color_space == icSigCmykData {
+     src_type = CMYK;
    } else if src_color_space != icSigRgbData {
      return;
    }
@@ -79,7 +81,8 @@ use qcms::DataType::*;
    if !qcms_profile_is_bogus(&mut *profile) {
  
      transform(srgb_profile, profile, size);
- 
+     let identity = qcms::Profile::new_XYZD50();
+     transform(&*identity, profile, size);
    }
    qcms_profile_release(profile);
    qcms_profile_release(srgb_profile);

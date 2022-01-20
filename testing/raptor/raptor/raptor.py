@@ -51,7 +51,6 @@ def main(args=sys.argv[1:]):
         args.extra_prefs.update(
             {
                 "fission.autostart": True,
-                "dom.serviceWorkers.parent_intercept": True,
             }
         )
 
@@ -124,6 +123,9 @@ def main(args=sys.argv[1:]):
             gecko_profile=args.gecko_profile,
             gecko_profile_interval=args.gecko_profile_interval,
             gecko_profile_entries=args.gecko_profile_entries,
+            gecko_profile_extra_threads=args.gecko_profile_extra_threads,
+            gecko_profile_threads=args.gecko_profile_threads,
+            gecko_profile_features=args.gecko_profile_features,
             symbols_path=args.symbols_path,
             host=args.host,
             power_test=args.power_test,
@@ -141,9 +143,8 @@ def main(args=sys.argv[1:]):
             extra_prefs=args.extra_prefs or {},
             environment=args.environment or {},
             device_name=args.device_name,
-            no_conditioned_profile=args.no_conditioned_profile,
             disable_perf_tuning=args.disable_perf_tuning,
-            conditioned_profile_scenario=args.conditioned_profile_scenario,
+            conditioned_profile=args.conditioned_profile,
             chimera=args.chimera,
             project=args.project,
             verbose=args.verbose,

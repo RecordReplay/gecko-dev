@@ -68,9 +68,6 @@ add_task(async function setup() {
       // Clear historical search suggestions to avoid interference from previous
       // tests.
       ["browser.urlbar.maxHistoricalSearchSuggestions", 0],
-      // Use the default matching bucket configuration.
-      ["browser.urlbar.matchBuckets", "general:5,suggestion:4"],
-      //
       [
         "browser.partnerlink.attributionURL",
         `http://localhost:${gHttpServer.identity.primaryPort}/cid/`,
@@ -111,8 +108,12 @@ async function searchInSearchbar(inputText) {
   sb.focus();
   sb.value = inputText;
   sb.textbox.controller.startSearch(inputText);
-  // Wait for the popup to show.
-  await BrowserTestUtils.waitForEvent(sb.textbox.popup, "popupshown");
+  // Wait for the popup to be shown and built.
+  let popup = sb.textbox.popup;
+  await Promise.all([
+    BrowserTestUtils.waitForEvent(popup, "popupshown"),
+    BrowserTestUtils.waitForEvent(popup.oneOffButtons, "rebuild"),
+  ]);
   // And then for the search to complete.
   await BrowserTestUtils.waitForCondition(
     () =>
@@ -264,6 +265,14 @@ add_task(async function test_context_menu() {
 });
 
 add_task(async function test_about_newtab() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      [
+        "browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar",
+        false,
+      ],
+    ],
+  });
   let tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
     "about:newtab",
@@ -307,6 +316,7 @@ add_task(async function test_about_newtab() {
   );
 
   BrowserTestUtils.removeTab(tab);
+  await SpecialPowers.popPrefEnv();
   gRequests = [];
 });
 

@@ -36,6 +36,7 @@ class GfxInfo : public GfxInfoBase {
   NS_IMETHOD GetCleartypeParameters(nsAString& aCleartypeParams) override;
   NS_IMETHOD GetWindowProtocol(nsAString& aWindowProtocol) override;
   NS_IMETHOD GetDesktopEnvironment(nsAString& aDesktopEnvironment) override;
+  NS_IMETHOD GetTestType(nsAString& aTestType) override;
   NS_IMETHOD GetAdapterDescription(nsAString& aAdapterDescription) override;
   NS_IMETHOD GetAdapterDriver(nsAString& aAdapterDriver) override;
   NS_IMETHOD GetAdapterVendorID(nsAString& aAdapterVendorID) override;
@@ -101,8 +102,6 @@ class GfxInfo : public GfxInfoBase {
   UniquePtr<GLStrings> mGLStrings;
 
   nsCString mAdapterDescription;
-
-  OperatingSystem mOS;
 
   nsString mModel, mHardware, mManufacturer, mProduct;
   nsCString mOSVersion;

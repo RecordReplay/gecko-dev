@@ -6,13 +6,25 @@
 #ifndef mozilla_glean_DistributionData_h
 #define mozilla_glean_DistributionData_h
 
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 
 namespace mozilla::glean {
 
 struct DistributionData final {
   uint64_t sum;
-  nsDataHashtable<nsUint64HashKey, uint64_t> values;
+  nsTHashMap<nsUint64HashKey, uint64_t> values;
+
+  /**
+   * Create distribution data from the buckets, counts and sum,
+   * as returned by `fog_*_distribution_test_get_value`.
+   */
+  DistributionData(const nsTArray<uint64_t>& aBuckets,
+                   const nsTArray<uint64_t>& aCounts, uint64_t aSum)
+      : sum(aSum) {
+    for (size_t i = 0; i < aBuckets.Length(); ++i) {
+      this->values.InsertOrUpdate(aBuckets[i], aCounts[i]);
+    }
+  }
 };
 
 }  // namespace mozilla::glean

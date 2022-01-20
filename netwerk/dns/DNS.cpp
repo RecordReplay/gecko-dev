@@ -179,6 +179,11 @@ bool IsLoopbackHostname(const nsACString& aAsciiHost) {
          StringEndsWith(host, ".localhost"_ns);
 }
 
+bool HostIsIPLiteral(const nsACString& aAsciiHost) {
+  NetAddr addr;
+  return NS_SUCCEEDED(addr.InitFromString(aAsciiHost));
+}
+
 bool NetAddr::IsIPAddrAny() const {
   if (this->raw.family == AF_INET) {
     if (this->inet.ip == htonl(INADDR_ANY)) {
@@ -198,6 +203,24 @@ bool NetAddr::IsIPAddrAny() const {
 
 NetAddr::NetAddr(const PRNetAddr* prAddr) { PRNetAddrToNetAddr(prAddr, this); }
 
+nsresult NetAddr::InitFromString(const nsACString& aString, uint16_t aPort) {
+  PRNetAddr prAddr{};
+  memset(&prAddr, 0, sizeof(PRNetAddr));
+  if (PR_StringToNetAddr(PromiseFlatCString(aString).get(), &prAddr) !=
+      PR_SUCCESS) {
+    return NS_ERROR_FAILURE;
+  }
+
+  PRNetAddrToNetAddr(&prAddr, this);
+
+  if (this->raw.family == PR_AF_INET) {
+    this->inet.port = PR_htons(aPort);
+  } else if (this->raw.family == PR_AF_INET6) {
+    this->inet6.port = PR_htons(aPort);
+  }
+  return NS_OK;
+}
+
 bool NetAddr::IsIPAddrV4() const { return this->raw.family == AF_INET; }
 
 bool NetAddr::IsIPAddrV4Mapped() const {
@@ -209,13 +232,10 @@ bool NetAddr::IsIPAddrV4Mapped() const {
 
 static bool isLocalIPv4(uint32_t networkEndianIP) {
   uint32_t addr32 = ntohl(networkEndianIP);
-  if (addr32 >> 24 == 0x0A ||    // 10/8 prefix (RFC 1918).
-      addr32 >> 20 == 0xAC1 ||   // 172.16/12 prefix (RFC 1918).
-      addr32 >> 16 == 0xC0A8 ||  // 192.168/16 prefix (RFC 1918).
-      addr32 >> 16 == 0xA9FE) {  // 169.254/16 prefix (Link Local).
-    return true;
-  }
-  return false;
+  return addr32 >> 24 == 0x0A ||    // 10/8 prefix (RFC 1918).
+         addr32 >> 20 == 0xAC1 ||   // 172.16/12 prefix (RFC 1918).
+         addr32 >> 16 == 0xC0A8 ||  // 192.168/16 prefix (RFC 1918).
+         addr32 >> 16 == 0xA9FE;    // 169.254/16 prefix (Link Local).
 }
 
 bool NetAddr::IsIPAddrLocal() const {
@@ -342,18 +362,22 @@ AddrInfo::AddrInfo(const nsACString& host, const PRAddrInfo* prAddrInfo,
 }
 
 AddrInfo::AddrInfo(const nsACString& host, const nsACString& cname,
-                   unsigned int aTRR, nsTArray<NetAddr>&& addresses)
+                   DNSResolverType aResolverType, unsigned int aTRRType,
+                   nsTArray<NetAddr>&& addresses)
     : mHostName(host),
       mCanonicalName(cname),
-      mFromTRR(aTRR),
+      mResolverType(aResolverType),
+      mTRRType(aTRRType),
       mAddresses(std::move(addresses)) {}
 
-AddrInfo::AddrInfo(const nsACString& host, unsigned int aTRR,
-                   nsTArray<NetAddr>&& addresses, uint32_t aTTL)
+AddrInfo::AddrInfo(const nsACString& host, DNSResolverType aResolverType,
+                   unsigned int aTRRType, nsTArray<NetAddr>&& addresses,
+                   uint32_t aTTL)
     : ttl(aTTL),
       mHostName(host),
       mCanonicalName(),
-      mFromTRR(aTRR),
+      mResolverType(aResolverType),
+      mTRRType(aTRRType),
       mAddresses(std::move(addresses)) {}
 
 // deep copy constructor
@@ -361,7 +385,8 @@ AddrInfo::AddrInfo(const AddrInfo* src) {
   mHostName = src->mHostName;
   mCanonicalName = src->mCanonicalName;
   ttl = src->ttl;
-  mFromTRR = src->mFromTRR;
+  mResolverType = src->mResolverType;
+  mTRRType = src->mTRRType;
   mTrrFetchDuration = src->mTrrFetchDuration;
   mTrrFetchDurationNetworkOnly = src->mTrrFetchDurationNetworkOnly;
 

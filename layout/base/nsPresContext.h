@@ -60,7 +60,6 @@ class nsCSSFontFeatureValuesRule;
 class nsCSSFrameConstructor;
 class nsDisplayList;
 class nsDisplayListBuilder;
-class nsPluginFrame;
 class nsTransitionManager;
 class nsAnimationManager;
 class nsRefreshDriver;
@@ -75,7 +74,7 @@ class EffectCompositor;
 class Encoding;
 class EventStateManager;
 class CounterStyleManager;
-class OneShotPostRefreshObserver;
+class ManagedPostRefreshObserver;
 class PresShell;
 class RestyleManager;
 class ServoStyleSet;
@@ -136,7 +135,6 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   template <typename T>
   using Maybe = mozilla::Maybe<T>;
   using MediaEmulationData = mozilla::MediaEmulationData;
-  using StylePrefersColorScheme = mozilla::StylePrefersColorScheme;
 
   typedef mozilla::ScrollStyles ScrollStyles;
   using TransactionId = mozilla::layers::TransactionId;
@@ -512,11 +510,10 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   mozilla::ScreenIntMargin GetSafeAreaInsets() const { return mSafeAreaInsets; }
 
-  bool RegisterOneShotPostRefreshObserver(
-      mozilla::OneShotPostRefreshObserver* aObserver);
-  void UnregisterOneShotPostRefreshObserver(
-      mozilla::OneShotPostRefreshObserver* aObserver);
-  void ClearOneShotPostRefreshObservers();
+  void RegisterManagedPostRefreshObserver(mozilla::ManagedPostRefreshObserver*);
+  void UnregisterManagedPostRefreshObserver(
+      mozilla::ManagedPostRefreshObserver*);
+  void CancelManagedPostRefreshObservers();
 
  protected:
   void UpdateEffectiveTextZoom();
@@ -533,6 +530,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
     UpdateEffectiveTextZoom();
   }
   void SetFullZoom(float aZoom);
+  void SetOverrideDPPX(float);
 
  public:
   float GetFullZoom() { return mFullZoom; }
@@ -544,7 +542,6 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   float GetDeviceFullZoom();
 
   float GetOverrideDPPX() const { return mMediaEmulationData.mDPPX; }
-  void SetOverrideDPPX(float);
 
   /**
    * Recomputes the data dependent on the browsing context, like zoom and text
@@ -554,11 +551,6 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
    * and such should also move here.
    */
   void RecomputeBrowsingContextDependentData();
-
-  Maybe<StylePrefersColorScheme> GetOverridePrefersColorScheme() const {
-    return mMediaEmulationData.mPrefersColorScheme;
-  }
-  void SetOverridePrefersColorScheme(const Maybe<StylePrefersColorScheme>&);
 
   mozilla::CSSCoord GetAutoQualityMinFontSize() const {
     return DevPixelsToFloatCSSPixels(mAutoQualityMinFontSizePixelsPref);
@@ -625,6 +617,13 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   int32_t DevPixelsToIntCSSPixels(int32_t aPixels) {
     return AppUnitsToIntCSSPixels(DevPixelsToAppUnits(aPixels));
+  }
+
+  mozilla::CSSIntPoint DevPixelsToIntCSSPixels(
+      const mozilla::LayoutDeviceIntPoint& aPoint) {
+    return mozilla::CSSIntPoint(
+        AppUnitsToIntCSSPixels(DevPixelsToAppUnits(aPoint.x)),
+        AppUnitsToIntCSSPixels(DevPixelsToAppUnits(aPoint.y)));
   }
 
   float DevPixelsToFloatCSSPixels(int32_t aPixels) const {
@@ -1256,8 +1255,8 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   // During page load we use slower frame rate.
   uint32_t mNextFrameRateMultiplier;
 
-  nsTArray<RefPtr<mozilla::OneShotPostRefreshObserver>>
-      mOneShotPostRefreshObservers;
+  nsTArray<RefPtr<mozilla::ManagedPostRefreshObserver>>
+      mManagedPostRefreshObservers;
 
   ScrollStyles mViewportScrollStyles;
 
@@ -1338,6 +1337,11 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   unsigned mHadNonBlankPaint : 1;
   // Has NotifyContentfulPaint been called on this PresContext?
   unsigned mHadContentfulPaint : 1;
+  // True when a contentful paint has happened and this paint doesn't
+  // come from the regular tick process. Usually this means a
+  // contentful paint was triggered manually.
+  unsigned mHadNonTickContentfulPaint : 1;
+
   // Has NotifyDidPaintForSubtree been called for a contentful paint?
   unsigned mHadContentfulPaintComposite : 1;
 
@@ -1368,54 +1372,6 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 class nsRootPresContext final : public nsPresContext {
  public:
   nsRootPresContext(mozilla::dom::Document* aDocument, nsPresContextType aType);
-  virtual ~nsRootPresContext();
-
-  /**
-   * Registers a plugin to receive geometry updates (position and clip
-   * region) so it can update its widget.
-   * Callers must call UnregisterPluginForGeometryUpdates before
-   * the aPlugin frame is destroyed.
-   */
-  void RegisterPluginForGeometryUpdates(nsIContent* aPlugin);
-  /**
-   * Stops a plugin receiving geometry updates (position and clip
-   * region). If the plugin was not already registered, this does
-   * nothing.
-   */
-  void UnregisterPluginForGeometryUpdates(nsIContent* aPlugin);
-
-  bool NeedToComputePluginGeometryUpdates() {
-    return mRegisteredPlugins.Count() > 0;
-  }
-  /**
-   * Compute geometry updates for each plugin given that aList is the display
-   * list for aFrame. The updates are not yet applied;
-   * ApplyPluginGeometryUpdates is responsible for that. In the meantime they
-   * are stored on each nsPluginFrame.
-   * This needs to be called even when aFrame is a popup, since although
-   * windowed plugins aren't allowed in popups, windowless plugins are
-   * and ComputePluginGeometryUpdates needs to be called for them.
-   * aBuilder and aList can be null. This indicates that all plugins are
-   * hidden because we're in a background tab.
-   */
-  void ComputePluginGeometryUpdates(nsIFrame* aFrame,
-                                    nsDisplayListBuilder* aBuilder,
-                                    nsDisplayList* aList);
-
-  /**
-   * Apply the stored plugin geometry updates. This should normally be called
-   * in DidPaint so the plugins are moved/clipped immediately after we've
-   * updated our window, so they look in sync with our window.
-   */
-  void ApplyPluginGeometryUpdates();
-
-  /**
-   * Transfer stored plugin geometry updates to the compositor. Called during
-   * reflow, data is shipped over with layer updates. e10s specific.
-   */
-  void CollectPluginGeometryUpdates(
-      mozilla::layers::LayerManager* aLayerManager);
-
   virtual bool IsRoot() override { return true; }
 
   /**
@@ -1434,15 +1390,6 @@ class nsRootPresContext final : public nsPresContext {
       mozilla::MallocSizeOf aMallocSizeOf) const override;
 
  protected:
-  /**
-   * Start a timer to ensure we eventually run ApplyPluginGeometryUpdates.
-   */
-  void InitApplyPluginGeometryTimer();
-  /**
-   * Cancel the timer that ensures we eventually run ApplyPluginGeometryUpdates.
-   */
-  void CancelApplyPluginGeometryTimer();
-
   class RunWillPaintObservers : public mozilla::Runnable {
    public:
     explicit RunWillPaintObservers(nsRootPresContext* aPresContext)
@@ -1461,8 +1408,6 @@ class nsRootPresContext final : public nsPresContext {
 
   friend class nsPresContext;
 
-  nsCOMPtr<nsITimer> mApplyPluginGeometryTimer;
-  nsTHashtable<nsRefPtrHashKey<nsIContent>> mRegisteredPlugins;
   nsTArray<nsCOMPtr<nsIRunnable>> mWillPaintObservers;
   nsRevocableEventPtr<RunWillPaintObservers> mWillPaintFallbackEvent;
 };

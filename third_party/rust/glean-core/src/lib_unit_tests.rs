@@ -401,7 +401,7 @@ fn correct_order() {
         Counter(0),
         CustomDistributionExponential(Histogram::exponential(1, 500, 10)),
         CustomDistributionLinear(Histogram::linear(1, 500, 10)),
-        Datetime(local_now_with_offset(), TimeUnit::Second),
+        Datetime(local_now_with_offset().0, TimeUnit::Second),
         Experiment(RecordedExperimentData { branch: "branch".into(), extra: None, }),
         Quantity(0),
         String("glean".into()),
@@ -411,6 +411,7 @@ fn correct_order() {
         TimingDistribution(Histogram::functional(2.0, 8.0)),
         MemoryDistribution(Histogram::functional(2.0, 8.0)),
         Jwe("eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.OKOawDo13gRp2ojaHV7LFpZcgV7T6DVZKTyKOMTYUmKoTCVJRgckCL9kiMT03JGeipsEdY3mx_etLbbWSrFr05kLzcSr4qKAq7YN7e9jwQRb23nfa6c9d-StnImGyFDbSv04uVuxIp5Zms1gNxKKK2Da14B8S4rzVRltdYwam_lDp5XnZAYpQdb76FdIKLaVmqgfwX7XWRxv2322i-vDxRfqNzo_tETKzpVLzfiwQyeyPGLBIO56YJ7eObdv0je81860ppamavo35UgoRdbYaBcoh9QcfylQr66oc6vFWXRcZ_ZT2LawVCWTIy3brGPi6UklfCpIMfIjf7iGdXKHzg.48V1_ALb6US04U3b.5eym8TW_c8SuK0ltJ3rpYIzOeDQz7TALvtu6UG9oMo4vpzs9tX_EFShS8iB7j6jiSdiwkIr3ajwQzaBtQD_A.XFBoMYUZodetZdvTiFvSkQ".into()),
+        Rate(0, 0),
     ];
 
     for metric in all_metrics {
@@ -436,6 +437,7 @@ fn correct_order() {
             TimingDistribution(..)            => assert_eq!(11, disc),
             MemoryDistribution(..)            => assert_eq!(12, disc),
             Jwe(..)                           => assert_eq!(13, disc),
+            Rate(..)                          => assert_eq!(14, disc),
         }
     }
 }
@@ -811,11 +813,11 @@ fn test_setting_debug_view_tag() {
     let (mut glean, _) = new_glean(Some(dir));
 
     let valid_tag = "valid-tag";
-    assert_eq!(true, glean.set_debug_view_tag(valid_tag));
+    assert!(glean.set_debug_view_tag(valid_tag));
     assert_eq!(valid_tag, glean.debug_view_tag().unwrap());
 
     let invalid_tag = "invalid tag";
-    assert_eq!(false, glean.set_debug_view_tag(invalid_tag));
+    assert!(!glean.set_debug_view_tag(invalid_tag));
     assert_eq!(valid_tag, glean.debug_view_tag().unwrap());
 }
 
@@ -872,6 +874,7 @@ fn records_database_file_size() {
     assert!(data.sum > 0);
 }
 
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn records_io_errors() {
     use std::fs;
@@ -890,9 +893,10 @@ fn records_io_errors() {
 
     // Writing the ping file should fail.
     let submitted = glean.internal_pings.metrics.submit(&glean, None);
-    assert!(submitted.is_err());
+    // But the return value is still `true` because we enqueue the ping anyway.
+    assert!(submitted);
 
-    let metric = &glean.core_metrics.io_errors;
+    let metric = &glean.additional_metrics.io_errors;
     assert_eq!(
         1,
         metric.test_get_value(&glean, "metrics").unwrap(),
@@ -904,5 +908,42 @@ fn records_io_errors() {
 
     // Now we can submit a ping
     let submitted = glean.internal_pings.metrics.submit(&glean, None);
-    assert!(submitted.is_ok());
+    assert!(submitted);
+}
+
+#[test]
+fn test_activity_api() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut glean, _) = new_glean(Some(dir));
+
+    // Signal that the client was active.
+    glean.handle_client_active();
+
+    // Check that we set everything we needed for the 'active' status.
+    assert!(glean.is_dirty_flag_set());
+
+    // Signal back that client is ianctive.
+    glean.handle_client_inactive();
+
+    // Check that we set everything we needed for the 'inactuve' status.
+    assert!(!glean.is_dirty_flag_set());
+}
+
+/// We explicitly test that NO invalid timezone offset was recorded.
+/// If it _does_ happen and fails on a developer machine or CI, we better know about it.
+#[test]
+fn handles_local_now_gracefully() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (glean, _) = new_glean(Some(dir));
+
+    let metric = &glean.additional_metrics.invalid_timezone_offset;
+    assert_eq!(
+        None,
+        metric.test_get_value(&glean, "metrics"),
+        "Timezones should be valid"
+    );
 }

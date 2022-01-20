@@ -19,7 +19,6 @@ function get_cache_service() {
 function evict_cache_entries(where) {
   var clearDisk = !where || where == "disk" || where == "all";
   var clearMem = !where || where == "memory" || where == "all";
-  var clearAppCache = where == "appcache";
 
   var svc = get_cache_service();
   var storage;
@@ -30,12 +29,7 @@ function evict_cache_entries(where) {
   }
 
   if (clearDisk) {
-    storage = svc.diskCacheStorage(Services.loadContextInfo.default, false);
-    storage.asyncEvictStorage(null);
-  }
-
-  if (clearAppCache) {
-    storage = svc.appCacheStorage(Services.loadContextInfo.default, null);
+    storage = svc.diskCacheStorage(Services.loadContextInfo.default);
     storage.asyncEvictStorage(null);
   }
 }
@@ -47,52 +41,48 @@ function createURI(urispec) {
   return ioServ.newURI(urispec);
 }
 
-function getCacheStorage(where, lci, appcache) {
+function getCacheStorage(where, lci) {
   if (!lci) {
     lci = Services.loadContextInfo.default;
   }
   var svc = get_cache_service();
   switch (where) {
     case "disk":
-      return svc.diskCacheStorage(lci, false);
+      return svc.diskCacheStorage(lci);
     case "memory":
       return svc.memoryCacheStorage(lci);
-    case "appcache":
-      return svc.appCacheStorage(lci, appcache);
     case "pin":
       return svc.pinningCacheStorage(lci);
   }
   return null;
 }
 
-function asyncOpenCacheEntry(key, where, flags, lci, callback, appcache) {
+function asyncOpenCacheEntry(key, where, flags, lci, callback) {
   key = createURI(key);
 
   function CacheListener() {}
   CacheListener.prototype = {
-    _appCache: appcache,
-
     QueryInterface: ChromeUtils.generateQI(["nsICacheEntryOpenCallback"]),
 
-    onCacheEntryCheck(entry, appCache) {
+    onCacheEntryCheck(entry) {
       if (typeof callback === "object") {
-        return callback.onCacheEntryCheck(entry, appCache);
+        return callback.onCacheEntryCheck(entry);
       }
       return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
     },
 
-    onCacheEntryAvailable(entry, isnew, appCache, status) {
+    onCacheEntryAvailable(entry, isnew, status) {
       if (typeof callback === "object") {
         // Root us at the callback
         callback.__cache_listener_root = this;
-        callback.onCacheEntryAvailable(entry, isnew, appCache, status);
+        callback.onCacheEntryAvailable(entry, isnew, status);
       } else {
-        callback(status, entry, appCache);
+        callback(status, entry);
       }
     },
 
     run() {
-      var storage = getCacheStorage(where, lci, this._appCache);
+      var storage = getCacheStorage(where, lci);
       storage.asyncOpenURI(key, "", flags, this);
     },
   };
@@ -136,13 +126,7 @@ function get_device_entry_count(where, lci, continuation) {
   storage.asyncVisitStorage(visitor, false);
 }
 
-function asyncCheckCacheEntryPresence(
-  key,
-  where,
-  shouldExist,
-  continuation,
-  appCache
-) {
+function asyncCheckCacheEntryPresence(key, where, shouldExist, continuation) {
   asyncOpenCacheEntry(
     key,
     where,
@@ -161,7 +145,6 @@ function asyncCheckCacheEntryPresence(
         Assert.equal(null, entry);
       }
       continuation();
-    },
-    appCache
+    }
   );
 }

@@ -152,7 +152,7 @@ class nsPreflightCache {
 
     void PurgeExpired(TimeStamp now);
     bool CheckRequest(const nsCString& aMethod,
-                      const nsTArray<nsCString>& aCustomHeaders);
+                      const nsTArray<nsCString>& aHeaders);
 
     nsCString mKey;
     nsTArray<TokenTime> mMethods;
@@ -272,11 +272,7 @@ nsPreflightCache::CacheEntry* nsPreflightCache::GetEntry(
 
   // This is a new entry, allocate and insert into the table now so that any
   // failures don't cause items to be removed from a full cache.
-  CacheEntry* newEntry = new CacheEntry(key);
-  if (!newEntry) {
-    NS_WARNING("Failed to allocate new cache entry!");
-    return nullptr;
-  }
+  auto newEntry = MakeUnique<CacheEntry>(key);
 
   NS_ASSERTION(mTable.Count() <= PREFLIGHT_CACHE_SIZE,
                "Something is borked, too many entries in the cache!");
@@ -286,7 +282,7 @@ nsPreflightCache::CacheEntry* nsPreflightCache::GetEntry(
     // Try to kick out all the expired entries.
     TimeStamp now = TimeStamp::NowLoRes();
     for (auto iter = mTable.Iter(); !iter.Done(); iter.Next()) {
-      auto entry = iter.UserData();
+      auto* entry = iter.UserData();
       entry->PurgeExpired(now);
 
       if (entry->mHeaders.IsEmpty() && entry->mMethods.IsEmpty()) {
@@ -310,10 +306,10 @@ nsPreflightCache::CacheEntry* nsPreflightCache::GetEntry(
     }
   }
 
-  mTable.Put(key, newEntry);
-  mList.insertFront(newEntry);
+  auto* newEntryWeakRef = mTable.InsertOrUpdate(key, std::move(newEntry)).get();
+  mList.insertFront(newEntryWeakRef);
 
-  return newEntry;
+  return newEntryWeakRef;
 }
 
 void nsPreflightCache::RemoveEntries(
@@ -352,6 +348,14 @@ NS_IMPL_ISUPPORTS(nsCORSListenerProxy, nsIStreamListener, nsIRequestObserver,
 void nsCORSListenerProxy::Shutdown() {
   delete sPreflightCache;
   sPreflightCache = nullptr;
+}
+
+/* static */
+void nsCORSListenerProxy::ClearCache() {
+  if (!sPreflightCache) {
+    return;
+  }
+  sPreflightCache->Clear();
 }
 
 nsCORSListenerProxy::nsCORSListenerProxy(nsIStreamListener* aOuter,
@@ -452,7 +456,7 @@ class CheckOriginHeader final : public nsIHttpHeaderVisitor {
  public:
   NS_DECL_ISUPPORTS
 
-  CheckOriginHeader() : mHeaderCount(0) {}
+  CheckOriginHeader() = default;
 
   NS_IMETHOD
   VisitHeader(const nsACString& aHeader, const nsACString& aValue) override {
@@ -467,7 +471,7 @@ class CheckOriginHeader final : public nsIHttpHeaderVisitor {
   }
 
  private:
-  uint32_t mHeaderCount;
+  uint32_t mHeaderCount{0};
 
   ~CheckOriginHeader() = default;
 };
@@ -512,6 +516,15 @@ nsresult nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest) {
   // Test that things worked on a HTTP level
   nsCOMPtr<nsIHttpChannel> http = do_QueryInterface(aRequest);
   if (!http) {
+    nsCOMPtr<nsIChannel> channel = do_QueryInterface(aRequest);
+    nsCOMPtr<nsIURI> uri;
+    NS_GetFinalChannelURI(channel, getter_AddRefs(uri));
+    if (uri && uri->SchemeIs("moz-extension")) {
+      // moz-extension:-URLs do not support CORS, but can universally be read
+      // if an extension lists the resource in web_accessible_resources.
+      // Access will be checked in UpdateChannel.
+      return NS_OK;
+    }
     LogBlockedRequest(aRequest, "CORSRequestNotHttp", nullptr,
                       nsILoadInfo::BLOCKING_REASON_CORSREQUESTNOTHTTP,
                       topChannel);
@@ -523,13 +536,6 @@ nsresult nsCORSListenerProxy::CheckRequestApproved(nsIRequest* aRequest) {
     // For synthesized responses, we don't need to perform any checks.
     // Note: This would be unsafe if we ever changed our behavior to allow
     // service workers to intercept CORS preflights.
-    return NS_OK;
-  }
-  if (loadInfo->GetBypassCORSChecks()) {
-    // This flag gets set if a WebExtention redirects a channel
-    // @onBeforeRequest. At this point no request has been made so we don't have
-    // the "Access-Control-Allow-Origin" header yet and the redirect would fail.
-    // So we're skipping the CORS check in that case.
     return NS_OK;
   }
 
@@ -891,6 +897,15 @@ nsresult nsCORSListenerProxy::UpdateChannel(nsIChannel* aChannel,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
+  if (uri->SchemeIs("moz-extension")) {
+    // moz-extension:-URLs do not support CORS, but can universally be read
+    // if an extension lists the resource in web_accessible_resources.
+    // This is enforced via the CheckLoadURIWithPrincipal call above:
+    // moz-extension resources have the URI_DANGEROUS_TO_LOAD flag, unless
+    // listed in web_accessible_resources.
+    return NS_OK;
+  }
+
   if (!mHasBeenCrossSite &&
       NS_SUCCEEDED(mRequestingPrincipal->CheckMayLoad(uri, false)) &&
       (originalURI == uri ||
@@ -968,6 +983,9 @@ nsresult nsCORSListenerProxy::UpdateChannel(nsIChannel* aChannel,
     NS_ENSURE_SUCCESS(rv, rv);
 
     flags |= nsIRequest::LOAD_ANONYMOUS;
+    if (StaticPrefs::network_cors_preflight_allow_client_cert()) {
+      flags |= nsIRequest::LOAD_ANONYMOUS_ALLOW_CLIENT_CERT;
+    }
     rv = http->SetLoadFlags(flags);
     NS_ENSURE_SUCCESS(rv, rv);
   }
@@ -992,6 +1010,9 @@ nsresult nsCORSListenerProxy::CheckPreflightNeeded(nsIChannel* aChannel,
 
   nsCOMPtr<nsIHttpChannel> http = do_QueryInterface(aChannel);
   if (!http) {
+    // Note: A preflight is not needed for moz-extension:-requests either, but
+    // there is already a check for that in the caller of CheckPreflightNeeded,
+    // in UpdateChannel.
     LogBlockedRequest(aChannel, "CORSRequestNotHttp", nullptr,
                       nsILoadInfo::BLOCKING_REASON_CORSREQUESTNOTHTTP,
                       mHttpChannel);
@@ -1466,6 +1487,10 @@ nsresult nsCORSListenerProxy::StartCORSPreflight(
   // check won't be safe any more.
   loadFlags |=
       nsIChannel::LOAD_BYPASS_SERVICE_WORKER | nsIRequest::LOAD_ANONYMOUS;
+
+  if (StaticPrefs::network_cors_preflight_allow_client_cert()) {
+    loadFlags |= nsIRequest::LOAD_ANONYMOUS_ALLOW_CLIENT_CERT;
+  }
 
   nsCOMPtr<nsIChannel> preflightChannel;
   rv = NS_NewChannelInternal(getter_AddRefs(preflightChannel), uri, loadInfo,

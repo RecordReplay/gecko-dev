@@ -11,23 +11,10 @@ const {
   getOrientation,
 } = require("devtools/client/responsive/utils/orientation");
 const Constants = require("devtools/client/responsive/constants");
-const { TargetList } = require("devtools/shared/resources/target-list");
 const {
-  ResourceWatcher,
-} = require("devtools/shared/resources/resource-watcher");
+  CommandsFactory,
+} = require("devtools/shared/commands/commands-factory");
 
-loader.lazyRequireGetter(
-  this,
-  "DevToolsClient",
-  "devtools/client/devtools-client",
-  true
-);
-loader.lazyRequireGetter(
-  this,
-  "DevToolsServer",
-  "devtools/server/devtools-server",
-  true
-);
 loader.lazyRequireGetter(
   this,
   "throttlingProfiles",
@@ -44,12 +31,19 @@ loader.lazyRequireGetter(
   "devtools/client/responsive/utils/notification",
   true
 );
+loader.lazyRequireGetter(
+  this,
+  "PriorityLevels",
+  "devtools/client/shared/components/NotificationBox",
+  true
+);
 loader.lazyRequireGetter(this, "l10n", "devtools/client/responsive/utils/l10n");
 loader.lazyRequireGetter(this, "asyncStorage", "devtools/shared/async-storage");
 loader.lazyRequireGetter(
   this,
-  "saveScreenshot",
-  "devtools/client/shared/save-screenshot"
+  "captureAndSaveScreenshot",
+  "devtools/client/shared/screenshot",
+  true
 );
 
 const RELOAD_CONDITION_PREF_PREFIX = "devtools.responsive.reloadConditions.";
@@ -116,17 +110,11 @@ class ResponsiveUI {
   }
 
   get currentTarget() {
-    return this.targetList.targetFront;
+    return this.commands.targetCommand.targetFront;
   }
 
   get watcherFront() {
-    return this.resourceWatcher.watcherFront;
-  }
-
-  get hasResourceWatcherSupport() {
-    return this.resourceWatcher.hasResourceWatcherSupport(
-      this.resourceWatcher.TYPES.NETWORK_EVENT
-    );
+    return this.resourceCommand.watcherFront;
   }
 
   /**
@@ -151,8 +139,6 @@ class ResponsiveUI {
     // Listen to FullZoomChange events coming from the browser window,
     // so that we can zoom the size of the viewport by the same amount.
     this.browserWindow.addEventListener("FullZoomChange", this);
-
-    this.tab.addEventListener("BeforeTabRemotenessChange", this);
 
     // Get the protocol ready to speak with responsive emulation actor
     debug("Wait until RDP server connect");
@@ -228,32 +214,23 @@ class ResponsiveUI {
     this.resizeHandleY = resizeHandleY;
     this.resizeHandleY.addEventListener("mousedown", this.onResizeStart);
 
-    // Setup a ResizeObserver that sets the width of the toolbar to the width of the
-    // .browserStack.
-    this.resizeToolbarObserver = new this.browserWindow.ResizeObserver(
-      entries => {
-        for (const entry of entries) {
-          const { width } = entry.contentRect;
+    // Setup a ResizeObserver that stores the width and height of the
+    // .browserStack size as properties. These set properties are then used
+    // to out-of-grid elements that are affected by RDM.
+    this.resizeToolbarObserver = new this.browserWindow.ResizeObserver(() => {
+      const style = this.browserWindow.getComputedStyle(this.browserStackEl);
 
-          this.rdmFrame.style.setProperty("width", `${width}px`);
-
-          // If the device modal/selector is opened, resize the toolbar height to
-          // the size of the stack.
-          if (this.browserStackEl.classList.contains("device-modal-opened")) {
-            const style = this.browserWindow.getComputedStyle(
-              this.browserStackEl
-            );
-            this.rdmFrame.style.height = style.height;
-          } else {
-            // If the toolbar needs extra space for the UA input, then set a class that
-            // will accomodate its height. We should also make sure to keep the width
-            // value we're toggling against in sync with the media-query in
-            // devtools/client/responsive/index.css
-            this.rdmFrame.classList.toggle("accomodate-ua", width < 520);
-          }
-        }
-      }
-    );
+      this.browserStackEl.style.setProperty("--rdm-stack-width", style.width);
+      this.browserStackEl.style.setProperty("--rdm-stack-height", style.height);
+      // If the toolbar needs extra space for the UA input, then set a class that
+      // will accomodate its height. We should also make sure to keep the width
+      // value we're toggling against in sync with the media-query in
+      // devtools/client/responsive/index.css
+      this.rdmFrame.classList.toggle(
+        "accomodate-ua",
+        parseFloat(style.width) < 520
+      );
+    });
 
     this.resizeToolbarObserver.observe(this.browserStackEl);
   }
@@ -278,15 +255,9 @@ class ResponsiveUI {
     // So, skip any waiting when we're about to close the tab.
     const isTabDestroyed =
       !this.tab.linkedBrowser || this.responsiveFront.isDestroyed();
-    const isWindowClosing =
-      (options && options.reason === "unload") || isTabDestroyed;
+    const isWindowClosing = options?.reason === "unload" || isTabDestroyed;
     const isTabContentDestroying =
-      isWindowClosing ||
-      (options &&
-        (options.reason === "TabClose" ||
-          options.reason === "BeforeTabRemotenessChange"));
-
-    let currentTarget;
+      isWindowClosing || options?.reason === "TabClose";
 
     // Ensure init has finished before starting destroy
     if (!isTabContentDestroying) {
@@ -300,29 +271,12 @@ class ResponsiveUI {
       // Hide browser UI to avoid displaying weird intermediate states while closing.
       this.hideBrowserUI();
 
-      // Save reference to tab target before RDM stops listening to it. Will need it if
-      // the tab has to be reloaded to remove the emulated settings created by RDM.
-      currentTarget = this.currentTarget;
-
       // Resseting the throtting needs to be done before the
       // network events watching is stopped.
       await this.updateNetworkThrottling();
-
-      this.targetList.unwatchTargets(
-        [this.targetList.TYPES.FRAME],
-        this.onTargetAvailable
-      );
-
-      this.resourceWatcher.unwatchResources(
-        [this.resourceWatcher.TYPES.NETWORK_EVENT],
-        { onAvailable: this.onNetworkResourceAvailable }
-      );
-
-      this.targetList.destroy();
     }
 
     this.tab.removeEventListener("TabClose", this);
-    this.tab.removeEventListener("BeforeTabRemotenessChange", this);
     this.browserWindow.removeEventListener("unload", this);
     this.tab.linkedBrowser.leaveResponsiveMode();
 
@@ -343,20 +297,40 @@ class ResponsiveUI {
     this.browserStackEl.style.removeProperty("--rdm-width");
     this.browserStackEl.style.removeProperty("--rdm-height");
     this.browserStackEl.style.removeProperty("--rdm-zoom");
+    this.browserStackEl.style.removeProperty("--rdm-stack-height");
+    this.browserStackEl.style.removeProperty("--rdm-stack-width");
 
     // Ensure the tab is reloaded if required when exiting RDM so that no emulated
     // settings are left in a customized state.
     if (!isTabContentDestroying) {
       let reloadNeeded = false;
-      await this.updateDPPX();
+      await this.updateDPPX(null);
       reloadNeeded |=
         (await this.updateUserAgent()) && this.reloadOnChange("userAgent");
-      reloadNeeded |=
-        (await this.updateTouchSimulation()) &&
-        this.reloadOnChange("touchSimulation");
-      if (reloadNeeded && currentTarget) {
-        await currentTarget.reload();
+
+      // Don't reload on the server if we're already doing a reload on the client
+      const reloadOnTouchSimulationChange =
+        this.reloadOnChange("touchSimulation") && !reloadNeeded;
+      await this.updateTouchSimulation(null, reloadOnTouchSimulationChange);
+      if (reloadNeeded) {
+        await this.reloadBrowser();
       }
+
+      // Unwatch targets & resources as the last step. If we are not waching for
+      // any resource & target anymore, the JSWindowActors will be unregistered
+      // which will trigger an early destruction of the RDM target, before we
+      // could finalize the cleanup.
+      this.commands.targetCommand.unwatchTargets(
+        [this.commands.targetCommand.TYPES.FRAME],
+        this.onTargetAvailable
+      );
+
+      this.resourceCommand.unwatchResources(
+        [this.resourceCommand.TYPES.NETWORK_EVENT],
+        { onAvailable: this.onNetworkResourceAvailable }
+      );
+
+      this.commands.targetCommand.destroy();
     }
 
     // Show the browser UI now.
@@ -374,50 +348,38 @@ class ResponsiveUI {
     this.resizeHandleY = null;
     this.resizeToolbarObserver = null;
 
-    // Close the devtools client used to speak with responsive emulation actor.
+    // Destroying the commands will close the devtools client used to speak with responsive emulation actor.
     // The actor handles clearing any overrides itself, so it's not necessary to clear
     // anything on shutdown client side.
-    const clientClosed = this.client.close();
+    const commandsDestroyed = this.commands.destroy();
     if (!isTabContentDestroying) {
-      await clientClosed;
+      await commandsDestroyed;
     }
-    this.client = this.responsiveFront = null;
+    this.commands = this.responsiveFront = null;
     this.destroyed = true;
 
     return true;
   }
 
   async connectToServer() {
-    // The client being instantiated here is separate from the toolbox. It is being used
-    // separately and has a life cycle that doesn't correspond to the toolbox.
-    DevToolsServer.init();
-    DevToolsServer.registerAllActors();
-    this.client = new DevToolsClient(DevToolsServer.connectPipe());
-    await this.client.connect();
+    this.commands = await CommandsFactory.forTab(this.tab);
+    this.resourceCommand = this.commands.resourceCommand;
 
-    const descriptor = await this.client.mainRoot.getTab();
-    const targetFront = await descriptor.getTarget();
+    await this.commands.targetCommand.startListening();
 
-    this.targetList = new TargetList(this.client.mainRoot, targetFront);
-    this.resourceWatcher = new ResourceWatcher(this.targetList);
-
-    this.targetList.startListening();
-
-    await this.targetList.watchTargets(
-      [this.targetList.TYPES.FRAME],
+    await this.commands.targetCommand.watchTargets(
+      [this.commands.targetCommand.TYPES.FRAME],
       this.onTargetAvailable
     );
 
-    // To support network throttling the resource watcher
+    // To support network throttling the resource command
     // needs to be watching for network resources.
-    await this.resourceWatcher.watchResources(
-      [this.resourceWatcher.TYPES.NETWORK_EVENT],
+    await this.resourceCommand.watchResources(
+      [this.resourceCommand.TYPES.NETWORK_EVENT],
       { onAvailable: this.onNetworkResourceAvailable }
     );
 
-    if (this.hasResourceWatcherSupport) {
-      this.networkFront = await this.watcherFront.getNetworkParentActor();
-    }
+    this.networkFront = await this.watcherFront.getNetworkParentActor();
   }
 
   /**
@@ -460,9 +422,6 @@ class ResponsiveUI {
         // will pick up changes to the zoom.
         const { width, height } = this.getViewportSize();
         this.updateViewportSize(width, height);
-        break;
-      case "BeforeTabRemotenessChange":
-        this.onRemotenessChange(event);
         break;
       case "TabClose":
       case "unload":
@@ -532,9 +491,12 @@ class ResponsiveUI {
     reloadNeeded |=
       (await this.updateUserAgent(userAgent)) &&
       this.reloadOnChange("userAgent");
-    reloadNeeded |=
-      (await this.updateTouchSimulation(touch)) &&
-      this.reloadOnChange("touchSimulation");
+
+    // Don't reload on the server if we're already doing a reload on the client
+    const reloadOnTouchSimulationChange =
+      this.reloadOnChange("touchSimulation") && !reloadNeeded;
+    await this.updateTouchSimulation(touch, reloadOnTouchSimulationChange);
+
     if (reloadNeeded) {
       this.reloadBrowser();
     }
@@ -559,12 +521,11 @@ class ResponsiveUI {
 
     await this.updateMaxTouchPointsEnabled(enabled);
 
-    const reloadNeeded =
-      (await this.updateTouchSimulation(enabled)) &&
-      this.reloadOnChange("touchSimulation");
-    if (reloadNeeded) {
-      this.reloadBrowser();
-    }
+    await this.updateTouchSimulation(
+      enabled,
+      this.reloadOnChange("touchSimulation")
+    );
+
     // Used by tests
     this.emit("touch-simulation-changed");
   }
@@ -587,12 +548,14 @@ class ResponsiveUI {
 
   async onRemoveDeviceAssociation() {
     let reloadNeeded = false;
-    await this.updateDPPX();
+    await this.updateDPPX(null);
     reloadNeeded |=
       (await this.updateUserAgent()) && this.reloadOnChange("userAgent");
-    reloadNeeded |=
-      (await this.updateTouchSimulation()) &&
-      this.reloadOnChange("touchSimulation");
+
+    // Don't reload on the server if we're already doing a reload on the client
+    const reloadOnTouchSimulationChange =
+      this.reloadOnChange("touchSimulation") && !reloadNeeded;
+    await this.updateTouchSimulation(null, reloadOnTouchSimulationChange);
     if (reloadNeeded) {
       this.reloadBrowser();
     }
@@ -708,8 +671,28 @@ class ResponsiveUI {
   }
 
   async onScreenshot() {
-    const data = await this.responsiveFront.captureScreenshot();
-    await saveScreenshot(this.browserWindow, {}, data);
+    const messages = await captureAndSaveScreenshot(
+      this.currentTarget,
+      this.browserWindow
+    );
+
+    const priorityMap = {
+      error: PriorityLevels.PRIORITY_CRITICAL_HIGH,
+      warn: PriorityLevels.PRIORITY_WARNING_HIGH,
+    };
+    for (const { text, level } of messages) {
+      // captureAndSaveScreenshot returns "saved" messages, that indicate where the
+      // screenshot was saved. We don't want to display them as the download UI can be
+      // used to open the file.
+      if (level !== "warn" && level !== "error") {
+        continue;
+      }
+
+      showNotification(this.browserWindow, this.tab, {
+        msg: text,
+        priority: priorityMap[level],
+      });
+    }
 
     message.post(this.rdmFrame.contentWindow, "screenshot-captured");
   }
@@ -721,10 +704,7 @@ class ResponsiveUI {
   onUpdateDeviceModal(event) {
     if (event.data.isOpen) {
       this.browserStackEl.classList.add("device-modal-opened");
-      const style = this.browserWindow.getComputedStyle(this.browserStackEl);
-      this.rdmFrame.style.height = style.height;
     } else {
-      this.rdmFrame.style.removeProperty("height");
       this.browserStackEl.classList.remove("device-modal-opened");
     }
   }
@@ -802,45 +782,45 @@ class ResponsiveUI {
       0
     );
 
-    const { type, angle } = this.getInitialViewportOrientation({
-      width,
-      height,
-    });
+    // Restore the previously set orientation, or get it from the initial viewport if it
+    // wasn't set yet.
+    const { type, angle } =
+      this.commands.targetConfigurationCommand.configuration
+        .rdmPaneOrientation ||
+      this.getInitialViewportOrientation({
+        width,
+        height,
+      });
 
     await this.updateDPPX(pixelRatio);
     await this.updateScreenOrientation(type, angle);
     await this.updateMaxTouchPointsEnabled(touchSimulationEnabled);
 
-    let reloadNeeded = false;
     if (touchSimulationEnabled) {
-      reloadNeeded |=
-        (await this.updateTouchSimulation(touchSimulationEnabled)) &&
-        this.reloadOnChange("touchSimulation");
+      await this.updateTouchSimulation(touchSimulationEnabled);
     }
+
+    let reloadNeeded = false;
     if (userAgent) {
       reloadNeeded |=
         (await this.updateUserAgent(userAgent)) &&
         this.reloadOnChange("userAgent");
     }
     if (reloadNeeded) {
-      this.reloadBrowser();
+      await this.reloadBrowser();
     }
   }
 
   /**
    * Set or clear the emulated device pixel ratio.
    *
-   * @return boolean
-   *         Whether a reload is needed to apply the change.
-   *         (This is always immediate, so it's always false.)
+   * @param {Number|null} dppx: The ratio to simulate. Set to null to disable the
+   *                      simulation and roll back to the original ratio
    */
-  async updateDPPX(dppx) {
-    if (!dppx) {
-      await this.responsiveFront.clearDPPXOverride();
-      return false;
-    }
-    await this.responsiveFront.setDPPXOverride(dppx);
-    return false;
+  async updateDPPX(dppx = null) {
+    await this.commands.targetConfigurationCommand.updateConfiguration({
+      overrideDPPX: dppx,
+    });
   }
 
   /**
@@ -851,18 +831,13 @@ class ResponsiveUI {
    *         (This is always immediate, so it's always false.)
    */
   async updateNetworkThrottling(enabled, profile) {
-    const throttlingFront =
-      this.hasResourceWatcherSupport && this.networkFront
-        ? this.networkFront
-        : this.responsiveFront;
-
     if (!enabled) {
-      await throttlingFront.clearNetworkThrottling();
+      await this.networkFront.clearNetworkThrottling();
       return false;
     }
     const data = throttlingProfiles.find(({ id }) => id == profile);
     const { download, upload, latency } = data;
-    await throttlingFront.setNetworkThrottling({
+    await this.networkFront.setNetworkThrottling({
       downloadThroughput: download,
       uploadThroughput: upload,
       latency,
@@ -873,14 +848,21 @@ class ResponsiveUI {
   /**
    * Set or clear the emulated user agent.
    *
-   * @return boolean
-   *         Whether a reload is needed to apply the change.
+   * @param {String|null} userAgent: The user agent to set on the page. Set to null to revert
+   *                      the user agent to its original value
+   * @return {Boolean} Whether a reload is needed to apply the change.
    */
-  updateUserAgent(userAgent) {
-    if (!userAgent) {
-      return this.responsiveFront.clearUserAgentOverride();
-    }
-    return this.responsiveFront.setUserAgentOverride(userAgent);
+  async updateUserAgent(userAgent) {
+    const getConfigurationCustomUserAgent = () =>
+      this.commands.targetConfigurationCommand.configuration.customUserAgent ||
+      "";
+    const previousCustomUserAgent = getConfigurationCustomUserAgent();
+    await this.commands.targetConfigurationCommand.updateConfiguration({
+      customUserAgent: userAgent,
+    });
+
+    const updatedUserAgent = getConfigurationCustomUserAgent();
+    return previousCustomUserAgent !== updatedUserAgent;
   }
 
   /**
@@ -890,31 +872,31 @@ class ResponsiveUI {
    * false, this method will clear all touch simulation and meta viewport
    * overrides, returning to default behavior for both settings.
    *
-   * @return boolean
-   *         Whether a reload is needed to apply the override change(s).
+   * @param {boolean} enabled
+   * @param {boolean} reloadOnTouchSimulationToggle: Set to true to trigger a page reload
+   *        if the touch simulation state changes.
    */
-  async updateTouchSimulation(enabled) {
-    let reloadNeeded;
+  async updateTouchSimulation(enabled, reloadOnTouchSimulationToggle) {
+    // Call setMetaViewportOverride so the server would be in the expected state when/if
+    // the document reloads (as part of the call to updateConfiguration).
     if (enabled) {
       const metaViewportEnabled = Services.prefs.getBoolPref(
         "devtools.responsive.metaViewport.enabled",
         false
       );
-
-      reloadNeeded = await this.responsiveFront.setTouchEventsOverride(
-        "enabled"
-      );
-
       if (metaViewportEnabled) {
-        reloadNeeded |= await this.responsiveFront.setMetaViewportOverride(
+        await this.responsiveFront.setMetaViewportOverride(
           Ci.nsIDocShell.META_VIEWPORT_OVERRIDE_ENABLED
         );
       }
     } else {
-      reloadNeeded = await this.responsiveFront.clearTouchEventsOverride();
-      reloadNeeded |= await this.responsiveFront.clearMetaViewportOverride();
+      await this.responsiveFront.clearMetaViewportOverride();
     }
-    return reloadNeeded;
+
+    await this.commands.targetConfigurationCommand.updateConfiguration({
+      touchEventsOverride: enabled ? "enabled" : null,
+      reloadOnTouchSimulationToggle,
+    });
   }
 
   /**
@@ -932,16 +914,13 @@ class ResponsiveUI {
    *        reloaded/navigated to, so we should not be simulating "orientationchange".
    */
   async updateScreenOrientation(type, angle, isViewportRotated = false) {
-    await this.responsiveFront.simulateScreenOrientationChange(
-      type,
-      angle,
-      isViewportRotated
+    await this.commands.targetConfigurationCommand.simulateScreenOrientationChange(
+      {
+        type,
+        angle,
+        isViewportRotated,
+      }
     );
-
-    // Used by tests.
-    if (!isViewportRotated) {
-      this.emit("only-viewport-orientation-changed");
-    }
   }
 
   /**
@@ -951,7 +930,9 @@ class ResponsiveUI {
    *        Whether or not touch is enabled for the simulated device.
    */
   async updateMaxTouchPointsEnabled(touchSimulationEnabled) {
-    return this.responsiveFront.setMaxTouchPoints(touchSimulationEnabled);
+    return this.commands.targetConfigurationCommand.updateConfiguration({
+      rdmPaneMaxTouchPoints: touchSimulationEnabled ? 1 : 0,
+    });
   }
 
   /**
@@ -1064,6 +1045,11 @@ class ResponsiveUI {
 
     if (targetFront.isTopLevel) {
       this.responsiveFront = await targetFront.getFront("responsive");
+
+      if (this.destroying) {
+        return;
+      }
+
       await this.restoreActorState();
     }
   }
@@ -1071,22 +1057,11 @@ class ResponsiveUI {
   // to support network throttling.
   onNetworkResourceAvailable() {}
 
-  async onRemotenessChange(event) {
-    // The current tab target will be destroyed by the process change.
-    // Wait for the target to be fully destroyed so that the cache of the
-    // corresponding TabDescriptorFront has been cleared. Otherwise, getTab()
-    // might return the soon to be destroyed target again.
-    await this.targetList.targetFront.once("target-destroyed");
-    const descriptor = await this.client.mainRoot.getTab();
-    const newTarget = await descriptor.getTarget();
-    await this.targetList.switchToTarget(newTarget);
-  }
-
   /**
    * Reload the current tab.
    */
   async reloadBrowser() {
-    await this.currentTarget.reload();
+    await this.commands.targetCommand.reloadTopLevelTarget();
   }
 }
 

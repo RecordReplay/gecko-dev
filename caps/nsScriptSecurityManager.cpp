@@ -21,6 +21,7 @@
 #include "nspr.h"
 #include "nsJSPrincipals.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/ContentPrincipal.h"
 #include "ExpandedPrincipal.h"
 #include "SystemPrincipal.h"
 #include "DomainPolicy.h"
@@ -57,9 +58,11 @@
 #include <stdint.h>
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/Exceptions.h"
 #include "mozilla/dom/nsCSPContext.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/ResultExtensions.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/dom/WorkerPrivate.h"
@@ -109,7 +112,7 @@ class BundleHelper {
   nsIStringBundle* GetOrCreateInternal() {
     if (!mBundle) {
       nsCOMPtr<nsIStringBundleService> bundleService =
-          mozilla::services::GetStringBundleService();
+          mozilla::components::StringBundle::Service();
       if (NS_WARN_IF(!bundleService)) {
         return nullptr;
       }
@@ -620,16 +623,21 @@ nsScriptSecurityManager::CheckLoadURIWithPrincipal(nsIPrincipal* aPrincipal,
   if (!sourceURI) {
     if (basePrin->Is<ExpandedPrincipal>()) {
       auto expanded = basePrin->As<ExpandedPrincipal>();
-      for (auto& prin : expanded->AllowList()) {
-        nsresult rv =
-            CheckLoadURIWithPrincipal(prin, aTargetURI, aFlags, aInnerWindowID);
+      const auto& allowList = expanded->AllowList();
+      // Only report errors when all principals fail.
+      uint32_t flags = aFlags | nsIScriptSecurityManager::DONT_REPORT_ERRORS;
+      for (size_t i = 0; i < allowList.Length() - 1; i++) {
+        nsresult rv = CheckLoadURIWithPrincipal(allowList[i], aTargetURI, flags,
+                                                aInnerWindowID);
         if (NS_SUCCEEDED(rv)) {
           // Allow access if it succeeded with one of the allowlisted principals
           return NS_OK;
         }
       }
-      // None of our allowlisted principals worked.
-      return NS_ERROR_DOM_BAD_URI;
+
+      // Report errors (if requested) for the last principal.
+      return CheckLoadURIWithPrincipal(allowList.LastElement(), aTargetURI,
+                                       aFlags, aInnerWindowID);
     }
     NS_ERROR(
         "Non-system principals or expanded principal passed to "
@@ -660,6 +668,21 @@ nsScriptSecurityManager::CheckLoadURIWithPrincipal(nsIPrincipal* aPrincipal,
   if ((aFlags & nsIScriptSecurityManager::DISALLOW_SCRIPT) &&
       targetScheme.EqualsLiteral("javascript")) {
     return NS_ERROR_DOM_BAD_URI;
+  }
+
+  // Extensions may allow access to a web accessible resource.
+  bool maybeWebAccessible = false;
+  NS_URIChainHasFlags(targetBaseURI,
+                      nsIProtocolHandler::WEBEXT_URI_WEB_ACCESSIBLE,
+                      &maybeWebAccessible);
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (maybeWebAccessible) {
+    bool isWebAccessible = false;
+    rv = ExtensionPolicyService::GetSingleton().SourceMayLoadExtensionURI(
+        sourceURI, targetBaseURI, &isWebAccessible);
+    if (!(NS_SUCCEEDED(rv) && isWebAccessible)) {
+      return NS_ERROR_DOM_BAD_URI;
+    }
   }
 
   // Check for uris that are only loadable by principals that subsume them
@@ -886,12 +909,6 @@ nsresult nsScriptSecurityManager::CheckLoadURIFlags(
                                &sourceIsUIResource);
       NS_ENSURE_SUCCESS(rv, rv);
       if (sourceIsUIResource) {
-        // TODO Bug 1654488: Remove pref in CheckLoadURIFlags which
-        // allows all UI resources to load
-        if (StaticPrefs::
-                security_caps_allow_uri_is_ui_resource_in_checkloaduriflags()) {
-          return NS_OK;
-        }
         // Special case for moz-icon URIs loaded by a local resources like
         // e.g. chrome: or resource:
         if (targetScheme.EqualsLiteral("moz-icon")) {
@@ -1117,6 +1134,48 @@ nsScriptSecurityManager::CheckLoadURIStrWithPrincipal(
 }
 
 NS_IMETHODIMP
+nsScriptSecurityManager::CheckLoadURIWithPrincipalFromJS(
+    nsIPrincipal* aPrincipal, nsIURI* aTargetURI, uint32_t aFlags,
+    uint64_t aInnerWindowID, JSContext* aCx) {
+  MOZ_ASSERT(aPrincipal,
+             "CheckLoadURIWithPrincipalFromJS must have a principal");
+  NS_ENSURE_ARG_POINTER(aPrincipal);
+  NS_ENSURE_ARG_POINTER(aTargetURI);
+
+  nsresult rv =
+      CheckLoadURIWithPrincipal(aPrincipal, aTargetURI, aFlags, aInnerWindowID);
+  if (NS_FAILED(rv)) {
+    nsAutoCString uriStr;
+    Unused << aTargetURI->GetSpec(uriStr);
+
+    nsAutoCString message("Load of ");
+    message.Append(uriStr);
+
+    nsAutoCString principalStr;
+    Unused << aPrincipal->GetSpec(principalStr);
+    if (!principalStr.IsEmpty()) {
+      message.AppendPrintf(" from %s", principalStr.get());
+    }
+
+    message.Append(" denied");
+
+    dom::Throw(aCx, rv, message);
+  }
+
+  return rv;
+}
+
+NS_IMETHODIMP
+nsScriptSecurityManager::CheckLoadURIStrWithPrincipalFromJS(
+    nsIPrincipal* aPrincipal, const nsACString& aTargetURIStr, uint32_t aFlags,
+    JSContext* aCx) {
+  nsCOMPtr<nsIURI> targetURI;
+  MOZ_TRY(NS_NewURI(getter_AddRefs(targetURI), aTargetURIStr));
+
+  return CheckLoadURIWithPrincipalFromJS(aPrincipal, targetURI, aFlags, 0, aCx);
+}
+
+NS_IMETHODIMP
 nsScriptSecurityManager::InFileURIAllowlist(nsIURI* aUri, bool* aResult) {
   MOZ_ASSERT(aUri);
   MOZ_ASSERT(aResult);
@@ -1253,10 +1312,10 @@ nsScriptSecurityManager::PrincipalWithOA(
     if (!aOriginAttributes.isObject() || !attrs.Init(aCx, aOriginAttributes)) {
       return NS_ERROR_INVALID_ARG;
     }
-    RefPtr<ContentPrincipal> copy = new ContentPrincipal();
     auto* contentPrincipal = static_cast<ContentPrincipal*>(aPrincipal);
-    nsresult rv = copy->Init(contentPrincipal, attrs);
-    NS_ENSURE_SUCCESS(rv, rv);
+    RefPtr<ContentPrincipal> copy =
+        new ContentPrincipal(contentPrincipal, attrs);
+    NS_ENSURE_TRUE(copy, NS_ERROR_FAILURE);
     copy.forget(aReturnPrincipal);
   } else {
     // We do this for null principals, system principals (both fine)

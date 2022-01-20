@@ -10,6 +10,7 @@
 #include "ErrorList.h"
 #include "PLDHashTable.h"
 #include "mozilla/BasicEvents.h"
+#include "nsHashtablesFwd.h"
 #include "nsIObserver.h"
 #include "nsISupports.h"
 #include "nsStringFwd.h"
@@ -31,8 +32,8 @@
 #  define SPOOFED_OSCPU "Intel Mac OS X 10.15"
 #  define SPOOFED_PLATFORM "MacIntel"
 #elif defined(MOZ_WIDGET_ANDROID)
-#  define SPOOFED_UA_OS "Android 9; Mobile"
-#  define SPOOFED_APPVERSION "5.0 (Android 9)"
+#  define SPOOFED_UA_OS "Android 10; Mobile"
+#  define SPOOFED_APPVERSION "5.0 (Android 10)"
 #  define SPOOFED_OSCPU "Linux aarch64"
 #  define SPOOFED_PLATFORM "Linux aarch64"
 #else
@@ -53,17 +54,12 @@
 // For the HTTP User-Agent header, we use a simpler set of spoofed values
 // that do not reveal the specific desktop platform.
 #if defined(MOZ_WIDGET_ANDROID)
-#  define SPOOFED_HTTP_UA_OS "Android 9; Mobile"
+#  define SPOOFED_HTTP_UA_OS "Android 10; Mobile"
 #else
 #  define SPOOFED_HTTP_UA_OS "Windows NT 10.0"
 #endif
 
 struct JSContext;
-template <class KeyClass, class DataType>
-class nsDataHashtable;
-
-// Forward declare LRUCache, defined in nsRFPService.cpp
-class LRUCache;
 
 namespace mozilla {
 class WidgetKeyboardEvent;
@@ -254,7 +250,7 @@ class nsRFPService final : public nsIObserver {
                                     const WidgetKeyboardEvent* aKeyboardEvent,
                                     SpoofingKeyboardCode& aOut);
 
-  static nsDataHashtable<KeyboardHashKey, const SpoofingKeyboardCode*>*
+  static nsTHashMap<KeyboardHashKey, const SpoofingKeyboardCode*>*
       sSpoofingKeyboardCodes;
 
   static TimerPrecisionType GetTimerPrecisionType(bool aIsSystemPrincipal,

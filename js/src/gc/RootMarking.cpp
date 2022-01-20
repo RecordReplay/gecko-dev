@@ -230,36 +230,13 @@ inline void JS::RootingContext::traceGCRooterList(JSTracer* trc,
   }
 }
 
-void StackShape::trace(JSTracer* trc) {
-  if (base) {
-    TraceRoot(trc, &base, "StackShape base");
-  }
-
-  TraceRoot(trc, (jsid*)&propid, "StackShape id");
-
-  if ((attrs & JSPROP_GETTER) && rawGetter) {
-    TraceRoot(trc, (JSObject**)&rawGetter, "StackShape getter");
-  }
-
-  if ((attrs & JSPROP_SETTER) && rawSetter) {
-    TraceRoot(trc, (JSObject**)&rawSetter, "StackShape setter");
-  }
-}
-
 void PropertyDescriptor::trace(JSTracer* trc) {
-  if (obj) {
-    TraceRoot(trc, &obj, "Descriptor::obj");
+  TraceRoot(trc, &value_, "Descriptor::value");
+  if (getter_) {
+    TraceRoot(trc, &getter_, "Descriptor::getter");
   }
-  TraceRoot(trc, &value, "Descriptor::value");
-  if ((attrs & JSPROP_GETTER) && getter) {
-    JSObject* tmp = JS_FUNC_TO_DATA_PTR(JSObject*, getter);
-    TraceRoot(trc, &tmp, "Descriptor::get");
-    getter = JS_DATA_TO_FUNC_PTR(JSGetterOp, tmp);
-  }
-  if ((attrs & JSPROP_SETTER) && setter) {
-    JSObject* tmp = JS_FUNC_TO_DATA_PTR(JSObject*, setter);
-    TraceRoot(trc, &tmp, "Descriptor::set");
-    setter = JS_DATA_TO_FUNC_PTR(JSSetterOp, tmp);
+  if (setter_) {
+    TraceRoot(trc, &setter_, "Descriptor::setter");
   }
 }
 
@@ -449,9 +426,10 @@ class AssertNoRootsTracer final : public JS::CallbackTracer {
   }
 
  public:
+  // This skips tracking WeakMap entries because they are not roots.
   explicit AssertNoRootsTracer(JSRuntime* rt)
       : JS::CallbackTracer(rt, JS::TracerKind::Callback,
-                           JS::WeakMapTraceAction::TraceKeysAndValues) {}
+                           JS::WeakMapTraceAction::Skip) {}
 };
 #endif  // DEBUG
 
@@ -513,11 +491,15 @@ class BufferGrayRootsTracer final : public GenericTracer {
     unsupportedEdge();
     return nullptr;
   }
-  js::ObjectGroup* onObjectGroupEdge(js::ObjectGroup* group) override {
+  js::BaseShape* onBaseShapeEdge(js::BaseShape* base) override {
     unsupportedEdge();
     return nullptr;
   }
-  js::BaseShape* onBaseShapeEdge(js::BaseShape* base) override {
+  js::GetterSetter* onGetterSetterEdge(js::GetterSetter* gs) override {
+    unsupportedEdge();
+    return nullptr;
+  }
+  js::PropMap* onPropMapEdge(js::PropMap* map) override {
     unsupportedEdge();
     return nullptr;
   }

@@ -80,7 +80,7 @@ mozilla::ipc::IPCResult TCPSocketParent::RecvOpen(
     const bool& aUseArrayBuffers) {
   mSocket = new TCPSocket(nullptr, aHost, aPort, aUseSSL, aUseArrayBuffers);
   mSocket->SetSocketBridgeParent(this);
-  NS_ENSURE_SUCCESS(mSocket->Init(), IPC_OK());
+  NS_ENSURE_SUCCESS(mSocket->Init(nullptr), IPC_OK());
   return IPC_OK();
 }
 
@@ -152,9 +152,9 @@ mozilla::ipc::IPCResult TCPSocketParent::RecvClose() {
 }
 
 void TCPSocketParent::FireErrorEvent(const nsAString& aName,
-                                     const nsAString& aType,
+                                     const nsAString& aType, nsresult aError,
                                      TCPReadyState aReadyState) {
-  SendEvent(u"error"_ns, TCPError(nsString(aName), nsString(aType)),
+  SendEvent(u"error"_ns, TCPError(nsString(aName), nsString(aType), aError),
             aReadyState);
 }
 

@@ -14,18 +14,26 @@
 #include "nsColor.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/widget/ThemeChangeKind.h"
 
 struct gfxFontStyle;
 
+class nsIFrame;
+
 namespace mozilla {
+
+namespace dom {
+class Document;
+}
 
 namespace widget {
 class FullLookAndFeel;
-class LookAndFeelCache;
 }  // namespace widget
 
 enum class StyleSystemColor : uint8_t;
+enum class StyleSystemColorScheme : uint8_t;
+enum class StyleSystemFont : uint8_t;
 
 class LookAndFeel {
  public:
@@ -131,15 +139,6 @@ class LookAndFeel {
      * (will return the default of NS_ERROR_FAILURE).
      */
     WindowsGlass,
-
-    /*
-     * A Boolean value to determine whether the device is a touch enabled
-     * device. Currently this is only supported by the Windows 7 Touch API.
-     *
-     * Platforms that do not support this metric should return
-     * NS_ERROR_NOT_IMPLEMENTED when queried for this metric.
-     */
-    TouchEnabled,
 
     /*
      * A Boolean value to determine whether the Mac graphite theme is
@@ -277,6 +276,30 @@ class LookAndFeel {
      */
     GTKCSDCloseButton,
 
+    /**
+     * An Integer value that will represent the position of the Minimize button
+     * in GTK Client side decoration header. Its value will be between 0 and 2
+     * if it is on the left side of the tabbar, otherwise it will be between
+     * 3 and 5.
+     */
+    GTKCSDMinimizeButtonPosition,
+
+    /**
+     * An Integer value that will represent the position of the Maximize button
+     * in GTK Client side decoration header. Its value will be between 0 and 2
+     * if it is on the left side of the tabbar, otherwise it will be between
+     * 3 and 5.
+     */
+    GTKCSDMaximizeButtonPosition,
+
+    /**
+     * An Integer value that will represent the position of the Close button
+     * in GTK Client side decoration header. Its value will be between 0 and 2
+     * if it is on the left side of the tabbar, otherwise it will be between
+     * 3 and 5.
+     */
+    GTKCSDCloseButtonPosition,
+
     /*
      * A boolean value indicating whether titlebar buttons are located
      * in left titlebar corner.
@@ -311,35 +334,22 @@ class LookAndFeel {
      * 'Coarse | Fine | Hover'.
      */
     AllPointerCapabilities,
-    /**
-     * An Integer value that will represent the position of the Close button
-     * in GTK Client side decoration header. Its value will be between 0 and 2
-     * if it is on the left side of the tabbar, otherwise it will be between
-     * 3 and 5.
-     */
-    GTKCSDCloseButtonPosition,
+    /** The vertical scrollbar width, in CSS pixels. */
+    SystemVerticalScrollbarWidth,
 
-    /**
-     * An Integer value that will represent the position of the Minimize button
-     * in GTK Client side decoration header. Its value will be between 0 and 2
-     * if it is on the left side of the tabbar, otherwise it will be between
-     * 3 and 5.
-     */
-    GTKCSDMinimizeButtonPosition,
-
-    /**
-     * An Integer value that will represent the position of the Maximize button
-     * in GTK Client side decoration header. Its value will be between 0 and 2
-     * if it is on the left side of the tabbar, otherwise it will be between
-     * 3 and 5.
-     */
-    GTKCSDMaximizeButtonPosition,
+    /** The horizontal scrollbar height, in CSS pixels. */
+    SystemHorizontalScrollbarHeight,
 
     /*
      * Not an ID; used to define the range of valid IDs.  Must be last.
      */
     End,
   };
+
+  // This is a common enough integer that seems worth the shortcut.
+  static bool UseOverlayScrollbars() {
+    return GetInt(IntID::UseOverlayScrollbars);
+  }
 
   /**
    * Windows themes we currently detect.
@@ -402,62 +412,75 @@ class LookAndFeel {
     // should be added to the calculated caret width.
     CaretAspectRatio,
 
+    // GTK text scale factor.
+    TextScaleFactor,
+
+    // Mouse pointer scaling factor.
+    CursorScale,
+
     // Not an ID; used to define the range of valid IDs.  Must be last.
     End,
   };
 
-  // These constants must be kept in 1:1 correspondence with the
-  // NS_STYLE_FONT_* system font constants.
-  enum class FontID {
-    Caption = 1,  // css2
-    MINIMUM = Caption,
-    Icon,
-    Menu,
-    MessageBox,
-    SmallCaption,
-    StatusBar,
+  using FontID = mozilla::StyleSystemFont;
 
-    Window,  // css3
-    Document,
-    Workspace,
-    Desktop,
-    Info,
-    Dialog,
-    Button,
-    PullDownMenu,
-    List,
-    Field,
+  // Whether we should use a light or dark appearance.
+  //
+  // This is currently ignored (but won't be for long).
+  enum class ColorScheme : uint8_t { Light, Dark };
 
-    Tooltips,  // moz
-    Widget,
-    MAXIMUM = Widget,
-  };
+  static ColorScheme SystemColorScheme() {
+    return GetInt(IntID::SystemUsesDarkTheme) ? ColorScheme::Dark
+                                              : ColorScheme::Light;
+  }
 
-  /**
-   * GetColor() return a native color value (might be overwritten by prefs) for
-   * aID.  Some platforms don't return an error even if the index doesn't
-   * match any system colors.  And also some platforms may initialize the
-   * return value even when it returns an error.  Therefore, if you want to
-   * use a color for the default value, you should use the other GetColor()
-   * which returns nscolor directly.
-   *
-   * NOTE:
-   *   ColorID::TextSelectForeground might return NS_DONT_CHANGE_COLOR.
-   *   ColorID::IME* might return NS_TRANSPARENT, NS_SAME_AS_FOREGROUND_COLOR or
-   *   NS_40PERCENT_FOREGROUND_COLOR.
-   *   These values have particular meaning.  Then, they are not an actual
-   *   color value.
-   */
-  static nsresult GetColor(ColorID aID, nscolor* aResult);
+  static ColorScheme ColorSchemeForDocument(const dom::Document& aDoc);
 
-  /**
-   * This variant of GetColor() takes an extra Boolean parameter that allows
-   * the caller to ask that hard-coded color values be substituted for
-   * native colors (used when it is desireable to hide system colors to
-   * avoid system fingerprinting).
-   */
-  static nsresult GetColor(ColorID aID, bool aUseStandinsForNativeColors,
-                           nscolor* aResult);
+  // Whether standins for native colors should be used (that is, colors faked,
+  // taken from win7, mostly). This forces light appearance, effectively.
+  enum class UseStandins : bool { No, Yes };
+  static UseStandins ShouldUseStandins(const dom::Document&, ColorID);
+
+  // Returns a native color value (might be overwritten by prefs) for a given
+  // color id.
+  //
+  // NOTE:
+  //   ColorID::TextSelectForeground might return NS_SAME_AS_FOREGROUND_COLOR.
+  //   ColorID::IME* might return NS_TRANSPARENT, NS_SAME_AS_FOREGROUND_COLOR or
+  //   NS_40PERCENT_FOREGROUND_COLOR.
+  //   These values have particular meaning.  Then, they are not an actual
+  //   color value.
+  static Maybe<nscolor> GetColor(ColorID, ColorScheme, UseStandins);
+
+  // Gets the color with appropriate defaults for UseStandins, ColorScheme etc
+  // for a given document.
+  static Maybe<nscolor> GetColor(ColorID, const dom::Document&);
+
+  // Gets the color with appropriate defaults for UseStandins, ColorScheme etc
+  // for a given frame.
+  //
+  // TODO(emilio): This right now just peeks the document out of the frame's
+  // pres context, but in the future we actually want to look at the style to
+  // get the right color scheme, to implement the color-scheme property.
+  static Maybe<nscolor> GetColor(ColorID, const nsIFrame*);
+
+  // Versions of the above which returns the color if found, or a default (which
+  // defaults to opaque black) otherwise.
+  static nscolor Color(ColorID aId, ColorScheme aScheme,
+                       UseStandins aUseStandins,
+                       nscolor aDefault = NS_RGB(0, 0, 0)) {
+    return GetColor(aId, aScheme, aUseStandins).valueOr(aDefault);
+  }
+
+  static nscolor Color(ColorID aId, const dom::Document& aDoc,
+                       nscolor aDefault = NS_RGB(0, 0, 0)) {
+    return GetColor(aId, aDoc).valueOr(aDefault);
+  }
+
+  static nscolor Color(ColorID aId, nsIFrame* aFrame,
+                       nscolor aDefault = NS_RGB(0, 0, 0)) {
+    return GetColor(aId, aFrame).valueOr(aDefault);
+  }
 
   /**
    * GetInt() and GetFloat() return a int or float value for aID.  The result
@@ -467,27 +490,8 @@ class LookAndFeel {
    * use a value for the default value, you should use the other method which
    * returns int or float directly.
    */
-  static nsresult GetInt(IntID aID, int32_t* aResult);
+  static nsresult GetInt(IntID, int32_t* aResult);
   static nsresult GetFloat(FloatID aID, float* aResult);
-
-  static nscolor GetColor(ColorID aID, nscolor aDefault = NS_RGB(0, 0, 0)) {
-    nscolor result = NS_RGB(0, 0, 0);
-    if (NS_FAILED(GetColor(aID, &result))) {
-      return aDefault;
-    }
-    return result;
-  }
-
-  static nscolor GetColorUsingStandins(ColorID aID,
-                                       nscolor aDefault = NS_RGB(0, 0, 0)) {
-    nscolor result = NS_RGB(0, 0, 0);
-    if (NS_FAILED(GetColor(aID,
-                           true,  // aUseStandinsForNativeColors
-                           &result))) {
-      return aDefault;
-    }
-    return result;
-  }
 
   static int32_t GetInt(IntID aID, int32_t aDefault = 0) {
     int32_t result;
@@ -553,39 +557,22 @@ class LookAndFeel {
    */
   static void NativeInit();
 
-  /**
-   * If the implementation is caching values, these accessors allow the
-   * cache to be exported and imported.
-   */
-  static widget::LookAndFeelCache GetCache();
-  static void SetCache(const widget::LookAndFeelCache& aCache);
   static void SetData(widget::FullLookAndFeel&& aTables);
   static void NotifyChangedAllWindows(widget::ThemeChangeKind);
 };
 
 }  // namespace mozilla
 
-// On the Mac, GetColor(ColorID::TextSelectForeground, color) returns this
-// constant to specify that the foreground color should not be changed
-// (ie. a colored text keeps its colors  when selected).
-// Of course if other plaforms work like the Mac, they can use it too.
-#define NS_DONT_CHANGE_COLOR NS_RGB(0x01, 0x01, 0x01)
-
-// Similar with NS_DONT_CHANGE_COLOR, except NS_DONT_CHANGE_COLOR would returns
-// complementary color if fg color is same as bg color.
-// NS_CHANGE_COLOR_IF_SAME_AS_BG would returns
-// ColorID::TextSelectForegroundCustom if fg and bg color are the same.
-#define NS_CHANGE_COLOR_IF_SAME_AS_BG NS_RGB(0x02, 0x02, 0x02)
-
 // ---------------------------------------------------------------------
 //  Special colors for ColorID::IME* and ColorID::SpellCheckerUnderline
 // ---------------------------------------------------------------------
 
 // For background color only.
-#define NS_TRANSPARENT NS_RGBA(0x01, 0x00, 0x00, 0x00)
+constexpr nscolor NS_TRANSPARENT = NS_RGBA(0x01, 0x00, 0x00, 0x00);
 // For foreground color only.
-#define NS_SAME_AS_FOREGROUND_COLOR NS_RGBA(0x02, 0x00, 0x00, 0x00)
-#define NS_40PERCENT_FOREGROUND_COLOR NS_RGBA(0x03, 0x00, 0x00, 0x00)
+constexpr nscolor NS_SAME_AS_FOREGROUND_COLOR = NS_RGBA(0x02, 0x00, 0x00, 0x00);
+constexpr nscolor NS_40PERCENT_FOREGROUND_COLOR =
+    NS_RGBA(0x03, 0x00, 0x00, 0x00);
 
 #define NS_IS_SELECTION_SPECIAL_COLOR(c)                          \
   ((c) == NS_TRANSPARENT || (c) == NS_SAME_AS_FOREGROUND_COLOR || \

@@ -22,12 +22,10 @@
 namespace mozilla {
 namespace net {
 
-static const char kRolloutURIPref[] = "doh-rollout.uri";
-static const char kRolloutModePref[] = "doh-rollout.mode";
-
 static const char* gTRRUriCallbackPrefs[] = {
-    "network.trr.uri", "network.trr.mode", kRolloutURIPref, kRolloutModePref,
-    nullptr,
+    "network.trr.uri",  "network.trr.default_provider_uri",
+    "network.trr.mode", kRolloutURIPref,
+    kRolloutModePref,   nullptr,
 };
 
 NS_IMPL_ISUPPORTS(TRRServiceParent, nsIObserver, nsISupportsWeakReference)
@@ -108,15 +106,15 @@ bool TRRServiceParent::MaybeSetPrivateURI(const nsACString& aURI) {
 }
 
 void TRRServiceParent::SetDetectedTrrURI(const nsACString& aURI) {
-  if (mURIPrefHasUserValue) {
+  if (!mURIPref.IsEmpty()) {
     return;
   }
 
   mURISetByDetection = MaybeSetPrivateURI(aURI);
-  RefPtr<TRRServiceParent> self = this;
-  nsCString uri(aURI);
   gIOService->CallOrWaitForSocketProcess(
-      [self, uri]() { Unused << self->SendSetDetectedTrrURI(uri); });
+      [self = RefPtr{this}, uri = nsAutoCString(aURI)]() {
+        Unused << self->SendSetDetectedTrrURI(uri);
+      });
 }
 
 void TRRServiceParent::GetTrrURI(nsACString& aURI) { aURI = mPrivateURI; }
@@ -136,6 +134,7 @@ void TRRServiceParent::PrefsChanged(const char* aName, void* aSelf) {
 
 void TRRServiceParent::prefsChanged(const char* aName) {
   if (!aName || !strcmp(aName, "network.trr.uri") ||
+      !strcmp(aName, "network.trr.default_provider_uri") ||
       !strcmp(aName, kRolloutURIPref)) {
     OnTRRURIChange();
   }

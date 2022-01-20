@@ -53,7 +53,6 @@ let gOriginalUpdateAutoValue = null;
 // Some elements append a trailing /. After the chrome tests are removed this
 // code can be changed so URL_HOST already has a trailing /.
 const gDetailsURL = URL_HOST + "/";
-const gDefaultWhatsNewURL = URL_HTTP_UPDATE_SJS + "?uiURL=DETAILS";
 
 // Set to true to log additional information for debugging. To log additional
 // information for individual tests set gDebugTest to false here and to true
@@ -75,9 +74,6 @@ add_task(async function setupTestCommon() {
       [PREF_APP_UPDATE_LOG, gDebugTest],
       [PREF_APP_UPDATE_PROMPTWAITTIME, 3600],
       [PREF_APP_UPDATE_SERVICE_ENABLED, false],
-      // Disable activity stream to prevent errors when opening pages during
-      // TV runs. See bug 1548422 for an example.
-      ["browser.library.activity-stream.enabled", false],
     ],
   });
 
@@ -293,23 +289,6 @@ function getNotificationButton(win, notificationId, button) {
   );
   ok(!notification.hidden, `${notificationId} notification is showing`);
   return notification[button];
-}
-
-/**
- * Ensures that the "What's new" link with the provided ID is displayed and
- * matches the url parameter provided.
- *
- * @param  win
- *         The window to get the "What's new" link for.
- * @param  id
- *         The ID of the "What's new" link element.
- * @param  url
- *         The URL to check against.
- */
-function checkWhatsNewLink(win, id, url) {
-  let whatsNewLink = win.document.getElementById(id);
-  ok(!whatsNewLink.hidden, "What's new link is not hidden.");
-  is(whatsNewLink.href, url, `What's new link href should equal ${url}`);
 }
 
 /**
@@ -599,14 +578,6 @@ function runDoorhangerUpdateTest(params, steps) {
         ok(!gUpdateManager.readyUpdate, "There should not be a ready update");
       }
 
-      if (pageURLs && pageURLs.whatsNew !== undefined) {
-        checkWhatsNewLink(
-          window,
-          `${notificationId}-whats-new`,
-          pageURLs.whatsNew
-        );
-      }
-
       let buttonEl = getNotificationButton(window, notificationId, button);
       buttonEl.click();
 
@@ -692,10 +663,8 @@ function runAboutDialogUpdateTest(params, steps) {
 
     const { panelId, checkActiveUpdate, continueFile, downloadInfo } = step;
     return (async function() {
-      let updateDeck = aboutDialog.document.getElementById("updateDeck");
       await TestUtils.waitForCondition(
-        () =>
-          updateDeck.selectedPanel && updateDeck.selectedPanel.id == panelId,
+        () => aboutDialog.gAppUpdater.selectedPanel?.id == panelId,
         "Waiting for the expected panel ID: " + panelId,
         undefined,
         200
@@ -704,7 +673,7 @@ function runAboutDialogUpdateTest(params, steps) {
         // ID and the expected panel ID is printed in the log.
         logTestInfo(e);
       });
-      let selectedPanel = updateDeck.selectedPanel;
+      let { selectedPanel } = aboutDialog.gAppUpdater;
       is(selectedPanel.id, panelId, "The panel ID should equal " + panelId);
 
       if (checkActiveUpdate) {
@@ -903,11 +872,8 @@ function runAboutPrefsUpdateTest(params, steps) {
         tab.linkedBrowser,
         [{ panelId }],
         async ({ panelId }) => {
-          let updateDeck = content.document.getElementById("updateDeck");
           await ContentTaskUtils.waitForCondition(
-            () =>
-              updateDeck.selectedPanel &&
-              updateDeck.selectedPanel.id == panelId,
+            () => content.gAppUpdater.selectedPanel?.id == panelId,
             "Waiting for the expected panel ID: " + panelId,
             undefined,
             200
@@ -919,7 +885,7 @@ function runAboutPrefsUpdateTest(params, steps) {
             info(e);
           });
           is(
-            updateDeck.selectedPanel.id,
+            content.gAppUpdater.selectedPanel.id,
             panelId,
             "The panel ID should equal " + panelId
           );
@@ -1020,8 +986,7 @@ function runAboutPrefsUpdateTest(params, steps) {
             "unsupportedSystem",
           ];
           if (linkPanels.includes(panelId)) {
-            let selectedPanel = content.document.getElementById("updateDeck")
-              .selectedPanel;
+            let { selectedPanel } = content.gAppUpdater;
             // The unsupportedSystem panel uses the update's detailsURL and the
             // downloadFailed and manualUpdate panels use the app.update.url.manual
             // preference.
@@ -1041,8 +1006,7 @@ function runAboutPrefsUpdateTest(params, steps) {
 
           let buttonPanels = ["downloadAndInstall", "apply"];
           if (buttonPanels.includes(panelId)) {
-            let selectedPanel = content.document.getElementById("updateDeck")
-              .selectedPanel;
+            let { selectedPanel } = content.gAppUpdater;
             let buttonEl = selectedPanel.querySelector("button");
             // Note: The about:preferences doesn't focus the button like the
             // About Dialog does.

@@ -101,21 +101,31 @@ bool WebGLFBAttachPoint::IsComplete(WebGLContext* webgl,
   const auto& tex = Texture();
   if (tex) {
     // ES 3.0 spec, pg 213 has giant blocks of text that bake down to requiring
-    // that attached tex images are within the valid mip-levels of the texture.
-    // While it draws distinction to only test non-immutable textures, that's
-    // because immutable textures are *always* texture-complete. We need to
-    // check immutable textures though, because checking completeness is also
-    // when we zero invalidated/no-data tex images.
+    // that attached *non-immutable* tex images are within the valid mip-levels
+    // of the texture. We still need to check immutable textures though, because
+    // checking completeness is also when we zero invalidated/no-data tex
+    // images.
     const auto attachedMipLevel = MipLevel();
 
     const bool withinValidMipLevels = [&]() {
       const bool ensureInit = false;
       const auto texCompleteness = tex->CalcCompletenessInfo(ensureInit);
-      if (!texCompleteness)  // OOM
-        return false;
+      if (!texCompleteness) return false;  // OOM
+
+      if (tex->Immutable()) {
+        // Immutable textures can attach a level that's not valid for sampling.
+        // It still has to exist though!
+        return attachedMipLevel < tex->ImmutableLevelCount();
+      }
+
+      // Base level must be complete.
       if (!texCompleteness->levels) return false;
 
-      const auto baseLevel = tex->BaseMipmapLevel();
+      const auto baseLevel = tex->Es3_level_base();
+      if (attachedMipLevel == baseLevel) return true;
+
+      // If not base level, must be mip-complete and within mips.
+      if (!texCompleteness->mipmapComplete) return false;
       const auto maxLevel = baseLevel + texCompleteness->levels - 1;
       return baseLevel <= attachedMipLevel && attachedMipLevel <= maxLevel;
     }();
@@ -1062,6 +1072,7 @@ void WebGLFramebuffer::RefreshDrawBuffers() const {
     }
   }
 
+  gl->fBindFramebuffer(LOCAL_GL_DRAW_FRAMEBUFFER, mGLName);
   gl->fDrawBuffers(driverBuffers.size(), driverBuffers.data());
 }
 
@@ -1078,6 +1089,7 @@ void WebGLFramebuffer::RefreshReadBuffer() const {
     driverBuffer = mColorReadBuffer->mAttachmentPoint;
   }
 
+  gl->fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER, mGLName);
   gl->fReadBuffer(driverBuffer);
 }
 

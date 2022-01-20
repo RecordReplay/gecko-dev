@@ -10,7 +10,8 @@
 // in order to be referenced by any other spec or front module.
 
 // Declare in which spec module and front module a set of types are defined.
-// This array should be sorted by `spec` attribute.
+// This array should be sorted by `spec` attribute, and this is verified in the
+// test devtools/shared/protocol/tests/xpcshell/test_protocol_index.js
 const Types = (exports.__TypesForTests = [
   {
     types: [
@@ -56,11 +57,6 @@ const Types = (exports.__TypesForTests = [
     types: ["compatibility"],
     spec: "devtools/shared/specs/compatibility",
     front: "devtools/client/fronts/compatibility",
-  },
-  {
-    types: ["contentViewer"],
-    spec: "devtools/shared/specs/content-viewer",
-    front: "devtools/client/fronts/content-viewer",
   },
   {
     types: ["cssProperties"],
@@ -205,6 +201,11 @@ const Types = (exports.__TypesForTests = [
     front: "devtools/client/fronts/preference",
   },
   {
+    types: ["privatePropertiesIterator"],
+    spec: "devtools/shared/specs/private-properties-iterator",
+    front: "devtools/client/fronts/private-properties-iterator",
+  },
+  {
     types: ["propertyIterator"],
     spec: "devtools/shared/specs/property-iterator",
     front: "devtools/client/fronts/property-iterator",
@@ -228,6 +229,11 @@ const Types = (exports.__TypesForTests = [
     types: ["screenshot"],
     spec: "devtools/shared/specs/screenshot",
     front: "devtools/client/fronts/screenshot",
+  },
+  {
+    types: ["screenshot-content"],
+    spec: "devtools/shared/specs/screenshot-content",
+    front: "devtools/client/fronts/screenshot-content",
   },
   {
     types: ["source"],
@@ -283,14 +289,14 @@ const Types = (exports.__TypesForTests = [
     front: "devtools/client/fronts/symbol-iterator",
   },
   {
+    types: ["target-configuration"],
+    spec: "devtools/shared/specs/target-configuration",
+    front: "devtools/client/fronts/target-configuration",
+  },
+  {
     types: ["browsingContextTarget"],
     spec: "devtools/shared/specs/targets/browsing-context",
     front: "devtools/client/fronts/targets/browsing-context",
-  },
-  {
-    types: ["chromeWindowTarget"],
-    spec: "devtools/shared/specs/targets/chrome-window",
-    front: null,
   },
   {
     types: ["contentProcessTarget"],
@@ -321,6 +327,11 @@ const Types = (exports.__TypesForTests = [
     types: ["thread"],
     spec: "devtools/shared/specs/thread",
     front: "devtools/client/fronts/thread",
+  },
+  {
+    types: ["thread-configuration"],
+    spec: "devtools/shared/specs/thread-configuration",
+    front: "devtools/client/fronts/thread-configuration",
   },
   {
     types: ["domwalker"],

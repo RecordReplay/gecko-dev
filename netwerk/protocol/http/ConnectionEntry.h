@@ -8,7 +8,7 @@
 
 #include "PendingTransactionInfo.h"
 #include "PendingTransactionQueue.h"
-#include "HalfOpenSocket.h"
+#include "DnsAndConnectSocket.h"
 #include "DashboardTypes.h"
 
 namespace mozilla {
@@ -79,15 +79,13 @@ class ConnectionEntry {
 
   void MoveConnection(HttpConnectionBase* proxyConn, ConnectionEntry* otherEnt);
 
-  size_t HalfOpensLength() const { return mHalfOpens.Length(); }
-  size_t HalfOpenFastOpenBackupsLength() const {
-    return mHalfOpenFastOpenBackups.Length();
+  size_t DnsAndConnectSocketsLength() const {
+    return mDnsAndConnectSockets.Length();
   }
-  void InsertIntoHalfOpens(HalfOpenSocket* sock);
-  void InsertIntoHalfOpenFastOpenBackups(HalfOpenSocket* sock);
-  void CloseAllHalfOpens();
-  void RemoveHalfOpenFastOpenBackups(HalfOpenSocket* sock);
-  bool IsInHalfOpens(HalfOpenSocket* sock);
+
+  void InsertIntoDnsAndConnectSockets(DnsAndConnectSocket* sock);
+  void RemoveDnsAndConnectSocket(DnsAndConnectSocket* dnsAndSock, bool abandon);
+  void CloseAllDnsAndConnectSockets();
 
   HttpRetParams GetConnectionData();
   void LogConnections();
@@ -98,10 +96,18 @@ class ConnectionEntry {
 
   // calculate the number of half open sockets that have not had at least 1
   // connection complete
-  uint32_t UnconnectedHalfOpens() const;
+  uint32_t UnconnectedDnsAndConnectSockets() const;
 
-  // Remove a particular half open socket from the mHalfOpens array
-  bool RemoveHalfOpen(HalfOpenSocket*);
+  // Remove a particular DnsAndConnectSocket from the mDnsAndConnectSocket array
+  bool RemoveDnsAndConnectSocket(DnsAndConnectSocket*);
+
+  bool MaybeProcessCoalescingKeys(nsIDNSAddrRecord* dnsRecord,
+                                  bool aIsHttp3 = false);
+
+  nsresult CreateDnsAndConnectSocket(nsAHttpTransaction* trans, uint32_t caps,
+                                     bool speculative, bool isFromPredictor,
+                                     bool urgentStart, bool allow1918,
+                                     PendingTransactionInfo* pendingTransInfo);
 
   // Spdy sometimes resolves the address in the socket manager in order
   // to re-coalesce sharded HTTP hosts. The dotted decimal address is
@@ -133,9 +139,6 @@ class ConnectionEntry {
 
   // True if this connection entry has initiated a socket
   bool mUsedForConnection : 1;
-
-  // Try using TCP Fast Open.
-  bool mUseFastOpen : 1;
 
   bool mDoNotDestroy : 1;
 
@@ -195,10 +198,8 @@ class ConnectionEntry {
   nsTArray<RefPtr<nsHttpConnection>> mIdleConns;  // idle persistent connections
   nsTArray<RefPtr<HttpConnectionBase>> mActiveConns;  // active connections
 
-  nsTArray<HalfOpenSocket*> mHalfOpens;  // half open connections
-  nsTArray<RefPtr<HalfOpenSocket>>
-      mHalfOpenFastOpenBackups;  // backup half open connections for
-                                 // connection in fast open phase
+  nsTArray<RefPtr<DnsAndConnectSocket>>
+      mDnsAndConnectSockets;  // dns resolution and half open connections
 
   PendingTransactionQueue mPendingQ;
   ~ConnectionEntry();

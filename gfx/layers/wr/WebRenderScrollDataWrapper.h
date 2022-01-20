@@ -212,10 +212,12 @@ class MOZ_STACK_CLASS WebRenderScrollDataWrapper final {
 
     gfx::Matrix4x4 transform;
     if (AtTopLayer()) {
-      transform = mLayer->GetAncestorTransform();
+      float resolution = mLayer->GetResolution();
+      transform = mLayer->GetAncestorTransform() *
+                  gfx::Matrix4x4::Scaling(resolution, resolution, 1.f);
     }
     if (AtBottomLayer()) {
-      transform = transform * mLayer->GetTransform();
+      transform = mLayer->GetTransform() * transform;
     }
     return transform;
   }
@@ -380,9 +382,9 @@ class MOZ_STACK_CLASS WebRenderScrollDataWrapper final {
     return false;
   }
 
-  bool IsAsyncZoomContainer() const {
+  Maybe<ScrollableLayerGuid::ViewID> GetAsyncZoomContainerId() const {
     MOZ_ASSERT(IsValid());
-    return mLayer->IsAsyncZoomContainer();
+    return mLayer->GetAsyncZoomContainerId();
   }
 
   const void* GetLayer() const {

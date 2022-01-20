@@ -18,8 +18,7 @@ const TEST_URI =
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
-  const target = await TargetFactory.forTab(gBrowser.selectedTab);
-  const toolbox = gDevTools.getToolbox(target);
+  const toolbox = await gDevTools.getToolboxForTab(gBrowser.selectedTab);
 
   await testOpenInDebugger(hud, toolbox, "console.trace()");
   await testOpenInDebugger(hud, toolbox, "myErrorObject");
@@ -48,7 +47,7 @@ async function testOpenInDebugger(hud, toolbox, text) {
 async function checkClickOnNode(hud, toolbox, frameNode) {
   info("checking click on node location");
   const onSourceInDebuggerOpened = once(hud, "source-in-debugger-opened");
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "mousedown" },
     frameNode.querySelector(".location")
   );

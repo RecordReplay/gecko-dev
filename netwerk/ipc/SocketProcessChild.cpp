@@ -12,6 +12,7 @@
 #include "HttpTransactionChild.h"
 #include "HttpConnectionMgrChild.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Components.h"
 #include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/ipc/CrashReporterClient.h"
 #include "mozilla/ipc/BackgroundChild.h"
@@ -27,6 +28,7 @@
 #include "mozilla/net/TRRServiceChild.h"
 #include "mozilla/ipc/PChildToParentStreamChild.h"
 #include "mozilla/ipc/PParentToChildStreamChild.h"
+#include "mozilla/ipc/ProcessUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/RemoteLazyInputStreamChild.h"
 #include "mozilla/Telemetry.h"
@@ -39,7 +41,6 @@
 #include "nsNSSComponent.h"
 #include "nsSocketTransportService2.h"
 #include "nsThreadManager.h"
-#include "ProcessUtils.h"
 #include "SocketProcessBridgeParent.h"
 
 #if defined(XP_WIN)
@@ -52,12 +53,14 @@
 #  include "mozilla/Sandbox.h"
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "ChildProfilerController.h"
-#endif
+#include "ChildProfilerController.h"
 
 #ifdef MOZ_WEBRTC
 #  include "mozilla/net/WebrtcTCPSocketChild.h"
+#endif
+
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+#  include "mozilla/SandboxTestingChild.h"
 #endif
 
 namespace mozilla {
@@ -67,8 +70,7 @@ using namespace ipc;
 
 SocketProcessChild* sSocketProcessChild;
 
-SocketProcessChild::SocketProcessChild()
-    : mShuttingDown(false), mMutex("SocketProcessChild::mMutex") {
+SocketProcessChild::SocketProcessChild() {
   LOG(("CONSTRUCT SocketProcessChild::SocketProcessChild\n"));
   nsDebugImpl::SetMultiprocessMode("Socket");
 
@@ -94,12 +96,12 @@ void CGSShutdownServerConnections();
 #endif
 
 bool SocketProcessChild::Init(base::ProcessId aParentPid,
-                              const char* aParentBuildID, MessageLoop* aIOLoop,
-                              UniquePtr<IPC::Channel> aChannel) {
+                              const char* aParentBuildID,
+                              mozilla::ipc::ScopedPort aPort) {
   if (NS_WARN_IF(NS_FAILED(nsThreadManager::get().Init()))) {
     return false;
   }
-  if (NS_WARN_IF(!Open(std::move(aChannel), aParentPid, aIOLoop))) {
+  if (NS_WARN_IF(!Open(std::move(aPort), aParentPid))) {
     return false;
   }
   // This must be sent before any IPDL message, which may hit sentinel
@@ -143,11 +145,7 @@ bool SocketProcessChild::Init(base::ProcessId aParentPid,
   // Initialize DNS Service here, since it needs to be done in main thread.
   nsCOMPtr<nsIDNSService> dns =
       do_GetService("@mozilla.org/network/dns-service;1", &rv);
-  if (NS_FAILED(rv)) {
-    return false;
-  }
-
-  return true;
+  return NS_SUCCEEDED(rv);
 }
 
 void SocketProcessChild::ActorDestroy(ActorDestroyReason aWhy) {
@@ -160,12 +158,10 @@ void SocketProcessChild::ActorDestroy(ActorDestroyReason aWhy) {
     ProcessChild::QuickExit();
   }
 
-#ifdef MOZ_GECKO_PROFILER
   if (mProfilerController) {
     mProfilerController->Shutdown();
     mProfilerController = nullptr;
   }
-#endif
 
   CrashReporterClient::DestroySingleton();
   XRE_ShutdownChildProcess();
@@ -174,10 +170,9 @@ void SocketProcessChild::ActorDestroy(ActorDestroyReason aWhy) {
 void SocketProcessChild::CleanUp() {
   LOG(("SocketProcessChild::CleanUp\n"));
 
-  for (auto iter = mSocketProcessBridgeParentMap.Iter(); !iter.Done();
-       iter.Next()) {
-    if (!iter.Data()->Closed()) {
-      iter.Data()->Close();
+  for (const auto& parent : mSocketProcessBridgeParentMap.Values()) {
+    if (!parent->Closed()) {
+      parent->Close();
     }
   }
 
@@ -258,9 +253,9 @@ mozilla::ipc::IPCResult SocketProcessChild::RecvInitSocketProcessBridgeParent(
     const ProcessId& aContentProcessId,
     Endpoint<mozilla::net::PSocketProcessBridgeParent>&& aEndpoint) {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(!mSocketProcessBridgeParentMap.Get(aContentProcessId, nullptr));
+  MOZ_ASSERT(!mSocketProcessBridgeParentMap.Contains(aContentProcessId));
 
-  mSocketProcessBridgeParentMap.Put(
+  mSocketProcessBridgeParentMap.InsertOrUpdate(
       aContentProcessId, MakeRefPtr<SocketProcessBridgeParent>(
                              aContentProcessId, std::move(aEndpoint)));
   return IPC_OK();
@@ -268,12 +263,21 @@ mozilla::ipc::IPCResult SocketProcessChild::RecvInitSocketProcessBridgeParent(
 
 mozilla::ipc::IPCResult SocketProcessChild::RecvInitProfiler(
     Endpoint<PProfilerChild>&& aEndpoint) {
-#ifdef MOZ_GECKO_PROFILER
   mProfilerController =
       mozilla::ChildProfilerController::Create(std::move(aEndpoint));
-#endif
   return IPC_OK();
 }
+
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+mozilla::ipc::IPCResult SocketProcessChild::RecvInitSandboxTesting(
+    Endpoint<PSandboxTestingChild>&& aEndpoint) {
+  if (!SandboxTestingChild::Initialize(std::move(aEndpoint))) {
+    return IPC_FAIL(
+        this, "InitSandboxTesting failed to initialise the child process.");
+  }
+  return IPC_OK();
+}
+#endif
 
 mozilla::ipc::IPCResult SocketProcessChild::RecvSocketProcessTelemetryPing() {
   const uint32_t kExpectedUintValue = 42;
@@ -381,7 +385,7 @@ mozilla::ipc::IPCResult
 SocketProcessChild::RecvOnHttpActivityDistributorActivated(
     const bool& aIsActivated) {
   if (nsCOMPtr<nsIHttpActivityObserver> distributor =
-          services::GetHttpActivityDistributor()) {
+          components::HttpActivityDistributor::Service()) {
     distributor->SetIsActive(aIsActivated);
   }
   return IPC_OK();
@@ -428,7 +432,7 @@ void SocketProcessChild::AddDataBridgeToMap(
     uint64_t aChannelId, BackgroundDataBridgeParent* aActor) {
   ipc::AssertIsOnBackgroundThread();
   MutexAutoLock lock(mMutex);
-  mBackgroundDataBridgeMap.Put(aChannelId, aActor);
+  mBackgroundDataBridgeMap.InsertOrUpdate(aChannelId, RefPtr{aActor});
 }
 
 void SocketProcessChild::RemoveDataBridgeFromMap(uint64_t aChannelId) {
@@ -440,7 +444,7 @@ void SocketProcessChild::RemoveDataBridgeFromMap(uint64_t aChannelId) {
 Maybe<RefPtr<BackgroundDataBridgeParent>>
 SocketProcessChild::GetAndRemoveDataBridge(uint64_t aChannelId) {
   MutexAutoLock lock(mMutex);
-  return mBackgroundDataBridgeMap.GetAndRemove(aChannelId);
+  return mBackgroundDataBridgeMap.Extract(aChannelId);
 }
 
 mozilla::ipc::IPCResult SocketProcessChild::RecvClearSessionCache() {

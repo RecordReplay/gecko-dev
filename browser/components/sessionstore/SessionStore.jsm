@@ -4,7 +4,7 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["SessionStore"];
+var EXPORTED_SYMBOLS = ["SessionStore", "_LastSession"];
 
 // Current version of the format used by Session Restore.
 const FORMAT_VERSION = 1;
@@ -33,6 +33,8 @@ const NOTIFY_TAB_RESTORED = "sessionstore-debug-tab-restored"; // WARNING: debug
 const NOTIFY_DOMWINDOWCLOSED_HANDLED =
   "sessionstore-debug-domwindowclosed-handled"; // WARNING: debug-only
 
+const NOTIFY_BROWSER_SHUTDOWN_FLUSH = "sessionstore-browser-shutdown-flush";
+
 // Maximum number of tabs to restore simultaneously. Previously controlled by
 // the browser.sessionstore.max_concurrent_tabs pref.
 const MAX_CONCURRENT_TAB_RESTORES = 3;
@@ -53,6 +55,9 @@ const OBSERVING = [
   "browser:purge-session-history-for-domain",
   "idle-daily",
   "clear-origin-attributes-data",
+  "browsing-context-did-set-embedder",
+  "browsing-context-discarded",
+  "browser-shutdown-tabstate-updated",
 ];
 
 // XUL Window properties to (re)store
@@ -89,28 +94,8 @@ const MESSAGES = [
   // SSTabRestored at this time.
   "SessionStore:restoreTabContentComplete",
 
-  // A crashed tab was revived by navigating to a different page. Remove its
-  // browser from the list of crashed browsers to stop ignoring its messages.
-  "SessionStore:crashedTabRevived",
-
   // The content script encountered an error.
   "SessionStore:error",
-
-  // The content script asks us to add the session history listener in the
-  // parent process when sessionHistory is in the parent process.
-  "SessionStore:addSHistoryListener",
-
-  // The content script asks us to remove the session history listener which
-  // is added in the restore process when sessionHistory is in the parent process.
-  "SessionStore:removeRestoreListener",
-
-  // The content script asks us to restore session history in the parent process
-  // when sessionHistory is in the parent process.
-  "SessionStore:restoreSHistoryInParent",
-
-  // The content script asks us to reload the current session history entry when
-  // sessionHistory is in the parent process.
-  "SessionStore:reloadCurrentEntry",
 ];
 
 // The list of messages we accept from <xul:browser>s that have no tab
@@ -119,38 +104,23 @@ const MESSAGES = [
 // has just been closed.
 const NOTAB_MESSAGES = new Set([
   // For a description see above.
-  "SessionStore:crashedTabRevived",
-
-  // For a description see above.
   "SessionStore:update",
 
   // For a description see above.
   "SessionStore:error",
-
-  // For a description see above.
-  "SessionStore:addSHistoryListener",
 ]);
 
 // The list of messages we accept without an "epoch" parameter.
 // See getCurrentEpoch() and friends to find out what an "epoch" is.
 const NOEPOCH_MESSAGES = new Set([
   // For a description see above.
-  "SessionStore:crashedTabRevived",
-
-  // For a description see above.
   "SessionStore:error",
-
-  // For a description see above.
-  "SessionStore:addSHistoryListener",
 ]);
 
 // The list of messages we want to receive even during the short period after a
 // frame has been removed from the DOM and before its frame script has finished
 // unloading.
 const CLOSED_MESSAGES = new Set([
-  // For a description see above.
-  "SessionStore:crashedTabRevived",
-
   // For a description see above.
   "SessionStore:update",
 
@@ -199,11 +169,16 @@ const BROWSER_STARTUP_RESUME_SESSION = 3;
 const kNoIndex = Number.MAX_SAFE_INTEGER;
 const kLastIndex = Number.MAX_SAFE_INTEGER - 1;
 
-ChromeUtils.import("resource://gre/modules/PrivateBrowsingUtils.jsm", this);
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryTimestamps.jsm", this);
-ChromeUtils.import("resource://gre/modules/Timer.jsm", this);
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+const { PrivateBrowsingUtils } = ChromeUtils.import(
+  "resource://gre/modules/PrivateBrowsingUtils.jsm"
+);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { TelemetryTimestamps } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryTimestamps.jsm"
+);
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -303,6 +278,11 @@ var SessionStore = {
 
   setTabState: function ss_setTabState(aTab, aState) {
     SessionStoreInternal.setTabState(aTab, aState);
+  },
+
+  // Return whether a tab is restoring.
+  isTabRestoring(aTab) {
+    return TAB_STATE_FOR_BROWSER.has(aTab.linkedBrowser);
   },
 
   getInternalObjectState(obj) {
@@ -428,10 +408,16 @@ var SessionStore = {
     return SessionStoreInternal.reviveAllCrashedTabs();
   },
 
-  updateSessionStoreFromTablistener(aBrowser, aBrowsingContext, aData) {
+  updateSessionStoreFromTablistener(
+    aBrowser,
+    aBrowsingContext,
+    aPermanentKey,
+    aData
+  ) {
     return SessionStoreInternal.updateSessionStoreFromTablistener(
       aBrowser,
       aBrowsingContext,
+      aPermanentKey,
       aData
     );
   },
@@ -448,6 +434,14 @@ var SessionStore = {
     return SessionStoreInternal.resetBrowserToLazyState(tab);
   },
 
+  maybeExitCrashedState(browser) {
+    SessionStoreInternal.maybeExitCrashedState(browser);
+  },
+
+  isBrowserInCrashedSet(browser) {
+    return SessionStoreInternal.isBrowserInCrashedSet(browser);
+  },
+
   /**
    * Ensures that session store has registered and started tracking a given window.
    * @param window
@@ -462,6 +456,10 @@ var SessionStore = {
        */
       SessionStoreInternal.onLoad(window);
     }
+  },
+
+  getCurrentEpoch(browser) {
+    return SessionStoreInternal.getCurrentEpoch(browser.permanentKey);
   },
 
   /**
@@ -552,11 +550,15 @@ var SessionStoreInternal = {
   // For each <browser> element, records the SHistoryListener.
   _browserSHistoryListener: new WeakMap(),
 
-  // For each <browser> element, records the SHistoryListener.
-  _browserSHistoryListenerForRestore: new WeakMap(),
+  // Tracks the various listeners that are used throughout the restore.
+  _restoreListeners: new WeakMap(),
+
+  // Records the promise created in _restoreHistory, which is used to track
+  // the completion of the first phase of the restore.
+  _tabStateRestorePromises: new WeakMap(),
 
   // The history data needed to be restored in the parent.
-  _shistoryToRestore: new WeakMap(),
+  _tabStateToRestore: new WeakMap(),
 
   // For each <browser> element, records the current epoch.
   _browserEpochs: new WeakMap(),
@@ -988,285 +990,277 @@ var SessionStoreInternal = {
           this._forgetTabsWithUserContextId(userContextId);
         }
         break;
+      case "browsing-context-did-set-embedder":
+        if (Services.appinfo.sessionHistoryInParent) {
+          if (
+            aSubject &&
+            aSubject === aSubject.top &&
+            aSubject.isContent &&
+            aSubject.embedderElement &&
+            aSubject.embedderElement.permanentKey
+          ) {
+            let permanentKey = aSubject.embedderElement.permanentKey;
+            this._browserSHistoryListener.get(permanentKey)?.unregister();
+            this.getOrCreateSHistoryListener(permanentKey, aSubject, true);
+          }
+        }
+        break;
+      case "browsing-context-discarded":
+        if (Services.appinfo.sessionHistoryInParent) {
+          let permanentKey = aSubject?.embedderElement?.permanentKey;
+          if (permanentKey) {
+            this._browserSHistoryListener.get(permanentKey)?.unregister();
+          }
+        }
+        break;
+      case "browser-shutdown-tabstate-updated":
+        if (Services.appinfo.sessionHistoryInParent) {
+          // Non-SHIP code calls this when the frame script is unloaded.
+          this.onFinalTabStateUpdateComplete(aSubject);
+        }
+        break;
     }
   },
 
-  // Create a sHistoryLister and register it.
-  // We also need to save the SHistoryLister into this._browserSHistoryListener.
-  addSHistoryListener(aBrowser) {
-    function SHistoryListener(browser) {
-      browser.frameLoader.browsingContext.sessionHistory.addSHistoryListener(
-        this
-      );
+  getOrCreateSHistoryListener(
+    permanentKey,
+    browsingContext,
+    collectImmediately = false
+  ) {
+    class SHistoryListener {
+      constructor() {
+        this.QueryInterface = ChromeUtils.generateQI([
+          "nsISHistoryListener",
+          "nsISupportsWeakReference",
+        ]);
 
-      this.browser = browser;
-      this.frameLoader = browser.frameLoader;
-      this._fromIdx = kNoIndex;
-      this._sHistoryChanges = false;
-      if (this.browser.currentURI && this.browser.ownerGlobal) {
-        this._lastKnownUri = browser.currentURI.displaySpec;
-        this._lastKnownBody = browser.ownerGlobal.document.body;
-        this._lastKnownUserContextId =
-          browser.contentPrincipal.originAttributes.userContextId;
+        this._browserId = browsingContext.browserId;
+        this._fromIndex = kNoIndex;
       }
-    }
-    SHistoryListener.prototype = {
-      QueryInterface: ChromeUtils.generateQI([
-        "nsISHistoryListener",
-        "nsISupportsWeakReference",
-      ]),
 
-      notifySHistoryChanges(index) {
-        if (this._fromIdx <= index) {
-          // If we already know that we need to update history from index N we can ignore any changes
-          // that happened with an element with index larger than N.
-          // Note: initially we use kNoIndex which is MAX_SAFE_INTEGER which means we don't ignore anything
-          // here, and in case of navigation in the history back and forth we use kLastIndex which ignores
+      unregister() {
+        let bc = BrowsingContext.getCurrentTopByBrowserId(this._browserId);
+        bc?.sessionHistory?.removeSHistoryListener(this);
+        SessionStoreInternal._browserSHistoryListener.delete(permanentKey);
+      }
+
+      collect(
+        permanentKey, // eslint-disable-line no-shadow
+        browsingContext, // eslint-disable-line no-shadow
+        { collectFull = true, writeToCache = false }
+      ) {
+        // Don't bother doing anything if we haven't seen any navigations.
+        if (!collectFull && this._fromIndex === kNoIndex) {
+          return null;
+        }
+
+        let fromIndex = collectFull ? -1 : this._fromIndex;
+        this._fromIndex = kNoIndex;
+
+        let historychange = SessionHistory.collectFromParent(
+          browsingContext.currentURI?.spec,
+          true, // Bug 1704574
+          browsingContext.sessionHistory,
+          fromIndex
+        );
+
+        if (writeToCache) {
+          let win =
+            browsingContext.embedderElement?.ownerGlobal ||
+            browsingContext.currentWindowGlobal?.browsingContext?.window;
+
+          SessionStoreInternal.onTabStateUpdate(permanentKey, win, {
+            data: { historychange },
+          });
+        }
+
+        return historychange;
+      }
+
+      collectFrom(index) {
+        if (this._fromIndex <= index) {
+          // If we already know that we need to update history from index N we
+          // can ignore any changes that happened with an element with index
+          // larger than N.
+          //
+          // Note: initially we use kNoIndex which is MAX_SAFE_INTEGER which
+          // means we don't ignore anything here, and in case of navigation in
+          // the history back and forth cases we use kLastIndex which ignores
           // only the subsequent navigations, but not any new elements added.
           return;
         }
 
-        if (!this._sHistoryChanges) {
-          this.frameLoader.requestSHistoryUpdate(/*aImmediately*/ false);
-          this._sHistoryChanges = true;
-        }
-        this._fromIdx = index;
-        if (this.browser.currentURI && this.browser.ownerGlobal) {
-          this._lastKnownUri = this.browser.currentURI.displaySpec;
-          this._lastKnownBody = this.browser.ownerGlobal.document.body;
-          this._lastKnownUserContextId = this.browser.contentPrincipal.originAttributes.userContextId;
-        }
-      },
+        let bc = BrowsingContext.getCurrentTopByBrowserId(this._browserId);
+        if (bc?.embedderElement?.frameLoader) {
+          this._fromIndex = index;
 
-      uninstall() {
-        if (this.frameLoader.browsingContext) {
-          let shistory = this.frameLoader.browsingContext.sessionHistory;
-          if (shistory) {
-            shistory.removeSHistoryListener(this);
-          }
+          // Queue a tab state update on the |browser.sessionstore.interval|
+          // timer. We'll call this.collect() when we receive the update.
+          bc.embedderElement.frameLoader.requestSHistoryUpdate();
         }
-      },
+      }
 
       OnHistoryNewEntry(newURI, oldIndex) {
-        // We use oldIndex - 1 to collect the current entry as well. This makes sure to
-        // collect any changes that were made to the entry while the document was active.
-        this.notifySHistoryChanges(oldIndex == -1 ? oldIndex : oldIndex - 1);
-      },
-
+        // We use oldIndex - 1 to collect the current entry as well. This makes
+        // sure to collect any changes that were made to the entry while the
+        // document was active.
+        this.collectFrom(oldIndex == -1 ? oldIndex : oldIndex - 1);
+      }
       OnHistoryGotoIndex() {
-        this.notifySHistoryChanges(kLastIndex);
-      },
+        this.collectFrom(kLastIndex);
+      }
       OnHistoryPurge() {
-        this.notifySHistoryChanges(-1);
-      },
-
+        this.collectFrom(-1);
+      }
       OnHistoryReload() {
-        this.notifySHistoryChanges(-1);
+        this.collectFrom(-1);
         return true;
-      },
-
+      }
       OnHistoryReplaceEntry() {
-        this.notifySHistoryChanges(-1);
-      },
-    };
-
-    let spec = null;
-    if (aBrowser.currentURI) {
-      spec = aBrowser.currentURI.displaySpec;
+        this.collectFrom(-1);
+      }
     }
 
-    if (!aBrowser.frameLoader) {
-      debug(
-        "addSHistoryListener(), aBrowser.frameLoader doesn't exist" +
-          ",browser.currentURI.displaySpec=" +
-          spec
-      );
+    if (!Services.appinfo.sessionHistoryInParent) {
+      throw new Error("This function should only be used with SHIP");
+    }
+
+    if (!permanentKey || browsingContext !== browsingContext.top) {
+      return null;
+    }
+
+    let sessionHistory = browsingContext.sessionHistory;
+    if (!sessionHistory) {
+      return null;
+    }
+
+    let listener = this._browserSHistoryListener.get(permanentKey);
+    if (listener) {
+      return listener;
+    }
+
+    listener = new SHistoryListener();
+    sessionHistory.addSHistoryListener(listener);
+    this._browserSHistoryListener.set(permanentKey, listener);
+
+    let isAboutBlank = browsingContext.currentURI?.spec === "about:blank";
+
+    if (collectImmediately && (!isAboutBlank || sessionHistory.count !== 0)) {
+      listener.collect(permanentKey, browsingContext, { writeToCache: true });
+    }
+
+    return listener;
+  },
+
+  onTabStateUpdate(permanentKey, win, update) {
+    // Ignore messages from <browser> elements that have crashed
+    // and not yet been revived.
+    if (this._crashedBrowsers.has(permanentKey)) {
       return;
     }
-    if (!aBrowser.frameLoader.browsingContext) {
-      debug(
-        "addSHistoryListener(), aBrowser.fl.browsingContext doesn't exists" +
-          ",browser.currentURI.displaySpec=" +
-          spec
-      );
-      return;
-    }
-    if (!aBrowser.frameLoader.browsingContext.sessionHistory) {
-      debug(
-        "addSHistoryListener(), aBrowser.fl.bc.sessionHistory doesn't exists" +
-          ",browser.currentURI.displaySpec=" +
-          spec
-      );
-      return;
-    }
 
-    let listener = new SHistoryListener(aBrowser);
-    this._browserSHistoryListener.set(aBrowser.permanentKey, listener);
+    TabState.update(permanentKey, update);
+    this.saveStateDelayed(win);
 
-    // Collect data if we start with a non-empty shistory.
-    let uri = aBrowser.currentURI.displaySpec;
-    let history = aBrowser.frameLoader.browsingContext.sessionHistory;
-    if (uri != "about:blank" || history.count != 0) {
-      aBrowser.frameLoader.requestSHistoryUpdate(/*aImmediately*/ true);
+    // Handle any updates sent by the child after the tab was closed. This
+    // might be the final update as sent by the "unload" handler but also
+    // any async update message that was sent before the child unloaded.
+    let closedTab = this._closedTabs.get(permanentKey);
+    if (closedTab) {
+      // Update the closed tab's state. This will be reflected in its
+      // window's list of closed tabs as that refers to the same object.
+      TabState.copyFromCache(permanentKey, closedTab.tabData.state);
     }
   },
 
-  /**
-   * This listener detects when a page being restored is reloaded. It triggers a
-   * callback and cancels the reload. The callback will send a message to
-   * SessionStore.jsm so that it can restore the content immediately.
-   */
-  addSHistoryListenerForRestore(aBrowser) {
-    function SHistoryListener(browser) {
-      browser.frameLoader.browsingContext.sessionHistory.addSHistoryListener(
-        this
-      );
-      this.browser = browser;
-    }
-    SHistoryListener.prototype = {
-      QueryInterface: ChromeUtils.generateQI([
-        "nsISHistoryListener",
-        "nsISupportsWeakReference",
-      ]),
-
-      uninstall() {
-        let shistory = this.browser.frameLoader.browsingContext.sessionHistory;
-        if (shistory) {
-          shistory.removeSHistoryListener(this);
-        }
-      },
-
-      OnHistoryGotoIndex() {},
-      OnHistoryPurge() {},
-      OnHistoryReplaceEntry() {},
-
-      // This will be called for a pending tab when loadURI(uri) is called where
-      // the given |uri| only differs in the fragment.
-      OnHistoryNewEntry(newURI) {
-        let currentURI = this.browser.currentURI;
-
-        // Ignore new SHistory entries with the same URI as those do not indicate
-        // a navigation inside a document by changing the #hash part of the URL.
-        // We usually hit this when purging session history for browsers.
-        if (currentURI && currentURI.displaySpec == newURI.spec) {
-          return;
-        }
-
-        // Notify ContentSessionStore.jsm to restore on new entry.
-        this.browser.messageManager.sendAsyncMessage(
-          "SessionStore:OnHistoryNewEntry",
-          { uri: newURI.spec }
-        );
-      },
-
-      OnHistoryReload() {
-        // Notify ContentSessionStore.jsm to restore tab contents.
-        this.browser.messageManager.sendAsyncMessage(
-          "SessionStore:OnHistoryReload"
-        );
-        // Cancel the load.
-        return false;
-      },
-    };
+  onFinalTabStateUpdateComplete(browser) {
+    let permanentKey = browser.permanentKey;
 
     if (
-      !aBrowser.frameLoader ||
-      !aBrowser.frameLoader.browsingContext ||
-      !aBrowser.frameLoader.browsingContext.sessionHistory
+      this._closedTabs.has(permanentKey) &&
+      !this._crashedBrowsers.has(permanentKey)
     ) {
-      return;
+      let { closedTabs, tabData } = this._closedTabs.get(permanentKey);
+
+      // We expect no further updates.
+      this._closedTabs.delete(permanentKey);
+
+      // The tab state no longer needs this reference.
+      delete tabData.permanentKey;
+
+      // Determine whether the tab state is worth saving.
+      let shouldSave = this._shouldSaveTabState(tabData.state);
+      let index = closedTabs.indexOf(tabData);
+
+      if (shouldSave && index == -1) {
+        // If the tab state is worth saving and we didn't push it onto
+        // the list of closed tabs when it was closed (because we deemed
+        // the state not worth saving) then add it to the window's list
+        // of closed tabs now.
+        this.saveClosedTabData(closedTabs, tabData);
+      } else if (!shouldSave && index > -1) {
+        // Remove from the list of closed tabs. The update messages sent
+        // after the tab was closed changed enough state so that we no
+        // longer consider its data interesting enough to keep around.
+        this.removeClosedTabData(closedTabs, index);
+      }
     }
 
-    let listener = new SHistoryListener(aBrowser);
-    this._browserSHistoryListenerForRestore.set(
-      aBrowser.permanentKey,
-      listener
-    );
+    // If this the final message we need to resolve all pending flush
+    // requests for the given browser as they might have been sent too
+    // late and will never respond. If they have been sent shortly after
+    // switching a browser's remoteness there isn't too much data to skip.
+    TabStateFlusher.resolveAll(browser);
+
+    this._browserSHistoryListener.get(permanentKey)?.unregister();
+    this._restoreListeners.get(permanentKey)?.unregister();
+
+    Services.obs.notifyObservers(browser, NOTIFY_BROWSER_SHUTDOWN_FLUSH);
   },
 
-  updateSessionStoreFromTablistener(aBrowser, aBrowsingContext, aData) {
-    if (aBrowser.permanentKey == undefined) {
+  updateSessionStoreFromTablistener(
+    browser,
+    browsingContext,
+    permanentKey,
+    update
+  ) {
+    permanentKey = browser?.permanentKey ?? permanentKey;
+    if (!permanentKey) {
       return;
     }
 
     // Ignore sessionStore update from previous epochs
-    if (!this.isCurrentEpoch(aBrowser, aData.epoch)) {
+    if (!this.isCurrentEpoch(permanentKey, update.epoch)) {
       return;
     }
 
-    let sHistoryChangedInListener = false;
-    let listener = this._browserSHistoryListener.get(aBrowser.permanentKey);
-    if (listener) {
-      sHistoryChangedInListener = listener._sHistoryChanges;
+    if (browsingContext.isReplaced) {
+      return;
     }
 
-    if (aData.sHistoryNeeded || sHistoryChangedInListener) {
-      if (!listener) {
-        debug(
-          "updateSessionStoreFromTablistener() with aData.sHistoryNeeded, but no SHlistener. Add again!!!"
-        );
-        this.addSHistoryListener(aBrowser);
-        listener = this._browserSHistoryListener.get(aBrowser.permanentKey);
-      }
+    if (Services.appinfo.sessionHistoryInParent) {
+      let listener = this.getOrCreateSHistoryListener(
+        permanentKey,
+        browsingContext
+      );
 
       if (listener) {
-        if (!aData.sHistoryNeeded && listener._fromIdx == kNoIndex) {
-          // No shistory changes needed.
-          listener._sHistoryChanges = false;
-        } else if (aBrowsingContext.sessionHistory) {
-          let uri = aBrowser.currentURI
-            ? aBrowser.currentURI.displaySpec
-            : listener._lastKnownUri;
-          let body = aBrowser.ownerGlobal
-            ? aBrowser.ownerGlobal.document.body
-            : listener._lastKnownBody;
-          let userContextId = aBrowser.contentPrincipal
-            ? aBrowser.contentPrincipal.originAttributes.userContextId
-            : listener._lastKnownUserContextId;
-          // If aData.sHistoryNeeded we need to collect all session
-          // history entries, because with SHIP this indicates that we
-          // either saw 'DOMTitleChanged' in
-          // mozilla::dom::TabListener::HandleEvent or
-          // 'OnDocumentStart/OnDocumentEnd' was called on
-          // mozilla::dom::ContentSessionStore, and both needs a full
-          // collect.
-          aData.data.historychange = SessionHistory.collectFromParent(
-            uri,
-            body,
-            aBrowsingContext.sessionHistory,
-            userContextId,
-            listener._sHistoryChanges && !aData.sHistoryNeeded
-              ? listener._fromIdx
-              : -1
-          );
-          listener._sHistoryChanges = false;
-          listener._fromIdx = kNoIndex;
-        } else {
-          debug(
-            "updateSessionStoreFromTablistener() with sHistoryNeeded, but no sessionHistory.\n"
-          );
+        let historychange = listener.collect(permanentKey, browsingContext, {
+          collectFull: !!update.sHistoryNeeded,
+          writeToCache: false,
+        });
+
+        if (historychange) {
+          update.data.historychange = historychange;
         }
-      } else {
-        debug(
-          "updateSessionStoreFromTablistener() with sHistoryNeeded, but no sHlistener.\n"
-        );
       }
     }
 
-    if ("sHistoryNeeded" in aData) {
-      delete aData.sHistoryNeeded;
-    }
+    let win =
+      browser?.ownerGlobal ??
+      browsingContext.currentWindowGlobal?.browsingContext?.window;
 
-    TabState.update(aBrowser, aData);
-    let win = aBrowser.ownerGlobal;
-    this.saveStateDelayed(win);
-
-    if (aData.flushID) {
-      // This is an update kicked off by an async flush request. Notify the
-      // TabStateFlusher so that it can finish the request and notify its
-      // consumer that's waiting for the flush to be done.
-      TabStateFlusher.resolve(aBrowser, aData.flushID);
-    }
+    this.onTabStateUpdate(permanentKey, win, update);
   },
 
   /**
@@ -1300,39 +1294,11 @@ var SessionStoreInternal = {
     }
 
     // Ignore messages from previous epochs.
-    if (hasEpoch && !this.isCurrentEpoch(browser, data.epoch)) {
+    if (hasEpoch && !this.isCurrentEpoch(browser.permanentKey, data.epoch)) {
       return;
     }
 
     switch (aMessage.name) {
-      case "SessionStore:addSHistoryListener":
-        this.addSHistoryListener(browser);
-        break;
-      case "SessionStore:restoreSHistoryInParent":
-        if (
-          browser.frameLoader &&
-          browser.frameLoader.browsingContext &&
-          browser.frameLoader.browsingContext.sessionHistory
-        ) {
-          let tabData = this._shistoryToRestore.get(browser.permanentKey);
-          if (tabData) {
-            this._shistoryToRestore.delete(browser.permanentKey);
-            SessionHistory.restoreFromParent(
-              browser.frameLoader.browsingContext.sessionHistory,
-              tabData
-            );
-          }
-          this.addSHistoryListenerForRestore(browser);
-        } else {
-          debug(
-            "receive SessionStore:restoreSHistoryInParent: but cannot find sessionHistory from bc."
-          );
-        }
-        browser.messageManager.sendAsyncMessage(
-          "SessionStore:finishRestoreHistory"
-        );
-        break;
-
       case "SessionStore:update":
         // |browser.frameLoader| might be empty if the browser was already
         // destroyed and its tab removed. In that case we still have the last
@@ -1346,241 +1312,26 @@ var SessionStoreInternal = {
           return;
         }
 
-        if (aMessage.data.isFinal) {
-          // If this the final message we need to resolve all pending flush
-          // requests for the given browser as they might have been sent too
-          // late and will never respond. If they have been sent shortly after
-          // switching a browser's remoteness there isn't too much data to skip.
-          TabStateFlusher.resolveAll(browser);
-          let listener = this._browserSHistoryListener.get(
-            browser.permanentKey
-          );
-          if (listener) {
-            listener.uninstall();
-            this._browserSHistoryListener.delete(browser.permanentKey);
-          }
-        } else if (aMessage.data.flushID) {
+        this.onTabStateUpdate(browser.permanentKey, browser.ownerGlobal, data);
+
+        if (data.isFinal) {
+          this.onFinalTabStateUpdateComplete(browser);
+        } else if (data.flushID) {
           // This is an update kicked off by an async flush request. Notify the
           // TabStateFlusher so that it can finish the request and notify its
           // consumer that's waiting for the flush to be done.
-          TabStateFlusher.resolve(browser, aMessage.data.flushID);
+          TabStateFlusher.resolve(browser, data.flushID);
         }
 
-        // Ignore messages from <browser> elements that have crashed
-        // and not yet been revived.
-        if (this._crashedBrowsers.has(browser.permanentKey)) {
-          return;
-        }
-
-        // Update the tab's cached state.
-        // Mark the window as dirty and trigger a delayed write.
-        TabState.update(browser, aMessage.data);
-        this.saveStateDelayed(win);
-
-        // Handle any updates sent by the child after the tab was closed. This
-        // might be the final update as sent by the "unload" handler but also
-        // any async update message that was sent before the child unloaded.
-        if (this._closedTabs.has(browser.permanentKey)) {
-          let { closedTabs, tabData } = this._closedTabs.get(
-            browser.permanentKey
-          );
-
-          // Update the closed tab's state. This will be reflected in its
-          // window's list of closed tabs as that refers to the same object.
-          TabState.copyFromCache(browser, tabData.state);
-
-          // Is this the tab's final message?
-          if (aMessage.data.isFinal) {
-            // We expect no further updates.
-            this._closedTabs.delete(browser.permanentKey);
-            // The tab state no longer needs this reference.
-            delete tabData.permanentKey;
-
-            // Determine whether the tab state is worth saving.
-            let shouldSave = this._shouldSaveTabState(tabData.state);
-            let index = closedTabs.indexOf(tabData);
-
-            if (shouldSave && index == -1) {
-              // If the tab state is worth saving and we didn't push it onto
-              // the list of closed tabs when it was closed (because we deemed
-              // the state not worth saving) then add it to the window's list
-              // of closed tabs now.
-              this.saveClosedTabData(closedTabs, tabData);
-            } else if (!shouldSave && index > -1) {
-              // Remove from the list of closed tabs. The update messages sent
-              // after the tab was closed changed enough state so that we no
-              // longer consider its data interesting enough to keep around.
-              this.removeClosedTabData(closedTabs, index);
-            }
-          }
-        }
         break;
-      case "SessionStore:restoreHistoryComplete": {
-        // Notify the tabbrowser that the tab chrome has been restored.
-        let tabData = TabState.collect(tab, TAB_CUSTOM_VALUES.get(tab));
-
-        // wall-paper fix for bug 439675: make sure that the URL to be loaded
-        // is always visible in the address bar if no other value is present
-        let activePageData = tabData.entries[tabData.index - 1] || null;
-        let uri = activePageData ? activePageData.url || null : null;
-        // NB: we won't set initial URIs (about:home, about:newtab, etc.) here
-        // because their load will not normally trigger a location bar clearing
-        // when they finish loading (to avoid race conditions where we then
-        // clear user input instead), so we shouldn't set them here either.
-        // They also don't fall under the issues in bug 439675 where user input
-        // needs to be preserved if the load doesn't succeed.
-        // We also don't do this for remoteness updates, where it should not
-        // be necessary.
-        if (
-          !browser.userTypedValue &&
-          uri &&
-          !data.isRemotenessUpdate &&
-          !win.gInitialPages.includes(uri)
-        ) {
-          browser.userTypedValue = uri;
-        }
-
-        // Update tab label and icon again after the tab history was updated.
-        this.updateTabLabelAndIcon(tab, tabData);
-
-        let event = win.document.createEvent("Events");
-        event.initEvent("SSTabRestoring", true, false);
-        tab.dispatchEvent(event);
+      case "SessionStore:restoreHistoryComplete":
+        this._restoreHistoryComplete(browser, data);
         break;
-      }
-      case "SessionStore:removeRestoreListener":
-        let listener = this._browserSHistoryListenerForRestore.get(
-          browser.permanentKey
-        );
-        if (listener) {
-          listener.uninstall();
-          this._browserSHistoryListenerForRestore.delete(browser.permanentKey);
-        }
+      case "SessionStore:restoreTabContentStarted":
+        this._restoreTabContentStarted(browser, data);
         break;
-      case "SessionStore:reloadCurrentEntry":
-        let fL =
-          browser.frameLoader ||
-          this._lastKnownFrameLoader.get(browser.permanentKey);
-        if (fL) {
-          if (fL.browsingContext) {
-            if (fL.browsingContext.sessionHistory) {
-              fL.browsingContext.sessionHistory.reloadCurrentEntry();
-            } else {
-              debug(
-                "receive SessionStore:reloadCurrentEntry browser.fL.bC.sessionHistory is null."
-              );
-            }
-          } else {
-            debug(
-              "receive SessionStore:reloadCurrentEntry browser.fL.browsingContext is null."
-            );
-          }
-        } else {
-          debug(
-            "receive SessionStore:reloadCurrentEntry browser.frameLoader is null."
-          );
-        }
-        break;
-      case "SessionStore:restoreTabContentStarted": {
-        let initiatedBySessionStore =
-          TAB_STATE_FOR_BROWSER.get(browser) != TAB_STATE_NEEDS_RESTORE;
-        let isNavigateAndRestore =
-          data.reason == RESTORE_TAB_CONTENT_REASON.NAVIGATE_AND_RESTORE;
-
-        // We need to be careful when restoring the urlbar's search mode because
-        // we race a call to gURLBar.setURI due to the location change.  setURI
-        // will exit search mode and set gURLBar.value to the restored URL,
-        // clobbering any search mode and userTypedValue we restore here.  If
-        // this is a typical restore -- restoring on startup or restoring a
-        // closed tab for example -- then we need to restore search mode after
-        // that setURI call, and so we wait until restoreTabContentComplete, at
-        // which point setURI will have been called.  If this is not a typical
-        // restore -- it was not initiated by session store or it's due to a
-        // remoteness change -- then we do not want to restore search mode at
-        // all, and so we remove it from the tab state cache.  In particular, if
-        // the restore is due to a remoteness change, then the user is loading a
-        // new URL and the current search mode should not be carried over to it.
-        let cacheState = TabStateCache.get(browser);
-        if (cacheState.searchMode) {
-          if (!initiatedBySessionStore || isNavigateAndRestore) {
-            TabStateCache.update(browser, {
-              searchMode: null,
-              userTypedValue: null,
-            });
-          }
-          break;
-        }
-
-        if (!initiatedBySessionStore) {
-          // If a load not initiated by sessionstore was started in a
-          // previously pending tab. Mark the tab as no longer pending.
-          this.markTabAsRestoring(tab);
-        } else if (!isNavigateAndRestore) {
-          // If the user was typing into the URL bar when we crashed, but hadn't hit
-          // enter yet, then we just need to write that value to the URL bar without
-          // loading anything. This must happen after the load, as the load will clear
-          // userTypedValue.
-          //
-          // Note that we only want to do that if we're restoring state for reasons
-          // _other_ than a navigateAndRestore remoteness-flip, as such a flip
-          // implies that the user was navigating.
-          let tabData = TabState.collect(tab, TAB_CUSTOM_VALUES.get(tab));
-          if (
-            tabData.userTypedValue &&
-            !tabData.userTypedClear &&
-            !browser.userTypedValue
-          ) {
-            browser.userTypedValue = tabData.userTypedValue;
-            if (tab.selected) {
-              win.gURLBar.setURI();
-            }
-          }
-
-          // Remove state we don't need any longer.
-          TabStateCache.update(browser, {
-            userTypedValue: null,
-            userTypedClear: null,
-          });
-        }
-        break;
-      }
-      case "SessionStore:restoreTabContentComplete": {
-        // Restore search mode and its search string in userTypedValue, if
-        // appropriate.
-        let cacheState = TabStateCache.get(browser);
-        if (cacheState.searchMode) {
-          win.gURLBar.setSearchMode(cacheState.searchMode, browser);
-          browser.userTypedValue = cacheState.userTypedValue;
-          if (tab.selected) {
-            win.gURLBar.setURI();
-          }
-          TabStateCache.update(browser, {
-            searchMode: null,
-            userTypedValue: null,
-          });
-        }
-
-        // This callback is used exclusively by tests that want to
-        // monitor the progress of network loads.
-        if (gDebuggingEnabled) {
-          Services.obs.notifyObservers(browser, NOTIFY_TAB_RESTORED);
-        }
-
-        SessionStoreInternal._resetLocalTabRestoringState(tab);
-        SessionStoreInternal.restoreNextTab();
-
-        this._sendTabRestoredNotification(tab, data.isRemotenessUpdate);
-
-        Services.obs.notifyObservers(
-          null,
-          "sessionstore-one-or-no-tab-restored"
-        );
-        break;
-      }
-      case "SessionStore:crashedTabRevived":
-        // The browser was revived by navigating to a different page
-        // manually, so we remove it from the ignored browser set.
-        this._crashedBrowsers.delete(browser.permanentKey);
+      case "SessionStore:restoreTabContentComplete":
+        this._restoreTabContentComplete(browser, data);
         break;
       case "SessionStore:error":
         TabStateFlusher.resolveAll(
@@ -1649,7 +1400,7 @@ var SessionStoreInternal = {
             target.permanentKey,
             target.frameLoader
           );
-          this.resetEpoch(target);
+          this.resetEpoch(target.permanentKey, target.frameLoader);
         }
         break;
       default:
@@ -1695,11 +1446,13 @@ var SessionStoreInternal = {
     });
 
     // Load the frame script after registering listeners.
-    mm.loadFrameScript(
-      "chrome://browser/content/content-sessionStore.js",
-      true,
-      true
-    );
+    if (!Services.appinfo.sessionHistoryInParent) {
+      mm.loadFrameScript(
+        "chrome://browser/content/content-sessionStore.js",
+        true,
+        true
+      );
+    }
 
     // and create its data object
     this._windows[aWindow.__SSi] = {
@@ -2109,7 +1862,7 @@ var SessionStoreInternal = {
         for (let browser of browsers) {
           if (this._closedWindowTabs.has(browser.permanentKey)) {
             let tabData = this._closedWindowTabs.get(browser.permanentKey);
-            TabState.copyFromCache(browser, tabData);
+            TabState.copyFromCache(browser.permanentKey, tabData);
             this._closedWindowTabs.delete(browser.permanentKey);
           }
         }
@@ -2617,7 +2370,7 @@ var SessionStoreInternal = {
     if (
       TAB_LAZY_STATES.has(aTab) &&
       !TAB_STATE_FOR_BROWSER.has(browser) &&
-      TabStateCache.get(browser)
+      TabStateCache.get(browser.permanentKey)
     ) {
       let tabState = TabState.clone(aTab, TAB_CUSTOM_VALUES.get(aTab));
       this.restoreTab(aTab, tabState);
@@ -2728,13 +2481,13 @@ var SessionStoreInternal = {
 
     let { userTypedValue = "", userTypedClear = 0 } = browser;
 
-    let cacheState = TabStateCache.get(browser);
+    let cacheState = TabStateCache.get(browser.permanentKey);
     if (cacheState === undefined && userTypedValue) {
       // Discard was likely called before state can be cached.  Update
       // the persistent tab state cache with browser information so a
       // restore will be successful.  This information is necessary for
       // restoreTabContent in ContentRestore.jsm to work properly.
-      TabStateCache.update(browser, {
+      TabStateCache.update(browser.permanentKey, {
         userTypedValue,
         userTypedClear: 1,
       });
@@ -2746,6 +2499,34 @@ var SessionStoreInternal = {
       userTypedValue,
       userTypedClear,
     });
+  },
+
+  /**
+   * Check if we are dealing with a crashed browser. If so, then the corresponding
+   * crashed tab was revived by navigating to a different page. Remove the browser
+   * from the list of crashed browsers to stop ignoring its messages.
+   * @param aBrowser
+   *        Browser reference
+   */
+  maybeExitCrashedState(aBrowser) {
+    let uri = aBrowser.documentURI;
+    if (uri?.spec?.startsWith("about:tabcrashed")) {
+      this._crashedBrowsers.delete(aBrowser.permanentKey);
+    }
+  },
+
+  /**
+   * A debugging-only function to check if a browser is in _crashedBrowsers.
+   * @param aBrowser
+   *        Browser reference
+   */
+  isBrowserInCrashedSet(aBrowser) {
+    if (gDebuggingEnabled) {
+      return this._crashedBrowsers.has(aBrowser.permanentKey);
+    }
+    throw new Error(
+      "SessionStore.isBrowserInCrashedSet() should only be called in debug mode!"
+    );
   },
 
   /**
@@ -2936,7 +2717,9 @@ var SessionStoreInternal = {
     // when the user revives the tab from the crash.
     if (TAB_STATE_FOR_BROWSER.has(browser)) {
       let tab = win.gBrowser.getTabForBrowser(browser);
-      this._resetLocalTabRestoringState(tab);
+      if (tab) {
+        this._resetLocalTabRestoringState(tab);
+      }
     }
   },
 
@@ -3187,6 +2970,7 @@ var SessionStoreInternal = {
       ...(aTab == aWindow.gBrowser.selectedTab
         ? { relatedToCurrent: true, ownerTab: aTab }
         : {}),
+      skipLoad: true,
     };
     let newTab = aWindow.gBrowser.addTrustedTab(null, tabOptions);
 
@@ -3225,7 +3009,7 @@ var SessionStoreInternal = {
       // the tab to duplicate may have already been closed. In that case we
       // only have access to the <xul:browser>.
       let options = { includePrivateData: true };
-      TabState.copyFromCache(browser, tabState, options);
+      TabState.copyFromCache(browser.permanentKey, tabState, options);
 
       tabState.index += aDelta;
       tabState.index = Math.max(
@@ -3625,7 +3409,7 @@ var SessionStoreInternal = {
           tabData.iconLoadingPrincipal
         );
       }
-      TabStateCache.update(browser, {
+      TabStateCache.update(browser.permanentKey, {
         image: null,
         iconLoadingPrincipal: null,
       });
@@ -4169,15 +3953,19 @@ var SessionStoreInternal = {
    * @returns a promise resolved when all windows have been opened
    */
   _openWindows(root) {
+    let windowsOpened = [];
     for (let winData of root.windows) {
       if (!winData || !winData.tabs || !winData.tabs[0]) {
         continue;
       }
-      this._openWindowWithState({ windows: [winData] });
+      windowsOpened.push(this._openWindowWithState({ windows: [winData] }));
     }
-    return Promise.all(
-      [...WINDOW_SHOWING_PROMISES.values()].map(deferred => deferred.promise)
-    );
+    let windowOpenedPromises = [];
+    for (const openedWindow of windowsOpened) {
+      let deferred = WINDOW_SHOWING_PROMISES.get(openedWindow);
+      windowOpenedPromises.push(deferred.promise);
+    }
+    return Promise.all(windowOpenedPromises);
   },
 
   /**
@@ -4600,24 +4388,11 @@ var SessionStoreInternal = {
     // Update the tab state in case we shut down without being notified.
     this._windows[window.__SSi].tabs[tab._tPos] = tabData;
 
-    // Prepare the tab so that it can be properly restored. We'll pin/unpin
-    // and show/hide tabs as necessary. We'll also attach a copy of the tab's
-    // data in case we close it before it's been restored.
-    if (tabData.pinned) {
-      tabbrowser.pinTab(tab);
-    } else {
-      tabbrowser.unpinTab(tab);
-    }
-
-    if (tabData.hidden) {
-      tabbrowser.hideTab(tab);
-    } else {
-      tabbrowser.showTab(tab);
-    }
-
-    if (!!tabData.muted != browser.audioMuted) {
-      tab.toggleMuteAudio(tabData.muteReason);
-    }
+    // Prepare the tab so that it can be properly restored.  We'll also attach
+    // a copy of the tab's data in case we close it before it's been restored.
+    // Anything that dispatches an event to external consumers must happen at
+    // the end of this method, to make sure that the tab/browser object is in a
+    // reliable and consistent state.
 
     if (tabData.lastAccessed) {
       tab.updateLastAccessed(tabData.lastAccessed);
@@ -4666,7 +4441,7 @@ var SessionStoreInternal = {
     }
 
     // Update the persistent tab state cache with |tabData| information.
-    TabStateCache.update(browser, {
+    TabStateCache.update(browser.permanentKey, {
       // NOTE: Copy the entries array shallowly, so as to not screw with the
       // original tabData's history when getting history updates.
       history: { entries: [...tabData.entries], index: tabData.index },
@@ -4695,7 +4470,7 @@ var SessionStoreInternal = {
       // Start a new epoch to discard all frame script messages relating to a
       // previous epoch. All async messages that are still on their way to chrome
       // will be ignored and don't override any tab data set when restoring.
-      let epoch = this.startNextEpoch(browser);
+      let epoch = this.startNextEpoch(browser.permanentKey);
 
       // Ensure that the tab will get properly restored in the event the tab
       // crashes while restoring.  But don't set this on lazy browsers as
@@ -4750,6 +4525,25 @@ var SessionStoreInternal = {
       });
     }
 
+    // Most of tabData has been restored, now continue with restoring
+    // attributes that may trigger external events.
+
+    if (tabData.pinned) {
+      tabbrowser.pinTab(tab);
+    } else {
+      tabbrowser.unpinTab(tab);
+    }
+
+    if (tabData.hidden) {
+      tabbrowser.hideTab(tab);
+    } else {
+      tabbrowser.showTab(tab);
+    }
+
+    if (!!tabData.muted != browser.audioMuted) {
+      tab.toggleMuteAudio(tabData.muteReason);
+    }
+
     if (tab.hasAttribute("customizemode")) {
       window.gCustomizeMode.setTab(tab);
     }
@@ -4786,10 +4580,11 @@ var SessionStoreInternal = {
 
     this.markTabAsRestoring(aTab);
 
+    let isRemotenessUpdate = aOptions.isRemotenessUpdate;
+    let explicitlyUpdateRemoteness = !Services.appinfo.sessionHistoryInParent;
     // If we aren't already updating the browser's remoteness, check if it's
     // necessary.
-    let isRemotenessUpdate = aOptions.isRemotenessUpdate;
-    if (!isRemotenessUpdate) {
+    if (explicitlyUpdateRemoteness && !isRemotenessUpdate) {
       isRemotenessUpdate = tabbrowser.updateBrowserRemotenessByURL(
         browser,
         uri
@@ -4801,7 +4596,7 @@ var SessionStoreInternal = {
         // Start a new epoch to discard all frame script messages relating to a
         // previous epoch. All async messages that are still on their way to chrome
         // will be ignored and don't override any tab data set when restoring.
-        let epoch = this.startNextEpoch(browser);
+        let epoch = this.startNextEpoch(browser.permanentKey);
 
         this._sendRestoreHistory(browser, {
           tabData,
@@ -4812,7 +4607,7 @@ var SessionStoreInternal = {
       }
     }
 
-    browser.messageManager.sendAsyncMessage("SessionStore:restoreTabContent", {
+    this._sendRestoreTabContent(browser, {
       loadArguments,
       isRemotenessUpdate,
       reason:
@@ -5779,6 +5574,11 @@ var SessionStoreInternal = {
     // The browser is no longer in any sort of restoring state.
     TAB_STATE_FOR_BROWSER.delete(browser);
 
+    if (Services.appinfo.sessionHistoryInParent) {
+      this._restoreListeners.get(browser.permanentKey)?.unregister();
+      browser.browsingContext.clearRestoreState();
+    }
+
     aTab.removeAttribute("pending");
 
     if (previousState == TAB_STATE_RESTORING) {
@@ -5801,7 +5601,9 @@ var SessionStoreInternal = {
       return;
     }
 
-    browser.messageManager.sendAsyncMessage("SessionStore:resetRestore", {});
+    if (!Services.appinfo.sessionHistoryInParent) {
+      browser.messageManager.sendAsyncMessage("SessionStore:resetRestore", {});
+    }
     this._resetLocalTabRestoringState(tab);
   },
 
@@ -5811,26 +5613,18 @@ var SessionStoreInternal = {
    * to ignore stale messages sent from previous epochs. The function returns
    * the new epoch ID for the given |browser|.
    */
-  startNextEpoch(browser) {
-    let next = this.getCurrentEpoch(browser) + 1;
-    this._browserEpochs.set(browser.permanentKey, next);
+  startNextEpoch(permanentKey) {
+    let next = this.getCurrentEpoch(permanentKey) + 1;
+    this._browserEpochs.set(permanentKey, next);
     return next;
-  },
-
-  /**
-   * Manually set the epoch to a given value.
-   */
-  setCurrentEpoch(aBrowser, aEpoch) {
-    this._browserEpochs.set(aBrowser.permanentKey, aEpoch);
-    return aEpoch;
   },
 
   /**
    * Returns the current epoch for the given <browser>. If we haven't assigned
    * a new epoch this will default to zero for new tabs.
    */
-  getCurrentEpoch(browser) {
-    return this._browserEpochs.get(browser.permanentKey) || 0;
+  getCurrentEpoch(permanentKey) {
+    return this._browserEpochs.get(permanentKey) || 0;
   },
 
   /**
@@ -5840,8 +5634,8 @@ var SessionStoreInternal = {
    * epoch. This function does that, and returns true if |epoch| is up-to-date
    * with respect to |browser|.
    */
-  isCurrentEpoch(browser, epoch) {
-    return this.getCurrentEpoch(browser) == epoch;
+  isCurrentEpoch(permanentKey, epoch) {
+    return this.getCurrentEpoch(permanentKey) == epoch;
   },
 
   /**
@@ -5849,8 +5643,11 @@ var SessionStoreInternal = {
    * receive a hint that a new docShell has been loaded into the browser as
    * the frame script starts out with epoch=0.
    */
-  resetEpoch(browser) {
-    this._browserEpochs.delete(browser.permanentKey);
+  resetEpoch(permanentKey, frameLoader = null) {
+    this._browserEpochs.delete(permanentKey);
+    if (frameLoader) {
+      frameLoader.requestEpochUpdate(0);
+    }
   },
 
   /**
@@ -5887,6 +5684,472 @@ var SessionStoreInternal = {
   },
 
   /**
+   * Builds a single nsISessionStoreRestoreData tree for the provided |formdata|
+   * and |scroll| trees.
+   */
+  buildRestoreData(formdata, scroll) {
+    function addFormEntries(root, fields, isXpath) {
+      for (let [key, value] of Object.entries(fields)) {
+        switch (typeof value) {
+          case "string":
+            root.addTextField(isXpath, key, value);
+            break;
+          case "boolean":
+            root.addCheckbox(isXpath, key, value);
+            break;
+          case "object": {
+            if (value === null) {
+              break;
+            }
+            if (
+              value.hasOwnProperty("type") &&
+              value.hasOwnProperty("fileList")
+            ) {
+              root.addFileList(isXpath, key, value.type, value.fileList);
+              break;
+            }
+            if (
+              value.hasOwnProperty("selectedIndex") &&
+              value.hasOwnProperty("value")
+            ) {
+              root.addSingleSelect(
+                isXpath,
+                key,
+                value.selectedIndex,
+                value.value
+              );
+              break;
+            }
+            if (
+              key === "sessionData" &&
+              ["about:sessionrestore", "about:welcomeback"].includes(
+                formdata.url
+              )
+            ) {
+              root.addTextField(isXpath, key, JSON.stringify(value));
+              break;
+            }
+            if (Array.isArray(value)) {
+              root.addMultipleSelect(isXpath, key, value);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    let root = SessionStoreUtils.constructSessionStoreRestoreData();
+    if (scroll?.hasOwnProperty("scroll")) {
+      root.scroll = scroll.scroll;
+    }
+    if (formdata?.hasOwnProperty("url")) {
+      root.url = formdata.url;
+      if (formdata.hasOwnProperty("innerHTML")) {
+        // eslint-disable-next-line no-unsanitized/property
+        root.innerHTML = formdata.innerHTML;
+      }
+      if (formdata.hasOwnProperty("xpath")) {
+        addFormEntries(root, formdata.xpath, /* isXpath */ true);
+      }
+      if (formdata.hasOwnProperty("id")) {
+        addFormEntries(root, formdata.id, /* isXpath */ false);
+      }
+    }
+    let childrenLength = Math.max(
+      scroll?.children?.length || 0,
+      formdata?.children?.length || 0
+    );
+    for (let i = 0; i < childrenLength; i++) {
+      root.addChild(
+        this.buildRestoreData(formdata?.children?.[i], scroll?.children?.[i]),
+        i
+      );
+    }
+    return root;
+  },
+
+  _waitForStateStop(browser, expectedURL = null) {
+    const deferred = PromiseUtils.defer();
+
+    const listener = {
+      unregister(reject = true) {
+        if (reject) {
+          deferred.reject();
+        }
+
+        SessionStoreInternal._restoreListeners.delete(browser.permanentKey);
+
+        try {
+          browser.removeProgressListener(
+            this,
+            Ci.nsIWebProgress.NOTIFY_STATE_WINDOW
+          );
+        } catch {} // May have already gotten rid of the browser's webProgress.
+      },
+
+      onStateChange(webProgress, request, stateFlags, status) {
+        if (
+          webProgress.isTopLevel &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_STOP
+        ) {
+          // FIXME: We sometimes see spurious STATE_STOP events for about:blank
+          // loads, so we have to account for that here.
+          let aboutBlankOK = !expectedURL || expectedURL === "about:blank";
+          let url = request.QueryInterface(Ci.nsIChannel).originalURI.spec;
+          if (url !== "about:blank" || aboutBlankOK) {
+            this.unregister(false);
+            deferred.resolve();
+          }
+        }
+      },
+
+      QueryInterface: ChromeUtils.generateQI([
+        "nsIWebProgressListener",
+        "nsISupportsWeakReference",
+      ]),
+    };
+
+    this._restoreListeners.get(browser.permanentKey)?.unregister();
+    this._restoreListeners.set(browser.permanentKey, listener);
+
+    browser.addProgressListener(
+      listener,
+      Ci.nsIWebProgress.NOTIFY_STATE_WINDOW
+    );
+
+    return deferred.promise;
+  },
+
+  _listenForNavigations(browser, callbacks) {
+    const listener = {
+      unregister() {
+        browser.browsingContext?.sessionHistory?.removeSHistoryListener(this);
+
+        try {
+          browser.removeProgressListener(
+            this,
+            Ci.nsIWebProgress.NOTIFY_STATE_WINDOW
+          );
+        } catch {} // May have already gotten rid of the browser's webProgress.
+
+        SessionStoreInternal._restoreListeners.delete(browser.permanentKey);
+      },
+
+      OnHistoryReload() {
+        this.unregister();
+        return callbacks.onHistoryReload();
+      },
+
+      // TODO(kashav): ContentRestore.jsm handles OnHistoryNewEntry separately,
+      // so we should eventually support that here as well.
+      OnHistoryNewEntry() {},
+      OnHistoryGotoIndex() {},
+      OnHistoryPurge() {},
+      OnHistoryReplaceEntry() {},
+
+      onStateChange(webProgress, request, stateFlags, status) {
+        if (
+          webProgress.isTopLevel &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_START
+        ) {
+          this.unregister();
+          callbacks.onStartRequest();
+        }
+      },
+
+      QueryInterface: ChromeUtils.generateQI([
+        "nsISHistoryListener",
+        "nsIWebProgressListener",
+        "nsISupportsWeakReference",
+      ]),
+    };
+
+    this._restoreListeners.get(browser.permanentKey)?.unregister();
+    this._restoreListeners.set(browser.permanentKey, listener);
+
+    browser.browsingContext?.sessionHistory?.addSHistoryListener(listener);
+
+    browser.addProgressListener(
+      listener,
+      Ci.nsIWebProgress.NOTIFY_STATE_WINDOW
+    );
+  },
+
+  /**
+   * This mirrors ContentRestore.restoreHistory() for parent process session
+   * history restores.
+   */
+  _restoreHistory(browser, data) {
+    if (!Services.appinfo.sessionHistoryInParent) {
+      throw new Error("This function should only be used with SHIP");
+    }
+
+    this._tabStateToRestore.set(browser.permanentKey, data);
+
+    // In case about:blank isn't done yet.
+    // XXX(kashav): Does this actually accomplish anything? Can we remove?
+    browser.stop();
+
+    SessionHistory.restoreFromParent(
+      browser.browsingContext.sessionHistory,
+      data.tabData
+    );
+
+    let url = data.tabData?.entries[data.tabData.index - 1]?.url;
+    let disallow = data.tabData?.disallow;
+
+    let promise = SessionStoreUtils.restoreDocShellState(
+      browser.browsingContext,
+      url,
+      disallow
+    );
+    this._tabStateRestorePromises.set(browser.permanentKey, promise);
+
+    const onResolve = () => {
+      if (TAB_STATE_FOR_BROWSER.get(browser) !== TAB_STATE_RESTORING) {
+        this._listenForNavigations(browser, {
+          // The history entry was reloaded before we began restoring tab
+          // content, just proceed as we would normally.
+          onHistoryReload: () => {
+            this._restoreTabContent(browser);
+            return false;
+          },
+
+          // Some foreign code, like an extension, loaded a new URI on the
+          // browser. We no longer want to restore saved tab data, but may
+          // still have browser state that needs to be restored.
+          onStartRequest: () => {
+            this._tabStateToRestore.delete(browser.permanentKey);
+            this._restoreTabContent(browser);
+          },
+        });
+      }
+
+      this._tabStateRestorePromises.delete(browser.permanentKey);
+
+      this._restoreHistoryComplete(browser, data);
+    };
+
+    promise.then(onResolve).catch(() => {});
+  },
+
+  /**
+   * Either load the saved typed value or restore the active history entry.
+   * If neither is possible, just load an empty document.
+   */
+  _restoreTabEntry(browser, tabData) {
+    let url = "about:blank";
+    let loadFlags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY;
+
+    if (tabData.userTypedValue && tabData.userTypedClear) {
+      url = tabData.userTypedValue;
+      loadFlags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP;
+    } else if (tabData.entries.length) {
+      return SessionStoreUtils.initializeRestore(
+        browser.browsingContext,
+        this.buildRestoreData(tabData.formdata, tabData.scroll)
+      );
+    }
+
+    let loadPromise = this._waitForStateStop(browser, url);
+
+    browser.browsingContext.loadURI(url, {
+      loadFlags,
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+    });
+
+    return loadPromise;
+  },
+
+  /**
+   * This mirrors ContentRestore.restoreTabContent() for parent process session
+   * history restores.
+   */
+  _restoreTabContent(browser, options = {}) {
+    if (!Services.appinfo.sessionHistoryInParent) {
+      throw new Error("This function should only be used with SHIP");
+    }
+
+    this._restoreListeners.get(browser.permanentKey)?.unregister();
+
+    this._restoreTabContentStarted(browser, options);
+
+    let state = this._tabStateToRestore.get(browser.permanentKey);
+    this._tabStateToRestore.delete(browser.permanentKey);
+
+    let promises = [this._tabStateRestorePromises.get(browser.permanentKey)];
+
+    if (state) {
+      promises.push(this._restoreTabEntry(browser, state.tabData));
+    } else {
+      // The browser started another load, so we decided to not restore
+      // saved tab data. We should still wait for that new load to finish
+      // before proceeding.
+      promises.push(this._waitForStateStop(browser));
+    }
+
+    Promise.allSettled(promises).then(() => {
+      this._restoreTabContentComplete(browser, options);
+    });
+  },
+
+  _sendRestoreTabContent(browser, options) {
+    if (Services.appinfo.sessionHistoryInParent) {
+      this._restoreTabContent(browser, options);
+    } else {
+      browser.messageManager.sendAsyncMessage(
+        "SessionStore:restoreTabContent",
+        options
+      );
+    }
+  },
+
+  _restoreHistoryComplete(browser, data) {
+    let win = browser.ownerGlobal;
+    let tab = win?.gBrowser.getTabForBrowser(browser);
+    if (!tab) {
+      return;
+    }
+
+    // Notify the tabbrowser that the tab chrome has been restored.
+    let tabData = TabState.collect(tab, TAB_CUSTOM_VALUES.get(tab));
+
+    // wall-paper fix for bug 439675: make sure that the URL to be loaded
+    // is always visible in the address bar if no other value is present
+    let activePageData = tabData.entries[tabData.index - 1] || null;
+    let uri = activePageData ? activePageData.url || null : null;
+    // NB: we won't set initial URIs (about:home, about:newtab, etc.) here
+    // because their load will not normally trigger a location bar clearing
+    // when they finish loading (to avoid race conditions where we then
+    // clear user input instead), so we shouldn't set them here either.
+    // They also don't fall under the issues in bug 439675 where user input
+    // needs to be preserved if the load doesn't succeed.
+    // We also don't do this for remoteness updates, where it should not
+    // be necessary.
+    if (
+      !browser.userTypedValue &&
+      uri &&
+      !data.isRemotenessUpdate &&
+      !win.gInitialPages.includes(uri)
+    ) {
+      browser.userTypedValue = uri;
+    }
+
+    // Update tab label and icon again after the tab history was updated.
+    this.updateTabLabelAndIcon(tab, tabData);
+
+    let event = win.document.createEvent("Events");
+    event.initEvent("SSTabRestoring", true, false);
+    tab.dispatchEvent(event);
+  },
+
+  _restoreTabContentStarted(browser, data) {
+    let win = browser.ownerGlobal;
+    let tab = win?.gBrowser.getTabForBrowser(browser);
+    if (!tab) {
+      return;
+    }
+
+    let initiatedBySessionStore =
+      TAB_STATE_FOR_BROWSER.get(browser) != TAB_STATE_NEEDS_RESTORE;
+    let isNavigateAndRestore =
+      data.reason == RESTORE_TAB_CONTENT_REASON.NAVIGATE_AND_RESTORE;
+
+    // We need to be careful when restoring the urlbar's search mode because
+    // we race a call to gURLBar.setURI due to the location change.  setURI
+    // will exit search mode and set gURLBar.value to the restored URL,
+    // clobbering any search mode and userTypedValue we restore here.  If
+    // this is a typical restore -- restoring on startup or restoring a
+    // closed tab for example -- then we need to restore search mode after
+    // that setURI call, and so we wait until restoreTabContentComplete, at
+    // which point setURI will have been called.  If this is not a typical
+    // restore -- it was not initiated by session store or it's due to a
+    // remoteness change -- then we do not want to restore search mode at
+    // all, and so we remove it from the tab state cache.  In particular, if
+    // the restore is due to a remoteness change, then the user is loading a
+    // new URL and the current search mode should not be carried over to it.
+    let cacheState = TabStateCache.get(browser.permanentKey);
+    if (cacheState.searchMode) {
+      if (!initiatedBySessionStore || isNavigateAndRestore) {
+        TabStateCache.update(browser.permanentKey, {
+          searchMode: null,
+          userTypedValue: null,
+        });
+      }
+      return;
+    }
+
+    if (!initiatedBySessionStore) {
+      // If a load not initiated by sessionstore was started in a
+      // previously pending tab. Mark the tab as no longer pending.
+      this.markTabAsRestoring(tab);
+    } else if (!isNavigateAndRestore) {
+      // If the user was typing into the URL bar when we crashed, but hadn't hit
+      // enter yet, then we just need to write that value to the URL bar without
+      // loading anything. This must happen after the load, as the load will clear
+      // userTypedValue.
+      //
+      // Note that we only want to do that if we're restoring state for reasons
+      // _other_ than a navigateAndRestore remoteness-flip, as such a flip
+      // implies that the user was navigating.
+      let tabData = TabState.collect(tab, TAB_CUSTOM_VALUES.get(tab));
+      if (
+        tabData.userTypedValue &&
+        !tabData.userTypedClear &&
+        !browser.userTypedValue
+      ) {
+        browser.userTypedValue = tabData.userTypedValue;
+        if (tab.selected) {
+          win.gURLBar.setURI();
+        }
+      }
+
+      // Remove state we don't need any longer.
+      TabStateCache.update(browser.permanentKey, {
+        userTypedValue: null,
+        userTypedClear: null,
+      });
+    }
+  },
+
+  _restoreTabContentComplete(browser, data) {
+    let win = browser.ownerGlobal;
+    let tab = browser.ownerGlobal?.gBrowser.getTabForBrowser(browser);
+    if (!tab) {
+      return;
+    }
+    // Restore search mode and its search string in userTypedValue, if
+    // appropriate.
+    let cacheState = TabStateCache.get(browser.permanentKey);
+    if (cacheState.searchMode) {
+      win.gURLBar.setSearchMode(cacheState.searchMode, browser);
+      browser.userTypedValue = cacheState.userTypedValue;
+      if (tab.selected) {
+        win.gURLBar.setURI();
+      }
+      TabStateCache.update(browser.permanentKey, {
+        searchMode: null,
+        userTypedValue: null,
+      });
+    }
+
+    // This callback is used exclusively by tests that want to
+    // monitor the progress of network loads.
+    if (gDebuggingEnabled) {
+      Services.obs.notifyObservers(browser, NOTIFY_TAB_RESTORED);
+    }
+
+    SessionStoreInternal._resetLocalTabRestoringState(tab);
+    SessionStoreInternal.restoreNextTab();
+
+    this._sendTabRestoredNotification(tab, data.isRemotenessUpdate);
+
+    Services.obs.notifyObservers(null, "sessionstore-one-or-no-tab-restored");
+  },
+
+  /**
    * Send the "SessionStore:restoreHistory" message to content, triggering a
    * content restore. This method is intended to be used internally by
    * SessionStore, as it also ensures that permissions are avaliable in the
@@ -5897,39 +6160,22 @@ var SessionStoreInternal = {
    * @param options The options data to send to content.
    */
   _sendRestoreHistory(browser, options) {
-    // If the tabData which we're sending down has any sessionStorage associated
-    // with it, we need to send down permissions for the domains, as this
-    // information will be needed to correctly restore the session.
     if (options.tabData.storage) {
-      for (let origin of Object.getOwnPropertyNames(options.tabData.storage)) {
-        try {
-          let { frameLoader } = browser;
-          if (frameLoader.remoteTab) {
-            let attrs = browser.contentPrincipal.originAttributes;
-            let dataPrincipal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
-              origin
-            );
-            let principal = Services.scriptSecurityManager.principalWithOA(
-              dataPrincipal,
-              attrs
-            );
-            frameLoader.remoteTab.transmitPermissionsForPrincipal(principal);
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      }
+      SessionStoreUtils.restoreSessionStorageFromParent(
+        browser.browsingContext,
+        options.tabData.storage
+      );
+      delete options.tabData.storage;
     }
 
-    if (this._shistoryInParent) {
-      // Save the history data for restoring in the parent process.
-      this._shistoryToRestore.set(browser.permanentKey, options.tabData);
+    if (Services.appinfo.sessionHistoryInParent) {
+      this._restoreHistory(browser, options);
+    } else {
+      browser.messageManager.sendAsyncMessage(
+        "SessionStore:restoreHistory",
+        options
+      );
     }
-
-    browser.messageManager.sendAsyncMessage(
-      "SessionStore:restoreHistory",
-      options
-    );
 
     if (browser && browser.frameLoader) {
       browser.frameLoader.requestEpochUpdate(options.epoch);
@@ -6230,3 +6476,6 @@ var LastSession = {
     }
   },
 };
+
+// Exposed for tests
+const _LastSession = LastSession;

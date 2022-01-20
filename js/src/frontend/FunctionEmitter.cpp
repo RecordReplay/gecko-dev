@@ -7,7 +7,6 @@
 #include "frontend/FunctionEmitter.h"
 
 #include "mozilla/Assertions.h"  // MOZ_ASSERT
-#include "mozilla/Unused.h"
 
 #include "builtin/ModuleObject.h"          // ModuleObject
 #include "frontend/AsyncEmitter.h"         // AsyncEmitter
@@ -46,11 +45,11 @@ bool FunctionEmitter::prepareForNonLazy() {
 
   MOZ_ASSERT(funbox_->isInterpreted());
   MOZ_ASSERT(funbox_->emitBytecode);
-  MOZ_ASSERT(!funbox_->wasEmitted());
+  MOZ_ASSERT(!funbox_->wasEmittedByEnclosingScript());
 
   //                [stack]
 
-  funbox_->setWasEmitted(true);
+  funbox_->setWasEmittedByEnclosingScript(true);
 
 #ifdef DEBUG
   state_ = State::NonLazy;
@@ -79,11 +78,11 @@ bool FunctionEmitter::emitLazy() {
 
   MOZ_ASSERT(funbox_->isInterpreted());
   MOZ_ASSERT(!funbox_->emitBytecode);
-  MOZ_ASSERT(!funbox_->wasEmitted());
+  MOZ_ASSERT(!funbox_->wasEmittedByEnclosingScript());
 
   //                [stack]
 
-  funbox_->setWasEmitted(true);
+  funbox_->setWasEmittedByEnclosingScript(true);
 
   // Prepare to update the inner lazy script now that it's parent is fully
   // compiled. These updates will be applied in UpdateEmittedInnerFunctions().
@@ -102,7 +101,7 @@ bool FunctionEmitter::emitLazy() {
 
 bool FunctionEmitter::emitAgain() {
   MOZ_ASSERT(state_ == State::Start);
-  MOZ_ASSERT(funbox_->wasEmitted());
+  MOZ_ASSERT(funbox_->wasEmittedByEnclosingScript());
 
   //                [stack]
 
@@ -171,12 +170,12 @@ bool FunctionEmitter::emitAgain() {
 bool FunctionEmitter::emitAsmJSModule() {
   MOZ_ASSERT(state_ == State::Start);
 
-  MOZ_ASSERT(!funbox_->wasEmitted());
+  MOZ_ASSERT(!funbox_->wasEmittedByEnclosingScript());
   MOZ_ASSERT(funbox_->isAsmJSModule());
 
   //                [stack]
 
-  funbox_->setWasEmitted(true);
+  funbox_->setWasEmittedByEnclosingScript(true);
 
   if (!emitFunction()) {
     //              [stack]
@@ -312,7 +311,7 @@ bool FunctionEmitter::emitTopLevelFunction(GCThingIndex index) {
   // NOTE: The `index` is not directly stored as an opcode, but we collect the
   // range of indices in `BytecodeEmitter::emitDeclarationInstantiation` instead
   // of discrete indices.
-  mozilla::Unused << index;
+  (void)index;
 
   return true;
 }
@@ -383,9 +382,7 @@ bool FunctionScriptEmitter::prepareForParameters() {
     // parameter exprs, any unobservable environment ops (like pushing the
     // call object, setting '.this', etc) need to go in the prologue, else it
     // messes up breakpoint tests.
-    if (!bce_->switchToMain(generator)) {
-      return false;
-    }
+    bce_->switchToMain(generator);
   }
 
   if (!functionEmitterScope_->enterFunction(bce_, funbox_)) {
@@ -398,9 +395,7 @@ bool FunctionScriptEmitter::prepareForParameters() {
   }
 
   if (!funbox_->hasParameterExprs) {
-    if (!bce_->switchToMain(generator)) {
-      return false;
-    }
+    bce_->switchToMain(generator);
   }
 
   if (funbox_->needsPromiseResult()) {
@@ -480,10 +475,9 @@ bool FunctionScriptEmitter::emitExtraBodyVarScope() {
   //
   //   function f(x, y = 42) { var y; }
   //
-  const ParserAtom* name = nullptr;
   for (ParserBindingIter bi(*funbox_->functionScopeBindings(), true); bi;
        bi++) {
-    name = bce_->compilationState.getParserAtomAt(bce_->cx, bi.name());
+    auto name = bi.name();
 
     // There may not be a var binding of the same name.
     if (!bce_->locationOfNameBoundInScope(name,
@@ -494,8 +488,8 @@ bool FunctionScriptEmitter::emitExtraBodyVarScope() {
     // The '.this' and '.generator' function special
     // bindings should never appear in the extra var
     // scope. 'arguments', however, may.
-    MOZ_ASSERT(name != bce_->cx->parserNames().dotThis &&
-               name != bce_->cx->parserNames().dotGenerator);
+    MOZ_ASSERT(name != TaggedParserAtomIndex::WellKnown::dotThis() &&
+               name != TaggedParserAtomIndex::WellKnown::dotGenerator());
 
     NameOpEmitter noe(bce_, name, NameOpEmitter::Kind::Initialize);
     if (!noe.prepareForRhs()) {
@@ -540,7 +534,7 @@ bool FunctionScriptEmitter::emitEndBody() {
       }
 
       if (!bce_->emit1(JSOp::Undefined)) {
-        //            [stack] RESULT? UNDEF
+        //          [stack] RESULT? UNDEF
         return false;
       }
 
@@ -550,18 +544,18 @@ bool FunctionScriptEmitter::emitEndBody() {
       }
 
       if (!bce_->emit1(JSOp::SetRval)) {
-        //            [stack]
+        //          [stack]
         return false;
       }
 
       if (!bce_->emitGetDotGeneratorInInnermostScope()) {
-        //            [stack] GEN
+        //          [stack] GEN
         return false;
       }
 
       // No need to check for finally blocks, etc as in EmitReturn.
       if (!bce_->emitYieldOp(JSOp::FinalYieldRval)) {
-        //            [stack]
+        //          [stack]
         return false;
       }
     } else if (funbox_->needsPromiseResult()) {
@@ -574,23 +568,23 @@ bool FunctionScriptEmitter::emitEndBody() {
       // Emit final yield bytecode for async generators, for example:
       // async function asyncgen * () { ... }
       if (!bce_->emit1(JSOp::Undefined)) {
-        //            [stack] RESULT? UNDEF
+        //          [stack] RESULT? UNDEF
         return false;
       }
 
       if (!bce_->emit1(JSOp::SetRval)) {
-        //            [stack]
+        //          [stack]
         return false;
       }
 
       if (!bce_->emitGetDotGeneratorInInnermostScope()) {
-        //            [stack] GEN
+        //          [stack] GEN
         return false;
       }
 
       // No need to check for finally blocks, etc as in EmitReturn.
       if (!bce_->emitYieldOp(JSOp::FinalYieldRval)) {
-        //            [stack]
+        //          [stack]
         return false;
       }
     }
@@ -690,7 +684,7 @@ FunctionParamsEmitter::FunctionParamsEmitter(BytecodeEmitter* bce,
       funbox_(funbox),
       functionEmitterScope_(bce_->innermostEmitterScope()) {}
 
-bool FunctionParamsEmitter::emitSimple(const ParserAtom* paramName) {
+bool FunctionParamsEmitter::emitSimple(TaggedParserAtomIndex paramName) {
   MOZ_ASSERT(state_ == State::Start);
 
   //                [stack]
@@ -727,7 +721,7 @@ bool FunctionParamsEmitter::prepareForDefault() {
   return true;
 }
 
-bool FunctionParamsEmitter::emitDefaultEnd(const ParserAtom* paramName) {
+bool FunctionParamsEmitter::emitDefaultEnd(TaggedParserAtomIndex paramName) {
   MOZ_ASSERT(state_ == State::Default);
 
   //                [stack] DEFAULT
@@ -833,7 +827,7 @@ bool FunctionParamsEmitter::emitDestructuringDefaultEnd() {
   return true;
 }
 
-bool FunctionParamsEmitter::emitRest(const ParserAtom* paramName) {
+bool FunctionParamsEmitter::emitRest(TaggedParserAtomIndex paramName) {
   MOZ_ASSERT(state_ == State::Start);
 
   //                [stack]
@@ -924,7 +918,7 @@ bool FunctionParamsEmitter::emitRestArray() {
   return true;
 }
 
-bool FunctionParamsEmitter::emitAssignment(const ParserAtom* paramName) {
+bool FunctionParamsEmitter::emitAssignment(TaggedParserAtomIndex paramName) {
   //                [stack] ARG
 
   NameLocation paramLoc =

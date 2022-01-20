@@ -9,7 +9,7 @@ use crate::metrics::time_unit::TimeUnit;
 use crate::metrics::Metric;
 use crate::metrics::MetricType;
 use crate::storage::StorageManager;
-use crate::util::{get_iso_time_string, local_now_with_offset};
+use crate::util::{get_iso_time_string, local_now_with_offset_and_record};
 use crate::CommonMetricData;
 use crate::Glean;
 
@@ -117,7 +117,7 @@ impl DatetimeMetric {
             return;
         }
 
-        let value = value.unwrap_or_else(local_now_with_offset);
+        let value = value.unwrap_or_else(|| local_now_with_offset_and_record(&glean));
         let value = Metric::Datetime(value, self.time_unit);
         glean.storage().record(glean, &self.meta, &value)
     }
@@ -159,7 +159,7 @@ impl DatetimeMetric {
     ///
     /// The stored value or `None` if nothing stored.
     pub fn test_get_value(&self, glean: &Glean, storage_name: &str) -> Option<Datetime> {
-        match StorageManager.snapshot_metric(
+        match StorageManager.snapshot_metric_for_test(
             glean.storage(),
             storage_name,
             &self.meta.identifier(glean),
@@ -211,7 +211,7 @@ impl DatetimeMetric {
     ///
     /// This doesn't clear the stored value.
     pub fn test_get_value_as_string(&self, glean: &Glean, storage_name: &str) -> Option<String> {
-        match StorageManager.snapshot_metric(
+        match StorageManager.snapshot_metric_for_test(
             glean.storage(),
             storage_name,
             &self.meta.identifier(glean),

@@ -39,8 +39,6 @@ add_task(async function setup() {
       // Clear historical search suggestions to avoid interference from previous
       // tests.
       ["browser.urlbar.maxHistoricalSearchSuggestions", 0],
-      // Use the default matching bucket configuration.
-      ["browser.urlbar.matchBuckets", "general:5,suggestion:4"],
       // Turn autofill off.
       ["browser.urlbar.autoFill", false],
     ],
@@ -58,7 +56,12 @@ add_task(async function setup() {
 
   // Move the mouse away from the results panel, because hovering a result may
   // change its aspect (e.g. by showing a " - search with Engine" suffix).
-  await EventUtils.synthesizeNativeMouseMove(gURLBar.inputField);
+  await EventUtils.promiseNativeMouseEvent({
+    type: "mousemove",
+    target: gURLBar.inputField,
+    offsetX: 0,
+    offsetY: 0,
+  });
 });
 
 add_task(async function test_tab_switch_result() {
@@ -258,7 +261,7 @@ add_task(async function test_remote_tab_result() {
         url: "http://example.com",
         icon: UrlbarUtils.ICON.DEFAULT,
         client: "7cqCr77ptzX3",
-        lastUsed: parseInt(Date.now() / 1000),
+        lastUsed: Math.floor(Date.now() / 1000),
       },
     ],
   };
@@ -288,7 +291,7 @@ add_task(async function test_remote_tab_result() {
     .stub(SyncedTabs._internal, "getTabClients")
     .callsFake(() => Promise.resolve(Cu.cloneInto([REMOTE_TAB], {})));
 
-  // Reset internal cache in PlacesRemoteTabsAutocompleteProvider.
+  // Reset internal cache in UrlbarProviderRemoteTabs.
   Services.obs.notifyObservers(null, "weave:engine:sync:finish", "tabs");
 
   registerCleanupFunction(async function() {

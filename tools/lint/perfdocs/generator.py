@@ -82,18 +82,18 @@ class Generator(object):
 
                 tests = suite_info.get("tests", {})
                 for test_name in sorted(tests.keys()):
-                    documentation.extend(
-                        self._verifier._gatherer.framework_gatherers[
-                            yaml_content["name"]
-                        ].build_test_description(
-                            test_name, tests[test_name], suite_name
-                        )
+                    gatherer = self._verifier._gatherer.framework_gatherers[
+                        yaml_content["name"]
+                    ]
+                    test_description = gatherer.build_test_description(
+                        test_name, tests[test_name], suite_name
                     )
+                    documentation.extend(test_description)
                 documentation.append("")
 
             # Insert documentation into `.rst` file
             framework_rst = re.sub(
-                r"{documentation}", os.linesep.join(documentation), rst_content
+                r"{documentation}", "\n".join(documentation), rst_content
             )
             frameworks_info[yaml_content["name"]] = {
                 "dynamic": framework_rst,
@@ -162,9 +162,7 @@ class Generator(object):
         mainpage = read_file(
             os.path.join(self.templates_path, "index.rst"), stringify=True
         )
-        fmt_frameworks = os.linesep.join(
-            ["  * :doc:`%s`" % name for name in frameworks]
-        )
+        fmt_frameworks = "\n".join(["  * :doc:`%s`" % name for name in frameworks])
         fmt_mainpage = re.sub(r"{test_documentation}", fmt_frameworks, mainpage)
         save_file(fmt_mainpage, os.path.join(perfdocs_tmpdir, "index"))
 

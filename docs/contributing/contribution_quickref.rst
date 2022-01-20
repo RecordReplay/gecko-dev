@@ -5,6 +5,16 @@ Some parts of this process, including cloning and compiling, can take a long tim
 If at any point you get stuck, please don't hesitate to ask at `https://chat.mozilla.org <https://chat.mozilla.org>`__
 in the `#introduction <https://chat.mozilla.org/#/room/#introduction:mozilla.org>`__ channel.
 
+Before you start
+----------------
+Please register and create your account for
+
+`Bugzilla <https://bugzilla.mozilla.org/>`__ : web-based general-purpose bug tracking system.
+To register with Phabricator, make sure you enable Two-Factor Authentication (My Profile >> Edit Profile & Preferences >> Two-Factor Authentication) in Bugzilla.
+
+`Phabricator <https://phabricator.services.mozilla.com/>`__: web-based software development collaboration tools, mainly for code review.
+Please obtain an API Token (Settings >> Conduit API Tokens)
+
 Clone the sources
 -----------------
 
@@ -84,6 +94,7 @@ To run it:
 
 :ref:`More information about Linux <Building Firefox On Linux>` / :ref:`More information about MacOS <Building Firefox On MacOS>`
 
+.. _write_a_patch:
 
 To write a patch
 ----------------
@@ -104,7 +115,7 @@ Then:
 
 The commit message should look like:
 
-.. code-block::
+.. code-block:: text
 
     Bug xxxx - Short description of your change. r?reviewer
 
@@ -186,7 +197,7 @@ more information.
     You can ask your reviewer to submit the patch for you if you don't have that
     level of access.
 
-:ref:`More information <Try Server>`
+:ref:`More information <Pushing to Try>`
 
 
 To submit a patch
@@ -235,6 +246,18 @@ Run:
 
 After amending the patch, you will need to submit it using moz-phab again.
 
+.. warning::
+
+    Don't use ``hg commit --amend -m`` or ``git commit --amend -m``.
+
+    Phabricator tracks revision by editing the commit message when a
+    revision is created to add a special ``Differential Revision:
+    <url>`` line.
+
+    When ``--amend -m`` is used, that line will be lost, leading to
+    the creation of a new revision when re-submitted, which isn't
+    the desired outcome.
+
 If you wrote many changes, you can squash or edit commits with the
 command:
 
@@ -263,12 +286,18 @@ To pull changes from the repository, run:
    # Git
    $ git pull --rebase
 
+.. _push_a_change:
+
 To push a change in the code base
 ---------------------------------
 
 Once the change has been accepted and you've fixed any remaining issues
-the reviewer identified, add the *Check-in Needed* tag to the review
-(use the *Edit Revision* option on the top right).
+the reviewer identified, the reviewer should land the patch.
+
+If the patch has not landed on "autoland" (the integration branch) after a few days,
+feel free to contact the reviewer and/or
+@Aryx or @Sylvestre on the `#introduction <https://chat.mozilla.org/#/room/#introduction:mozilla.org>`__
+channel.
 
 The landing procedure will automatically close the review and the bug.
 

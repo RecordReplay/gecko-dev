@@ -6,7 +6,7 @@
 #ifndef nsHttpConnectionMgr_h__
 #define nsHttpConnectionMgr_h__
 
-#include "HalfOpenSocket.h"
+#include "DnsAndConnectSocket.h"
 #include "HttpConnectionBase.h"
 #include "HttpConnectionMgrShell.h"
 #include "nsHttpConnection.h"
@@ -14,14 +14,12 @@
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "nsClassHashtable.h"
-#include "nsDataHashtable.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Attributes.h"
 #include "ARefBase.h"
 #include "nsWeakReference.h"
 #include "ConnectionEntry.h"
-#include "TCPFastOpen.h"
 
 #include "nsINamed.h"
 #include "nsIObserver.h"
@@ -39,7 +37,7 @@ struct HttpRetParams;
 
 // message handlers have this signature
 class nsHttpConnectionMgr;
-typedef void (nsHttpConnectionMgr::*nsConnEventHandler)(int32_t, ARefBase*);
+using nsConnEventHandler = void (nsHttpConnectionMgr::*)(int32_t, ARefBase*);
 
 class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
                                   public nsIObserver {
@@ -59,7 +57,7 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   //-------------------------------------------------------------------------
 
   [[nodiscard]] nsresult CancelTransactions(nsHttpConnectionInfo*,
-                                            nsresult reason);
+                                            nsresult code);
 
   //-------------------------------------------------------------------------
   // NOTE: functions below may be called only on the socket thread.
@@ -71,11 +69,12 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
                                nsHttpConnectionInfo* wildcardCI,
                                HttpConnectionBase* conn);
 
-  // Move a transaction from the pendingQ of it's connection entry to another
-  // one. Returns true if the transaction is moved successfully, otherwise
-  // returns false.
-  bool MoveTransToNewConnEntry(nsHttpTransaction* aTrans,
-                               nsHttpConnectionInfo* aNewCI);
+  // Remove a transaction from the pendingQ of it's connection entry. Returns
+  // true if the transaction is removed successfully, otherwise returns false.
+  bool RemoveTransFromConnEntry(nsHttpTransaction* aTrans);
+
+  // Directly dispatch the transaction or insert it in to the pendingQ.
+  [[nodiscard]] nsresult ProcessNewTransaction(nsHttpTransaction* aTrans);
 
   // This is used to force an idle connection to be closed and removed from
   // the idle connection list. It is called when the idle connection detects
@@ -121,18 +120,19 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // NOTE: relatively expensive to call, there are two hashtable lookups.
   bool IsConnEntryUnderPressure(nsHttpConnectionInfo*);
 
-  uint64_t CurrentTopLevelOuterContentWindowId() {
-    return mCurrentTopLevelOuterContentWindowId;
+  uint64_t CurrentTopBrowsingContextId() {
+    return mCurrentTopBrowsingContextId;
   }
 
+  void DoFallbackConnection(SpeculativeTransaction* aTrans, bool aFetchHTTPSRR);
   void DoSpeculativeConnection(SpeculativeTransaction* aTrans,
                                bool aFetchHTTPSRR);
 
   HttpConnectionBase* GetH2orH3ActiveConn(ConnectionEntry* ent, bool aNoHttp2,
                                           bool aNoHttp3);
 
-  void IncreaseNumHalfOpenConns();
-  void DecreaseNumHalfOpenConns();
+  void IncreaseNumDnsAndConnectSockets();
+  void DecreaseNumDnsAndConnectSockets();
 
   // Wen a new idle connection has been added, this function is called to
   // increment mNumIdleConns and update PruneDeadConnections timer.
@@ -173,10 +173,20 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   already_AddRefed<PendingTransactionInfo> FindTransactionHelper(
       bool removeWhenFound, ConnectionEntry* aEnt, nsAHttpTransaction* aTrans);
 
+  void DoSpeculativeConnectionInternal(ConnectionEntry* aEnt,
+                                       SpeculativeTransaction* aTrans,
+                                       bool aFetchHTTPSRR);
+
+  already_AddRefed<ConnectionEntry> FindConnectionEntry(
+      const nsHttpConnectionInfo* ci);
+
  public:
   static nsAHttpConnection* MakeConnectionHandle(HttpConnectionBase* aWrapped);
   void RegisterOriginCoalescingKey(HttpConnectionBase*, const nsACString& host,
                                    int32_t port);
+  // A test if be-conservative should be used when proxy is setup for the
+  // connection
+  bool BeConservativeIfProxied(nsIProxyInfo* proxy);
 
  protected:
   friend class ConnectionEntry;
@@ -184,32 +194,32 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   void DecrementActiveConnCount(HttpConnectionBase*);
 
  private:
-  friend class HalfOpenSocket;
+  friend class DnsAndConnectSocket;
   friend class PendingTransactionInfo;
 
   //-------------------------------------------------------------------------
   // NOTE: these members may be accessed from any thread (use mReentrantMonitor)
   //-------------------------------------------------------------------------
 
-  ReentrantMonitor mReentrantMonitor;
+  ReentrantMonitor mReentrantMonitor{"nsHttpConnectionMgr.mReentrantMonitor"};
   nsCOMPtr<nsIEventTarget> mSocketThreadTarget;
 
   // connection limits
-  uint16_t mMaxUrgentExcessiveConns;
-  uint16_t mMaxConns;
-  uint16_t mMaxPersistConnsPerHost;
-  uint16_t mMaxPersistConnsPerProxy;
-  uint16_t mMaxRequestDelay;  // in seconds
-  bool mThrottleEnabled;
-  uint32_t mThrottleVersion;
-  uint32_t mThrottleSuspendFor;
-  uint32_t mThrottleResumeFor;
-  uint32_t mThrottleReadLimit;
-  uint32_t mThrottleReadInterval;
-  uint32_t mThrottleHoldTime;
+  uint16_t mMaxUrgentExcessiveConns{0};
+  uint16_t mMaxConns{0};
+  uint16_t mMaxPersistConnsPerHost{0};
+  uint16_t mMaxPersistConnsPerProxy{0};
+  uint16_t mMaxRequestDelay{0};  // in seconds
+  bool mThrottleEnabled{false};
+  uint32_t mThrottleVersion{2};
+  uint32_t mThrottleSuspendFor{0};
+  uint32_t mThrottleResumeFor{0};
+  uint32_t mThrottleReadLimit{0};
+  uint32_t mThrottleReadInterval{0};
+  uint32_t mThrottleHoldTime{0};
   TimeDuration mThrottleMaxTime;
-  bool mBeConservativeForProxy;
-  Atomic<bool, mozilla::Relaxed> mIsShuttingDown;
+  bool mBeConservativeForProxy{true};
+  Atomic<bool, mozilla::Relaxed> mIsShuttingDown{false};
 
   //-------------------------------------------------------------------------
   // NOTE: these members are only accessed on the socket transport thread
@@ -251,18 +261,14 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
                                                      uint32_t,
                                                      HttpConnectionBase*,
                                                      int32_t);
-  [[nodiscard]] nsresult ProcessNewTransaction(nsHttpTransaction*);
   [[nodiscard]] nsresult EnsureSocketThreadTarget();
   void ReportProxyTelemetry(ConnectionEntry* ent);
-  [[nodiscard]] nsresult CreateTransport(
-      ConnectionEntry*, nsAHttpTransaction*, uint32_t, bool, bool, bool, bool,
-      PendingTransactionInfo* pendingTransInfo);
   void StartedConnect();
   void RecvdConnect();
 
-  ConnectionEntry* GetOrCreateConnectionEntry(nsHttpConnectionInfo*,
-                                              bool allowWildCard, bool aNoHttp2,
-                                              bool aNoHttp3);
+  ConnectionEntry* GetOrCreateConnectionEntry(
+      nsHttpConnectionInfo*, bool prohibitWildCard, bool aNoHttp2,
+      bool aNoHttp3, bool* aAvailableForDispatchNow = nullptr);
 
   [[nodiscard]] nsresult MakeNewConnection(
       ConnectionEntry* ent, PendingTransactionInfo* pendingTransInfo);
@@ -313,36 +319,36 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   void OnMsgUpdateRequestTokenBucket(int32_t, ARefBase*);
   void OnMsgVerifyTraffic(int32_t, ARefBase*);
   void OnMsgPruneNoTraffic(int32_t, ARefBase*);
-  void OnMsgUpdateCurrentTopLevelOuterContentWindowId(int32_t, ARefBase*);
+  void OnMsgUpdateCurrentTopBrowsingContextId(int32_t, ARefBase*);
   void OnMsgClearConnectionHistory(int32_t, ARefBase*);
 
   // Total number of active connections in all of the ConnectionEntry objects
   // that are accessed from mCT connection table.
-  uint16_t mNumActiveConns;
+  uint16_t mNumActiveConns{0};
   // Total number of idle connections in all of the ConnectionEntry objects
   // that are accessed from mCT connection table.
-  uint16_t mNumIdleConns;
+  uint16_t mNumIdleConns{0};
   // Total number of spdy or http3 connections which are a subset of the active
   // conns
-  uint16_t mNumSpdyHttp3ActiveConns;
-  // Total number of connections in mHalfOpens ConnectionEntry objects
+  uint16_t mNumSpdyHttp3ActiveConns{0};
+  // Total number of connections in DnsAndConnectSockets ConnectionEntry objects
   // that are accessed from mCT connection table
-  uint32_t mNumHalfOpenConns;
+  uint32_t mNumDnsAndConnectSockets{0};
 
   // Holds time in seconds for next wake-up to prune dead connections.
-  uint64_t mTimeOfNextWakeUp;
+  uint64_t mTimeOfNextWakeUp{UINT64_MAX};
   // Timer for next pruning of dead connections.
   nsCOMPtr<nsITimer> mTimer;
   // Timer for pruning stalled connections after changed network.
   nsCOMPtr<nsITimer> mTrafficTimer;
-  bool mPruningNoTraffic;
+  bool mPruningNoTraffic{false};
 
   // A 1s tick to call nsHttpConnection::ReadTimeoutTick on
   // active http/1 connections and check for orphaned half opens.
   // Disabled when there are no active or half open connections.
   nsCOMPtr<nsITimer> mTimeoutTick;
-  bool mTimeoutTickArmed;
-  uint32_t mTimeoutTickNext;
+  bool mTimeoutTickArmed{false};
+  uint32_t mTimeoutTickNext{1};
 
   //
   // the connection table
@@ -360,7 +366,7 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   void OnMsgPrintDiagnostics(int32_t, ARefBase*);
 
   nsCString mLogData;
-  uint64_t mCurrentTopLevelOuterContentWindowId;
+  uint64_t mCurrentTopBrowsingContextId{0};
 
   // Called on a pref change
   void SetThrottlingEnabled(bool aEnable);
@@ -382,7 +388,7 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // V1 specific
   // Whether we are inside the "stop reading" interval, altered by the throttle
   // ticker
-  bool mThrottlingInhibitsReading;
+  bool mThrottlingInhibitsReading{false};
 
   TimeStamp mThrottlingWindowEndsAt;
 
@@ -425,26 +431,22 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // @param excludeActive: skip active tabid transactions.
   void ResumeReadOf(
       nsClassHashtable<nsUint64HashKey, nsTArray<RefPtr<nsHttpTransaction>>>&,
-      bool excludeActive = false);
+      bool excludeForActiveTab = false);
   void ResumeReadOf(nsTArray<RefPtr<nsHttpTransaction>>*);
 
   // Cached status of the active tab active transactions existence,
   // saves a lot of hashtable lookups
-  bool mActiveTabTransactionsExist;
-  bool mActiveTabUnthrottledTransactionsExist;
+  bool mActiveTabTransactionsExist{false};
+  bool mActiveTabUnthrottledTransactionsExist{false};
 
   void LogActiveTransactions(char);
 
   // When current active tab is changed, this function uses
-  // |previousWindowId| to select background transactions and
-  // mCurrentTopLevelOuterContentWindowId| to select foreground transactions.
+  // |previousId| to select background transactions and
+  // |mCurrentTopBrowsingContextId| to select foreground transactions.
   // Then, it notifies selected transactions' connection of the new active tab
   // id.
-  void NotifyConnectionOfWindowIdChange(uint64_t previousWindowId);
-
-  // A test if be-conservative should be used when proxy is setup for the
-  // connection
-  bool BeConservativeIfProxied(nsIProxyInfo* proxy);
+  void NotifyConnectionOfBrowsingContextIdChange(uint64_t previousId);
 };
 
 }  // namespace net

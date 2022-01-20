@@ -49,6 +49,7 @@
   grid-column-start: 2;
   align-self: baseline;
   padding-top: 10px;
+  line-height: 1.8em;
 }
 
 ::slotted([slot="buttons"]) {
@@ -62,9 +63,8 @@
 }
 
 button {
-  min-width: 140px;
-  width: 170px;
-  height: 30px;
+  min-width: 170px;
+  min-height: 30px;
   margin: 0;
 }
 

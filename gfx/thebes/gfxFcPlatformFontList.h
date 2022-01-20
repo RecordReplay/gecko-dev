@@ -13,6 +13,7 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
 #include "nsClassHashtable.h"
+#include "nsTHashMap.h"
 
 #include <fontconfig/fontconfig.h>
 #include "ft2build.h"
@@ -27,7 +28,9 @@
 namespace mozilla {
 namespace dom {
 class SystemFontListEntry;
-};
+class SystemFontList;
+class SystemFontOptions;
+};  // namespace dom
 
 template <>
 class RefPtrTraits<FcPattern> {
@@ -104,7 +107,7 @@ class gfxFontconfigFontEntry final : public gfxFT2FontEntryBase {
   nsresult CopyFontTable(uint32_t aTableTag, nsTArray<uint8_t>&) override;
   hb_blob_t* GetFontTable(uint32_t aTableTag) override;
 
-  double GetAspect();
+  double GetAspect(uint8_t aSizeAdjustBasis);
 
  protected:
   virtual ~gfxFontconfigFontEntry();
@@ -131,8 +134,6 @@ class gfxFontconfigFontEntry final : public gfxFT2FontEntryBase {
   // the FreeType face.
   bool mHasVariations;
   bool mHasVariationsInitialized;
-
-  double mAspect;
 
   class UnscaledFontCache {
    public:
@@ -176,7 +177,7 @@ class gfxFontconfigFontFamily final : public gfxFontFamily {
 
   // Families are constructed initially with just references to patterns.
   // When necessary, these are enumerated within FindStyleVariations.
-  void AddFontPattern(FcPattern* aFontPattern);
+  void AddFontPattern(FcPattern* aFontPattern, bool aSingleName);
 
   void SetFamilyContainsAppFonts(bool aContainsAppFonts) {
     mContainsAppFonts = aContainsAppFonts;
@@ -199,9 +200,12 @@ class gfxFontconfigFontFamily final : public gfxFontFamily {
 
   nsTArray<RefPtr<FcPattern>> mFontPatterns;
 
-  bool mContainsAppFonts;
-  bool mHasNonScalableFaces;
-  bool mForceScalable;
+  // Number of faces that have a single name. Faces that have multiple names are
+  // sorted last.
+  uint32_t mUniqueNameFaceCount = 0;
+  bool mContainsAppFonts : 1;
+  bool mHasNonScalableFaces : 1;
+  bool mForceScalable : 1;
 };
 
 class gfxFontconfigFont final : public gfxFT2FontBase {
@@ -233,7 +237,8 @@ class gfxFcPlatformFontList final : public gfxPlatformFontList {
   gfxFcPlatformFontList();
 
   static gfxFcPlatformFontList* PlatformFontList() {
-    return static_cast<gfxFcPlatformFontList*>(sPlatformFontList);
+    return static_cast<gfxFcPlatformFontList*>(
+        gfxPlatformFontList::PlatformFontList());
   }
 
   // initialize font lists
@@ -243,7 +248,7 @@ class gfxFcPlatformFontList final : public gfxPlatformFontList {
   void GetFontList(nsAtom* aLangGroup, const nsACString& aGenericFamily,
                    nsTArray<nsString>& aListOfFonts) override;
 
-  void ReadSystemFontList(nsTArray<FontPatternListEntry>* retValue);
+  void ReadSystemFontList(mozilla::dom::SystemFontList*);
 
   gfxFontEntry* CreateFontEntry(
       mozilla::fontlist::Face* aFace,
@@ -350,7 +355,7 @@ class gfxFcPlatformFontList final : public gfxPlatformFontList {
 
   // to avoid enumerating all fonts, maintain a mapping of local font
   // names to family
-  nsBaseHashtable<nsCStringHashKey, RefPtr<FcPattern>, FcPattern*> mLocalNames;
+  nsTHashMap<nsCString, RefPtr<FcPattern>> mLocalNames;
 
   // caching generic/lang ==> font family list
   nsClassHashtable<nsCStringHashKey, PrefFontList> mGenericMappings;
@@ -361,11 +366,34 @@ class gfxFcPlatformFontList final : public gfxPlatformFontList {
   // font list is rebuilt (e.g. due to a fontconfig configuration change),
   // these pointers will be invalidated. InitFontList() flushes the cache
   // in this case.
-  nsDataHashtable<nsCStringHashKey, CopyableTArray<FamilyAndGeneric>>
-      mFcSubstituteCache;
+  nsTHashMap<nsCStringHashKey, nsTArray<FamilyAndGeneric>> mFcSubstituteCache;
 
   nsCOMPtr<nsITimer> mCheckFontUpdatesTimer;
   RefPtr<FcConfig> mLastConfig;
+
+  // The current system font options in effect.
+#ifdef MOZ_WIDGET_GTK
+  // NOTE(emilio): This is a *system cairo* cairo_font_options_t object. As
+  // such, it can't be used outside of the few functions defined here.
+  cairo_font_options_t* mSystemFontOptions = nullptr;
+  int32_t mFreetypeLcdSetting = -1;  // -1 for not set
+
+  void ClearSystemFontOptions();
+
+  // Returns whether options actually changed.
+  // TODO(emilio): We could call this when gsettings change or such, but
+  // historically we haven't reacted to these settings changes, so keeping it
+  // simple for now.
+  bool UpdateSystemFontOptions();
+
+  void UpdateSystemFontOptionsFromIpc(const mozilla::dom::SystemFontOptions&);
+  void SystemFontOptionsToIpc(mozilla::dom::SystemFontOptions&);
+
+ public:
+  void SubstituteSystemFontOptions(FcPattern*);
+
+ private:
+#endif
 
   // By default, font prefs under Linux are set to simply lookup
   // via fontconfig the appropriate font for serif/sans-serif/monospace.

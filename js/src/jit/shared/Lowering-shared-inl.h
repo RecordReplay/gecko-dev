@@ -228,7 +228,12 @@ void LIRGeneratorShared::defineInt64(
     LDefinition::Policy policy) {
   // Call instructions should use defineReturn.
   MOZ_ASSERT(!lir->isCall());
+
+#ifdef JS_64BIT
+  MOZ_ASSERT(mir->type() == MIRType::Int64 || mir->type() == MIRType::IntPtr);
+#else
   MOZ_ASSERT(mir->type() == MIRType::Int64);
+#endif
 
   uint32_t vreg = getVirtualRegister();
 
@@ -323,20 +328,29 @@ void LIRGeneratorShared::defineReturn(LInstruction* lir, MDefinition* mir) {
   add(lir);
 }
 
-// In LIR, we treat booleans and integers as the same low-level type (INTEGER).
-// When snapshotting, we recover the actual JS type from MIR. This function
-// checks that when making redefinitions, we don't accidentally coerce two
-// incompatible types.
+#ifdef DEBUG
+// This function checks that when making redefinitions, we don't accidentally
+// coerce two incompatible types.
 static inline bool IsCompatibleLIRCoercion(MIRType to, MIRType from) {
   if (to == from) {
     return true;
   }
+  // In LIR, we treat boolean and int32 as the same low-level type (INTEGER).
+  // When snapshotting, we recover the actual JS type from MIR.
   if ((to == MIRType::Int32 || to == MIRType::Boolean) &&
       (from == MIRType::Int32 || from == MIRType::Boolean)) {
     return true;
   }
+#  ifndef JS_64BIT
+  // On 32-bit platforms Int32 can be redefined as IntPtr and vice versa.
+  if ((to == MIRType::Int32 || to == MIRType::IntPtr) &&
+      (from == MIRType::IntPtr || from == MIRType::Int32)) {
+    return true;
+  }
+#  endif
   return false;
 }
+#endif
 
 void LIRGeneratorShared::redefine(MDefinition* def, MDefinition* as) {
   MOZ_ASSERT(IsCompatibleLIRCoercion(def->type(), as->type()));
@@ -375,6 +389,17 @@ void LIRGeneratorShared::ensureDefined(MDefinition* mir) {
     visitEmittedAtUses(mir->toInstruction());
     MOZ_ASSERT(mir->isLowered());
   }
+}
+
+bool LIRGeneratorShared::willHaveDifferentLIRNodes(MDefinition* mir1,
+                                                   MDefinition* mir2) {
+  if (mir1 != mir2) {
+    return true;
+  }
+  if (mir1->isEmittedAtUses()) {
+    return true;
+  }
+  return false;
 }
 
 template <typename LClass, typename... Args>
@@ -442,6 +467,32 @@ LAllocation LIRGeneratorShared::useRegisterOrConstantAtStart(MDefinition* mir) {
   return useRegisterAtStart(mir);
 }
 
+inline bool CanUseInt32Constant(MDefinition* mir) {
+  if (!mir->isConstant()) {
+    return false;
+  }
+  MConstant* cst = mir->toConstant();
+  if (cst->type() == MIRType::IntPtr) {
+    return INT32_MIN <= cst->toIntPtr() && cst->toIntPtr() <= INT32_MAX;
+  }
+  MOZ_ASSERT(cst->type() == MIRType::Int32);
+  return true;
+}
+
+LAllocation LIRGeneratorShared::useRegisterOrInt32Constant(MDefinition* mir) {
+  if (CanUseInt32Constant(mir)) {
+    return LAllocation(mir->toConstant());
+  }
+  return useRegister(mir);
+}
+
+LAllocation LIRGeneratorShared::useAnyOrInt32Constant(MDefinition* mir) {
+  if (CanUseInt32Constant(mir)) {
+    return LAllocation(mir->toConstant());
+  }
+  return useAny(mir);
+}
+
 LAllocation LIRGeneratorShared::useRegisterOrZero(MDefinition* mir) {
   if (mir->isConstant() && mir->toConstant()->isInt32(0)) {
     return LAllocation();
@@ -479,12 +530,18 @@ LAllocation LIRGeneratorShared::useStorableAtStart(MDefinition* mir) {
 LAllocation LIRGeneratorShared::useAny(MDefinition* mir) {
   return useRegister(mir);
 }
+LAllocation LIRGeneratorShared::useAnyAtStart(MDefinition* mir) {
+  return useRegisterAtStart(mir);
+}
 #else
 LAllocation LIRGeneratorShared::useAnyOrConstant(MDefinition* mir) {
   return useOrConstant(mir);
 }
 
 LAllocation LIRGeneratorShared::useAny(MDefinition* mir) { return use(mir); }
+LAllocation LIRGeneratorShared::useAnyAtStart(MDefinition* mir) {
+  return useAtStart(mir);
+}
 LAllocation LIRGeneratorShared::useStorable(MDefinition* mir) {
   return useRegisterOrConstant(mir);
 }
@@ -694,20 +751,24 @@ LBoxAllocation LIRGeneratorShared::useBox(MDefinition* mir, LUse::Policy policy,
 #endif
 }
 
-LBoxAllocation LIRGeneratorShared::useBoxOrTyped(MDefinition* mir) {
+LBoxAllocation LIRGeneratorShared::useBoxOrTyped(MDefinition* mir,
+                                                 bool useAtStart) {
   if (mir->type() == MIRType::Value) {
-    return useBox(mir);
+    return useBox(mir, LUse::REGISTER, useAtStart);
   }
 
 #if defined(JS_NUNBOX32)
-  return LBoxAllocation(useRegister(mir), LAllocation());
+  return LBoxAllocation(useAtStart ? useRegisterAtStart(mir) : useRegister(mir),
+                        LAllocation());
 #else
-  return LBoxAllocation(useRegister(mir));
+  return LBoxAllocation(useAtStart ? useRegisterAtStart(mir)
+                                   : useRegister(mir));
 #endif
 }
 
 LBoxAllocation LIRGeneratorShared::useBoxOrTypedOrConstant(MDefinition* mir,
-                                                           bool useConstant) {
+                                                           bool useConstant,
+                                                           bool useAtStart) {
   if (useConstant && mir->isConstant()) {
 #if defined(JS_NUNBOX32)
     return LBoxAllocation(LAllocation(mir->toConstant()), LAllocation());
@@ -716,7 +777,7 @@ LBoxAllocation LIRGeneratorShared::useBoxOrTypedOrConstant(MDefinition* mir,
 #endif
   }
 
-  return useBoxOrTyped(mir);
+  return useBoxOrTyped(mir, useAtStart);
 }
 
 LInt64Allocation LIRGeneratorShared::useInt64(MDefinition* mir,

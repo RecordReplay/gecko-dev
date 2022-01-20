@@ -4,16 +4,17 @@
 
 use crate::command::LogOptions;
 use crate::logging::Level;
-use base64;
 use mozdevice::AndroidStorageInput;
 use mozprofile::preferences::Pref;
 use mozprofile::profile::Profile;
+use mozrunner::firefox_args::{get_arg_value, parse_args, Arg};
 use mozrunner::runner::platform::firefox_default_path;
 use mozversion::{self, firefox_binary_version, firefox_version, Version};
 use regex::bytes::Regex;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::default::Default;
+use std::ffi::OsString;
 use std::fmt::{self, Display};
 use std::fs;
 use std::io;
@@ -23,7 +24,6 @@ use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
 use webdriver::capabilities::{BrowserCapabilities, Capabilities};
 use webdriver::error::{ErrorStatus, WebDriverError, WebDriverResult};
-use zip;
 
 #[derive(Clone, Debug)]
 enum VersionError {
@@ -154,6 +154,10 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
         Ok(true)
     }
 
+    fn accept_proxy(&mut self, _: &Capabilities, _: &Capabilities) -> WebDriverResult<bool> {
+        Ok(true)
+    }
+
     fn set_window_rect(&mut self, _: &Capabilities) -> WebDriverResult<bool> {
         Ok(true)
     }
@@ -164,7 +168,7 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
         comparison: &str,
     ) -> WebDriverResult<bool> {
         Version::from_str(version)
-            .map_err(|err| VersionError::from(err))?
+            .map_err(VersionError::from)?
             .matches(comparison)
             .map_err(|err| VersionError::from(err).into())
     }
@@ -173,8 +177,10 @@ impl<'a> BrowserCapabilities for FirefoxCapabilities<'a> {
         Ok(true)
     }
 
-    fn accept_proxy(&mut self, _: &Capabilities, _: &Capabilities) -> WebDriverResult<bool> {
-        Ok(true)
+    fn web_socket_url(&mut self, caps: &Capabilities) -> WebDriverResult<bool> {
+        self.browser_version(caps)?
+            .map(|v| self.compare_browser_version(&v, ">=90"))
+            .unwrap_or(Ok(false))
     }
 
     fn validate_custom(&mut self, name: &str, value: &Value) -> WebDriverResult<()> {
@@ -409,6 +415,27 @@ impl FirefoxOptions {
             rv.profile = FirefoxOptions::load_profile(&options)?;
         }
 
+        if let Some(args) = rv.args.as_ref() {
+            let os_args = parse_args(args.iter().map(OsString::from).collect::<Vec<_>>().iter());
+            if let Some(path) = get_arg_value(os_args.iter(), Arg::Profile) {
+                if rv.profile.is_some() {
+                    return Err(WebDriverError::new(
+                        ErrorStatus::InvalidArgument,
+                        "Can't provide both a --profile argument and a profile",
+                    ));
+                }
+                let path_buf = PathBuf::from(path);
+                rv.profile = Some(Profile::new_from_path(&path_buf)?);
+            }
+
+            if get_arg_value(os_args.iter(), Arg::NamedProfile).is_some() && rv.profile.is_some() {
+                return Err(WebDriverError::new(
+                    ErrorStatus::InvalidArgument,
+                    "Can't provide both a -P argument and a profile",
+                ));
+            }
+        }
+
         if let Some(json) = matched.remove("moz:debuggerAddress") {
             let use_web_socket = json.as_bool().ok_or_else(|| {
                 WebDriverError::new(
@@ -418,9 +445,7 @@ impl FirefoxOptions {
             })?;
 
             if use_web_socket {
-                let mut remote_args = Vec::new();
-                remote_args.push("--remote-debugging-port".to_owned());
-                remote_args.push("0".to_owned());
+                let mut remote_args = vec!["--remote-debugging-port".to_owned(), "0".to_owned()];
 
                 if let Some(ref mut args) = rv.args {
                     args.append(&mut remote_args);
@@ -434,6 +459,27 @@ impl FirefoxOptions {
                 if has_fission_pref.is_none() {
                     rv.prefs
                         .push(("fission.autostart".to_owned(), Pref::new(false)));
+                }
+            }
+        }
+
+        if let Some(json) = matched.get("webSocketUrl") {
+            let use_web_socket = json.as_bool().ok_or_else(|| {
+                WebDriverError::new(
+                    ErrorStatus::InvalidArgument,
+                    "webSocketUrl is not a boolean",
+                )
+            })?;
+
+            if use_web_socket {
+                let mut remote_args = Vec::new();
+                remote_args.push("--remote-debugging-port".to_owned());
+                remote_args.push("0".to_owned());
+
+                if let Some(ref mut args) = rv.args {
+                    args.append(&mut remote_args);
+                } else {
+                    rv.args = Some(remote_args);
                 }
             }
         }
@@ -583,7 +629,7 @@ impl FirefoxOptions {
                 ));
             }
 
-            let mut android = AndroidOptions::new(package, storage);
+            let mut android = AndroidOptions::new(package.clone(), storage);
 
             android.activity = match options.get("androidActivity") {
                 Some(json) => {
@@ -597,7 +643,7 @@ impl FirefoxOptions {
                         })?
                         .to_owned();
 
-                    if activity.contains("/") {
+                    if activity.contains('/') {
                         return Err(WebDriverError::new(
                             ErrorStatus::InvalidArgument,
                             "androidActivity should not contain '/",
@@ -606,7 +652,25 @@ impl FirefoxOptions {
 
                     Some(activity)
                 }
-                None => None,
+                None => {
+                    match package.as_str() {
+                        "org.mozilla.firefox"
+                        | "org.mozilla.firefox_beta"
+                        | "org.mozilla.fenix"
+                        | "org.mozilla.fenix.debug"
+                        | "org.mozilla.reference.browser" => {
+                            Some("org.mozilla.fenix.IntentReceiverActivity".to_string())
+                        }
+                        "org.mozilla.focus"
+                        | "org.mozilla.focus.debug"
+                        | "org.mozilla.klar"
+                        | "org.mozilla.klar.debug" => {
+                            Some("org.mozilla.focus.activity.IntentReceiverActivity".to_string())
+                        }
+                        // For all other applications fallback to auto-detection.
+                        _ => None,
+                    }
+                }
             };
 
             android.device_serial = match options.get("androidDeviceSerial") {
@@ -644,7 +708,16 @@ impl FirefoxOptions {
 
                     Some(args)
                 }
-                None => None,
+                None => {
+                    // All GeckoView based applications support this view,
+                    // and allow to open a blank page in a Gecko window.
+                    Some(vec![
+                        "-a".to_string(),
+                        "android.intent.action.VIEW".to_string(),
+                        "-d".to_string(),
+                        "about:blank".to_string(),
+                    ])
+                }
             };
 
             Ok(Some(android))
@@ -724,10 +797,8 @@ mod tests {
 
     use self::mozprofile::preferences::Pref;
     use super::*;
-    use crate::marionette::MarionetteHandler;
     use mozdevice::AndroidStorageInput;
-    use serde_json::json;
-    use std::default::Default;
+    use serde_json::{json, Map, Value};
     use std::fs::File;
     use std::io::Read;
 
@@ -796,6 +867,52 @@ mod tests {
     }
 
     #[test]
+    fn fx_options_from_capabilities_with_websocket_url_not_set() {
+        let mut caps = Capabilities::new();
+
+        let opts = FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
+            .expect("Valid Firefox options");
+
+        assert!(
+            opts.args.is_none(),
+            "CLI arguments for Firefox unexpectedly found"
+        );
+    }
+
+    #[test]
+    fn fx_options_from_capabilities_with_websocket_url_false() {
+        let mut caps = Capabilities::new();
+        caps.insert("webSocketUrl".into(), json!(false));
+
+        let opts = FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
+            .expect("Valid Firefox options");
+
+        assert!(
+            opts.args.is_none(),
+            "CLI arguments for Firefox unexpectedly found"
+        );
+    }
+
+    #[test]
+    fn fx_options_from_capabilities_with_websocket_url_true() {
+        let mut caps = Capabilities::new();
+        caps.insert("webSocketUrl".into(), json!(true));
+
+        let opts = FirefoxOptions::from_capabilities(None, AndroidStorageInput::Auto, &mut caps)
+            .expect("Valid Firefox options");
+
+        if let Some(args) = opts.args {
+            let mut iter = args.iter();
+            assert!(iter
+                .find(|&arg| arg == &"--remote-debugging-port".to_owned())
+                .is_some());
+            assert_eq!(iter.next(), Some(&"0".to_owned()));
+        } else {
+            assert!(false, "CLI arguments for Firefox not found");
+        }
+    }
+
+    #[test]
     fn fx_options_from_capabilities_with_debugger_address_not_set() {
         let mut caps = Capabilities::new();
 
@@ -818,7 +935,7 @@ mod tests {
 
         assert!(
             opts.args.is_none(),
-            "CLI arguments for remote protocol unexpectedly found"
+            "CLI arguments for Firefox unexpectedly found"
         );
     }
 
@@ -837,7 +954,7 @@ mod tests {
                 .is_some());
             assert_eq!(iter.next(), Some(&"0".to_owned()));
         } else {
-            assert!(false, "CLI arguments for remote protocol not found");
+            assert!(false, "CLI arguments for Firefox not found");
         }
 
         assert!(opts
@@ -871,13 +988,7 @@ mod tests {
             firefox_opts.insert("androidPackage".into(), json!(value));
 
             let opts = make_options(firefox_opts).expect("valid firefox options");
-            assert_eq!(
-                opts.android,
-                Some(AndroidOptions::new(
-                    value.to_string(),
-                    AndroidStorageInput::Auto
-                ))
-            );
+            assert_eq!(opts.android.unwrap().package, value.to_string());
         }
     }
 
@@ -899,20 +1010,63 @@ mod tests {
     }
 
     #[test]
-    fn fx_options_android_activity_valid_value() {
-        for value in ["cheese", "Cheese_9"].iter() {
+    fn fx_options_android_activity_default_known_apps() {
+        let packages = vec![
+            "org.mozilla.firefox",
+            "org.mozilla.firefox_beta",
+            "org.mozilla.fenix",
+            "org.mozilla.fenix.debug",
+            "org.mozilla.focus",
+            "org.mozilla.focus.debug",
+            "org.mozilla.klar",
+            "org.mozilla.klar.debug",
+            "org.mozilla.reference.browser",
+        ];
+
+        for package in packages {
             let mut firefox_opts = Capabilities::new();
-            firefox_opts.insert("androidPackage".into(), json!("foo.bar"));
-            firefox_opts.insert("androidActivity".into(), json!(value));
+            firefox_opts.insert("androidPackage".into(), json!(package));
 
             let opts = make_options(firefox_opts).expect("valid firefox options");
-            let android_opts = AndroidOptions {
-                package: "foo.bar".to_owned(),
-                activity: Some(value.to_string()),
-                ..Default::default()
-            };
-            assert_eq!(opts.android, Some(android_opts));
+            assert!(opts
+                .android
+                .unwrap()
+                .activity
+                .unwrap()
+                .contains("IntentReceiverActivity"));
         }
+    }
+
+    #[test]
+    fn fx_options_android_activity_default_unknown_apps() {
+        let packages = vec!["org.mozilla.geckoview_example", "com.some.other.app"];
+
+        for package in packages {
+            let mut firefox_opts = Capabilities::new();
+            firefox_opts.insert("androidPackage".into(), json!(package));
+
+            let opts = make_options(firefox_opts).expect("valid firefox options");
+            assert_eq!(opts.android.unwrap().activity, None);
+        }
+
+        let mut firefox_opts = Capabilities::new();
+        firefox_opts.insert(
+            "androidPackage".into(),
+            json!("org.mozilla.geckoview_example"),
+        );
+
+        let opts = make_options(firefox_opts).expect("valid firefox options");
+        assert_eq!(opts.android.unwrap().activity, None);
+    }
+
+    #[test]
+    fn fx_options_android_activity_override() {
+        let mut firefox_opts = Capabilities::new();
+        firefox_opts.insert("androidPackage".into(), json!("foo.bar"));
+        firefox_opts.insert("androidActivity".into(), json!("foo"));
+
+        let opts = make_options(firefox_opts).expect("valid firefox options");
+        assert_eq!(opts.android.unwrap().activity, Some("foo".to_string()));
     }
 
     #[test]
@@ -940,16 +1094,14 @@ mod tests {
         firefox_opts.insert("androidDeviceSerial".into(), json!("cheese"));
 
         let opts = make_options(firefox_opts).expect("valid firefox options");
-        let android_opts = AndroidOptions {
-            package: "foo.bar".to_owned(),
-            device_serial: Some("cheese".to_owned()),
-            ..Default::default()
-        };
-        assert_eq!(opts.android, Some(android_opts));
+        assert_eq!(
+            opts.android.unwrap().device_serial,
+            Some("cheese".to_string())
+        );
     }
 
     #[test]
-    fn fx_options_android_serial_invalid() {
+    fn fx_options_android_device_serial_invalid() {
         let mut firefox_opts = Capabilities::new();
         firefox_opts.insert("androidPackage".into(), json!("foo.bar"));
         firefox_opts.insert("androidDeviceSerial".into(), json!(42));
@@ -958,18 +1110,45 @@ mod tests {
     }
 
     #[test]
-    fn fx_options_android_intent_arguments() {
+    fn fx_options_android_intent_arguments_defaults() {
+        let packages = vec![
+            "org.mozilla.firefox",
+            "org.mozilla.firefox_beta",
+            "org.mozilla.fenix",
+            "org.mozilla.fenix.debug",
+            "org.mozilla.geckoview_example",
+            "org.mozilla.reference.browser",
+            "com.some.other.app",
+        ];
+
+        for package in packages {
+            let mut firefox_opts = Capabilities::new();
+            firefox_opts.insert("androidPackage".into(), json!(package));
+
+            let opts = make_options(firefox_opts).expect("valid firefox options");
+            assert_eq!(
+                opts.android.unwrap().intent_arguments,
+                Some(vec![
+                    "-a".to_string(),
+                    "android.intent.action.VIEW".to_string(),
+                    "-d".to_string(),
+                    "about:blank".to_string(),
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn fx_options_android_intent_arguments_override() {
         let mut firefox_opts = Capabilities::new();
         firefox_opts.insert("androidPackage".into(), json!("foo.bar"));
         firefox_opts.insert("androidIntentArguments".into(), json!(["lorem", "ipsum"]));
 
         let opts = make_options(firefox_opts).expect("valid firefox options");
-        let android_opts = AndroidOptions {
-            package: "foo.bar".to_owned(),
-            intent_arguments: Some(vec!["lorem".to_owned(), "ipsum".to_owned()]),
-            ..Default::default()
-        };
-        assert_eq!(opts.android, Some(android_opts));
+        assert_eq!(
+            opts.android.unwrap().intent_arguments,
+            Some(vec!["lorem".to_string(), "ipsum".to_string()])
+        );
     }
 
     #[test]
@@ -1052,37 +1231,28 @@ mod tests {
     }
 
     #[test]
-    fn test_prefs() {
-        let encoded_profile = example_profile();
-        let mut prefs: Map<String, Value> = Map::new();
-        prefs.insert(
-            "browser.display.background_color".into(),
-            Value::String("#00ff00".into()),
-        );
-
+    fn fx_options_args_profile() {
         let mut firefox_opts = Capabilities::new();
-        firefox_opts.insert("profile".into(), encoded_profile);
-        firefox_opts.insert("prefs".into(), Value::Object(prefs));
+        firefox_opts.insert("args".into(), json!(["--profile", "foo"]));
 
-        let opts = make_options(firefox_opts).expect("valid profile and prefs");
-        let mut profile = opts.profile.expect("valid firefox profile");
+        make_options(firefox_opts).expect("Valid args");
+    }
 
-        let handler = MarionetteHandler::new(Default::default());
-        handler
-            .set_prefs(2828, &mut profile, true, opts.prefs)
-            .expect("set preferences");
+    #[test]
+    fn fx_options_args_profile_and_profile() {
+        let mut firefox_opts = Capabilities::new();
+        firefox_opts.insert("args".into(), json!(["--profile", "foo"]));
+        firefox_opts.insert("profile".into(), json!("foo"));
 
-        let prefs_set = profile.user_prefs().expect("valid user preferences");
-        println!("{:#?}", prefs_set.prefs);
+        make_options(firefox_opts).expect_err("Invalid args");
+    }
 
-        assert_eq!(
-            prefs_set.get("startup.homepage_welcome_url"),
-            Some(&Pref::new("data:text/html,PASS"))
-        );
-        assert_eq!(
-            prefs_set.get("browser.display.background_color"),
-            Some(&Pref::new("#00ff00"))
-        );
-        assert_eq!(prefs_set.get("marionette.port"), Some(&Pref::new(2828)));
+    #[test]
+    fn fx_options_args_p_and_profile() {
+        let mut firefox_opts = Capabilities::new();
+        firefox_opts.insert("args".into(), json!(["-P"]));
+        firefox_opts.insert("profile".into(), json!("foo"));
+
+        make_options(firefox_opts).expect_err("Invalid args");
     }
 }

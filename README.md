@@ -54,9 +54,8 @@ git merge replay-merge
 git push
 ```
 
-8. Update geckoVersion in the backend.
-9. Update User Agent version reported by `CurrentFirefoxVersion()` in `toolkit/recordreplay/ProcessRecordReplay.cpp`
-10. Make sure automatic updates work with the new browser. Deploy a browser but do not release it, then open it, open "About Replay" and see if it updates.
+8. Update User Agent version reported by `CurrentFirefoxVersion()` in `toolkit/recordreplay/ProcessRecordReplay.cpp`
+9. Make sure automatic updates work with the new browser. Run the build/test action on the merge branch, delete the `noupdate` file for the build in S3, then launch the browser, open "About Replay" and see if it updates.
 
 Tips for debugging:
 

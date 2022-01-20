@@ -17,9 +17,9 @@ namespace wr {
 class RenderCompositorSWGL : public RenderCompositor {
  public:
   static UniquePtr<RenderCompositor> Create(
-      RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError);
+      const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError);
 
-  RenderCompositorSWGL(RefPtr<widget::CompositorWidget>&& aWidget,
+  RenderCompositorSWGL(const RefPtr<widget::CompositorWidget>& aWidget,
                        void* aContext);
   virtual ~RenderCompositorSWGL();
 
@@ -31,12 +31,14 @@ class RenderCompositorSWGL : public RenderCompositor {
   void CancelFrame() override;
   RenderedFrameId EndFrame(const nsTArray<DeviceIntRect>& aDirtyRects) final;
 
-  void StartCompositing(const wr::DeviceIntRect* aDirtyRects,
+  void StartCompositing(wr::ColorF aClearColor,
+                        const wr::DeviceIntRect* aDirtyRects,
                         size_t aNumDirtyRects,
                         const wr::DeviceIntRect* aOpaqueRects,
                         size_t aNumOpaqueRects) override;
 
   bool UsePartialPresent() override { return true; }
+  bool RequestFullRender() override;
 
   void Pause() override;
   bool Resume() override;
@@ -55,12 +57,12 @@ class RenderCompositorSWGL : public RenderCompositor {
   bool SupportsExternalBufferTextures() const override { return true; }
 
   // Interface for wr::Compositor
-  CompositorCapabilities GetCompositorCapabilities() override;
+  void GetCompositorCapabilities(CompositorCapabilities* aCaps) override;
 
  private:
   void* mContext = nullptr;
   RefPtr<gfx::DrawTarget> mDT;
-  LayoutDeviceIntRegion mRegion;
+  LayoutDeviceIntRegion mDirtyRegion;
   RefPtr<gfx::DataSourceSurface> mSurface;
   uint8_t* mMappedData = nullptr;
   int32_t mMappedStride = 0;

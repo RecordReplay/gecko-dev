@@ -17,6 +17,10 @@
       }
     },
 
+    "AllowedDomainsForApps": {
+      "type": "string"
+    },
+
     "AppAutoUpdate": {
       "type": "boolean"
     },
@@ -77,6 +81,29 @@
           "type": "boolean"
         }
       }
+    },
+
+    "AutoLaunchProtocolsFromOrigins": {
+      "type": ["JSON", "array"],
+      "items": {
+        "type": "object",
+        "properties": {
+          "allowed_origins": {
+            "type": "array",
+            "items": {
+              "type": "origin"
+            }
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "required": ["allowed_origins", "protocol"]
+        }
+      }
+    },
+
+    "BackgroundAppUpdate": {
+      "type": "boolean"
     },
 
     "BlockAboutAddons": {
@@ -190,7 +217,18 @@
 
         "Locked": {
           "type": "boolean"
+        },
+
+        "Behavior": {
+          "type": "string",
+          "enum": ["accept", "reject-foreign", "reject", "limit-foreign", "reject-tracker", "reject-tracker-and-partition-foreign"]
+        },
+
+        "BehaviorPrivateBrowsing": {
+          "type": "string",
+          "enum": ["accept", "reject-foreign", "reject", "limit-foreign", "reject-tracker", "reject-tracker-and-partition-foreign"]
         }
+
       }
     },
 
@@ -477,6 +515,9 @@
             },
             "blocked_install_message": {
               "type": "string"
+            },
+            "updates_disabled": {
+              "type": "boolean"
             }
           }
         }
@@ -496,10 +537,16 @@
         "TopSites": {
           "type": "boolean"
         },
+        "SponsoredTopSites": {
+          "type": "boolean"
+        },
         "Highlights": {
           "type": "boolean"
         },
         "Pocket": {
+          "type": "boolean"
+        },
+        "SponsoredPocket": {
           "type": "boolean"
         },
         "Snippets": {
@@ -684,6 +731,10 @@
         "type": "object"
       },
       "type": ["JSON", "array"]
+    },
+
+    "ManualAppUpdateOnly": {
+        "type": "boolean"
     },
 
     "NetworkPrediction": {
@@ -1141,6 +1192,10 @@
       }
     },
 
+    "ShowHomeButton": {
+      "type": "boolean"
+    },
+
     "SSLVersionMax": {
       "type": "string",
       "enum": ["tls1", "tls1.1", "tls1.2", "tls1.3"]
@@ -1208,6 +1263,10 @@
           }
         }
       }
+    },
+
+    "WindowsSSO": {
+      "type": "boolean"
     }
   }
 }

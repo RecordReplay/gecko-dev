@@ -7,6 +7,7 @@
 
 #include "nsAccUtils.h"
 #include "Role.h"
+#include "AccAttributes.h"
 #include "AccIterator.h"
 #include "States.h"
 
@@ -17,7 +18,6 @@
 #include "mozilla/dom/Document.h"
 #include "nsContentUtils.h"
 #include "nsIImageLoadingContent.h"
-#include "nsIPersistentProperties2.h"
 #include "nsPIDOMWindow.h"
 #include "nsIURI.h"
 
@@ -35,7 +35,7 @@ ImageAccessible::ImageAccessible(nsIContent* aContent, DocAccessible* aDoc)
 ImageAccessible::~ImageAccessible() {}
 
 ////////////////////////////////////////////////////////////////////////////////
-// Accessible public
+// LocalAccessible public
 
 uint64_t ImageAccessible::NativeState() const {
   // The state is a bitfield, get our inherited state, then logically OR it with
@@ -46,9 +46,10 @@ uint64_t ImageAccessible::NativeState() const {
   nsCOMPtr<nsIImageLoadingContent> content(do_QueryInterface(mContent));
   nsCOMPtr<imgIRequest> imageRequest;
 
-  if (content)
+  if (content) {
     content->GetRequest(nsIImageLoadingContent::CURRENT_REQUEST,
                         getter_AddRefs(imageRequest));
+  }
 
   if (imageRequest) {
     nsCOMPtr<imgIContainer> imgContainer;
@@ -84,20 +85,20 @@ ENameValueFlag ImageAccessible::NativeName(nsString& aName) const {
       mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::alt, aName);
   if (!aName.IsEmpty()) return eNameOK;
 
-  ENameValueFlag nameFlag = Accessible::NativeName(aName);
+  ENameValueFlag nameFlag = LocalAccessible::NativeName(aName);
   if (!aName.IsEmpty()) return nameFlag;
 
   // No accessible name but empty 'alt' attribute is present. If further name
   // computation algorithm doesn't provide non empty name then it means
   // an empty 'alt' attribute was used to indicate a decorative image (see
-  // Accessible::Name() method for details).
+  // LocalAccessible::Name() method for details).
   return hasAltAttrib ? eNoNameOnPurpose : eNameOK;
 }
 
 role ImageAccessible::NativeRole() const { return roles::GRAPHIC; }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Accessible
+// LocalAccessible
 
 uint8_t ImageAccessible::ActionCount() const {
   uint8_t actionCount = LinkableAccessible::ActionCount();
@@ -106,10 +107,11 @@ uint8_t ImageAccessible::ActionCount() const {
 
 void ImageAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName) {
   aName.Truncate();
-  if (IsLongDescIndex(aIndex) && HasLongDesc())
+  if (IsLongDescIndex(aIndex) && HasLongDesc()) {
     aName.AssignLiteral("showlongdesc");
-  else
+  } else {
     LinkableAccessible::ActionNameAt(aIndex, aName);
+  }
 }
 
 bool ImageAccessible::DoAction(uint8_t aIndex) const {
@@ -145,14 +147,13 @@ nsIntPoint ImageAccessible::Position(uint32_t aCoordType) {
 
 nsIntSize ImageAccessible::Size() { return Bounds().Size(); }
 
-// Accessible
-already_AddRefed<nsIPersistentProperties> ImageAccessible::NativeAttributes() {
-  nsCOMPtr<nsIPersistentProperties> attributes =
-      LinkableAccessible::NativeAttributes();
+// LocalAccessible
+already_AddRefed<AccAttributes> ImageAccessible::NativeAttributes() {
+  RefPtr<AccAttributes> attributes = LinkableAccessible::NativeAttributes();
 
   nsAutoString src;
   mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::src, src);
-  if (!src.IsEmpty()) nsAccUtils::SetAccAttr(attributes, nsGkAtoms::src, src);
+  if (!src.IsEmpty()) attributes->SetAttribute(nsGkAtoms::src, src);
 
   return attributes.forget();
 }

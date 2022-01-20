@@ -31,6 +31,24 @@ fog:
       - glean-team@mozilla.com
     expires: never
 
+  failed_idle_registration:
+    type: boolean
+    lifetime: application
+    description: |
+      True if we failed to register with the idle service. Absent otherwise.
+      Means IPC probably isn't working well.
+      Child-process data will likely be absent, or incomplete.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1694739
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1694739#c5
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - chutten@mozilla.com
+      - glean-team@mozilla.com
+    expires: never
+
 fog.ipc:
   replay_failures:
     type: counter
@@ -48,62 +66,35 @@ fog.ipc:
       - glean-team@mozilla.com
     expires: never
 
-fog_validation:
-  legacy_telemetry_client_id:
-    type: uuid
-    description:
-      The Telemetry client_id.
-      To be sent only in the "fog-validation" ping.
+  buffer_sizes:
+    type: memory_distribution
+    memory_unit: byte
+    description: |
+      The number and size of the IPC buffers being received over FOG IPC.
     bugs:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1674233
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1694739
     data_reviews:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1674233#c4
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1694739#c5
     data_sensitivity:
       - technical
-      - highly_sensitive
-    lifetime: application
     notification_emails:
       - chutten@mozilla.com
       - glean-team@mozilla.com
-    expires: "89"
-    send_in_pings:
-      - fog-validation
+    expires: never
 
-  os_version:
-    type: string
-    description:
-      The version of the OS running Firefox, as detected by Gecko.
-      To be sent only in the "fog-validation" ping.
+  flush_durations:
+    type: timing_distribution
+    time_unit: microsecond
+    description: |
+      The length of time between asking the child processes for their
+      IPC buffers and all of them being received by the parent.
     bugs:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1679835
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1694739
     data_reviews:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1679835#c3
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1694739#c5
     data_sensitivity:
       - technical
-    lifetime: application
-    notification_emails:
-      - aplacitelli@mozilla.com
-      - chutten@mozilla.com
-      - glean-team@mozilla.com
-    expires: "89"
-    send_in_pings:
-      - fog-validation
-
-  profile_disk_is_ssd:
-    type: boolean
-    description:
-      True iff the type of the disk the current Firefox profile is stored on
-      is an SSD. (Windows only).
-    bugs:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1675877
-    data_reviews:
-      - https://bugzilla.mozilla.org/show_bug.cgi?id=1675877#c7
-    data_sensitivity:
-      - technical
-    lifetime: application
     notification_emails:
       - chutten@mozilla.com
       - glean-team@mozilla.com
-    expires: "89"
-    send_in_pings:
-      - fog-validation
+    expires: never

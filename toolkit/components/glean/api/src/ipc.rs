@@ -4,7 +4,7 @@
 
 //! IPC Implementation, Rust part
 
-use crate::private::{Instant, MetricId};
+use crate::private::MetricId;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ use {
 
 use super::metrics::__glean_metric_maps;
 
-type EventRecord = (Instant, Option<HashMap<i32, String>>);
+type EventRecord = (u64, HashMap<i32, String>);
 
 /// Contains all the information necessary to update the metrics on the main
 /// process.
@@ -28,8 +28,10 @@ pub struct IPCPayload {
     pub counters: HashMap<MetricId, i32>,
     pub events: HashMap<MetricId, Vec<EventRecord>>,
     pub memory_samples: HashMap<MetricId, Vec<u64>>,
+    pub custom_samples: HashMap<MetricId, Vec<i64>>,
     pub string_lists: HashMap<MetricId, Vec<String>>,
-    pub timing_samples: HashMap<MetricId, Vec<u128>>,
+    pub timing_samples: HashMap<MetricId, Vec<u64>>,
+    pub labeled_counters: HashMap<MetricId, HashMap<String, i32>>,
 }
 
 /// Global singleton: pending IPC payload.
@@ -115,12 +117,49 @@ pub fn take_buf() -> Option<Vec<u8>> {
     })
 }
 
+// Reason: We instrument the error counts,
+// but don't need more detailed error information at the moment.
+#[allow(clippy::result_unit_err)]
 pub fn replay_from_buf(buf: &[u8]) -> Result<(), ()> {
+    // TODO: Instrument failures to find metrics by id.
     let ipc_payload: IPCPayload = bincode::deserialize(buf).map_err(|_| ())?;
     for (id, value) in ipc_payload.counters.into_iter() {
-        log::info!("Asked to replay {:?}, {:?}", id, value);
         if let Some(metric) = __glean_metric_maps::COUNTER_MAP.get(&id) {
             metric.add(value);
+        }
+    }
+    for (id, records) in ipc_payload.events.into_iter() {
+        for (timestamp, extra) in records.into_iter() {
+            let _ = __glean_metric_maps::record_event_by_id_with_time(id, timestamp, extra);
+        }
+    }
+    for (id, samples) in ipc_payload.memory_samples.into_iter() {
+        if let Some(metric) = __glean_metric_maps::MEMORY_DISTRIBUTION_MAP.get(&id) {
+            samples
+                .into_iter()
+                .for_each(|sample| metric.accumulate(sample));
+        }
+    }
+    for (id, samples) in ipc_payload.custom_samples.into_iter() {
+        if let Some(metric) = __glean_metric_maps::CUSTOM_DISTRIBUTION_MAP.get(&id) {
+            metric.accumulate_samples_signed(samples);
+        }
+    }
+    for (id, strings) in ipc_payload.string_lists.into_iter() {
+        if let Some(metric) = __glean_metric_maps::STRING_LIST_MAP.get(&id) {
+            strings.iter().for_each(|s| metric.add(s));
+        }
+    }
+    for (id, samples) in ipc_payload.timing_samples.into_iter() {
+        if let Some(metric) = __glean_metric_maps::TIMING_DISTRIBUTION_MAP.get(&id) {
+            metric.accumulate_raw_samples_nanos(samples);
+        }
+    }
+    for (id, labeled_counts) in ipc_payload.labeled_counters.into_iter() {
+        if let Some(metric) = __glean_metric_maps::LABELED_COUNTER_MAP.get(&id) {
+            for (label, count) in labeled_counts.into_iter() {
+                metric.get(&label).add(count);
+            }
         }
     }
     Ok(())

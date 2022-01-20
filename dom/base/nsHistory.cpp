@@ -15,9 +15,11 @@
 #include "nsIWebNavigation.h"
 #include "nsReadableUtils.h"
 #include "nsContentUtils.h"
+#include "mozilla/dom/WindowContext.h"
 #include "mozilla/dom/Location.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/BasePrincipal.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -136,7 +138,8 @@ void nsHistory::GetState(JSContext* aCx, JS::MutableHandle<JS::Value> aResult,
   aResult.setNull();
 }
 
-void nsHistory::Go(int32_t aDelta, CallerType aCallerType, ErrorResult& aRv) {
+void nsHistory::Go(int32_t aDelta, nsIPrincipal& aSubjectPrincipal,
+                   ErrorResult& aRv) {
   LOG(("nsHistory::Go(%d)", aDelta));
   nsCOMPtr<nsPIDOMWindowInner> win(do_QueryReferent(mInnerWindow));
   if (!win || !win->HasActiveDocument()) {
@@ -148,7 +151,7 @@ void nsHistory::Go(int32_t aDelta, CallerType aCallerType, ErrorResult& aRv) {
     // "When the go(delta) method is invoked, if delta is zero, the user agent
     // must act as if the location.reload() method was called instead."
     RefPtr<Location> location = win->Location();
-    return location->Reload(false, aRv);
+    return location->Reload(false, aSubjectPrincipal, aRv);
   }
 
   RefPtr<ChildSHistory> session_history = GetSessionHistory();
@@ -157,15 +160,24 @@ void nsHistory::Go(int32_t aDelta, CallerType aCallerType, ErrorResult& aRv) {
     return;
   }
 
+  bool userActivation =
+      win->GetWindowContext()
+          ? win->GetWindowContext()->HasValidTransientUserGestureActivation()
+          : false;
+
+  CallerType callerType = aSubjectPrincipal.IsSystemPrincipal()
+                              ? CallerType::System
+                              : CallerType::NonSystem;
+
   // Ignore the return value from Go(), since returning errors from Go() can
   // lead to exceptions and a possible leak of history length
   // AsyncGo throws if we hit the location change rate limit.
   if (StaticPrefs::dom_window_history_async()) {
     session_history->AsyncGo(aDelta, /* aRequireUserInteraction = */ false,
-                             aCallerType, aRv);
+                             userActivation, callerType, aRv);
   } else {
     session_history->Go(aDelta, /* aRequireUserInteraction = */ false,
-                        IgnoreErrors());
+                        userActivation, IgnoreErrors());
   }
 }
 
@@ -184,11 +196,17 @@ void nsHistory::Back(CallerType aCallerType, ErrorResult& aRv) {
     return;
   }
 
+  bool userActivation =
+      win->GetWindowContext()
+          ? win->GetWindowContext()->HasValidTransientUserGestureActivation()
+          : false;
+
   if (StaticPrefs::dom_window_history_async()) {
-    sHistory->AsyncGo(-1, /* aRequireUserInteraction = */ false, aCallerType,
-                      aRv);
+    sHistory->AsyncGo(-1, /* aRequireUserInteraction = */ false, userActivation,
+                      aCallerType, aRv);
   } else {
-    sHistory->Go(-1, /* aRequireUserInteraction = */ false, IgnoreErrors());
+    sHistory->Go(-1, /* aRequireUserInteraction = */ false, userActivation,
+                 IgnoreErrors());
   }
 }
 
@@ -207,11 +225,17 @@ void nsHistory::Forward(CallerType aCallerType, ErrorResult& aRv) {
     return;
   }
 
+  bool userActivation =
+      win->GetWindowContext()
+          ? win->GetWindowContext()->HasValidTransientUserGestureActivation()
+          : false;
+
   if (StaticPrefs::dom_window_history_async()) {
-    sHistory->AsyncGo(1, /* aRequireUserInteraction = */ false, aCallerType,
-                      aRv);
+    sHistory->AsyncGo(1, /* aRequireUserInteraction = */ false, userActivation,
+                      aCallerType, aRv);
   } else {
-    sHistory->Go(1, /* aRequireUserInteraction = */ false, IgnoreErrors());
+    sHistory->Go(1, /* aRequireUserInteraction = */ false, userActivation,
+                 IgnoreErrors());
   }
 }
 

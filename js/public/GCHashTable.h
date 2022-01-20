@@ -13,7 +13,9 @@
 #include "js/HashTable.h"
 #include "js/RootingAPI.h"
 #include "js/SweepingAPI.h"
-#include "js/TracingAPI.h"
+#include "js/TypeDecls.h"
+
+class JSTracer;
 
 namespace JS {
 
@@ -52,8 +54,9 @@ struct DefaultMapSweepPolicy {
 //
 // Note that this HashMap only knows *how* to trace and sweep, but it does not
 // itself cause tracing or sweeping to be invoked. For tracing, it must be used
-// with Rooted or PersistentRooted, or barriered and traced manually. For
-// sweeping, currently it requires an explicit call to <map>.sweep().
+// as Rooted<GCHashMap> or PersistentRooted<GCHashMap>, or barriered and traced
+// manually. For sweeping, currently it requires an explicit call to
+// <map>.sweep().
 template <typename Key, typename Value,
           typename HashPolicy = js::DefaultHasher<Key>,
           typename AllocPolicy = js::TempAllocPolicy,
@@ -358,10 +361,15 @@ class MutableWrappedPtrOperations<JS::GCHashSet<Args...>, Wrapper>
 
   void clear() { set().clear(); }
   void clearAndCompact() { set().clearAndCompact(); }
-  MOZ_MUST_USE bool reserve(uint32_t len) { return set().reserve(len); }
+  [[nodiscard]] bool reserve(uint32_t len) { return set().reserve(len); }
   void remove(Ptr p) { set().remove(p); }
   void remove(const Lookup& l) { set().remove(l); }
   AddPtr lookupForAdd(const Lookup& l) { return set().lookupForAdd(l); }
+
+  template <typename TInput>
+  void replaceKey(Ptr p, const Lookup& l, TInput&& newValue) {
+    set().replaceKey(p, l, std::forward<TInput>(newValue));
+  }
 
   template <typename TInput>
   bool add(AddPtr& p, TInput&& t) {
@@ -763,6 +771,11 @@ class WeakCache<GCHashSet<T, HashPolicy, AllocPolicy>>
     if (p) {
       remove(p);
     }
+  }
+
+  template <typename TInput>
+  void replaceKey(Ptr p, const Lookup& l, TInput&& newValue) {
+    set.replaceKey(p, l, std::forward<TInput>(newValue));
   }
 
   template <typename TInput>

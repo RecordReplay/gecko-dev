@@ -422,8 +422,12 @@ export default class LoginItem extends HTMLElement {
               detail: propertyToCopy,
             })
           );
-          otherCopyButton.disabled = false;
-          delete otherCopyButton.dataset.copied;
+          // If there is no username, this must be triggered by the password button,
+          // don't enable otherCopyButton (username copy button) in this case.
+          if (this._login.username) {
+            otherCopyButton.disabled = false;
+            delete otherCopyButton.dataset.copied;
+          }
           clearTimeout(this._copyUsernameTimeoutId);
           clearTimeout(this._copyPasswordTimeoutId);
           let timeoutId = setTimeout(() => {
@@ -873,7 +877,6 @@ export default class LoginItem extends HTMLElement {
       window.AboutLoginsUtils.passwordRevealVisible === false
     ) {
       this._revealCheckbox.hidden = true;
-      return;
     }
 
     let { checked } = this._revealCheckbox;

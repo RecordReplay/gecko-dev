@@ -7,6 +7,7 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/Monitor.h"
+#include "mozilla/WindowsProcessMitigations.h"
 
 #include "nsComponentManagerUtils.h"
 #include "nsIconChannel.h"
@@ -447,6 +448,13 @@ static UINT GetSizeInfoFlag(uint32_t aDesiredImageSize) {
 }
 
 nsresult nsIconChannel::GetHIconFromFile(bool aNonBlocking, HICON* hIcon) {
+  if (IsWin32kLockedDown()) {
+    MOZ_DIAGNOSTIC_ASSERT(false,
+                          "GetHIconFromFile requires call to SHGetFileInfo, "
+                          "which cannot be used when win32k is disabled.");
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   nsCString contentType;
   nsCString fileExt;
   nsCOMPtr<nsIFile> localFile;  // file we want an icon for
@@ -501,6 +509,12 @@ nsresult nsIconChannel::GetHIconFromFile(bool aNonBlocking, HICON* hIcon) {
     // the generic icon.
     // In any case, we need to insert a '.' before the extension.
     filePath = u"."_ns + NS_ConvertUTF8toUTF16(defFileExt);
+  }
+
+  if (!localFile && !fileExists &&
+      ((filePath.Length() == 1 && filePath.Last() == '.') ||
+       filePath.Length() == 0)) {
+    filePath = u".MozBogusExtensionMoz"_ns;
   }
 
   if (aNonBlocking) {

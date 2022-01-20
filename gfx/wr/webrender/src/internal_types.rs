@@ -9,7 +9,7 @@ use api;
 use crate::render_api::DebugCommand;
 use crate::composite::NativeSurfaceOperation;
 use crate::device::TextureFilter;
-use crate::renderer::PipelineInfo;
+use crate::renderer::{FullFrameStats, PipelineInfo};
 use crate::gpu_cache::GpuCacheUpdateList;
 use crate::frame_builder::Frame;
 use crate::profiler::TransactionProfile;
@@ -239,19 +239,6 @@ impl CacheTextureId {
     pub const INVALID: CacheTextureId = CacheTextureId(!0);
 }
 
-/// Canonical type for texture layer indices.
-///
-/// WebRender is currently not very consistent about layer index types. Some
-/// places use i32 (since that's the type used in various OpenGL APIs), some
-/// places use u32 (since having it be signed is non-sensical, but the
-/// underlying graphics APIs generally operate on 32-bit integers) and some
-/// places use usize (since that's most natural in Rust).
-///
-/// Going forward, we aim to us usize throughout the codebase, since that allows
-/// operations like indexing without a cast, and convert to the required type in
-/// the device module when making calls into the platform layer.
-pub type LayerIndex = usize;
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -326,12 +313,22 @@ pub struct TextureCacheAllocation {
     pub kind: TextureCacheAllocationKind,
 }
 
+/// A little bit of extra information to make memory reports more useful
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
+pub enum TextureCacheCategory {
+    Atlas,
+    Standalone,
+    PictureTile,
+    RenderTarget,
+}
+
 /// Information used when allocating / reallocating.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TextureCacheAllocInfo {
     pub width: i32,
     pub height: i32,
-    pub layer_count: i32,
     pub format: ImageFormat,
     pub filter: TextureFilter,
     pub target: ImageBufferKind,
@@ -339,6 +336,7 @@ pub struct TextureCacheAllocInfo {
     pub is_shared_cache: bool,
     /// If true, this texture requires a depth target.
     pub has_depth: bool,
+    pub category: TextureCacheCategory
 }
 
 /// Sub-operation-specific information for allocation operations.
@@ -358,7 +356,6 @@ pub struct TextureCacheUpdate {
     pub rect: DeviceIntRect,
     pub stride: Option<i32>,
     pub offset: i32,
-    pub layer_index: i32,
     pub format_override: Option<ImageFormat>,
     pub source: TextureUpdateSource,
 }
@@ -418,15 +415,13 @@ impl TextureUpdateList {
         origin: DeviceIntPoint,
         width: i32,
         height: i32,
-        layer_index: usize
     ) {
         let size = DeviceIntSize::new(width, height);
-        let rect = DeviceIntRect::new(origin, size);
+        let rect = DeviceIntRect::from_origin_and_size(origin, size);
         self.push_update(id, TextureCacheUpdate {
             rect,
             stride: None,
             offset: 0,
-            layer_index: layer_index as i32,
             format_override: None,
             source: TextureUpdateSource::DebugClear,
         });
@@ -521,11 +516,10 @@ pub struct RenderedDocument {
     pub frame: Frame,
     pub is_new_scene: bool,
     pub profile: TransactionProfile,
+    pub frame_stats: Option<FullFrameStats>
 }
 
 pub enum DebugOutput {
-    FetchDocuments(String),
-    FetchClipScrollTree(String),
     #[cfg(feature = "capture")]
     SaveCapture(CaptureConfig, Vec<ExternalCaptureImage>),
     #[cfg(feature = "replay")]

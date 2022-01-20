@@ -14,7 +14,7 @@
 #include "nsIObserver.h"
 #include "nsHostResolver.h"
 #include "nsString.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 #include "nsHashKeys.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Attributes.h"
@@ -32,7 +32,7 @@ class nsDNSService final : public nsPIDNSService,
   NS_DECL_NSIOBSERVER
   NS_DECL_NSIMEMORYREPORTER
 
-  nsDNSService();
+  nsDNSService() = default;
 
   static already_AddRefed<nsIDNSService> GetXPCOMSingleton();
 
@@ -49,7 +49,7 @@ class nsDNSService final : public nsPIDNSService,
       nsIDNSRecord** result);
 
  private:
-  ~nsDNSService();
+  ~nsDNSService() = default;
 
   nsresult ReadPrefs(const char* name);
   static already_AddRefed<nsDNSService> GetSingleton();
@@ -77,33 +77,39 @@ class nsDNSService final : public nsPIDNSService,
 
   bool DNSForbiddenByActiveProxy(const nsACString& aHostname, uint32_t flags);
 
+  // Locks the mutex and returns an addreffed resolver. May return null.
+  already_AddRefed<nsHostResolver> GetResolverLocked();
+
   RefPtr<nsHostResolver> mResolver;
   nsCOMPtr<nsIIDNService> mIDN;
 
   // mLock protects access to mResolver, mLocalDomains, mIPv4OnlyDomains and
   // mFailedSVCDomainNames
-  mozilla::Mutex mLock;
+  mozilla::Mutex mLock{"nsDNSServer.mLock"};
 
   // mIPv4OnlyDomains is a comma-separated list of domains for which only
   // IPv4 DNS lookups are performed. This allows the user to disable IPv6 on
   // a per-domain basis and work around broken DNS servers. See bug 68796.
   nsCString mIPv4OnlyDomains;
   nsCString mForceResolve;
-  bool mDisableIPv6;
-  bool mDisablePrefetch;
-  bool mBlockDotOnion;
-  bool mNotifyResolution;
-  bool mOfflineLocalhost;
-  bool mForceResolveOn;
-  nsTHashtable<nsCStringHashKey> mLocalDomains;
+  bool mDisableIPv6 = false;
+  bool mDisablePrefetch = false;
+  bool mBlockDotOnion = false;
+  bool mNotifyResolution = false;
+  bool mOfflineLocalhost = false;
+  bool mForceResolveOn = false;
+  nsTHashSet<nsCString> mLocalDomains;
   RefPtr<mozilla::net::TRRService> mTrrService;
-  mozilla::Atomic<bool, mozilla::Relaxed> mHasSocksProxy;
+  mozilla::Atomic<bool, mozilla::Relaxed> mHasSocksProxy{false};
 
-  uint32_t mResCacheEntries;
-  uint32_t mResCacheExpiration;
-  uint32_t mResCacheGrace;
-  bool mResolverPrefsUpdated;
+  uint32_t mResCacheEntries = 0;
+  uint32_t mResCacheExpiration = 0;
+  uint32_t mResCacheGrace = 0;
+  bool mResolverPrefsUpdated = false;
+  bool mODoHActivated = false;
   nsClassHashtable<nsCStringHashKey, nsTArray<nsCString>> mFailedSVCDomainNames;
 };
+
+already_AddRefed<nsIDNSService> GetOrInitDNSService();
 
 #endif  // nsDNSService2_h__

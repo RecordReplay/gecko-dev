@@ -11,6 +11,7 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StorageAccess.h"
 #include "nsContentUtils.h"
+#include "nsIEffectiveTLDService.h"
 #include "nsNetUtil.h"
 
 namespace mozilla {
@@ -385,6 +386,58 @@ bool StoragePrincipalHelper::GetOriginAttributesForHSTS(
 bool StoragePrincipalHelper::GetOriginAttributesForHTTPSRR(
     nsIChannel* aChannel, OriginAttributes& aAttributes) {
   return GetOriginAttributesWithScheme(aChannel, aAttributes, HTTPS);
+}
+
+// static
+bool StoragePrincipalHelper::GetOriginAttributes(
+    const mozilla::ipc::PrincipalInfo& aPrincipalInfo,
+    OriginAttributes& aAttributes) {
+  aAttributes = mozilla::OriginAttributes();
+
+  using Type = ipc::PrincipalInfo;
+  switch (aPrincipalInfo.type()) {
+    case Type::TContentPrincipalInfo:
+      aAttributes = aPrincipalInfo.get_ContentPrincipalInfo().attrs();
+      break;
+    case Type::TNullPrincipalInfo:
+      aAttributes = aPrincipalInfo.get_NullPrincipalInfo().attrs();
+      break;
+    case Type::TExpandedPrincipalInfo:
+      aAttributes = aPrincipalInfo.get_ExpandedPrincipalInfo().attrs();
+      break;
+    case Type::TSystemPrincipalInfo:
+      break;
+    default:
+      return false;
+  }
+
+  return true;
+}
+
+bool StoragePrincipalHelper::PartitionKeyHasBaseDomain(
+    const nsAString& aPartitionKey, const nsACString& aBaseDomain) {
+  return PartitionKeyHasBaseDomain(aPartitionKey,
+                                   NS_ConvertUTF8toUTF16(aBaseDomain));
+}
+
+// static
+bool StoragePrincipalHelper::PartitionKeyHasBaseDomain(
+    const nsAString& aPartitionKey, const nsAString& aBaseDomain) {
+  if (aPartitionKey.IsEmpty() || aBaseDomain.IsEmpty()) {
+    return false;
+  }
+
+  nsString scheme;
+  nsString pkBaseDomain;
+  int32_t port;
+  bool success = OriginAttributes::ParsePartitionKey(aPartitionKey, scheme,
+                                                     pkBaseDomain, port);
+
+  if (!success) {
+    return false;
+  }
+
+  return aBaseDomain.Equals(pkBaseDomain);
 }
 
 }  // namespace mozilla

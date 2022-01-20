@@ -5,14 +5,14 @@
 // except according to those terms.
 
 use crate::client_events::{Http3ClientEvent, Http3ClientEvents};
-use crate::connection::{HandleReadableOutput, Http3Connection, Http3State};
+use crate::connection::{Http3Connection, Http3State};
 use crate::hframe::HFrame;
 use crate::push_controller::PushController;
 use crate::push_stream::PushStream;
 use crate::recv_message::{MessageType, RecvMessage};
 use crate::send_message::{SendMessage, SendMessageEvents};
 use crate::settings::HSettings;
-use crate::{Header, RecvMessageEvents, ResetType};
+use crate::{Header, ReceiveOutput, RecvMessageEvents, ResetType};
 use neqo_common::{
     event::Provider as EventProvider, hex, hex_with_len, qdebug, qinfo, qlog::NeqoQlog, qtrace,
     Datagram, Decoder, Encoder, Role,
@@ -20,11 +20,13 @@ use neqo_common::{
 use neqo_crypto::{agent::CertificateInfo, AuthenticationStatus, ResumptionToken, SecretAgentInfo};
 use neqo_qpack::{QpackSettings, Stats as QpackStats};
 use neqo_transport::{
-    AppError, Connection, ConnectionEvent, ConnectionId, ConnectionIdManager, ConnectionParameters,
-    Output, QuicVersion, Stats as TransportStats, StreamId, StreamType, ZeroRttState,
+    AppError, Connection, ConnectionEvent, ConnectionId, ConnectionIdGenerator,
+    ConnectionParameters, Output, QuicVersion, Stats as TransportStats, StreamId, StreamType,
+    ZeroRttState,
 };
 use std::cell::RefCell;
 use std::fmt::Display;
+use std::mem;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Instant;
@@ -58,8 +60,7 @@ where
 
 fn alpn_from_quic_version(version: QuicVersion) -> &'static str {
     match version {
-        QuicVersion::Draft27 => "h3-27",
-        QuicVersion::Draft28 => "h3-28",
+        QuicVersion::Version1 => "h3",
         QuicVersion::Draft29 => "h3-29",
         QuicVersion::Draft30 => "h3-30",
         QuicVersion::Draft31 => "h3-31",
@@ -91,11 +92,12 @@ impl Http3Client {
     /// the socket can't be created or configured.
     pub fn new(
         server_name: &str,
-        cid_manager: Rc<RefCell<dyn ConnectionIdManager>>,
+        cid_manager: Rc<RefCell<dyn ConnectionIdGenerator>>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        conn_params: &ConnectionParameters,
+        conn_params: ConnectionParameters,
         http3_parameters: &Http3Parameters,
+        now: Instant,
     ) -> Res<Self> {
         Ok(Self::new_with_conn(
             Connection::new_client(
@@ -105,6 +107,7 @@ impl Http3Client {
                 local_addr,
                 remote_addr,
                 conn_params,
+                now,
             )?,
             http3_parameters,
         ))
@@ -154,6 +157,15 @@ impl Http3Client {
         self.conn.set_qlog(qlog);
     }
 
+    /// Enable encrypted client hello (ECH).
+    ///
+    /// # Errors
+    /// Fails when the configuration provided is bad.
+    pub fn enable_ech(&mut self, ech_config_list: impl AsRef<[u8]>) -> Res<()> {
+        self.conn.client_enable_ech(ech_config_list)?;
+        Ok(())
+    }
+
     /// Get the connection id, which is useful for disambiguating connections to
     /// the same origin.
     #[must_use]
@@ -175,6 +187,8 @@ impl Http3Client {
     /// This may be call if an application has a resumption token. This must be called before connection starts.
     /// # Errors
     /// An error is return if token cannot be decoded or a connection is is a wrong state.
+    /// # Panics
+    /// On closing if the base handler can't handle it (debug only).
     pub fn enable_resumption(&mut self, now: Instant, token: impl AsRef<[u8]>) -> Res<()> {
         if self.base_handler.state != Http3State::Initializing {
             return Err(Error::InvalidState);
@@ -196,12 +210,10 @@ impl Http3Client {
         self.conn.enable_resumption(now, tok)?;
         if self.conn.state().closed() {
             let state = self.conn.state().clone();
-            debug_assert!(
-                Ok(true)
-                    == self
-                        .base_handler
-                        .handle_state_change(&mut self.conn, &state)
-            );
+            let res = self
+                .base_handler
+                .handle_state_change(&mut self.conn, &state);
+            debug_assert_eq!(Ok(true), res);
             return Err(Error::FatalError);
         }
         if *self.conn.zero_rtt_state() == ZeroRttState::Sending {
@@ -222,7 +234,10 @@ impl Http3Client {
         S: AsRef<str> + Display,
     {
         qinfo!([self], "Close the connection error={} msg={}.", error, msg);
-        if !matches!(self.base_handler.state, Http3State::Closing(_)| Http3State::Closed(_)) {
+        if !matches!(
+            self.base_handler.state,
+            Http3State::Closing(_) | Http3State::Closed(_)
+        ) {
             self.push_handler.borrow_mut().clear();
             self.conn.close(now, error, msg);
             self.base_handler.close(error);
@@ -278,11 +293,12 @@ impl Http3Client {
             .map_err(|e| Error::map_stream_create_errors(&e))?;
 
         // Transform pseudo-header fields
-        let mut final_headers = Vec::new();
-        final_headers.push((":method".into(), method.to_owned()));
-        final_headers.push((":scheme".into(), scheme.to_owned()));
-        final_headers.push((":authority".into(), host.to_owned()));
-        final_headers.push((":path".into(), path.to_owned()));
+        let mut final_headers = vec![
+            Header::new(":method", method),
+            Header::new(":scheme", scheme),
+            Header::new(":authority", host),
+            Header::new(":path", path),
+        ];
         final_headers.extend_from_slice(headers);
 
         self.base_handler.add_streams(
@@ -291,20 +307,24 @@ impl Http3Client {
             Box::new(RecvMessage::new(
                 MessageType::Response,
                 id,
+                Rc::clone(&self.base_handler.qpack_decoder),
                 Box::new(self.events.clone()),
-                Some(self.push_handler.clone()),
+                Some(Rc::clone(&self.push_handler)),
             )),
         );
 
         // Call immediately send so that at least headers get sent. This will make Firefox faster, since
         // it can send request body immediatly in most cases and does not need to do a complete process loop.
-        if let Err(e) = self
+        let output = self
             .base_handler
             .send_streams
             .get_mut(&id)
             .ok_or(Error::InvalidStreamId)?
-            .send(&mut self.conn, &mut self.base_handler.qpack_encoder)
-        {
+            .send(
+                &mut self.conn,
+                &mut self.base_handler.qpack_encoder.borrow_mut(),
+            );
+        if let Err(e) = output {
             if e.connection_error() {
                 self.close(now, e.code(), "");
             }
@@ -372,10 +392,11 @@ impl Http3Client {
             .base_handler
             .recv_streams
             .get_mut(&stream_id)
+            .ok_or(Error::InvalidStreamId)?
+            .http_stream()
             .ok_or(Error::InvalidStreamId)?;
 
-        let res = recv_stream.read_data(&mut self.conn, &mut self.base_handler.qpack_decoder, buf);
-        match res {
+        match recv_stream.read_data(&mut self.conn, buf) {
             Ok((amount, fin)) => {
                 if recv_stream.done() {
                     self.base_handler.recv_streams.remove(&stream_id);
@@ -513,16 +534,9 @@ impl Http3Client {
             match e {
                 ConnectionEvent::NewStream { stream_id } => match stream_id.stream_type() {
                     StreamType::BiDi => return Err(Error::HttpStreamCreation),
-                    StreamType::UniDi => {
-                        if self
-                            .base_handler
-                            .handle_new_unidi_stream(&mut self.conn, stream_id.as_u64())?
-                        {
-                            // Do not force read from the stream because RecvStreamReadable will trigger a read.
-                            // If we read the stream here we may post multiple read events.
-                            self.handle_new_push_stream(stream_id.as_u64(), false)?;
-                        }
-                    }
+                    StreamType::UniDi => self
+                        .base_handler
+                        .handle_new_unidi_stream(stream_id.as_u64()),
                 },
                 ConnectionEvent::SendStreamWritable { stream_id } => {
                     if let Some(s) = self.base_handler.send_streams.get_mut(&stream_id.as_u64()) {
@@ -555,6 +569,9 @@ impl Http3Client {
                     self.events.new_requests_creatable(stream_type)
                 }
                 ConnectionEvent::AuthenticationNeeded => self.events.authentication_needed(),
+                ConnectionEvent::EchFallbackAuthenticationNeeded { public_name } => {
+                    self.events.ech_fallback_authentication_needed(public_name)
+                }
                 ConnectionEvent::StateChange(state) => {
                     if self
                         .base_handler
@@ -582,8 +599,8 @@ impl Http3Client {
             .base_handler
             .handle_stream_readable(&mut self.conn, stream_id)?
         {
-            HandleReadableOutput::PushStream => self.handle_new_push_stream(stream_id, true),
-            HandleReadableOutput::ControlFrames(control_frames) => {
+            ReceiveOutput::PushStream => self.handle_new_push_stream(stream_id),
+            ReceiveOutput::ControlFrames(control_frames) => {
                 for f in control_frames {
                     match f {
                         HFrame::CancelPush { push_id } => self
@@ -605,22 +622,21 @@ impl Http3Client {
         }
     }
 
-    fn handle_new_push_stream(&mut self, stream_id: u64, force_read: bool) -> Res<()> {
+    fn handle_new_push_stream(&mut self, stream_id: u64) -> Res<()> {
         if self.push_handler.borrow().can_receive_push() {
             self.base_handler.add_recv_stream(
                 stream_id,
                 Box::new(PushStream::new(
                     stream_id,
-                    self.push_handler.clone(),
+                    Rc::clone(&self.push_handler),
+                    Rc::clone(&self.base_handler.qpack_decoder),
                     self.events.clone(),
                 )),
             );
-            if force_read {
-                let res2 = self
-                    .base_handler
-                    .handle_stream_readable(&mut self.conn, stream_id)?;
-                debug_assert!(matches!(res2, HandleReadableOutput::NoOutput));
-            }
+            let res = self
+                .base_handler
+                .handle_stream_readable(&mut self.conn, stream_id)?;
+            debug_assert!(matches!(res, ReceiveOutput::NoOutput));
             Ok(())
         } else {
             Err(Error::HttpId)
@@ -685,14 +701,23 @@ impl Http3Client {
         Ok(())
     }
 
+    /// Increases `max_stream_data` for a `stream_id`.
+    /// # Errors
+    /// Returns `InvalidStreamId` if a stream does not exist or the receiving
+    /// side is closed.
+    pub fn set_stream_max_data(&mut self, stream_id: u64, max_data: u64) -> Res<()> {
+        self.conn.set_stream_max_data(stream_id, max_data)?;
+        Ok(())
+    }
+
     #[must_use]
     pub fn qpack_decoder_stats(&self) -> QpackStats {
-        self.base_handler.qpack_decoder.stats()
+        self.base_handler.qpack_decoder.borrow().stats()
     }
 
     #[must_use]
     pub fn qpack_encoder_stats(&self) -> QpackStats {
-        self.base_handler.qpack_encoder.stats()
+        self.base_handler.qpack_encoder.borrow().stats()
     }
 
     #[must_use]
@@ -701,13 +726,9 @@ impl Http3Client {
     }
 
     fn reset_stream_on_error(&mut self, stream_id: u64, app_error: AppError) {
-        let _ = self.conn.stream_stop_sending(stream_id, app_error);
-        if let Some(rs) = self.base_handler.recv_streams.remove(&stream_id) {
-            rs.stream_reset(
-                app_error,
-                &mut self.base_handler.qpack_decoder,
-                ResetType::Local,
-            );
+        mem::drop(self.conn.stream_stop_sending(stream_id, app_error));
+        if let Some(mut rs) = self.base_handler.recv_streams.remove(&stream_id) {
+            rs.stream_reset(app_error, ResetType::Local).unwrap();
         }
     }
 }
@@ -735,27 +756,29 @@ mod tests {
         Http3Parameters, Http3State, QpackSettings, Rc, RefCell, StreamType,
     };
     use crate::hframe::{HFrame, H3_FRAME_TYPE_SETTINGS, H3_RESERVED_FRAME_TYPES};
+    use crate::qpack_encoder_receiver::EncoderRecvStream;
     use crate::settings::{HSetting, HSettingType, H3_RESERVED_SETTINGS};
-    use crate::Http3Server;
+    use crate::{Http3Server, RecvStream};
     use neqo_common::{event::Provider, Datagram, Decoder, Encoder};
     use neqo_crypto::{AllowZeroRtt, AntiReplay, ResumptionToken};
     use neqo_qpack::encoder::QPackEncoder;
     use neqo_transport::tparams::{self, TransportParameter};
     use neqo_transport::{
-        CloseError, ConnectionEvent, ConnectionParameters, FixedConnectionIdManager, Output, State,
-        RECV_BUFFER_SIZE, SEND_BUFFER_SIZE,
+        ConnectionError, ConnectionEvent, ConnectionParameters, Output, State, RECV_BUFFER_SIZE,
+        SEND_BUFFER_SIZE,
     };
     use std::convert::TryFrom;
+    use std::mem;
     use std::time::Duration;
     use test_fixture::{
-        anti_replay, default_server_h3, fixture_init, loopback, now, DEFAULT_ALPN_H3, DEFAULT_KEYS,
-        DEFAULT_SERVER_NAME,
+        addr, anti_replay, default_server_h3, fixture_init, now, CountingConnectionIdGenerator,
+        DEFAULT_ALPN_H3, DEFAULT_KEYS, DEFAULT_SERVER_NAME,
     };
 
     fn assert_closed(client: &Http3Client, expected: &Error) {
         match client.state() {
             Http3State::Closing(err) | Http3State::Closed(err) => {
-                assert_eq!(err, CloseError::Application(expected.code()))
+                assert_eq!(err, ConnectionError::Application(expected.code()))
             }
             _ => panic!("Wrong state {:?}", client.state()),
         };
@@ -770,10 +793,10 @@ mod tests {
         fixture_init();
         Http3Client::new(
             DEFAULT_SERVER_NAME,
-            Rc::new(RefCell::new(FixedConnectionIdManager::new(3))),
-            loopback(),
-            loopback(),
-            &ConnectionParameters::default(),
+            Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
+            addr(),
+            addr(),
+            ConnectionParameters::default(),
             &Http3Parameters {
                 qpack_settings: QpackSettings {
                     max_table_size_encoder: max_table_size,
@@ -782,6 +805,7 @@ mod tests {
                 },
                 max_concurrent_push_streams: 5,
             },
+            now(),
         )
         .expect("create a default client")
     }
@@ -814,7 +838,8 @@ mod tests {
         settings: HFrame,
         conn: Connection,
         control_stream_id: Option<u64>,
-        encoder: QPackEncoder,
+        encoder: Rc<RefCell<QPackEncoder>>,
+        encoder_receiver: EncoderRecvStream,
         encoder_stream_id: Option<u64>,
         decoder_stream_id: Option<u64>,
     }
@@ -830,40 +855,55 @@ mod tests {
 
         pub fn new_with_settings(server_settings: &[HSetting]) -> Self {
             fixture_init();
+            let max_table_size = server_settings
+                .iter()
+                .find(|s| s.setting_type == HSettingType::MaxTableCapacity)
+                .map_or(100, |s| s.value);
+            let max_blocked_streams = u16::try_from(
+                server_settings
+                    .iter()
+                    .find(|s| s.setting_type == HSettingType::BlockedStreams)
+                    .map_or(100, |s| s.value),
+            )
+            .unwrap();
+            let qpack = Rc::new(RefCell::new(QPackEncoder::new(
+                QpackSettings {
+                    max_table_size_encoder: max_table_size,
+                    max_table_size_decoder: max_table_size,
+                    max_blocked_streams,
+                },
+                true,
+            )));
             Self {
                 settings: HFrame::Settings {
                     settings: HSettings::new(server_settings),
                 },
                 conn: default_server_h3(),
                 control_stream_id: None,
-                encoder: QPackEncoder::new(
-                    QpackSettings {
-                        max_table_size_encoder: 128,
-                        max_table_size_decoder: 128,
-                        max_blocked_streams: 0,
-                    },
-                    true,
-                ),
+                encoder: Rc::clone(&qpack),
+                encoder_receiver: EncoderRecvStream::new(CLIENT_SIDE_DECODER_STREAM_ID, qpack),
                 encoder_stream_id: None,
                 decoder_stream_id: None,
             }
         }
 
         pub fn new_with_conn(conn: Connection) -> Self {
+            let qpack = Rc::new(RefCell::new(QPackEncoder::new(
+                QpackSettings {
+                    max_table_size_encoder: 128,
+                    max_table_size_decoder: 128,
+                    max_blocked_streams: 0,
+                },
+                true,
+            )));
             Self {
                 settings: HFrame::Settings {
                     settings: HSettings::new(&[]),
                 },
                 conn,
                 control_stream_id: None,
-                encoder: QPackEncoder::new(
-                    QpackSettings {
-                        max_table_size_encoder: 128,
-                        max_table_size_decoder: 128,
-                        max_blocked_streams: 0,
-                    },
-                    true,
-                ),
+                encoder: Rc::clone(&qpack),
+                encoder_receiver: EncoderRecvStream::new(CLIENT_SIDE_DECODER_STREAM_ID, qpack),
                 encoder_stream_id: None,
                 decoder_stream_id: None,
             }
@@ -873,8 +913,9 @@ mod tests {
             // Create a QPACK encoder stream
             self.encoder_stream_id = Some(self.conn.stream_create(StreamType::UniDi).unwrap());
             self.encoder
+                .borrow_mut()
                 .add_send_stream(self.encoder_stream_id.unwrap());
-            self.encoder.send(&mut self.conn).unwrap();
+            self.encoder.borrow_mut().send(&mut self.conn).unwrap();
 
             // Create decoder stream
             self.decoder_stream_id = Some(self.conn.stream_create(StreamType::UniDi).unwrap());
@@ -884,9 +925,6 @@ mod tests {
                     .unwrap(),
                 1
             );
-            self.encoder
-                .add_recv_stream(CLIENT_SIDE_DECODER_STREAM_ID)
-                .unwrap();
         }
 
         pub fn create_control_stream(&mut self) {
@@ -1041,6 +1079,7 @@ mod tests {
         ) {
             let header_block = self
                 .encoder
+                .borrow_mut()
                 .encode_header_block(&mut self.conn, &headers, stream_id)
                 .unwrap();
             let hframe = HFrame::Headers {
@@ -1087,7 +1126,7 @@ mod tests {
         assert!(client.events().any(connected));
 
         assert_eq!(client.state(), Http3State::Connected);
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
         assert!(server.conn.state().connected());
     }
 
@@ -1102,7 +1141,7 @@ mod tests {
     fn send_and_receive_client_settings(client: &mut Http3Client, server: &mut TestServer) {
         // send and receive client settings
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
         server.check_client_control_qpack_streams_no_resumption();
     }
 
@@ -1137,7 +1176,7 @@ mod tests {
             .fetch(now(), "GET", "https", "something.com", "/", headers)
             .unwrap();
         if close_sending_side {
-            let _ = client.stream_close_send(request_stream_id);
+            client.stream_close_send(request_stream_id).unwrap();
         }
         request_stream_id
     }
@@ -1149,7 +1188,7 @@ mod tests {
         0x43, 0xd3, 0xc1,
     ];
 
-    // For fetch request fetch("GET", "https", "something.com", "/", &[(String::from("myheaders"), String::from("myvalue"))])
+    // For fetch request fetch("GET", "https", "something.com", "/", &[(String::from("myheaders", "myvalue"))])
     // the following request header frame will be sent:
     const EXPECTED_REQUEST_HEADER_FRAME_VERSION2: &[u8] = &[
         0x01, 0x11, 0x02, 0x80, 0xd1, 0xd7, 0x50, 0x89, 0x41, 0xe9, 0x2a, 0x67, 0x35, 0x53, 0x2e,
@@ -1162,8 +1201,8 @@ mod tests {
     // decoded into:
     fn check_response_header_0(header: &[Header]) {
         let expected_response_header_0 = &[
-            (String::from(":status"), String::from("200")),
-            (String::from("content-length"), String::from("0")),
+            Header::new(":status", "200"),
+            Header::new("content-length", "0"),
         ];
         assert_eq!(header, expected_response_header_0);
     }
@@ -1187,8 +1226,8 @@ mod tests {
     // decoded into:
     fn check_response_header_1(header: &[Header]) {
         let expected_response_header_1 = &[
-            (String::from(":status"), String::from("200")),
-            (String::from("content-length"), String::from("7")),
+            Header::new(":status", "200"),
+            Header::new("content-length", "7"),
         ];
         assert_eq!(header, expected_response_header_1);
     }
@@ -1215,8 +1254,8 @@ mod tests {
     // decoded into:
     fn check_response_header_2(header: &[Header]) {
         let expected_response_header_2 = &[
-            (String::from(":status"), String::from("200")),
-            (String::from("content-length"), String::from("3")),
+            Header::new(":status", "200"),
+            Header::new("content-length", "3"),
         ];
         assert_eq!(header, expected_response_header_2);
     }
@@ -1232,7 +1271,7 @@ mod tests {
         let request_stream_id = make_request(client, close_sending_side, &[]);
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         // find the new request/response stream and send frame v on it.
         while let Some(e) = server.conn.next_event() {
@@ -1279,7 +1318,7 @@ mod tests {
         }
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
     }
 
     const PUSH_PROMISE_DATA: &[u8] = &[
@@ -1289,10 +1328,10 @@ mod tests {
 
     fn check_pushpromise_header(header: &[Header]) {
         let expected_response_header_1 = &[
-            (String::from(":method"), String::from("GET")),
-            (String::from(":scheme"), String::from("https")),
-            (String::from(":authority"), String::from("something.com")),
-            (String::from(":path"), String::from("/")),
+            Header::new(":method", "GET"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "something.com"),
+            Header::new(":path", "/"),
         ];
         assert_eq!(header, expected_response_header_1);
     }
@@ -1318,7 +1357,7 @@ mod tests {
 
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         push_stream_id
     }
@@ -1333,7 +1372,7 @@ mod tests {
 
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
     }
 
     fn send_cancel_push_and_exchange_packets(
@@ -1351,7 +1390,7 @@ mod tests {
 
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
     }
 
     const PUSH_DATA: &[u8] = &[
@@ -1364,8 +1403,8 @@ mod tests {
     // decoded into:
     fn check_push_response_header(header: &[Header]) {
         let expected_push_response_header = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("content-length"), String::from("4")),
+            Header::new(":status", "200"),
+            Header::new("content-length", "4"),
         ];
         assert_eq!(header, &expected_push_response_header[..]);
     }
@@ -1463,14 +1502,14 @@ mod tests {
                     assert!(push_streams.contains(&push_id));
                     check_push_response_header(&headers);
                     num_push_stream_headers += 1;
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::PushDataReadable { push_id } => {
                     assert!(push_streams.contains(&push_id));
                     let mut buf = [0_u8; 100];
                     let (amount, fin) = client.push_read_data(now(), push_id, &mut buf).unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(amount, EXPECTED_PUSH_RESPONSE_DATA_FRAME.len());
                     assert_eq!(&buf[..amount], EXPECTED_PUSH_RESPONSE_DATA_FRAME);
                     num_push_stream_data += 1;
@@ -1483,8 +1522,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, response_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert_eq!(stream_id, response_stream_id);
@@ -1507,7 +1546,7 @@ mod tests {
     // Client: Test receiving a new control stream and a SETTINGS frame.
     #[test]
     fn test_client_connect_and_exchange_qpack_and_control_streams() {
-        let _ = connect();
+        mem::drop(connect());
     }
 
     // Client: Test that the connection will be closed if control stream
@@ -1647,7 +1686,8 @@ mod tests {
         // send a frame that is not allowed on the control stream.
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), v);
+            .stream_send(server.control_stream_id.unwrap(), v)
+            .unwrap();
 
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
@@ -1689,7 +1729,7 @@ mod tests {
 
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         assert_closed(&client, &Error::HttpFrameUnexpected);
     }
@@ -1735,10 +1775,11 @@ mod tests {
         let new_stream_id = server.conn.stream_create(StreamType::UniDi).unwrap();
         let _ = server
             .conn
-            .stream_send(new_stream_id, &[0x41, 0x19, 0x4, 0x4, 0x6, 0x0, 0x8, 0x0]);
+            .stream_send(new_stream_id, &[0x41, 0x19, 0x4, 0x4, 0x6, 0x0, 0x8, 0x0])
+            .unwrap();
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         // check for stop-sending with Error::HttpStreamCreation.
         let mut stop_sending_event_found = false;
@@ -1761,12 +1802,12 @@ mod tests {
     fn test_wrong_frame_on_request_stream(v: &[u8]) {
         let (mut client, mut server, request_stream_id) = connect_and_send_request(false);
 
-        let _ = server.conn.stream_send(request_stream_id, v);
+        let _ = server.conn.stream_send(request_stream_id, v).unwrap();
 
         // Generate packet with the above bad h3 input
         let out = server.conn.process(None, now());
         // Process bad input and close the connection.
-        let _ = client.process(out.dgram(), now());
+        mem::drop(client.process(out.dgram(), now()));
 
         assert_closed(&client, &Error::HttpFrameUnexpected);
     }
@@ -1906,8 +1947,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_1(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert_eq!(stream_id, request_stream_id);
@@ -1915,7 +1956,7 @@ mod tests {
                     let (amount, fin) = client
                         .read_response_data(now(), stream_id, &mut buf)
                         .unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(amount, EXPECTED_RESPONSE_DATA_1.len());
                     assert_eq!(&buf[..amount], EXPECTED_RESPONSE_DATA_1);
                 }
@@ -1947,8 +1988,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert_eq!(stream_id, request_stream_id);
@@ -1956,7 +1997,7 @@ mod tests {
                     let (amount, fin) = client
                         .read_response_data(now(), stream_id, &mut buf)
                         .unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(amount, EXPECTED_RESPONSE_DATA_2_FRAME_1.len());
                     assert_eq!(&buf[..amount], EXPECTED_RESPONSE_DATA_2_FRAME_1);
                 }
@@ -1992,10 +2033,10 @@ mod tests {
             .send_request_body(request_stream_id, REQUEST_BODY)
             .unwrap();
         assert_eq!(sent, REQUEST_BODY.len());
-        let _ = client.stream_close_send(request_stream_id);
+        client.stream_close_send(request_stream_id).unwrap();
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         // find the new request/response stream and send response on it.
         while let Some(e) = server.conn.next_event() {
@@ -2010,13 +2051,13 @@ mod tests {
                     // Read request body.
                     let mut buf = [0_u8; 100];
                     let (amount, fin) = server.conn.stream_recv(stream_id, &mut buf).unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(amount, EXPECTED_REQUEST_BODY_FRAME.len());
                     assert_eq!(&buf[..amount], EXPECTED_REQUEST_BODY_FRAME);
 
                     // send response - 200  Content-Length: 3
                     // with content: 'abc'.
-                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_2);
+                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_2).unwrap();
                     server.conn.stream_close_send(stream_id).unwrap();
                 }
                 _ => {}
@@ -2038,7 +2079,7 @@ mod tests {
         assert_eq!(sent, Ok(request_body.len()));
 
         // Close stream.
-        let _ = client.stream_close_send(request_stream_id);
+        client.stream_close_send(request_stream_id).unwrap();
 
         // We need to loop a bit until all data has been sent.
         let mut out = client.process(None, now());
@@ -2055,7 +2096,7 @@ mod tests {
                     // Read the DATA frame.
                     let mut buf = vec![1_u8; RECV_BUFFER_SIZE];
                     let (amount, fin) = server.conn.stream_recv(stream_id, &mut buf).unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(
                         amount,
                         request_body.len() + expected_data_frame_header.len()
@@ -2072,7 +2113,7 @@ mod tests {
 
                     // send response - 200  Content-Length: 3
                     // with content: 'abc'.
-                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_2);
+                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_2).unwrap();
                     server.conn.stream_close_send(stream_id).unwrap();
                 }
             }
@@ -2130,7 +2171,7 @@ mod tests {
         assert_eq!(sent, Ok(expected_second_data_frame.len()));
 
         // Close stream.
-        let _ = client.stream_close_send(request_stream_id);
+        client.stream_close_send(request_stream_id).unwrap();
 
         let mut out = client.process(None, now());
         // We need to loop a bit until all data has been sent. Once for every 1K
@@ -2147,7 +2188,7 @@ mod tests {
                     // Read DATA frames.
                     let mut buf = vec![1_u8; RECV_BUFFER_SIZE];
                     let (amount, fin) = server.conn.stream_recv(stream_id, &mut buf).unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(
                         amount,
                         expected_first_data_frame_header.len()
@@ -2177,7 +2218,7 @@ mod tests {
 
                     // send response - 200  Content-Length: 3
                     // with content: 'abc'.
-                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_2);
+                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_2).unwrap();
                     server.conn.stream_close_send(stream_id).unwrap();
                 }
             }
@@ -2299,8 +2340,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                     response_headers = true;
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
@@ -2309,7 +2350,7 @@ mod tests {
                     let (amount, fin) = client
                         .read_response_data(now(), stream_id, &mut buf)
                         .unwrap();
-                    assert_eq!(fin, true);
+                    assert!(fin);
                     assert_eq!(amount, EXPECTED_RESPONSE_DATA_2_FRAME_1.len());
                     assert_eq!(&buf[..amount], EXPECTED_RESPONSE_DATA_2_FRAME_1);
                     response_body = true;
@@ -2371,7 +2412,7 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     assert_eq!(error, Error::HttpRequestRejected.code());
-                    assert_eq!(local, false);
+                    assert!(!local);
                     reset = true;
                 }
                 Http3ClientEvent::HeaderReady { .. } | Http3ClientEvent::DataReadable { .. } => {
@@ -2490,7 +2531,7 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     assert_eq!(error, Error::HttpRequestCancelled.code());
-                    assert_eq!(local, false);
+                    assert!(!local);
                     reset = true;
                 }
                 Http3ClientEvent::HeaderReady { .. } | Http3ClientEvent::DataReadable { .. } => {
@@ -2570,7 +2611,7 @@ mod tests {
         let (amount, fin) = client
             .read_response_data(now(), request_stream_id, &mut buf)
             .unwrap();
-        assert_eq!(fin, false);
+        assert!(!fin);
         assert_eq!(amount, EXPECTED_RESPONSE_DATA_2_FRAME_1.len());
         assert_eq!(&buf[..amount], EXPECTED_RESPONSE_DATA_2_FRAME_1);
 
@@ -2608,7 +2649,7 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     assert_eq!(error, Error::HttpRequestCancelled.code());
-                    assert_eq!(local, false);
+                    assert!(!local);
                     reset = true;
                 }
                 Http3ClientEvent::HeaderReady { .. } | Http3ClientEvent::DataReadable { .. } => {
@@ -2682,11 +2723,12 @@ mod tests {
         assert_eq!(request_stream_id_3, 8);
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x8]);
+            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x8])
+            .unwrap();
 
         // find the new request/response stream and send frame v on it.
         while let Some(e) = server.conn.next_event() {
@@ -2697,7 +2739,7 @@ mod tests {
                     // send response - 200  Content-Length: 7
                     // with content: 'abcdefg'.
                     // The content will be send in 2 DATA frames.
-                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_1);
+                    let _ = server.conn.stream_send(stream_id, HTTP_RESPONSE_1).unwrap();
                     server.conn.stream_close_send(stream_id).unwrap();
                 }
             }
@@ -2710,7 +2752,7 @@ mod tests {
             match e {
                 Http3ClientEvent::HeaderReady { headers, fin, .. } => {
                     check_response_header_1(&headers);
-                    assert_eq!(fin, false);
+                    assert!(!fin);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert!(
@@ -2731,7 +2773,7 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id_3);
                     assert_eq!(error, Error::HttpRequestRejected.code());
-                    assert_eq!(local, false);
+                    assert!(!local);
                     stream_reset = true;
                 }
                 _ => {}
@@ -2761,12 +2803,13 @@ mod tests {
         assert_eq!(request_stream_id_3, 8);
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         // First send a Goaway frame with an higher number
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x8]);
+            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x8])
+            .unwrap();
 
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
@@ -2782,7 +2825,7 @@ mod tests {
             {
                 assert_eq!(stream_id, request_stream_id_3);
                 assert_eq!(error, Error::HttpRequestRejected.code());
-                assert_eq!(local, false);
+                assert!(!local);
                 stream_reset_1 += 1;
             }
         }
@@ -2793,7 +2836,8 @@ mod tests {
         // Server sends another GOAWAY frame
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x4]);
+            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x4])
+            .unwrap();
 
         // Send response for stream 0
         server_send_response_and_exchange_packet(
@@ -2809,7 +2853,7 @@ mod tests {
             match e {
                 Http3ClientEvent::HeaderReady { headers, fin, .. } => {
                     check_response_header_1(&headers);
-                    assert_eq!(fin, false);
+                    assert!(!fin);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert!(stream_id == request_stream_id_1);
@@ -2828,7 +2872,7 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id_2);
                     assert_eq!(error, Error::HttpRequestRejected.code());
-                    assert_eq!(local, false);
+                    assert!(!local);
                     stream_reset_2 += 1;
                 }
                 _ => {}
@@ -2852,7 +2896,8 @@ mod tests {
         // First send a Goaway frame with a smaller number
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x4]);
+            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x4])
+            .unwrap();
 
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
@@ -2862,7 +2907,8 @@ mod tests {
         // Now send a Goaway frame with an higher number
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x8]);
+            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x8])
+            .unwrap();
 
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
@@ -2876,7 +2922,8 @@ mod tests {
 
         let _ = server
             .conn
-            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x9]);
+            .stream_send(server.control_stream_id.unwrap(), &[0x7, 0x1, 0x9])
+            .unwrap();
 
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
@@ -2937,8 +2984,8 @@ mod tests {
         {
             assert_eq!(stream_id, request_stream_id);
             check_response_header_2(&headers);
-            assert_eq!(fin, true);
-            assert_eq!(interim, false);
+            assert!(fin);
+            assert!(!interim);
         } else {
             panic!("wrong event type");
         }
@@ -2976,8 +3023,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { .. } => {
                     panic!("We should not receive a DataGeadable event!");
@@ -3004,7 +3051,7 @@ mod tests {
                     let res = client.read_response_data(now(), stream_id, &mut buf);
                     let (len, fin) = res.expect("should read");
                     assert_eq!(0, len);
-                    assert_eq!(fin, true);
+                    assert!(fin);
                 }
                 _ => {}
             };
@@ -3026,9 +3073,13 @@ mod tests {
         // Send headers.
         let _ = server
             .conn
-            .stream_send(request_stream_id, HTTP_RESPONSE_HEADER_ONLY_2);
+            .stream_send(request_stream_id, HTTP_RESPONSE_HEADER_ONLY_2)
+            .unwrap();
         // Send an empty data frame.
-        let _ = server.conn.stream_send(request_stream_id, &[0x00, 0x00]);
+        let _ = server
+            .conn
+            .stream_send(request_stream_id, &[0x00, 0x00])
+            .unwrap();
         // ok NOW send fin
         server.conn.stream_close_send(request_stream_id).unwrap();
 
@@ -3046,8 +3097,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert_eq!(stream_id, request_stream_id);
@@ -3078,9 +3129,13 @@ mod tests {
         // Send headers.
         let _ = server
             .conn
-            .stream_send(request_stream_id, HTTP_RESPONSE_HEADER_ONLY_2);
+            .stream_send(request_stream_id, HTTP_RESPONSE_HEADER_ONLY_2)
+            .unwrap();
         // Send an empty data frame.
-        let _ = server.conn.stream_send(request_stream_id, &[0x00, 0x00]);
+        let _ = server
+            .conn
+            .stream_send(request_stream_id, &[0x00, 0x00])
+            .unwrap();
 
         let out = server.conn.process(None, now());
         client.process(out.dgram(), now());
@@ -3096,8 +3151,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { .. } => {
                     panic!("We should not receive a DataGeadable event!");
@@ -3124,7 +3179,7 @@ mod tests {
                     let res = client.read_response_data(now(), stream_id, &mut buf);
                     let (len, fin) = res.expect("should read");
                     assert_eq!(0, len);
-                    assert_eq!(fin, true);
+                    assert!(fin);
                 }
                 _ => {}
             };
@@ -3161,8 +3216,8 @@ mod tests {
                 } => {
                     assert_eq!(stream_id, request_stream_id);
                     check_response_header_2(&headers);
-                    assert_eq!(fin, false);
-                    assert_eq!(interim, false);
+                    assert!(!fin);
+                    assert!(!interim);
                 }
                 Http3ClientEvent::DataReadable { stream_id } => {
                     assert_eq!(stream_id, request_stream_id);
@@ -3171,7 +3226,7 @@ mod tests {
                     let (len, fin) = res.expect("should have data");
                     assert_eq!(len, EXPECTED_RESPONSE_DATA_2_FRAME_1.len());
                     assert_eq!(&buf[..len], EXPECTED_RESPONSE_DATA_2_FRAME_1);
-                    assert_eq!(fin, false);
+                    assert!(!fin);
                 }
                 _ => {}
             };
@@ -3190,7 +3245,7 @@ mod tests {
             let res = client.read_response_data(now(), stream_id, &mut buf);
             let (len, fin) = res.expect("should read");
             assert_eq!(0, len);
-            assert_eq!(fin, true);
+            assert!(fin);
         } else {
             panic!("wrong event type");
         }
@@ -3275,7 +3330,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(len, EXPECTED_RESPONSE_DATA_2_FRAME_1.len());
                 assert_eq!(&buf[..len], EXPECTED_RESPONSE_DATA_2_FRAME_1);
-                assert_eq!(fin, true);
+                assert!(fin);
             }
             x => {
                 eprintln!("event {:?}", x);
@@ -3297,12 +3352,13 @@ mod tests {
         setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "3"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -3330,11 +3386,11 @@ mod tests {
         assert!(!client.events().any(header_ready_event));
 
         // Let client receive the encoder instructions.
-        let _ = client.process(encoder_inst_pkt.dgram(), now());
+        mem::drop(client.process(encoder_inst_pkt.dgram(), now()));
 
         let out = server.conn.process(None, now());
-        let _ = client.process(out.dgram(), now());
-        let _ = client.process(None, now());
+        mem::drop(client.process(out.dgram(), now()));
+        mem::drop(client.process(None, now()));
 
         let mut recv_header = false;
         let mut recv_data = false;
@@ -3365,12 +3421,13 @@ mod tests {
         setup_server_side_encoder(&mut hconn, &mut server);
 
         let sent_headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("0")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "0"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &sent_headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -3409,8 +3466,8 @@ mod tests {
             {
                 assert_eq!(stream_id, request_stream_id);
                 assert_eq!(headers, sent_headers);
-                assert_eq!(fin, true);
-                assert_eq!(interim, false);
+                assert!(fin);
+                assert!(!interim);
                 recv_header = true;
             } else {
                 panic!("event {:?}", e);
@@ -3483,7 +3540,7 @@ mod tests {
         let out = client.process(out.dgram(), now());
         assert_eq!(client.state(), Http3State::Connected);
 
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
         assert!(server.conn.state().connected());
 
         assert!(client.tls_info().unwrap().resumed());
@@ -3494,11 +3551,8 @@ mod tests {
     fn zero_rtt_send_request() {
         let (mut client, mut server) = start_with_0rtt();
 
-        let request_stream_id = make_request(
-            &mut client,
-            true,
-            &[(String::from("myheaders"), String::from("myvalue"))],
-        );
+        let request_stream_id =
+            make_request(&mut client, true, &[Header::new("myheaders", "myvalue")]);
         assert_eq!(request_stream_id, 0);
 
         let out = client.process(None, now());
@@ -3553,8 +3607,8 @@ mod tests {
         let mut server = Connection::new_server(
             test_fixture::DEFAULT_KEYS,
             test_fixture::DEFAULT_ALPN_H3,
-            Rc::new(RefCell::new(FixedConnectionIdManager::new(10))),
-            &ConnectionParameters::default(),
+            Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
+            ConnectionParameters::default(),
         )
         .unwrap();
         // Using a freshly initialized anti-replay context
@@ -3604,7 +3658,7 @@ mod tests {
         assert_eq!(res.unwrap_err(), Error::InvalidStreamId);
 
         // Client will send Setting frame and open new qpack streams.
-        let _ = server.process(client_out.dgram(), now());
+        mem::drop(server.process(client_out.dgram(), now()));
         TestServer::new_with_conn(server).check_client_control_qpack_streams_no_resumption();
 
         // Check that we can send a request and that the stream_id starts again from 0.
@@ -3650,7 +3704,7 @@ mod tests {
         let out = client.process(out.dgram(), now());
         assert_eq!(client.state(), Http3State::Connected);
 
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
         assert!(server.conn.state().connected());
 
         assert!(client.tls_info().unwrap().resumed());
@@ -3704,7 +3758,7 @@ mod tests {
                 HSetting::new(HSettingType::BlockedStreams, 100),
                 HSetting::new(HSettingType::MaxHeaderListSize, 10000),
             ],
-            &Http3State::Closing(CloseError::Application(265)),
+            &Http3State::Closing(ConnectionError::Application(265)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3722,7 +3776,7 @@ mod tests {
                 HSetting::new(HSettingType::MaxTableCapacity, 100),
                 HSetting::new(HSettingType::MaxHeaderListSize, 10000),
             ],
-            &Http3State::Closing(CloseError::Application(265)),
+            &Http3State::Closing(ConnectionError::Application(265)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3759,7 +3813,7 @@ mod tests {
                 HSetting::new(HSettingType::BlockedStreams, 100),
                 HSetting::new(HSettingType::MaxHeaderListSize, 10000),
             ],
-            &Http3State::Closing(CloseError::Application(514)),
+            &Http3State::Closing(ConnectionError::Application(514)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3778,7 +3832,7 @@ mod tests {
                 HSetting::new(HSettingType::BlockedStreams, 100),
                 HSetting::new(HSettingType::MaxHeaderListSize, 10000),
             ],
-            &Http3State::Closing(CloseError::Application(265)),
+            &Http3State::Closing(ConnectionError::Application(265)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3816,7 +3870,7 @@ mod tests {
                 HSetting::new(HSettingType::BlockedStreams, 50),
                 HSetting::new(HSettingType::MaxHeaderListSize, 10000),
             ],
-            &Http3State::Closing(CloseError::Application(265)),
+            &Http3State::Closing(ConnectionError::Application(265)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3854,7 +3908,7 @@ mod tests {
                 HSetting::new(HSettingType::BlockedStreams, 100),
                 HSetting::new(HSettingType::MaxHeaderListSize, 5000),
             ],
-            &Http3State::Closing(CloseError::Application(265)),
+            &Http3State::Closing(ConnectionError::Application(265)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3911,7 +3965,7 @@ mod tests {
                 HSetting::new(HSettingType::BlockedStreams, 100),
                 HSetting::new(HSettingType::MaxHeaderListSize, 10000),
             ],
-            &Http3State::Closing(CloseError::Application(265)),
+            &Http3State::Closing(ConnectionError::Application(265)),
             ENCODER_STREAM_DATA_WITH_CAP_INSTRUCTION,
         );
     }
@@ -3942,8 +3996,8 @@ mod tests {
             {
                 assert_eq!(stream_id, request_stream_id);
                 check_response_header_0(&headers);
-                assert_eq!(fin, false);
-                assert_eq!(interim, false);
+                assert!(!fin);
+                assert!(!interim);
                 response_headers = true;
             }
         }
@@ -3974,7 +4028,7 @@ mod tests {
             .read_response_data(now(), request_stream_id, &mut buf)
             .unwrap();
         assert_eq!(0, len);
-        assert_eq!(fin, true)
+        assert!(fin);
     }
 
     #[test]
@@ -4003,8 +4057,8 @@ mod tests {
             {
                 assert_eq!(stream_id, request_stream_id);
                 check_response_header_0(&headers);
-                assert_eq!(fin, false);
-                assert_eq!(interim, false);
+                assert!(!fin);
+                assert!(!interim);
                 response_headers = true;
             }
         }
@@ -4044,7 +4098,7 @@ mod tests {
             .read_response_data(now(), request_stream_id, &mut buf)
             .unwrap();
         assert_eq!(0, len);
-        assert_eq!(fin, true);
+        assert!(fin);
     }
 
     #[test]
@@ -4073,8 +4127,8 @@ mod tests {
             {
                 assert_eq!(stream_id, request_stream_id);
                 check_response_header_0(&headers);
-                assert_eq!(fin, false);
-                assert_eq!(interim, false);
+                assert!(!fin);
+                assert!(!interim);
                 response_headers = true;
             }
         }
@@ -4271,17 +4325,18 @@ mod tests {
 
         let request_stream_id = make_request(&mut client, true, &[]);
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "3"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -4298,17 +4353,17 @@ mod tests {
         let d_frame = HFrame::Data { len: 3 };
         d_frame.encode(&mut d);
         d.encode(&[0x61, 0x62, 0x63]);
-        let _ = server.conn.stream_send(request_stream_id, &d[..]);
+        let _ = server.conn.stream_send(request_stream_id, &d[..]).unwrap();
         server.conn.stream_close_send(request_stream_id).unwrap();
 
         let out = server.conn.process(None, now());
-        let _ = client.process(out.dgram(), now());
+        mem::drop(client.process(out.dgram(), now()));
 
         let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
         assert!(!client.events().any(header_ready_event));
 
         // Let client receive the encoder instructions.
-        let _ = client.process(qpack_pkt1.dgram(), now());
+        mem::drop(client.process(qpack_pkt1.dgram(), now()));
 
         assert!(client.events().any(header_ready_event));
     }
@@ -4403,7 +4458,8 @@ mod tests {
         // Send response headers
         let _ = server
             .conn
-            .stream_send(request_stream_id, HTTP_RESPONSE_HEADER_ONLY_2);
+            .stream_send(request_stream_id, HTTP_RESPONSE_HEADER_ONLY_2)
+            .unwrap();
 
         // Send a push promise.
         send_push_promise(&mut server.conn, request_stream_id, 0);
@@ -4439,7 +4495,10 @@ mod tests {
         let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
 
         // Send response headers and data frames
-        let _ = server.conn.stream_send(request_stream_id, HTTP_RESPONSE_2);
+        let _ = server
+            .conn
+            .stream_send(request_stream_id, HTTP_RESPONSE_2)
+            .unwrap();
 
         // Send a push promise.
         send_push_promise(&mut server.conn, request_stream_id, 0);
@@ -4463,28 +4522,21 @@ mod tests {
         let any_push_event = |e| {
             matches!(
                 e,
-                Http3ClientEvent::PushPromise{..}
-                | Http3ClientEvent::PushHeaderReady{..}
-                | Http3ClientEvent::PushDataReadable{..})
+                Http3ClientEvent::PushPromise { .. }
+                    | Http3ClientEvent::PushHeaderReady { .. }
+                    | Http3ClientEvent::PushDataReadable { .. }
+            )
         };
         client.events().any(any_push_event)
     }
 
     fn check_data_readable(client: &mut Http3Client) -> bool {
-        let any_data_event = |e| {
-            matches!(
-                e,
-                Http3ClientEvent::DataReadable{..})
-        };
+        let any_data_event = |e| matches!(e, Http3ClientEvent::DataReadable { .. });
         client.events().any(any_data_event)
     }
 
     fn check_header_ready(client: &mut Http3Client) -> bool {
-        let any_event = |e| {
-            matches!(
-                e,
-                Http3ClientEvent::HeaderReady{..})
-        };
+        let any_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
         client.events().any(any_event)
     }
 
@@ -4492,8 +4544,8 @@ mod tests {
         let any_event = |e| {
             matches!(
                 e,
-                Http3ClientEvent::HeaderReady{..}
-                | Http3ClientEvent::PushPromise{..})
+                Http3ClientEvent::HeaderReady { .. } | Http3ClientEvent::PushPromise { .. }
+            )
         };
         client.events().any(any_event)
     }
@@ -4650,7 +4702,7 @@ mod tests {
         assert_eq!(request_stream_id_2, 4);
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         send_push_promise_and_exchange_packets(&mut client, &mut server, request_stream_id_2, 5);
 
@@ -4686,7 +4738,7 @@ mod tests {
         assert_eq!(request_stream_id_2, 4);
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         send_push_promise_and_exchange_packets(&mut client, &mut server, request_stream_id_2, 5);
 
@@ -4734,12 +4786,12 @@ mod tests {
         assert_eq!(request_stream_id_2, 4);
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         send_push_promise_and_exchange_packets(&mut client, &mut server, request_stream_id_2, 5);
 
         // Check that we do not have a Http3ClientEvent::PushPromise.
-        let push_event = |e| matches!(e, Http3ClientEvent::PushPromise{ .. });
+        let push_event = |e| matches!(e, Http3ClientEvent::PushPromise { .. });
         assert!(!client.events().any(push_event));
     }
 
@@ -4827,7 +4879,7 @@ mod tests {
         );
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         // Check max_push_id frame has been received
         let control_stream_readable =
@@ -4835,7 +4887,7 @@ mod tests {
         assert!(server.conn.events().any(control_stream_readable));
         let mut buf = [0_u8; 100];
         let (amount, fin) = server.conn.stream_recv(2, &mut buf).unwrap();
-        assert_eq!(fin, false);
+        assert!(!fin);
 
         assert_eq!(amount, MAX_PUSH_ID_FRAME.len());
         assert_eq!(&buf[..3], MAX_PUSH_ID_FRAME);
@@ -4846,7 +4898,7 @@ mod tests {
 
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
 
         assert_eq!(client.state(), Http3State::Connected);
 
@@ -5079,7 +5131,7 @@ mod tests {
 
         assert!(client.cancel_push(0).is_ok());
         let out = client.process(None, now()).dgram();
-        let _ = server.conn.process(out, now());
+        mem::drop(server.conn.process(out, now()));
 
         // Assert that we do not have any push event.
         assert!(!check_push_events(&mut client));
@@ -5109,7 +5161,7 @@ mod tests {
 
         assert!(client.cancel_push(0).is_ok());
         let out = client.process(None, now()).dgram();
-        let _ = server.conn.process(out, now());
+        mem::drop(server.conn.process(out, now()));
 
         send_push_promise_and_exchange_packets(&mut client, &mut server, request_stream_id, 0);
 
@@ -5129,12 +5181,28 @@ mod tests {
         assert_eq!(client.state(), Http3State::Connected);
     }
 
-    fn setup_server_side_encoder(client: &mut Http3Client, server: &mut TestServer) {
-        server.encoder.set_max_capacity(100).unwrap();
-        server.encoder.set_max_blocked_streams(100).unwrap();
-        server.encoder.send(&mut server.conn).unwrap();
+    fn setup_server_side_encoder_param(
+        client: &mut Http3Client,
+        server: &mut TestServer,
+        max_blocked_streams: u64,
+    ) {
+        server
+            .encoder
+            .borrow_mut()
+            .set_max_capacity(max_blocked_streams)
+            .unwrap();
+        server
+            .encoder
+            .borrow_mut()
+            .set_max_blocked_streams(100)
+            .unwrap();
+        server.encoder.borrow_mut().send(&mut server.conn).unwrap();
         let out = server.conn.process(None, now());
-        let _ = client.process(out.dgram(), now());
+        mem::drop(client.process(out.dgram(), now()));
+    }
+
+    fn setup_server_side_encoder(client: &mut Http3Client, server: &mut TestServer) {
+        setup_server_side_encoder_param(client, server, 100);
     }
 
     fn send_push_promise_using_encoder(
@@ -5143,16 +5211,34 @@ mod tests {
         stream_id: u64,
         push_id: u64,
     ) -> Option<Datagram> {
-        let headers = vec![
-            (String::from(":method"), String::from("GET")),
-            (String::from(":scheme"), String::from("https")),
-            (String::from(":authority"), String::from("something.com")),
-            (String::from(":path"), String::from("/")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+        send_push_promise_using_encoder_with_custom_headers(
+            client,
+            server,
+            stream_id,
+            push_id,
+            Header::new("my-header", "my-value"),
+        )
+    }
+
+    fn send_push_promise_using_encoder_with_custom_headers(
+        client: &mut Http3Client,
+        server: &mut TestServer,
+        stream_id: u64,
+        push_id: u64,
+        additional_header: Header,
+    ) -> Option<Datagram> {
+        let mut headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "something.com"),
+            Header::new(":path", "/"),
+            Header::new("content-length", "3"),
         ];
+        headers.push(additional_header);
+
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, stream_id)
             .unwrap();
         let push_promise_frame = HFrame::PushPromise {
@@ -5283,6 +5369,7 @@ mod tests {
         // insert "content-length: 1234
         server
             .encoder
+            .borrow_mut()
             .send_and_insert(&mut server.conn, b"content-length", b"1234")
             .unwrap();
         let encoder_inst_pkt1 = server.conn.process(None, now()).dgram();
@@ -5296,11 +5383,12 @@ mod tests {
         assert!(!check_push_events(&mut client));
 
         let response_headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("content-length"), String::from("1234")),
+            Header::new(":status", "200"),
+            Header::new("content-length", "1234"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &response_headers, request_stream_id)
             .unwrap();
         let header_hframe = HFrame::Headers {
@@ -5326,6 +5414,83 @@ mod tests {
         assert!(check_header_ready_and_push_promise(&mut client));
     }
 
+    // In this test there are 2 push promises that are blocked and the response header is
+    // blocked as well. After a packet is received only the first push promises is unblocked.
+    #[test]
+    fn two_push_promises_and_header_block() {
+        let mut client = default_http3_client_param(200);
+        let mut server = TestServer::new_with_settings(&[
+            HSetting::new(HSettingType::MaxTableCapacity, 200),
+            HSetting::new(HSettingType::BlockedStreams, 100),
+            HSetting::new(HSettingType::MaxHeaderListSize, 10000),
+        ]);
+        connect_only_transport_with(&mut client, &mut server);
+        server.create_control_stream();
+        server.create_qpack_streams();
+        setup_server_side_encoder_param(&mut client, &mut server, 200);
+
+        let request_stream_id = make_request_and_exchange_pkts(&mut client, &mut server, true);
+
+        // Send a PushPromise that is blocked until encoder_inst_pkt2 is process by the client.
+        let encoder_inst_pkt1 = send_push_promise_using_encoder_with_custom_headers(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            0,
+            Header::new("myn1", "myv1"),
+        );
+
+        // PushPromise is blocked wathing for encoder instructions.
+        assert!(!check_push_events(&mut client));
+
+        let encoder_inst_pkt2 = send_push_promise_using_encoder_with_custom_headers(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            1,
+            Header::new("myn2", "myv2"),
+        );
+
+        // PushPromise is blocked wathing for encoder instructions.
+        assert!(!check_push_events(&mut client));
+
+        let response_headers = vec![
+            Header::new(":status", "200"),
+            Header::new("content-length", "1234"),
+            Header::new("myn3", "myv3"),
+        ];
+        let encoded_headers = server
+            .encoder
+            .borrow_mut()
+            .encode_header_block(&mut server.conn, &response_headers, request_stream_id)
+            .unwrap();
+        let header_hframe = HFrame::Headers {
+            header_block: encoded_headers.to_vec(),
+        };
+        let mut d = Encoder::default();
+        header_hframe.encode(&mut d);
+        server_send_response_and_exchange_packet(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &d,
+            false,
+        );
+
+        // The response headers are blocked.
+        assert!(!check_header_ready(&mut client));
+
+        // Let client receive the encoder instructions.
+        let _out = client.process(encoder_inst_pkt1, now());
+
+        assert!(check_push_events(&mut client));
+
+        // Let client receive the encoder instructions.
+        let _out = client.process(encoder_inst_pkt2, now());
+
+        assert!(check_header_ready_and_push_promise(&mut client));
+    }
+
     // The PushPromise blocked on header decoding will be canceled if the stream is closed.
     #[test]
     fn blocked_push_promises_canceled() {
@@ -5335,8 +5500,10 @@ mod tests {
 
         setup_server_side_encoder(&mut client, &mut server);
 
-        let _encoder_inst_pkt =
-            send_push_promise_using_encoder(&mut client, &mut server, request_stream_id, 0);
+        mem::drop(
+            send_push_promise_using_encoder(&mut client, &mut server, request_stream_id, 0)
+                .unwrap(),
+        );
 
         server_send_response_and_exchange_packet(
             &mut client,
@@ -5354,14 +5521,14 @@ mod tests {
             .unwrap();
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
+        mem::drop(server.conn.process(out.dgram(), now()));
         // Check that encoder got stream_canceled instruction.
         let mut inst = [0_u8; 100];
         let (amount, fin) = server
             .conn
             .stream_recv(CLIENT_SIDE_DECODER_STREAM_ID, &mut inst)
             .unwrap();
-        assert_eq!(fin, false);
+        assert!(!fin);
         assert_eq!(amount, STREAM_CANCELED_ID_0.len());
         assert_eq!(&inst[..amount], STREAM_CANCELED_ID_0);
     }
@@ -5373,12 +5540,13 @@ mod tests {
         setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("0")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "0"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -5417,7 +5585,7 @@ mod tests {
         );
 
         // Now read headers.
-        let _ = client.process(encoder_insts.dgram(), now());
+        mem::drop(client.process(encoder_insts.dgram(), now()));
     }
 
     #[test]
@@ -5425,25 +5593,24 @@ mod tests {
         let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
         setup_server_side_encoder(&mut client, &mut server);
         // Cancel request.
-        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        mem::drop(client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code()));
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
-        let _ = server
-            .encoder
-            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+        mem::drop(server.conn.process(out.dgram(), now()));
+        mem::drop(server.encoder_receiver.receive(&mut server.conn));
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 1);
     }
 
     fn send_headers_using_encoder(
         client: &mut Http3Client,
         server: &mut TestServer,
         request_stream_id: u64,
-        headers: &[(String, String)],
+        headers: &[Header],
         data: &[u8],
     ) -> Option<Datagram> {
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -5471,17 +5638,16 @@ mod tests {
         setup_server_side_encoder(&mut client, &mut server);
 
         // Cancel request.
-        let _ = server
+        server
             .conn
-            .stream_reset_send(request_stream_id, Error::HttpRequestCancelled.code());
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+            .stream_reset_send(request_stream_id, Error::HttpRequestCancelled.code())
+            .unwrap();
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
         let out = server.conn.process(None, now());
         let out = client.process(out.dgram(), now());
-        let _ = server.conn.process(out.dgram(), now());
-        let _ = server
-            .encoder
-            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+        mem::drop(server.conn.process(out.dgram(), now()));
+        mem::drop(server.encoder_receiver.receive(&mut server.conn));
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 1);
     }
 
     #[test]
@@ -5490,31 +5656,34 @@ mod tests {
 
         setup_server_side_encoder(&mut client, &mut server);
 
-        let _ = send_headers_using_encoder(
-            &mut client,
-            &mut server,
-            request_stream_id,
-            &[
-                (String::from(":status"), String::from("200")),
-                (String::from("my-header"), String::from("my-header")),
-                (String::from("content-length"), String::from("3")),
-            ],
-            &[0x61, 0x62, 0x63],
+        mem::drop(
+            send_headers_using_encoder(
+                &mut client,
+                &mut server,
+                request_stream_id,
+                &[
+                    Header::new(":status", "200"),
+                    Header::new("my-header", "my-header"),
+                    Header::new("content-length", "3"),
+                ],
+                &[0x61, 0x62, 0x63],
+            )
+            .unwrap(),
         );
 
         let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
         assert!(!client.events().any(header_ready_event));
 
         // Cancel request.
-        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+        client
+            .stream_reset(request_stream_id, Error::HttpRequestCancelled.code())
+            .unwrap();
 
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
-        let _ = server
-            .encoder
-            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+        mem::drop(server.conn.process(out.dgram(), now()));
+        let _ = server.encoder_receiver.receive(&mut server.conn).unwrap();
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 1);
     }
 
     #[test]
@@ -5528,30 +5697,30 @@ mod tests {
             &mut server,
             request_stream_id,
             &[
-                (String::from(":status"), String::from("200")),
-                (String::from("my-header"), String::from("my-header")),
-                (String::from("content-length"), String::from("3")),
+                Header::new(":status", "200"),
+                Header::new("my-header", "my-header"),
+                Header::new("content-length", "3"),
             ],
             &[],
         );
 
         // Exchange encoder instructions
-        let _ = client.process(encoder_instruct, now());
+        mem::drop(client.process(encoder_instruct, now()));
 
         let header_ready_event = |e| matches!(e, Http3ClientEvent::HeaderReady { .. });
         assert!(client.events().any(header_ready_event));
         // After this the recv_stream is in ClosePending state
 
         // Cancel request.
-        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+        client
+            .stream_reset(request_stream_id, Error::HttpRequestCancelled.code())
+            .unwrap();
 
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
-        let _ = server
-            .encoder
-            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        mem::drop(server.conn.process(out.dgram(), now()));
+        let _ = server.encoder_receiver.receive(&mut server.conn).unwrap();
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
     }
 
     #[test]
@@ -5561,11 +5730,12 @@ mod tests {
         setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("content-length"), String::from("3")),
+            Header::new(":status", "200"),
+            Header::new("content-length", "3"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -5574,10 +5744,13 @@ mod tests {
 
         // Send the encoder instructions.
         let out = server.conn.process(None, now());
-        let _ = client.process(out.dgram(), now());
+        mem::drop(client.process(out.dgram(), now()));
 
         // Send PushPromise that will be blocked waiting for decoder instructions.
-        let _ = send_push_promise_using_encoder(&mut client, &mut server, request_stream_id, 0);
+        mem::drop(
+            send_push_promise_using_encoder(&mut client, &mut server, request_stream_id, 0)
+                .unwrap(),
+        );
 
         // Send response
         let mut d = Encoder::default();
@@ -5596,28 +5769,28 @@ mod tests {
         assert!(client.events().any(header_ready_event));
 
         // Cancel request.
-        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
+        client
+            .stream_reset(request_stream_id, Error::HttpRequestCancelled.code())
+            .unwrap();
 
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
-        let _ = server
-            .encoder
-            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 1);
+        mem::drop(server.conn.process(out.dgram(), now()));
+        let _ = server.encoder_receiver.receive(&mut server.conn).unwrap();
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 1);
     }
 
     #[test]
     fn qpack_stream_reset_dynamic_table_zero() {
         let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
         // Cancel request.
-        let _ = client.stream_reset(request_stream_id, Error::HttpRequestCancelled.code());
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        client
+            .stream_reset(request_stream_id, Error::HttpRequestCancelled.code())
+            .unwrap();
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
         let out = client.process(None, now());
-        let _ = server.conn.process(out.dgram(), now());
-        let _ = server
-            .encoder
-            .recv_if_encoder_stream(&mut server.conn, CLIENT_SIDE_DECODER_STREAM_ID);
-        assert_eq!(server.encoder.stats().stream_cancelled_recv, 0);
+        mem::drop(server.conn.process(out.dgram(), now()));
+        let _ = server.encoder_receiver.receive(&mut server.conn).unwrap();
+        assert_eq!(server.encoder.borrow_mut().stats().stream_cancelled_recv, 0);
     }
 
     #[test]
@@ -5627,12 +5800,13 @@ mod tests {
         setup_server_side_encoder(&mut client, &mut server);
 
         let headers = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("0")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "0"),
         ];
         let encoded_headers = server
             .encoder
+            .borrow_mut()
             .encode_header_block(&mut server.conn, &headers, request_stream_id)
             .unwrap();
         let hframe = HFrame::Headers {
@@ -5667,7 +5841,7 @@ mod tests {
         assert!(!client.events().any(header_ready_event));
 
         // Now make the encoder instructions available.
-        let _ = client.process(encoder_insts.dgram(), now());
+        mem::drop(client.process(encoder_insts.dgram(), now()));
 
         // Header blocks for both streams should be ready.
         let mut count_responses = 0;
@@ -5697,7 +5871,10 @@ mod tests {
             let (mut client, mut server) = connect_only_transport();
             let control_stream = server.conn.stream_create(StreamType::UniDi).unwrap();
             // Send the control stream type(0x0).
-            let _ = server.conn.stream_send(control_stream, CONTROL_STREAM_TYPE);
+            let _ = server
+                .conn
+                .stream_send(control_stream, CONTROL_STREAM_TYPE)
+                .unwrap();
             // Create a settings frame of length 2.
             let mut enc = Encoder::default();
             enc.encode_varint(H3_FRAME_TYPE_SETTINGS);
@@ -5720,13 +5897,13 @@ mod tests {
         setup_server_side_encoder(&mut client, &mut server);
 
         let mut d = Encoder::default();
-        let headers1xx = vec![(String::from(":status"), String::from("103"))];
+        let headers1xx = vec![Header::new(":status", "103")];
         server.encode_headers(request_stream_id, &headers1xx, &mut d);
 
         let headers200 = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "3"),
         ];
         server.encode_headers(request_stream_id, &headers200, &mut d);
 
@@ -5783,8 +5960,8 @@ mod tests {
 
         let mut d = Encoder::default();
         let headers = vec![
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "3"),
         ];
         server.encode_headers(request_stream_id, &headers, &mut d);
 
@@ -5809,7 +5986,7 @@ mod tests {
         );
 
         let out = client.process(None, now()).dgram();
-        let _ = server.conn.process(out, now());
+        mem::drop(server.conn.process(out, now()));
 
         // Check that server has received a reset.
         let stop_sending_event = |e| {
@@ -5841,13 +6018,13 @@ mod tests {
         let push_stream_id = server.conn.stream_create(StreamType::UniDi).unwrap();
 
         let mut d = Encoder::default();
-        let headers1xx = vec![(String::from(":status"), String::from("101"))];
+        let headers1xx = vec![Header::new(":status", "101")];
         server.encode_headers(push_stream_id, &headers1xx, &mut d);
 
         let headers200 = vec![
-            (String::from(":status"), String::from("200")),
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+            Header::new(":status", "200"),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "3"),
         ];
         server.encode_headers(push_stream_id, &headers200, &mut d);
 
@@ -5910,8 +6087,8 @@ mod tests {
 
         let mut d = Encoder::default();
         let headers = vec![
-            (String::from("my-header"), String::from("my-header")),
-            (String::from("content-length"), String::from("3")),
+            Header::new("my-header", "my-header"),
+            Header::new("content-length", "3"),
         ];
         server.encode_headers(request_stream_id, &headers, &mut d);
 
@@ -5942,7 +6119,7 @@ mod tests {
         assert!(client.events().any(push_reset_event));
 
         let out = client.process(None, now()).dgram();
-        let _ = server.conn.process(out, now());
+        mem::drop(server.conn.process(out, now()));
 
         // Check that server has received a reset.
         let stop_sending_event = |e| {
@@ -6010,59 +6187,89 @@ mod tests {
     #[test]
     fn malformed_response_pseudo_header_after_regular_header() {
         do_malformed_response_test(&[
-            (String::from("content-type"), String::from("text/plain")),
-            (String::from(":status"), String::from("100")),
+            Header::new("content-type", "text/plain"),
+            Header::new(":status", "100"),
         ]);
     }
 
     #[test]
     fn malformed_response_undefined_pseudo_header() {
-        do_malformed_response_test(&[
-            (String::from(":status"), String::from("200")),
-            (String::from(":cheese"), String::from("200")),
-        ]);
+        do_malformed_response_test(&[Header::new(":status", "200"), Header::new(":cheese", "200")]);
     }
 
     #[test]
     fn malformed_response_duplicate_pseudo_header() {
         do_malformed_response_test(&[
-            (String::from(":status"), String::from("200")),
-            (String::from(":status"), String::from("100")),
-            (String::from("content-type"), String::from("text/plain")),
+            Header::new(":status", "200"),
+            Header::new(":status", "100"),
+            Header::new("content-type", "text/plain"),
         ]);
     }
 
     #[test]
     fn malformed_response_uppercase_header() {
         do_malformed_response_test(&[
-            (String::from(":status"), String::from("200")),
-            (String::from("content-Type"), String::from("text/plain")),
+            Header::new(":status", "200"),
+            Header::new("content-Type", "text/plain"),
         ]);
     }
 
     #[test]
     fn malformed_response_excluded_header() {
-        do_malformed_response_test(&[
-            (String::from(":status"), String::from("200")),
-            (String::from("content-type"), String::from("text/plain")),
-            (String::from("connection"), String::from("close")),
-        ]);
+        let (mut client, mut server, request_stream_id) = connect_and_send_request(true);
+
+        setup_server_side_encoder(&mut client, &mut server);
+
+        let mut d = Encoder::default();
+        server.encode_headers(
+            request_stream_id,
+            &[
+                Header::new(":status", "200"),
+                Header::new("content-type", "text/plain"),
+                Header::new("connection", "close"),
+            ],
+            &mut d,
+        );
+
+        // Send response
+        server_send_response_and_exchange_packet(
+            &mut client,
+            &mut server,
+            request_stream_id,
+            &d,
+            false,
+        );
+
+        // Stream has been reset because of the malformed headers.
+        let e = client.events().next().unwrap();
+        assert_eq!(
+            e,
+            Http3ClientEvent::HeaderReady {
+                stream_id: request_stream_id,
+                headers: vec!(
+                    Header::new(":status", "200"),
+                    Header::new("content-type", "text/plain")
+                ),
+                interim: false,
+                fin: false,
+            }
+        );
     }
 
     #[test]
     fn malformed_response_excluded_byte_in_header() {
         do_malformed_response_test(&[
-            (String::from(":status"), String::from("200")),
-            (String::from("content:type"), String::from("text/plain")),
+            Header::new(":status", "200"),
+            Header::new("content:type", "text/plain"),
         ]);
     }
 
     #[test]
     fn malformed_response_request_header_in_response() {
         do_malformed_response_test(&[
-            (String::from(":status"), String::from("200")),
-            (String::from(":method"), String::from("GET")),
-            (String::from("content-type"), String::from("text/plain")),
+            Header::new(":status", "200"),
+            Header::new(":method", "GET"),
+            Header::new("content-type", "text/plain"),
         ]);
     }
 
@@ -6090,7 +6297,7 @@ mod tests {
         // exchange qpack settings, server will send a token as well.
         datagram = client.process(datagram, now()).dgram();
         datagram = server.process(datagram, now()).dgram();
-        let _ = client.process(datagram, now()).dgram();
+        mem::drop(client.process(datagram, now()).dgram());
 
         client
             .events()
@@ -6115,12 +6322,13 @@ mod tests {
             DEFAULT_KEYS,
             DEFAULT_ALPN_H3,
             anti_replay(),
-            Rc::new(RefCell::new(FixedConnectionIdManager::new(5))),
+            Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
             QpackSettings {
                 max_table_size_encoder: MAX_TABLE_SIZE,
                 max_table_size_decoder: MAX_TABLE_SIZE,
                 max_blocked_streams: MAX_BLOCKED_STREAMS,
             },
+            None,
         )
         .unwrap();
 
@@ -6137,11 +6345,7 @@ mod tests {
         assert!(client.events().any(zerortt_event));
 
         // Make a request that uses the dynamic table.
-        let _ = make_request(
-            &mut client,
-            true,
-            &[(String::from("myheaders"), String::from("myvalue"))],
-        );
+        let _ = make_request(&mut client, true, &[Header::new("myheaders", "myvalue")]);
         // Assert that the request has used dynamic table. That will trigger a header_ack.
         assert_eq!(client.qpack_encoder_stats().dynamic_table_references, 1);
 
@@ -6156,9 +6360,65 @@ mod tests {
         let out = server.process(out, now()).dgram();
         let out = client.process(out, now()).dgram();
         let out = server.process(out, now()).dgram();
-        let _ = client.process(out, now());
+        mem::drop(client.process(out, now()));
 
         // The header ack for the first request has been received.
         assert_eq!(client.qpack_encoder_stats().header_acks_recv, 1);
+    }
+
+    fn manipulate_conrol_stream(client: &mut Http3Client, stream_id: u64) {
+        assert_eq!(
+            client
+                .stream_reset(stream_id, Error::HttpNoError.code())
+                .unwrap_err(),
+            Error::InvalidStreamId
+        );
+        assert_eq!(
+            client.stream_close_send(stream_id).unwrap_err(),
+            Error::InvalidStreamId
+        );
+        let mut buf = [0; 2];
+        assert_eq!(
+            client.send_request_body(stream_id, &buf).unwrap_err(),
+            Error::InvalidStreamId
+        );
+        assert_eq!(
+            client
+                .read_response_data(now(), stream_id, &mut buf)
+                .unwrap_err(),
+            Error::InvalidStreamId
+        );
+    }
+
+    #[test]
+    fn manipulate_conrol_streams() {
+        let (mut client, server, request_stream_id) = connect_and_send_request(false);
+        manipulate_conrol_stream(&mut client, CLIENT_SIDE_CONTROL_STREAM_ID);
+        manipulate_conrol_stream(&mut client, CLIENT_SIDE_ENCODER_STREAM_ID);
+        manipulate_conrol_stream(&mut client, CLIENT_SIDE_DECODER_STREAM_ID);
+        manipulate_conrol_stream(&mut client, server.control_stream_id.unwrap());
+        manipulate_conrol_stream(&mut client, server.encoder_stream_id.unwrap());
+        manipulate_conrol_stream(&mut client, server.decoder_stream_id.unwrap());
+        client
+            .stream_reset(request_stream_id, Error::HttpNoError.code())
+            .unwrap();
+    }
+
+    // Client: receive a push stream
+    #[test]
+    fn incomple_push_stream() {
+        let (mut client, mut server) = connect();
+
+        // Create a push stream
+        let push_stream_id = server.conn.stream_create(StreamType::UniDi).unwrap();
+        let _ = server
+            .conn
+            .stream_send(push_stream_id, PUSH_STREAM_TYPE)
+            .unwrap();
+        let _ = server.conn.stream_send(push_stream_id, &[0]).unwrap();
+        server.conn.stream_close_send(push_stream_id).unwrap();
+        let out = server.conn.process(None, now());
+        client.process(out.dgram(), now());
+        assert_closed(&client, &Error::HttpGeneralProtocol);
     }
 }

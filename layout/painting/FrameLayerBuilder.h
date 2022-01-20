@@ -77,7 +77,6 @@ enum class DisplayItemEntryType : uint8_t {
   PopOpacity,
   PushTransform,
   PopTransform,
-  HitTestInfo,
 };
 
 /**
@@ -108,8 +107,6 @@ class DisplayItemData final {
   const DisplayItemClip& GetClip() const { return mClip; }
   void Invalidate() { mIsInvalid = true; }
   void NotifyRemoved();
-  void SetItem(nsPaintedDisplayItem* aItem) { mItem = aItem; }
-  nsPaintedDisplayItem* GetItem() const { return mItem; }
   nsIFrame* FirstFrame() const { return mFrameList[0]; }
   layers::BasicLayerManager* InactiveManager() const {
     return mInactiveManager;
@@ -554,10 +551,8 @@ class FrameLayerBuilder : public layers::LayerUserData {
    * Returns true if the given display item was rendered during the previous
    * paint. Returns false otherwise.
    */
-  static bool HasRetainedDataFor(nsIFrame* aFrame, uint32_t aDisplayItemKey);
-
-  typedef void (*DisplayItemDataCallback)(nsIFrame* aFrame,
-                                          DisplayItemData* aItem);
+  static bool HasRetainedDataFor(const nsIFrame* aFrame,
+                                 uint32_t aDisplayItemKey);
 
   /**
    * Return the resolution at which we expect to render aFrame's contents,
@@ -568,8 +563,7 @@ class FrameLayerBuilder : public layers::LayerUserData {
    */
   static gfxSize GetPaintedLayerScaleForFrame(nsIFrame* aFrame);
 
-  static void RemoveFrameFromLayerManager(
-      const nsIFrame* aFrame, SmallPointerArray<DisplayItemData>& aArray);
+  static void RemoveFrameFromLayerManager(nsIFrame* aFrame);
 
   /**
    * Given a frame and a display item key that uniquely identifies a

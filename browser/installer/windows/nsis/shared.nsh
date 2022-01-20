@@ -114,6 +114,9 @@
   ; Register AccessibleMarshal.dll with COM (this requires write access to HKLM)
   ${RegisterAccessibleMarshal}
 
+  ; Record the Windows Error Reporting module
+  WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows\Windows Error Reporting\RuntimeExceptionHelperModules" "$INSTDIR\mozwer.dll" 0
+
 !ifdef MOZ_MAINTENANCE_SERVICE
   Call IsUserAdmin
   Pop $R0
@@ -522,11 +525,6 @@ ${RemoveDefaultBrowserAgentShortcut}
   ; An empty string is used for the 4th & 5th params because the following
   ; protocol handlers already have a display name and the additional keys
   ; required for a protocol handler.
-!ifndef NIGHTLY_BUILD
-  ; Keep the compile-time conditional synchronized with the
-  ; "network.ftp.enabled" compile-time conditional.
-  ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,1" "" ""
-!endif ; !NIGHTLY_BUILD
   ${AddDisabledDDEHandlerValues} "http" "$2" "$8,1" "" ""
   ${AddDisabledDDEHandlerValues} "https" "$2" "$8,1" "" ""
   ${AddDisabledDDEHandlerValues} "mailto" "$2" "$8,1" "" ""
@@ -610,15 +608,9 @@ ${RemoveDefaultBrowserAgentShortcut}
 
   WriteRegStr ${RegKey} "$0\Capabilities\StartMenu" "StartMenuInternet" "$1"
 
-!ifndef NIGHTLY_BUILD
-  ; Keep the compile-time conditional synchronized with the
-  ; "network.ftp.enabled" compile-time conditional.
-  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "ftp"    "FirefoxURL$2"
-!else
-  ; We don't delete and re-create the entire key, so we need to remove
-  ; any existing registration.
+  ; In the past, we supported ftp.  Since we don't delete and re-create the
+  ; entire key, we need to remove any existing registration.
   DeleteRegValue ${RegKey} "$0\Capabilities\URLAssociations" "ftp"
-!endif ; !NIGHTLY_BUILD
 
   WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "http"   "FirefoxURL$2"
   WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "https"  "FirefoxURL$2"
@@ -873,7 +865,7 @@ ${RemoveDefaultBrowserAgentShortcut}
     ; Write the uninstall registry keys
     ${WriteRegStr2} $1 "$0" "Comments" "${BrandFullNameInternal} ${AppVersion}$3 (${ARCH} ${AB_CD})" 0
     ${WriteRegStr2} $1 "$0" "DisplayIcon" "$8\${FileMainEXE},0" 0
-    ${WriteRegStr2} $1 "$0" "DisplayName" "${BrandFullNameInternal} ${AppVersion}$3 (${ARCH} ${AB_CD})" 0
+    ${WriteRegStr2} $1 "$0" "DisplayName" "${BrandFullNameInternal}$3 (${ARCH} ${AB_CD})" 0
     ${WriteRegStr2} $1 "$0" "DisplayVersion" "${AppVersion}" 0
     ${WriteRegStr2} $1 "$0" "HelpLink" "${HelpLink}" 0
     ${WriteRegStr2} $1 "$0" "InstallLocation" "$8" 0
@@ -1019,13 +1011,8 @@ ${RemoveDefaultBrowserAgentShortcut}
 
   ${IsHandlerForInstallDir} "ftp" $R9
   ${If} "$R9" == "true"
-!ifndef NIGHTLY_BUILD
-    ; Keep the compile-time conditional synchronized with the
-    ; "network.ftp.enabled" compile-time conditional.
-    ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,1" "" ""
-!else
+    ; In the past, we supported ftp, so we need to delete any registration.
     ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,1" "" "delete"
-!endif ; !NIGHTLY_BUILD
   ${EndIf}
 
   ${IsHandlerForInstallDir} "http" $R9
@@ -1493,6 +1480,7 @@ ${RemoveDefaultBrowserAgentShortcut}
   Push "minidump-analyzer.exe"
   Push "pingsender.exe"
   Push "updater.exe"
+  Push "mozwer.dll"
   Push "${FileMainEXE}"
 !macroend
 !define PushFilesToCheck "!insertmacro PushFilesToCheck"

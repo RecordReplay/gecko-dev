@@ -17,10 +17,10 @@ fuzzy-if(cocoaWidget,255-255,80-80) == backplate-bg-image-005.html backplate-bg-
 fuzzy-if(cocoaWidget,255-255,40-40) == backplate-bg-image-006.html backplate-bg-image-006-ref.html
 
 fuzzy-if(cocoaWidget,255-255,40-40) == backplate-bg-image-007.html backplate-bg-image-007-ref.html
-fuzzy-if(cocoaWidget,255-255,20-20) fuzzy-if(!nativeThemePref,0-21,0-6) == backplate-bg-image-008.html backplate-bg-image-008-ref.html
+fuzzy-if(cocoaWidget,255-255,20-20) fuzzy-if(!cocoaWidget&&!nativeThemePref,0-21,0-6) == backplate-bg-image-008.html backplate-bg-image-008-ref.html
 fuzzy-if(cocoaWidget,255-255,20-20) == backplate-bg-image-009.html backplate-bg-image-009-ref.html
 fuzzy-if(cocoaWidget,255-255,1495-1495) fuzzy-if(winWidget,255-255,353-353) fuzzy-if(Android,255-255,700-700) == backplate-bg-image-010.html backplate-bg-image-010-ref.html
-fuzzy-if(cocoaWidget,255-255,284-320) == backplate-bg-image-011.html backplate-bg-image-011-ref.html
+random-if(useDrawSnapshot) fuzzy-if(cocoaWidget,255-255,284-320) == backplate-bg-image-011.html backplate-bg-image-011-ref.html
 fuzzy-if(cocoaWidget,255-255,16-16) == backplate-bg-image-012.html backplate-bg-image-012-ref.html
 
 test-pref(browser.display.suppress_canvas_background_image_on_forced_colors,true) == bg-image-root-001.html bg-image-root-001-ref.html
@@ -48,27 +48,22 @@ pref(browser.display.document_color_use,2) == background-transparent-form-contro
 
 # prefers-contrast media query:
 
-# a prefers-contrast value of forced or high should evaluate to true
-== prefers-contrast-001.html prefers-contrast-black-ref.html
+# Forced colors doesn't affect prefers-contrast.
+!= prefers-contrast-001.html prefers-contrast-black-ref.html
+# high should match when an accessibility theme is used
 test-pref(ui.windowForeground,"black") test-pref(ui.windowBackground,"white") test-pref(ui.useAccessibilityTheme,1) == prefers-contrast-001.html prefers-contrast-black-ref.html
 
 # high should match when an accessibility theme is being used
 test-pref(ui.windowForeground,"black") test-pref(ui.windowBackground,"white") test-pref(ui.useAccessibilityTheme,1) == prefers-contrast-002.html prefers-contrast-black-ref.html
 
-# If RFP is on the media query stops evaluating contrast preferences
-# and defaults to no-preference. The media query will still evaluate
-# to forced though when RFP is on. The idea being that there are other
-# ways to detect if forced colors are enabled so might as well not lie
-# about it.
-test-pref(privacy.resistFingerprinting,true) == prefers-contrast-003.html prefers-contrast-black-ref.html
+# If RFP is on the media query stops evaluating contrast preferences and
+# defaults to no-preference.
+test-pref(privacy.resistFingerprinting,true) != prefers-contrast-001.html prefers-contrast-black-ref.html
 # high should not match when RFP is enabled.
 test-pref(ui.windowForeground,"black") test-pref(ui.windowBackground,"white") test-pref(privacy.resistFingerprinting,true) test-pref(ui.useAccessibilityTheme,1) != prefers-contrast-002.html prefers-contrast-black-ref.html
 
 # Should only be enabled behind preference.
 test-pref(layout.css.prefers-contrast.enabled,false) != prefers-contrast-001.html prefers-contrast-black-ref.html
-
-# prefers-contrast forced matching forced
-== prefers-contrast-003.html prefers-contrast-black-ref.html
 
 # a prefers-contrast value of no-preference should evaluate to false
 # in the boolean context
@@ -90,3 +85,5 @@ test-pref(browser.display.document_color_use,0) == forced-colors-002.html prefer
 # boolean context
 == forced-colors-001.html prefers-contrast-black-ref.html
 test-pref(browser.display.document_color_use,0) != forced-colors-001.html prefers-contrast-black-ref.html
+
+!= system-colors.html system-colors-notref.html

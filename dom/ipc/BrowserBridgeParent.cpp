@@ -41,6 +41,10 @@ nsresult BrowserBridgeParent::InitWithProcess(
     return NS_ERROR_UNEXPECTED;
   }
 
+  MOZ_DIAGNOSTIC_ASSERT(
+      !browsingContext->GetBrowserParent(),
+      "BrowsingContext must have had previous BrowserParent cleared");
+
   // Unfortunately, due to the current racy destruction of BrowsingContext
   // instances when Fission is enabled, while `browsingContext` may not be
   // discarded, an ancestor might be.
@@ -108,6 +112,8 @@ nsresult BrowserBridgeParent::InitWithProcess(
   mBrowserParent->SetOwnerElement(aParentBrowser->GetOwnerElement());
   mBrowserParent->InitRendering();
 
+  GetBrowsingContext()->SetCurrentBrowserParent(mBrowserParent);
+
   windowParent->Init();
   return NS_OK;
 }
@@ -123,6 +129,11 @@ BrowserParent* BrowserBridgeParent::Manager() {
 
 void BrowserBridgeParent::Destroy() {
   if (mBrowserParent) {
+#ifdef ACCESSIBILITY
+    if (mEmbedderAccessibleDoc && !mEmbedderAccessibleDoc->IsShutdown()) {
+      mEmbedderAccessibleDoc->RemovePendingOOPChildDoc(this);
+    }
+#endif
     mBrowserParent->Destroy();
     mBrowserParent->SetBrowserBridgeParent(nullptr);
     mBrowserParent = nullptr;
@@ -160,6 +171,12 @@ IPCResult BrowserBridgeParent::RecvUpdateDimensions(
 
 IPCResult BrowserBridgeParent::RecvUpdateEffects(const EffectsInfo& aEffects) {
   Unused << mBrowserParent->SendUpdateEffects(aEffects);
+  return IPC_OK();
+}
+
+IPCResult BrowserBridgeParent::RecvUpdateRemotePrintSettings(
+    const embedding::PrintData& aPrintData) {
+  Unused << mBrowserParent->SendUpdateRemotePrintSettings(aPrintData);
   return IPC_OK();
 }
 
@@ -223,22 +240,35 @@ IPCResult BrowserBridgeParent::RecvSetIsUnderHiddenEmbedderElement(
 }
 
 #ifdef ACCESSIBILITY
+a11y::DocAccessibleParent* BrowserBridgeParent::GetDocAccessibleParent() {
+  auto* embeddedBrowser = GetBrowserParent();
+  if (!embeddedBrowser) {
+    return nullptr;
+  }
+  a11y::DocAccessibleParent* docAcc =
+      embeddedBrowser->GetTopLevelDocAccessible();
+  return docAcc && !docAcc->IsShutdown() ? docAcc : nullptr;
+}
+
 IPCResult BrowserBridgeParent::RecvSetEmbedderAccessible(
     PDocAccessibleParent* aDoc, uint64_t aID) {
+  MOZ_ASSERT(!mEmbedderAccessibleDoc || mEmbedderAccessibleDoc == aDoc,
+             "Embedder document shouldn't change");
   mEmbedderAccessibleDoc = static_cast<a11y::DocAccessibleParent*>(aDoc);
   mEmbedderAccessibleID = aID;
-  if (auto embeddedBrowser = GetBrowserParent()) {
-    a11y::DocAccessibleParent* childDocAcc =
-        embeddedBrowser->GetTopLevelDocAccessible();
-    if (childDocAcc && !childDocAcc->IsShutdown()) {
-      // The embedded DocAccessibleParent has already been created. This can
-      // happen if, for example, an iframe is hidden and then shown or
-      // an iframe is reflowed by layout.
-      mEmbedderAccessibleDoc->AddChildDoc(childDocAcc, aID,
-                                          /* aCreating */ false);
-    }
+  if (GetDocAccessibleParent()) {
+    // The embedded DocAccessibleParent has already been created. This can
+    // happen if, for example, an iframe is hidden and then shown or
+    // an iframe is reflowed by layout.
+    mEmbedderAccessibleDoc->AddChildDoc(this);
   }
   return IPC_OK();
+}
+
+a11y::DocAccessibleParent* BrowserBridgeParent::GetEmbedderAccessibleDoc() {
+  return mEmbedderAccessibleDoc && !mEmbedderAccessibleDoc->IsShutdown()
+             ? mEmbedderAccessibleDoc.get()
+             : nullptr;
 }
 #endif
 

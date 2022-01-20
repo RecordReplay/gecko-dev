@@ -136,6 +136,10 @@ class CanvasTranslator final : public gfx::InlineTranslator,
       gfx::ReferencePtr aRefPtr, const gfx::IntSize& aSize,
       gfx::SurfaceFormat aFormat) final;
 
+  already_AddRefed<gfx::GradientStops> GetOrCreateGradientStops(
+      gfx::GradientStop* aRawStops, uint32_t aNumStops,
+      gfx::ExtendMode aExtendMode) final;
+
   /**
    * Get the TextureData associated with a TextureData from another process.
    *
@@ -217,11 +221,6 @@ class CanvasTranslator final : public gfx::InlineTranslator,
    */
   UniquePtr<gfx::DataSourceSurface::ScopedMap> GetPreparedMap(
       gfx::ReferencePtr aSurface);
-
-  /**
-   * @return the BackendType being used for translation
-   */
-  gfx::BackendType GetBackendType() { return mBackendType; }
 
  private:
   explicit CanvasTranslator(

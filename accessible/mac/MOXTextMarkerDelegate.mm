@@ -15,7 +15,7 @@ using namespace mozilla::a11y;
 
 #define PREF_ACCESSIBILITY_MAC_DEBUG "accessibility.mac.debug"
 
-static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
+static nsTHashMap<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
 
 @implementation MOXTextMarkerDelegate
 
@@ -25,7 +25,7 @@ static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
   MOXTextMarkerDelegate* delegate = sDelegates.Get(aDoc.Bits());
   if (!delegate) {
     delegate = [[MOXTextMarkerDelegate alloc] initWithDoc:aDoc];
-    sDelegates.Put(aDoc.Bits(), delegate);
+    sDelegates.InsertOrUpdate(aDoc.Bits(), delegate);
     [delegate retain];
   }
 
@@ -90,11 +90,11 @@ static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
 
   // This is the base info object, includes the selected marker range and
   // the change type depending on the collapsed state of the selection.
-  NSMutableDictionary* info = [@{
+  NSMutableDictionary* info = [[@{
     @"AXSelectedTextMarkerRange" : selectedGeckoRange.IsValid() ? mSelection
                                                                 : [NSNull null],
     @"AXTextStateChangeType" : @(stateChangeType),
-  } mutableCopy];
+  } mutableCopy] autorelease];
 
   GeckoTextMarker caretMarker(mGeckoDocAccessible, mCaret);
   GeckoTextMarker prevCaretMarker(mGeckoDocAccessible, mPrevCaret);
@@ -337,9 +337,13 @@ static nsDataHashtable<nsUint64HashKey, MOXTextMarkerDelegate*> sDelegates;
 
 - (NSAttributedString*)moxAttributedStringForTextMarkerRange:
     (id)textMarkerRange {
-  return [[[NSAttributedString alloc]
-      initWithString:[self moxStringForTextMarkerRange:textMarkerRange]]
-      autorelease];
+  mozilla::a11y::GeckoTextMarkerRange range(mGeckoDocAccessible,
+                                            textMarkerRange);
+  if (!range.IsValid()) {
+    return nil;
+  }
+
+  return range.AttributedText();
 }
 
 - (NSValue*)moxBoundsForTextMarkerRange:(id)textMarkerRange {

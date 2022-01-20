@@ -8,6 +8,8 @@ ChromeUtils.defineModuleGetter(
   "resource://testing-common/UrlbarTestUtils.jsm"
 );
 
+let suggestionEngine;
+
 function checkHistogramResults(resultIndexes, expected, histogram) {
   for (let [i, val] of Object.entries(resultIndexes.values)) {
     if (i == expected) {
@@ -25,25 +27,6 @@ function checkHistogramResults(resultIndexes, expected, histogram) {
     }
   }
 }
-
-let searchInSearchbar = async function(inputText) {
-  let win = window;
-  await new Promise(r => waitForFocus(r, win));
-  let sb = BrowserSearch.searchBar;
-  // Write the search query in the searchbar.
-  sb.focus();
-  sb.value = inputText;
-  sb.textbox.controller.startSearch(inputText);
-  // Wait for the popup to show.
-  await BrowserTestUtils.waitForEvent(sb.textbox.popup, "popupshown");
-  // And then for the search to complete.
-  await BrowserTestUtils.waitForCondition(
-    () =>
-      sb.textbox.controller.searchStatus >=
-      Ci.nsIAutoCompleteController.STATUS_COMPLETE_NO_MATCH,
-    "The search in the searchbar must complete."
-  );
-};
 
 /**
  * Click one of the entries in the search suggestion popup.
@@ -67,6 +50,9 @@ function clickSearchbarSuggestion(entryName, clickOptions = {}) {
 
 add_task(async function setup() {
   await gCUITestUtils.addSearchBar();
+  const url = getRootDirectory(gTestPath) + "telemetrySearchSuggestions.xml";
+  suggestionEngine = await SearchTestUtils.promiseNewSearchEngine(url, "");
+
   registerCleanupFunction(() => {
     gCUITestUtils.removeSearchBar();
   });
@@ -74,16 +60,13 @@ add_task(async function setup() {
   // Create two new search engines. Mark one as the default engine, so
   // the test don't crash. We need to engines for this test as the searchbar
   // doesn't display the default search engine among the one-off engines.
-  await Services.search.addEngineWithDetails("MozSearch", {
-    alias: "mozalias",
-    method: "GET",
-    template: "http://example.com/?q={searchTerms}",
+  await SearchTestUtils.installSearchExtension({
+    name: "MozSearch",
+    keyword: "mozalias",
   });
-
-  await Services.search.addEngineWithDetails("MozSearch2", {
-    alias: "mozalias2",
-    method: "GET",
-    template: "http://example.com/?q={searchTerms}",
+  await SearchTestUtils.installSearchExtension({
+    name: "MozSearch2",
+    keyword: "mozalias2",
   });
 
   // Make the first engine the default search engine.
@@ -106,8 +89,6 @@ add_task(async function setup() {
   registerCleanupFunction(async function() {
     Services.telemetry.canRecordExtended = oldCanRecord;
     await Services.search.setDefault(originalEngine);
-    await Services.search.removeEngine(engineDefault);
-    await Services.search.removeEngine(engineOneOff);
     Services.telemetry.setEventRecordingEnabled("navigation", false);
   });
 });
@@ -259,10 +240,6 @@ add_task(async function test_oneOff_enterSelection() {
     "FX_SEARCHBAR_SELECTED_RESULT_METHOD"
   );
 
-  // Create an engine to generate search suggestions and add it as default
-  // for this test.
-  const url = getRootDirectory(gTestPath) + "telemetrySearchSuggestions.xml";
-  let suggestionEngine = await Services.search.addOpenSearchEngine(url, "");
   let previousEngine = await Services.search.getDefault();
   await Services.search.setDefault(suggestionEngine);
 
@@ -291,7 +268,6 @@ add_task(async function test_oneOff_enterSelection() {
   );
 
   await Services.search.setDefault(previousEngine);
-  await Services.search.removeEngine(suggestionEngine);
   BrowserTestUtils.removeTab(tab);
 });
 
@@ -312,11 +288,9 @@ add_task(async function test_oneOff_click() {
 
   info("Type a query.");
   let p = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
-  await searchInSearchbar("query");
+  let popup = await searchInSearchbar("query");
   info("Click the first one-off button.");
-  BrowserSearch.searchBar.textbox.popup.oneOffButtons
-    .getSelectableButtons(false)[0]
-    .click();
+  popup.oneOffButtons.getSelectableButtons(false)[0].click();
   await p;
 
   let resultMethods = resultMethodHist.snapshot();
@@ -340,10 +314,6 @@ async function checkSuggestionClick(clickOptions, waitForActionFn) {
     "SEARCH_COUNTS"
   );
 
-  // Create an engine to generate search suggestions and add it as default
-  // for this test.
-  const url = getRootDirectory(gTestPath) + "telemetrySearchSuggestions.xml";
-  let suggestionEngine = await Services.search.addOpenSearchEngine(url, "");
   let previousEngine = await Services.search.getDefault();
   await Services.search.setDefault(suggestionEngine);
 
@@ -402,7 +372,6 @@ async function checkSuggestionClick(clickOptions, waitForActionFn) {
   );
 
   await Services.search.setDefault(previousEngine);
-  await Services.search.removeEngine(suggestionEngine);
   BrowserTestUtils.removeTab(tab);
 }
 
@@ -434,10 +403,6 @@ add_task(async function test_suggestion_enterSelection() {
     "FX_SEARCHBAR_SELECTED_RESULT_METHOD"
   );
 
-  // Create an engine to generate search suggestions and add it as default
-  // for this test.
-  const url = getRootDirectory(gTestPath) + "telemetrySearchSuggestions.xml";
-  let suggestionEngine = await Services.search.addOpenSearchEngine(url, "");
   let previousEngine = await Services.search.getDefault();
   await Services.search.setDefault(suggestionEngine);
 
@@ -462,6 +427,5 @@ add_task(async function test_suggestion_enterSelection() {
   );
 
   await Services.search.setDefault(previousEngine);
-  await Services.search.removeEngine(suggestionEngine);
   BrowserTestUtils.removeTab(tab);
 });

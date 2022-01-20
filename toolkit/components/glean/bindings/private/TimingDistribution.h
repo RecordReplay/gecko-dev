@@ -8,9 +8,8 @@
 #define mozilla_glean_GleanTimingDistribution_h
 
 #include "mozilla/glean/bindings/DistributionData.h"
-#include "mozilla/glean/fog_ffi_generated.h"
 #include "mozilla/Maybe.h"
-#include "nsDataHashtable.h"
+#include "mozilla/Result.h"
 #include "nsIGleanMetrics.h"
 #include "nsTArray.h"
 
@@ -19,7 +18,6 @@ namespace mozilla::glean {
 typedef uint64_t TimerId;
 
 namespace impl {
-
 class TimingDistributionMetric {
  public:
   constexpr explicit TimingDistributionMetric(uint32_t aId) : mId(aId) {}
@@ -29,7 +27,7 @@ class TimingDistributionMetric {
    *
    * @returns A unique TimerId for the new timer
    */
-  TimerId Start() const { return fog_timing_distribution_start(mId); }
+  TimerId Start() const;
 
   /*
    * Stops tracking time for the provided metric and associated timer id.
@@ -41,9 +39,7 @@ class TimingDistributionMetric {
    * @param aId The TimerId to associate with this timing. This allows for
    *            concurrent timing of events associated with different ids.
    */
-  void StopAndAccumulate(TimerId&& aId) const {
-    fog_timing_distribution_stop_and_accumulate(mId, aId);
-  }
+  void StopAndAccumulate(const TimerId&& aId) const;
 
   /*
    * Aborts a previous `Start` call. No error is recorded if no `Start` was
@@ -51,7 +47,7 @@ class TimingDistributionMetric {
    *
    * @param aId The TimerId whose `Start` you wish to abort.
    */
-  void Cancel(TimerId&& aId) const { fog_timing_distribution_cancel(mId, aId); }
+  void Cancel(const TimerId&& aId) const;
 
   /**
    * **Test-only API**
@@ -70,21 +66,8 @@ class TimingDistributionMetric {
    *
    * @return value of the stored metric, or Nothing() if there is no value.
    */
-  Maybe<DistributionData> TestGetValue(
-      const nsACString& aPingName = nsCString()) const {
-    if (!fog_timing_distribution_test_has_value(mId, &aPingName)) {
-      return Nothing();
-    }
-    nsTArray<uint64_t> buckets;
-    nsTArray<uint64_t> counts;
-    DistributionData ret;
-    fog_timing_distribution_test_get_value(mId, &aPingName, &ret.sum, &buckets,
-                                           &counts);
-    for (size_t i = 0; i < buckets.Length(); ++i) {
-      ret.values.Put(buckets[i], counts[i]);
-    }
-    return Some(std::move(ret));
-  }
+  Result<Maybe<DistributionData>, nsCString> TestGetValue(
+      const nsACString& aPingName = nsCString()) const;
 
  private:
   const uint32_t mId;

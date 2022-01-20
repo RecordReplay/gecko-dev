@@ -83,7 +83,9 @@ static nsLineBox* FindContainingLine(nsIFrame* aFrame) {
 
 static void AdjustCaretFrameForLineEnd(nsIFrame** aFrame, int32_t* aOffset) {
   nsLineBox* line = FindContainingLine(*aFrame);
-  if (!line) return;
+  if (!line) {
+    return;
+  }
   int32_t count = line->GetChildCount();
   for (nsIFrame* f = line->mFirstChild; count > 0;
        --count, f = f->GetNextSibling()) {
@@ -484,11 +486,11 @@ nsIFrame* nsCaret::GetPaintGeometry(nsRect* aRect) {
   }
 
   // If the offset falls outside of the frame, then don't paint the caret.
-  int32_t startOffset, endOffset;
-  if (frame->IsTextFrame() &&
-      (NS_FAILED(frame->GetOffsets(startOffset, endOffset)) ||
-       startOffset > frameOffset || endOffset < frameOffset)) {
-    return nullptr;
+  if (frame->IsTextFrame()) {
+    auto [startOffset, endOffset] = frame->GetOffsets();
+    if (startOffset > frameOffset || endOffset < frameOffset) {
+      return nullptr;
+    }
   }
 
   nsRect caretRect;
@@ -636,11 +638,15 @@ nsIFrame* nsCaret::GetCaretFrameForNodeOffset(
     *aReturnUnadjustedFrame = theFrame;
   }
 
-  // if theFrame is after a text frame that's logically at the end of the line
-  // (e.g. if theFrame is a <br> frame), then put the caret at the end of
-  // that text frame instead. This way, the caret will be positioned as if
-  // trailing whitespace was not trimmed.
-  AdjustCaretFrameForLineEnd(&theFrame, &theFrameOffset);
+  if (nsFrameSelection::AdjustFrameForLineStart(theFrame, theFrameOffset)) {
+    aFrameSelection->SetHint(CARET_ASSOCIATE_AFTER);
+  } else {
+    // if theFrame is after a text frame that's logically at the end of the line
+    // (e.g. if theFrame is a <br> frame), then put the caret at the end of
+    // that text frame instead. This way, the caret will be positioned as if
+    // trailing whitespace was not trimmed.
+    AdjustCaretFrameForLineEnd(&theFrame, &theFrameOffset);
+  }
 
   // Mamdouh : modification of the caret to work at rtl and ltr with Bidi
   //
@@ -653,14 +659,12 @@ nsIFrame* nsCaret::GetCaretFrameForNodeOffset(
       aBidiLevel = theFrame->GetEmbeddingLevel();
     }
 
-    int32_t start;
-    int32_t end;
     nsIFrame* frameBefore;
     nsIFrame* frameAfter;
     nsBidiLevel levelBefore;  // Bidi level of the character before the caret
     nsBidiLevel levelAfter;   // Bidi level of the character after the caret
 
-    theFrame->GetOffsets(start, end);
+    auto [start, end] = theFrame->GetOffsets();
     if (start == 0 || end == 0 || start == theFrameOffset ||
         end == theFrameOffset) {
       nsPrevNextBidiLevels levels =
@@ -688,7 +692,7 @@ nsIFrame* nsCaret::GetCaretFrameForNodeOffset(
             if (theFrame != frameBefore) {
               if (frameBefore) {  // if there is a frameBefore, move into it
                 theFrame = frameBefore;
-                theFrame->GetOffsets(start, end);
+                std::tie(start, end) = theFrame->GetOffsets();
                 theFrameOffset = end;
               } else {
                 // if there is no frameBefore, we must be at the beginning of
@@ -718,7 +722,7 @@ nsIFrame* nsCaret::GetCaretFrameForNodeOffset(
               if (frameAfter) {
                 // if there is a frameAfter, move into it
                 theFrame = frameAfter;
-                theFrame->GetOffsets(start, end);
+                std::tie(start, end) = theFrame->GetOffsets();
                 theFrameOffset = start;
               } else {
                 // if there is no frameAfter, we must be at the end of the line
@@ -747,7 +751,7 @@ nsIFrame* nsCaret::GetCaretFrameForNodeOffset(
                      !IS_SAME_DIRECTION(aBidiLevel, levelAfter)) {
             if (NS_SUCCEEDED(aFrameSelection->GetFrameFromLevel(
                     frameAfter, eDirNext, aBidiLevel, &theFrame))) {
-              theFrame->GetOffsets(start, end);
+              std::tie(start, end) = theFrame->GetOffsets();
               levelAfter = theFrame->GetEmbeddingLevel();
               if (IS_LEVEL_RTL(aBidiLevel))  // c8: caret to the right of the
                                              // rightmost character
@@ -763,7 +767,7 @@ nsIFrame* nsCaret::GetCaretFrameForNodeOffset(
                      !IS_SAME_DIRECTION(aBidiLevel, levelAfter)) {
             if (NS_SUCCEEDED(aFrameSelection->GetFrameFromLevel(
                     frameBefore, eDirPrevious, aBidiLevel, &theFrame))) {
-              theFrame->GetOffsets(start, end);
+              std::tie(start, end) = theFrame->GetOffsets();
               levelBefore = theFrame->GetEmbeddingLevel();
               if (IS_LEVEL_RTL(aBidiLevel))  // c12: caret to the left of the
                                              // leftmost character

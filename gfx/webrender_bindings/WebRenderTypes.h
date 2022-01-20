@@ -326,29 +326,29 @@ static inline wr::LayoutVector2D ToLayoutVector2D(
 static inline wr::LayoutRect ToLayoutRect(
     const mozilla::LayoutDeviceRect& rect) {
   wr::LayoutRect r;
-  r.origin.x = rect.X();
-  r.origin.y = rect.Y();
-  r.size.width = rect.Width();
-  r.size.height = rect.Height();
+  r.min.x = rect.X();
+  r.min.y = rect.Y();
+  r.max.x = rect.X() + rect.Width();
+  r.max.y = rect.Y() + rect.Height();
   return r;
 }
 
 static inline wr::LayoutRect ToLayoutRect(const gfx::Rect& rect) {
   wr::LayoutRect r;
-  r.origin.x = rect.X();
-  r.origin.y = rect.Y();
-  r.size.width = rect.Width();
-  r.size.height = rect.Height();
+  r.min.x = rect.X();
+  r.min.y = rect.Y();
+  r.max.x = rect.X() + rect.Width();
+  r.max.y = rect.Y() + rect.Height();
   return r;
 }
 
 static inline wr::DeviceIntRect ToDeviceIntRect(
     const mozilla::ImageIntRect& rect) {
   wr::DeviceIntRect r;
-  r.origin.x = rect.X();
-  r.origin.y = rect.Y();
-  r.size.width = rect.Width();
-  r.size.height = rect.Height();
+  r.min.x = rect.X();
+  r.min.y = rect.Y();
+  r.max.x = rect.X() + rect.Width();
+  r.max.y = rect.Y() + rect.Height();
   return r;
 }
 
@@ -356,10 +356,10 @@ static inline wr::DeviceIntRect ToDeviceIntRect(
 static inline wr::LayoutIntRect ToLayoutIntRect(
     const mozilla::ImageIntRect& rect) {
   wr::LayoutIntRect r;
-  r.origin.x = rect.X();
-  r.origin.y = rect.Y();
-  r.size.width = rect.Width();
-  r.size.height = rect.Height();
+  r.min.x = rect.X();
+  r.min.y = rect.Y();
+  r.max.x = rect.X() + rect.Width();
+  r.max.y = rect.Y() + rect.Height();
   return r;
 }
 
@@ -371,17 +371,14 @@ static inline wr::LayoutRect ToLayoutRect(
 static inline wr::LayoutRect IntersectLayoutRect(const wr::LayoutRect& aRect,
                                                  const wr::LayoutRect& aOther) {
   wr::LayoutRect r;
-  r.origin.x = std::max(aRect.origin.x, aOther.origin.x);
-  r.origin.y = std::max(aRect.origin.y, aOther.origin.y);
-  r.size.width = std::min(aRect.origin.x + aRect.size.width,
-                          aOther.origin.x + aOther.size.width) -
-                 r.origin.x;
-  r.size.height = std::min(aRect.origin.y + aRect.size.height,
-                           aOther.origin.y + aOther.size.height) -
-                  r.origin.y;
-  if (r.size.width < 0 || r.size.height < 0) {
-    r.size.width = 0;
-    r.size.height = 0;
+  r.min.x = std::max(aRect.min.x, aOther.min.x);
+  r.min.y = std::max(aRect.min.y, aOther.min.y);
+  r.max.x = std::min(aRect.max.x, aOther.max.x);
+  r.max.y = std::min(aRect.max.y, aOther.max.y);
+
+  if (r.max.x < r.min.x || r.max.y < r.min.y) {
+    r.max.x = r.min.x;
+    r.max.y = r.min.y;
   }
   return r;
 }
@@ -468,16 +465,22 @@ static inline wr::BorderRadius EmptyBorderRadius() {
 }
 
 static inline wr::BorderRadius ToBorderRadius(
-    const mozilla::LayoutDeviceSize& topLeft,
-    const mozilla::LayoutDeviceSize& topRight,
-    const mozilla::LayoutDeviceSize& bottomLeft,
-    const mozilla::LayoutDeviceSize& bottomRight) {
+    const LayoutDeviceSize& topLeft, const LayoutDeviceSize& topRight,
+    const LayoutDeviceSize& bottomLeft, const LayoutDeviceSize& bottomRight) {
   wr::BorderRadius br;
   br.top_left = ToLayoutSize(topLeft);
   br.top_right = ToLayoutSize(topRight);
   br.bottom_left = ToLayoutSize(bottomLeft);
   br.bottom_right = ToLayoutSize(bottomRight);
   return br;
+}
+
+static inline wr::BorderRadius ToBorderRadius(
+    const gfx::RectCornerRadii& aRadii) {
+  return ToBorderRadius(LayoutDeviceSize::FromUnknownSize(aRadii[0]),
+                        LayoutDeviceSize::FromUnknownSize(aRadii[1]),
+                        LayoutDeviceSize::FromUnknownSize(aRadii[3]),
+                        LayoutDeviceSize::FromUnknownSize(aRadii[2]));
 }
 
 static inline wr::ComplexClipRegion ToComplexClipRegion(
@@ -760,6 +763,7 @@ enum class WebRenderError : int8_t {
   MAKE_CURRENT,
   RENDER,
   NEW_SURFACE,
+  BEGIN_DRAW,
   VIDEO_OVERLAY,
   EXCESSIVE_RESETS,
 
@@ -781,6 +785,31 @@ static inline wr::WrYuvColorSpace ToWrYuvColorSpace(
       MOZ_ASSERT_UNREACHABLE("Tried to convert invalid YUVColorSpace.");
   }
   return wr::WrYuvColorSpace::Rec601;
+}
+
+// TODO: Use YUVRangedColorSpace instead of assuming ColorRange::LIMITED.
+static inline wr::YuvRangedColorSpace ToWrYuvRangedColorSpace(
+    gfx::YUVRangedColorSpace aFrom) {
+  switch (aFrom) {
+    case gfx::YUVRangedColorSpace::BT601_Narrow:
+      return wr::YuvRangedColorSpace::Rec601Narrow;
+    case gfx::YUVRangedColorSpace::BT601_Full:
+      return wr::YuvRangedColorSpace::Rec601Full;
+    case gfx::YUVRangedColorSpace::BT709_Narrow:
+      return wr::YuvRangedColorSpace::Rec709Narrow;
+    case gfx::YUVRangedColorSpace::BT709_Full:
+      return wr::YuvRangedColorSpace::Rec709Full;
+    case gfx::YUVRangedColorSpace::BT2020_Narrow:
+      return wr::YuvRangedColorSpace::Rec2020Narrow;
+    case gfx::YUVRangedColorSpace::BT2020_Full:
+      return wr::YuvRangedColorSpace::Rec2020Full;
+    case gfx::YUVRangedColorSpace::GbrIdentity:
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Tried to convert invalid YUVColorSpace.");
+      break;
+  }
+  return wr::YuvRangedColorSpace::GbrIdentity;
 }
 
 static inline wr::WrColorDepth ToWrColorDepth(gfx::ColorDepth aColorDepth) {

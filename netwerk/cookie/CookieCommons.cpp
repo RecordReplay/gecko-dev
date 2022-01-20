@@ -68,11 +68,7 @@ bool CookieCommons::PathMatches(Cookie* aCookie, const nsACString& aPath) {
   // of the request path that is not included in the cookie path is a %x2F ("/")
   // character, they match.
   uint32_t cookiePathLen = cookiePath.Length();
-  if (isPrefix && aPath[cookiePathLen] == '/') {
-    return true;
-  }
-
-  return false;
+  return isPrefix && aPath[cookiePathLen] == '/';
 }
 
 // Get the base domain for aHostURI; e.g. for "www.bbc.co.uk", this would be
@@ -119,7 +115,13 @@ nsresult CookieCommons::GetBaseDomain(nsIPrincipal* aPrincipal,
     return nsContentUtils::GetHostOrIPv6WithBrackets(aPrincipal, aBaseDomain);
   }
 
-  return aPrincipal->GetBaseDomain(aBaseDomain);
+  nsresult rv = aPrincipal->GetBaseDomain(aBaseDomain);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  nsContentUtils::MaybeFixIPv6Host(aBaseDomain);
+  return NS_OK;
 }
 
 // Get the base domain for aHost; e.g. for "www.bbc.co.uk", this would be
@@ -451,7 +453,7 @@ already_AddRefed<nsICookieJarSettings> CookieCommons::GetCookieJarSettings(
       cookieJarSettings = CookieJarSettings::GetBlockingAll();
     }
   } else {
-    cookieJarSettings = CookieJarSettings::Create();
+    cookieJarSettings = CookieJarSettings::Create(CookieJarSettings::eRegular);
   }
 
   MOZ_ASSERT(cookieJarSettings);

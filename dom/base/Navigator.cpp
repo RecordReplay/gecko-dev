@@ -11,6 +11,7 @@
 #include "nsIXULAppInfo.h"
 #include "nsPluginArray.h"
 #include "nsMimeTypeArray.h"
+#include "mozilla/Components.h"
 #include "mozilla/ContentBlocking.h"
 #include "mozilla/ContentBlockingNotifier.h"
 #include "mozilla/MemoryReporting.h"
@@ -45,7 +46,6 @@
 #include "mozilla/dom/MIDIAccessManager.h"
 #include "mozilla/dom/MIDIOptionsBinding.h"
 #include "mozilla/dom/Permissions.h"
-#include "mozilla/dom/Presentation.h"
 #include "mozilla/dom/ServiceWorkerContainer.h"
 #include "mozilla/dom/StorageManager.h"
 #include "mozilla/dom/TCPSocket.h"
@@ -70,6 +70,10 @@
 #include "nsICookieManager.h"
 #include "nsICookieService.h"
 #include "nsIHttpChannel.h"
+#ifdef ENABLE_WEBDRIVER
+#  include "nsIMarionette.h"
+#  include "nsIRemoteAgent.h"
+#endif
 #include "nsStreamUtils.h"
 #include "WidgetUtils.h"
 #include "nsIScriptError.h"
@@ -78,7 +82,7 @@
 
 #include "nsIExternalProtocolHandler.h"
 #include "BrowserChild.h"
-#include "URIUtils.h"
+#include "mozilla/ipc/URIUtils.h"
 
 #include "mozilla/dom/MediaDevices.h"
 #include "MediaManager.h"
@@ -156,7 +160,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaKeySystemAccessManager)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPresentation)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGamepadServiceTest)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVRGetDisplaysPromises)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVRServiceTest)
@@ -173,7 +176,6 @@ void Navigator::Invalidate() {
   mMimeTypes = nullptr;
 
   if (mPlugins) {
-    mPlugins->Invalidate();
     mPlugins = nullptr;
   }
 
@@ -200,10 +202,6 @@ void Navigator::Invalidate() {
   }
 
   mMediaDevices = nullptr;
-
-  if (mPresentation) {
-    mPresentation = nullptr;
-  }
 
   mServiceWorkerContainer = nullptr;
 
@@ -485,7 +483,6 @@ nsPluginArray* Navigator::GetPlugins(ErrorResult& aRv) {
       return nullptr;
     }
     mPlugins = new nsPluginArray(mWindow);
-    mPlugins->Init();
   }
 
   return mPlugins;
@@ -515,15 +512,20 @@ StorageManager* Navigator::Storage() {
 }
 
 bool Navigator::CookieEnabled() {
-  bool cookieEnabled = (nsICookieManager::GetCookieBehavior() !=
-                        nsICookieService::BEHAVIOR_REJECT);
-
   // Check whether an exception overrides the global cookie behavior
   // Note that the code for getting the URI here matches that in
   // nsHTMLDocument::SetCookie.
   if (!mWindow || !mWindow->GetDocShell()) {
-    return cookieEnabled;
+    return nsICookieManager::GetCookieBehavior(false) !=
+           nsICookieService::BEHAVIOR_REJECT;
   }
+
+  nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(mWindow);
+  uint32_t cookieBehavior = loadContext
+                                ? nsICookieManager::GetCookieBehavior(
+                                      loadContext->UsePrivateBrowsing())
+                                : nsICookieManager::GetCookieBehavior(false);
+  bool cookieEnabled = cookieBehavior != nsICookieService::BEHAVIOR_REJECT;
 
   nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
   if (!doc) {
@@ -734,7 +736,8 @@ void Navigator::SetVibrationPermission(bool aPermitted, bool aPersistent) {
   }
 
   if (aPersistent) {
-    nsCOMPtr<nsIPermissionManager> permMgr = services::GetPermissionManager();
+    nsCOMPtr<nsIPermissionManager> permMgr =
+        components::PermissionManager::Service();
     if (!permMgr) {
       return;
     }
@@ -751,6 +754,21 @@ bool Navigator::Vibrate(uint32_t aDuration) {
   return Vibrate(pattern);
 }
 
+nsTArray<uint32_t> SanitizeVibratePattern(const nsTArray<uint32_t>& aPattern) {
+  nsTArray<uint32_t> pattern(aPattern.Clone());
+
+  if (pattern.Length() > StaticPrefs::dom_vibrator_max_vibrate_list_len()) {
+    pattern.SetLength(StaticPrefs::dom_vibrator_max_vibrate_list_len());
+  }
+
+  for (size_t i = 0; i < pattern.Length(); ++i) {
+    pattern[i] =
+        std::min(StaticPrefs::dom_vibrator_max_vibrate_ms(), pattern[i]);
+  }
+
+  return pattern;
+}
+
 bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -764,16 +782,7 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
     return false;
   }
 
-  nsTArray<uint32_t> pattern(aPattern.Clone());
-
-  if (pattern.Length() > StaticPrefs::dom_vibrator_max_vibrate_list_len()) {
-    pattern.SetLength(StaticPrefs::dom_vibrator_max_vibrate_list_len());
-  }
-
-  for (size_t i = 0; i < pattern.Length(); ++i) {
-    pattern[i] =
-        std::min(StaticPrefs::dom_vibrator_max_vibrate_ms(), pattern[i]);
-  }
+  nsTArray<uint32_t> pattern = SanitizeVibratePattern(aPattern);
 
   // The spec says we check dom.vibrator.enabled after we've done the sanity
   // checking on the pattern.
@@ -856,9 +865,9 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
 // https://html.spec.whatwg.org/multipage/system-state.html#custom-handlers
 // If you change this list, please also update the copy in E10SUtils.jsm.
 static const char* const kSafeSchemes[] = {
-    "bitcoin", "geo",  "im",   "irc",         "ircs", "magnet", "mailto",
-    "mms",     "news", "nntp", "openpgp4fpr", "sip",  "sms",    "smsto",
-    "ssh",     "tel",  "urn",  "webcal",      "wtai", "xmpp"};
+    "bitcoin", "geo", "im",   "irc",  "ircs",        "magnet", "mailto",
+    "matrix",  "mms", "news", "nntp", "openpgp4fpr", "sip",    "sms",
+    "smsto",   "ssh", "tel",  "urn",  "webcal",      "wtai",   "xmpp"};
 
 void Navigator::CheckProtocolHandlerAllowed(const nsAString& aScheme,
                                             nsIURI* aHandlerURI,
@@ -951,9 +960,19 @@ void Navigator::CheckProtocolHandlerAllowed(const nsAString& aScheme,
   }
 
   nsCOMPtr<nsIProtocolHandler> handler;
-  nsCOMPtr<nsIIOService> io = services::GetIOService();
+  nsCOMPtr<nsIIOService> io = components::IO::Service();
   if (NS_FAILED(
           io->GetProtocolHandler(scheme.get(), getter_AddRefs(handler)))) {
+    raisePermissionDeniedScheme();
+    return;
+  }
+
+  // check if we have prefs set saying not to add this.
+  bool defaultExternal =
+      Preferences::GetBool("network.protocol-handler.external-default");
+  nsPrintfCString specificPref("network.protocol-handler.external.%s",
+                               scheme.get());
+  if (!Preferences::GetBool(specificPref.get(), defaultExternal)) {
     raisePermissionDeniedScheme();
     return;
   }
@@ -966,16 +985,6 @@ void Navigator::CheckProtocolHandlerAllowed(const nsAString& aScheme,
   MOZ_RELEASE_ASSERT(
       externalHandler,
       "We should never allow overriding a builtin protocol handler");
-
-  // check if we have prefs set saying not to add this.
-  bool defaultExternal =
-      Preferences::GetBool("network.protocol-handler.external-default");
-  nsPrintfCString specificPref("network.protocol-handler.external.%s",
-                               scheme.get());
-  if (!Preferences::GetBool(specificPref.get(), defaultExternal)) {
-    raisePermissionDeniedScheme();
-    return;
-  }
 }
 
 void Navigator::RegisterProtocolHandler(const nsAString& aScheme,
@@ -1275,6 +1284,11 @@ void Navigator::MozGetUserMedia(const MediaStreamConstraints& aConstraints,
     aRv.ThrowInvalidStateError("The document is not fully active.");
     return;
   }
+  if (Document* doc = mWindow->GetExtantDoc()) {
+    if (!mWindow->IsSecureContext()) {
+      doc->SetUseCounter(eUseCounter_custom_MozGetUserMediaInsec);
+    }
+  }
   RefPtr<MediaManager::StreamPromise> sp;
   if (!MediaManager::IsOn(aConstraints.mVideo) &&
       !MediaManager::IsOn(aConstraints.mAudio)) {
@@ -1310,28 +1324,6 @@ void Navigator::MozGetUserMedia(const MediaStreamConstraints& aConstraints,
         auto error = MakeRefPtr<MediaStreamError>(window, *aError);
         MediaManager::CallOnError(*onerror, *error);
       });
-}
-
-void Navigator::MozGetUserMediaDevices(
-    const MediaStreamConstraints& aConstraints,
-    MozGetUserMediaDevicesSuccessCallback& aOnSuccess,
-    NavigatorUserMediaErrorCallback& aOnError, uint64_t aInnerWindowID,
-    const nsAString& aCallID, ErrorResult& aRv) {
-  if (!mWindow || !mWindow->GetOuterWindow() ||
-      mWindow->GetOuterWindow()->GetCurrentInnerWindow() != mWindow) {
-    aRv.Throw(NS_ERROR_NOT_AVAILABLE);
-    return;
-  }
-  if (Document* doc = mWindow->GetExtantDoc()) {
-    if (!mWindow->IsSecureContext()) {
-      doc->SetUseCounter(eUseCounter_custom_MozGetUserMediaInsec);
-    }
-  }
-  RefPtr<MediaManager> manager = MediaManager::Get();
-  // XXXbz aOnError seems to be unused?
-  nsCOMPtr<nsPIDOMWindowInner> window(mWindow);
-  aRv = manager->GetUserMediaDevices(window, aConstraints, aOnSuccess,
-                                     aInnerWindowID, aCallID);
 }
 
 //*****************************************************************************
@@ -1499,27 +1491,6 @@ void Navigator::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads,
   NS_ENSURE_TRUE_VOID(mWindow->GetDocShell());
   nsGlobalWindowInner* win = nsGlobalWindowInner::Cast(mWindow);
 
-  // As we are moving this API to secure contexts, we are going to temporarily
-  // show a console warning to developers.
-  if (!mGamepadSecureContextWarningShown && !win->IsSecureContext()) {
-    mGamepadSecureContextWarningShown = true;
-    auto msg =
-        u"The Gamepad API will only be available in "
-        "secure contexts (e.g., https). Please see "
-        "https://hacks.mozilla.org/2020/07/securing-gamepad-api/ for more "
-        "info."_ns;
-    nsContentUtils::ReportToConsoleNonLocalized(
-        msg, nsIScriptError::warningFlag, "DOM"_ns, win->GetExtantDoc());
-  }
-
-#ifdef EARLY_BETA_OR_EARLIER
-  if (!win->IsSecureContext()) {
-    return;
-  }
-#endif
-
-#ifdef NIGHTLY_BUILD
-  // We will move this into Beta in Firefox 82
   if (!FeaturePolicyUtils::IsFeatureAllowed(win->GetExtantDoc(),
                                             u"gamepad"_ns)) {
     aRv.ThrowSecurityError(
@@ -1527,7 +1498,6 @@ void Navigator::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads,
         "getGamepads() from this context.");
     return;
   }
-#endif
 
   win->SetHasGamepadEventListener(true);
   win->GetGamepads(aGamepads);
@@ -1859,29 +1829,25 @@ nsresult Navigator::GetPlatform(nsAString& aPlatform,
     }
   }
 
-  nsresult rv;
-
-  nsCOMPtr<nsIHttpProtocolHandler> service(
-      do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &rv));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // Sorry for the #if platform ugliness, but Communicator is likewise
-  // hardcoded and we are seeking backward compatibility here (bug 47080).
 #if defined(WIN32)
   aPlatform.AssignLiteral("Win32");
 #elif defined(XP_MACOSX)
   // Always return "MacIntel", even on ARM64 macOS like Safari does.
   aPlatform.AssignLiteral("MacIntel");
 #else
-  // XXX Communicator uses compiled-in build-time string defines
-  // to indicate the platform it was compiled *for*, not what it is
-  // currently running *on* which is what this does.
+  nsresult rv;
+  nsCOMPtr<nsIHttpProtocolHandler> service(
+      do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &rv));
+  NS_ENSURE_SUCCESS(rv, rv);
+
   nsAutoCString plat;
   rv = service->GetOscpu(plat);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   CopyASCIItoUTF16(plat, aPlatform);
 #endif
 
-  return rv;
+  return NS_OK;
 }
 
 /* static */
@@ -2088,18 +2054,6 @@ already_AddRefed<Promise> Navigator::RequestMediaKeySystemAccess(
   return promise.forget();
 }
 
-Presentation* Navigator::GetPresentation(ErrorResult& aRv) {
-  if (!mPresentation) {
-    if (!mWindow) {
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-      return nullptr;
-    }
-    mPresentation = Presentation::Create(mWindow);
-  }
-
-  return mPresentation;
-}
-
 CredentialsContainer* Navigator::Credentials() {
   if (!mCredentials) {
     mCredentials = new CredentialsContainer(GetWindow());
@@ -2159,7 +2113,27 @@ webgpu::Instance* Navigator::Gpu() {
 
 /* static */
 bool Navigator::Webdriver() {
-  return Preferences::GetBool("marionette.enabled", false);
+#ifdef ENABLE_WEBDRIVER
+  nsCOMPtr<nsIMarionette> marionette = do_GetService(NS_MARIONETTE_CONTRACTID);
+  if (marionette) {
+    bool marionetteRunning = false;
+    marionette->GetRunning(&marionetteRunning);
+    if (marionetteRunning) {
+      return true;
+    }
+  }
+
+  nsCOMPtr<nsIRemoteAgent> agent = do_GetService(NS_REMOTEAGENT_CONTRACTID);
+  if (agent) {
+    bool remoteAgentListening = false;
+    agent->GetListening(&remoteAgentListening);
+    if (remoteAgentListening) {
+      return true;
+    }
+  }
+#endif
+
+  return false;
 }
 
 }  // namespace mozilla::dom

@@ -8,7 +8,6 @@
 #include "nsCOMPtr.h"
 #include "nsUnicharUtils.h"
 #include "nsListControlFrame.h"
-#include "nsCheckboxRadioFrame.h"  // for COMPARE macro
 #include "nsGkAtoms.h"
 #include "nsComboboxControlFrame.h"
 #include "nsFontMetrics.h"
@@ -74,8 +73,8 @@ class nsListEventListener final : public nsIDOMEventListener {
 };
 
 //---------------------------------------------------------
-nsContainerFrame* NS_NewListControlFrame(PresShell* aPresShell,
-                                         ComputedStyle* aStyle) {
+nsListControlFrame* NS_NewListControlFrame(PresShell* aPresShell,
+                                           ComputedStyle* aStyle) {
   nsListControlFrame* it =
       new (aPresShell) nsListControlFrame(aStyle, aPresShell->GetPresContext());
 
@@ -141,7 +140,6 @@ void nsListControlFrame::DestroyFrom(nsIFrame* aDestructRoot,
                                  CanBubble::eYes, ChromeOnlyDispatch::eYes));
   }
 
-  nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
   nsHTMLScrollFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
@@ -218,9 +216,10 @@ void nsListControlFrame::PaintFocus(DrawTarget* aDrawTarget, nsPoint aPt) {
   }
 
   // set up back stop colors and then ask L&F service for the real colors
-  nscolor color = LookAndFeel::GetColor(
+  nscolor color = LookAndFeel::Color(
       lastItemIsSelected ? LookAndFeel::ColorID::WidgetSelectForeground
-                         : LookAndFeel::ColorID::WidgetSelectBackground);
+                         : LookAndFeel::ColorID::WidgetSelectBackground,
+      this);
 
   nsCSSRendering::PaintFocus(presContext, aDrawTarget, fRect, color);
 }
@@ -354,10 +353,6 @@ void nsListControlFrame::Reflow(nsPresContext* aPresContext,
     if (mIsAllFramesHere && !mHasBeenInitialized) {
       mHasBeenInitialized = true;
     }
-  }
-
-  if (HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
-    nsCheckboxRadioFrame::RegUnRegAccessKey(this, true);
   }
 
   if (IsInDropDownMode()) {
@@ -1808,8 +1803,8 @@ void nsListControlFrame::ScrollToFrame(dom::HTMLOptionElement& aOptElement) {
   if (nsIFrame* childFrame = aOptElement.GetPrimaryFrame()) {
     RefPtr<mozilla::PresShell> presShell = PresShell();
     presShell->ScrollFrameRectIntoView(
-        childFrame, nsRect(nsPoint(0, 0), childFrame->GetSize()), ScrollAxis(),
-        ScrollAxis(),
+        childFrame, nsRect(nsPoint(0, 0), childFrame->GetSize()), nsMargin(),
+        ScrollAxis(), ScrollAxis(),
         ScrollFlags::ScrollOverflowHidden |
             ScrollFlags::ScrollFirstAncestorOnly);
   }

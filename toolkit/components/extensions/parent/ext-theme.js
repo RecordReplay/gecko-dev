@@ -8,8 +8,6 @@
 
 /* eslint-disable complexity */
 
-var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-
 ChromeUtils.defineModuleGetter(
   this,
   "LightweightThemeManager",
@@ -68,6 +66,13 @@ class Theme {
             images: {},
             properties: {},
           };
+          if (this.lwtDarkStyles) {
+            this.lwtDarkStyles.experimental = {
+              colors: {},
+              images: {},
+              properties: {},
+            };
+          }
           const { baseURI } = this.extension;
           if (experiment.stylesheet) {
             experiment.stylesheet = baseURI.resolve(experiment.stylesheet);
@@ -204,7 +209,6 @@ class Theme {
         case "toolbar_field":
         case "toolbar_field_text":
         case "toolbar_field_border":
-        case "toolbar_field_separator":
         case "toolbar_field_focus":
         case "toolbar_field_text_focus":
         case "toolbar_field_border_focus":

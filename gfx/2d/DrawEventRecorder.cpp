@@ -92,11 +92,10 @@ void DrawEventRecorderMemory::RecordEvent(const RecordedEvent& aEvent) {
 }
 
 void DrawEventRecorderMemory::AddDependentSurface(uint64_t aDependencyId) {
-  mDependentSurfaces.PutEntry(aDependencyId);
+  mDependentSurfaces.Insert(aDependencyId);
 }
 
-nsTHashtable<nsUint64HashKey>&&
-DrawEventRecorderMemory::TakeDependentSurfaces() {
+nsTHashSet<uint64_t>&& DrawEventRecorderMemory::TakeDependentSurfaces() {
   return std::move(mDependentSurfaces);
 }
 
@@ -168,7 +167,7 @@ bool DrawEventRecorderMemory::Finish() {
   // write out the index
   mOutputStream.write(mIndex.mData, mIndex.mLength);
   bool hasItems = mIndex.mLength != 0;
-  mIndex = MemStream();
+  mIndex.reset();
   // write out the offset of the Index to the end of the output stream
   WriteElement(mOutputStream, indexOffset);
   ClearResources();
@@ -180,8 +179,8 @@ size_t DrawEventRecorderMemory::RecordingSize() {
 }
 
 void DrawEventRecorderMemory::WipeRecording() {
-  mOutputStream = MemStream();
-  mIndex = MemStream();
+  mOutputStream.reset();
+  mIndex.reset();
 
   WriteHeader(mOutputStream);
 }

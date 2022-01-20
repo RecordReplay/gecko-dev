@@ -7,12 +7,13 @@
 #ifndef mozilla_dom_SessionHistoryEntry_h
 #define mozilla_dom_SessionHistoryEntry_h
 
+#include "mozilla/Maybe.h"
 #include "mozilla/UniquePtr.h"
 #include "nsILayoutHistoryState.h"
 #include "nsISHEntry.h"
 #include "nsSHEntryShared.h"
 #include "nsStructuredCloneContainer.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 
 class nsDocShellLoadState;
 class nsIChannel;
@@ -76,6 +77,12 @@ class SessionHistoryInfo {
     *aScrollPositionX = mScrollPositionX;
     *aScrollPositionY = mScrollPositionY;
   }
+
+  void SetScrollPosition(int32_t aScrollPositionX, int32_t aScrollPositionY) {
+    mScrollPositionX = aScrollPositionX;
+    mScrollPositionY = aScrollPositionY;
+  }
+
   bool GetScrollRestorationIsManual() const {
     return mScrollRestorationIsManual;
   }
@@ -135,6 +142,8 @@ class SessionHistoryInfo {
 
   uint32_t LoadType() { return mLoadType; }
 
+  void SetSaveLayoutStateFlag(bool aSaveLayoutStateFlag);
+
  private:
   friend class SessionHistoryEntry;
   friend struct mozilla::ipc::IPDLParamTraits<SessionHistoryInfo>;
@@ -152,15 +161,15 @@ class SessionHistoryInfo {
   int32_t mScrollPositionX = 0;
   int32_t mScrollPositionY = 0;
   RefPtr<nsStructuredCloneContainer> mStateData;
-  nsString mSrcdocData;
+  Maybe<nsString> mSrcdocData;
   nsCOMPtr<nsIURI> mBaseURI;
 
   bool mLoadReplace = false;
   bool mURIWasModified = false;
-  bool mIsSrcdocEntry = false;
   bool mScrollRestorationIsManual = false;
   bool mPersist = true;
   bool mHasUserInteraction = false;
+  bool mHasUserActivation = false;
 
   union SharedState {
     SharedState();
@@ -204,7 +213,9 @@ class SessionHistoryInfo {
 struct LoadingSessionHistoryInfo {
   LoadingSessionHistoryInfo() = default;
   explicit LoadingSessionHistoryInfo(SessionHistoryEntry* aEntry);
-  LoadingSessionHistoryInfo(SessionHistoryEntry* aEntry, uint64_t aLoadId);
+  // Initializes mInfo using aEntry and otherwise copies the values from aInfo.
+  LoadingSessionHistoryInfo(SessionHistoryEntry* aEntry,
+                            LoadingSessionHistoryInfo* aInfo);
 
   already_AddRefed<nsDocShellLoadState> CreateLoadInfo() const;
 
@@ -225,6 +236,99 @@ struct LoadingSessionHistoryInfo {
   // If we're loading from the current active entry we want to treat it as not
   // a same-document navigation (see nsDocShell::IsSameDocumentNavigation).
   bool mLoadingCurrentActiveEntry = false;
+  // If mForceMaybeResetName.isSome() is true then the parent process has
+  // determined whether the BC's name should be cleared and stored in session
+  // history (see https://html.spec.whatwg.org/#history-traversal step 4.2).
+  // This is used when we're replacing the BC for BFCache in the parent. In
+  // other cases mForceMaybeResetName.isSome() will be false and the child
+  // process should be able to make that determination itself.
+  Maybe<bool> mForceMaybeResetName;
+};
+
+// HistoryEntryCounterForBrowsingContext is used to count the number of entries
+// which are added to the session history for a particular browsing context.
+// If a SessionHistoryEntry is cloned because of navigation in some other
+// browsing context, that doesn't cause the counter value to be increased.
+// The browsing context specific counter is needed to make it easier to
+// synchronously update history.length value in a child process when
+// an iframe is removed from DOM.
+class HistoryEntryCounterForBrowsingContext {
+ public:
+  HistoryEntryCounterForBrowsingContext()
+      : mCounter(new RefCountedCounter()), mHasModified(false) {
+    ++(*this);
+  }
+
+  HistoryEntryCounterForBrowsingContext(
+      const HistoryEntryCounterForBrowsingContext& aOther)
+      : mCounter(aOther.mCounter), mHasModified(false) {}
+
+  HistoryEntryCounterForBrowsingContext(
+      HistoryEntryCounterForBrowsingContext&& aOther) = delete;
+
+  ~HistoryEntryCounterForBrowsingContext() {
+    if (mHasModified) {
+      --(*mCounter);
+    }
+  }
+
+  void CopyValueFrom(const HistoryEntryCounterForBrowsingContext& aOther) {
+    if (mHasModified) {
+      --(*mCounter);
+    }
+    mCounter = aOther.mCounter;
+    mHasModified = false;
+  }
+
+  HistoryEntryCounterForBrowsingContext& operator=(
+      const HistoryEntryCounterForBrowsingContext& aOther) = delete;
+
+  HistoryEntryCounterForBrowsingContext& operator++() {
+    mHasModified = true;
+    ++(*mCounter);
+    return *this;
+  }
+
+  operator uint32_t() const { return *mCounter; }
+
+  bool Modified() { return mHasModified; }
+
+  void SetModified(bool aModified) { mHasModified = aModified; }
+
+  void Reset() {
+    if (mHasModified) {
+      --(*mCounter);
+    }
+    mCounter = new RefCountedCounter();
+    mHasModified = false;
+  }
+
+ private:
+  class RefCountedCounter {
+   public:
+    NS_INLINE_DECL_REFCOUNTING(
+        mozilla::dom::HistoryEntryCounterForBrowsingContext::RefCountedCounter)
+
+    RefCountedCounter& operator++() {
+      ++mCounter;
+      return *this;
+    }
+
+    RefCountedCounter& operator--() {
+      --mCounter;
+      return *this;
+    }
+
+    operator uint32_t() const { return mCounter; }
+
+   private:
+    ~RefCountedCounter() = default;
+
+    uint32_t mCounter = 0;
+  };
+
+  RefPtr<RefCountedCounter> mCounter;
+  bool mHasModified;
 };
 
 // SessionHistoryEntry is used to store session history data in the parent
@@ -254,6 +358,9 @@ class SessionHistoryEntry : public nsISHEntry {
 
   SHEntrySharedParentState* SharedInfo() const;
 
+  void SetFrameLoader(nsFrameLoader* aFrameLoader);
+  nsFrameLoader* GetFrameLoader();
+
   void AddChild(SessionHistoryEntry* aChild, int32_t aOffset,
                 bool aUseRemoteSubframes);
   void RemoveChild(SessionHistoryEntry* aChild);
@@ -270,6 +377,16 @@ class SessionHistoryEntry : public nsISHEntry {
   }
 
   const nsID& DocshellID() const;
+
+  HistoryEntryCounterForBrowsingContext& BCHistoryLength() {
+    return mBCHistoryLength;
+  }
+
+  void SetBCHistoryLength(HistoryEntryCounterForBrowsingContext& aCounter) {
+    mBCHistoryLength.CopyValueFrom(aCounter);
+  }
+
+  void ClearBCHistoryLength() { mBCHistoryLength.Reset(); }
 
   void SetIsDynamicallyAdded(bool aDynamic);
 
@@ -292,7 +409,9 @@ class SessionHistoryEntry : public nsISHEntry {
 
   bool mForInitialLoad = false;
 
-  static nsDataHashtable<nsUint64HashKey, SessionHistoryEntry*>* sLoadIdToEntry;
+  HistoryEntryCounterForBrowsingContext mBCHistoryLength;
+
+  static nsTHashMap<nsUint64HashKey, SessionHistoryEntry*>* sLoadIdToEntry;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(SessionHistoryEntry, NS_SESSIONHISTORYENTRY_IID)

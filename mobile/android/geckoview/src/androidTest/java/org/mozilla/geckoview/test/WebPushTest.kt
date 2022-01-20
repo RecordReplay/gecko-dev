@@ -60,9 +60,10 @@ class WebPushTest : BaseSessionTest() {
         sessionRule.setPrefsUntilTestEnd(mapOf("dom.webnotifications.requireuserinteraction" to false))
         // Grant "desktop notification" permission
         mainSession.delegateUntilTestEnd(object : Callbacks.PermissionDelegate {
-            override fun onContentPermissionRequest(session: GeckoSession, uri: String?, type: Int, callback: GeckoSession.PermissionDelegate.Callback) {
-                assertThat("Should grant DESKTOP_NOTIFICATIONS permission", type, equalTo(GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION))
-                callback.grant()
+            override fun onContentPermissionRequest(session: GeckoSession, perm: GeckoSession.PermissionDelegate.ContentPermission):
+                    GeckoResult<Int>? {
+                assertThat("Should grant DESKTOP_NOTIFICATIONS permission", perm.permission, equalTo(GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION))
+                return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
             }
         })
 
@@ -151,6 +152,17 @@ class WebPushTest : BaseSessionTest() {
         sessionRule.runtime.webPushController.onPushEvent(delegate!!.storedSubscription!!.scope, testPayload.toByteArray(Charsets.UTF_8))
 
         assertThat("Push data should match", p.value as String, equalTo(testPayload))
+    }
+
+    @Test
+    fun pushEventWithoutData() {
+        subscribe()
+
+        val p = mainSession.evaluatePromiseJS("window.doWaitForPushEvent()")
+
+        sessionRule.runtime.webPushController.onPushEvent(delegate!!.storedSubscription!!.scope, null)
+
+        assertThat("Push data should be empty", p.value as String, equalTo(""))
     }
 
     private fun sendNotification() {

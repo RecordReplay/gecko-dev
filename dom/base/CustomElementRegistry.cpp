@@ -8,6 +8,7 @@
 
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/CycleCollectedJSContext.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/CustomElementRegistryBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/HTMLElementBinding.h"
@@ -324,13 +325,13 @@ CustomElementRegistry::RunCustomElementCreationCallback::Run() {
   MOZ_ASSERT(!mRegistry->mElementCreationCallbacks.GetWeak(mAtom),
              "Callback should be removed.");
 
-  mozilla::UniquePtr<nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>> elements;
+  mozilla::UniquePtr<nsTHashSet<RefPtr<nsIWeakReference>>> elements;
   mRegistry->mElementCreationCallbacksUpgradeCandidatesMap.Remove(mAtom,
                                                                   &elements);
   MOZ_ASSERT(elements, "There should be a list");
 
-  for (auto iter = elements->Iter(); !iter.Done(); iter.Next()) {
-    nsCOMPtr<Element> elem = do_QueryReferent(iter.Get()->GetKey());
+  for (const auto& key : *elements) {
+    nsCOMPtr<Element> elem = do_QueryReferent(key);
     if (!elem) {
       continue;
     }
@@ -352,7 +353,7 @@ CustomElementDefinition* CustomElementRegistry::LookupCustomElementDefinition(
     mElementCreationCallbacks.Get(aTypeAtom, getter_AddRefs(callback));
     if (callback) {
       mElementCreationCallbacks.Remove(aTypeAtom);
-      mElementCreationCallbacksUpgradeCandidatesMap.LookupOrAdd(aTypeAtom);
+      mElementCreationCallbacksUpgradeCandidatesMap.GetOrInsertNew(aTypeAtom);
       RefPtr<Runnable> runnable =
           new RunCustomElementCreationCallback(this, aTypeAtom, callback);
       nsContentUtils::AddScriptRunner(runnable.forget());
@@ -408,10 +409,10 @@ void CustomElementRegistry::RegisterUnresolvedElement(Element* aElement,
     return;
   }
 
-  nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>* unresolved =
-      mCandidatesMap.LookupOrAdd(typeName);
+  nsTHashSet<RefPtr<nsIWeakReference>>* unresolved =
+      mCandidatesMap.GetOrInsertNew(typeName);
   nsWeakPtr elem = do_GetWeakReference(aElement);
-  unresolved->PutEntry(elem);
+  unresolved->Insert(elem);
 }
 
 void CustomElementRegistry::UnregisterUnresolvedElement(Element* aElement,
@@ -430,10 +431,10 @@ void CustomElementRegistry::UnregisterUnresolvedElement(Element* aElement,
   }
 #endif
 
-  nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>* candidates = nullptr;
+  nsTHashSet<RefPtr<nsIWeakReference>>* candidates = nullptr;
   if (mCandidatesMap.Get(aTypeName, &candidates)) {
     MOZ_ASSERT(candidates);
-    candidates->RemoveEntry(weak);
+    candidates->Remove(weak);
   }
 }
 
@@ -548,7 +549,7 @@ namespace {
 
 class CandidateFinder {
  public:
-  CandidateFinder(nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>& aCandidates,
+  CandidateFinder(nsTHashSet<RefPtr<nsIWeakReference>>& aCandidates,
                   Document* aDoc);
   nsTArray<nsCOMPtr<Element>> OrderedCandidates();
 
@@ -558,18 +559,17 @@ class CandidateFinder {
 };
 
 CandidateFinder::CandidateFinder(
-    nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>& aCandidates,
-    Document* aDoc)
+    nsTHashSet<RefPtr<nsIWeakReference>>& aCandidates, Document* aDoc)
     : mDoc(aDoc), mCandidates(aCandidates.Count()) {
   MOZ_ASSERT(mDoc);
-  for (auto iter = aCandidates.Iter(); !iter.Done(); iter.Next()) {
-    nsCOMPtr<Element> elem = do_QueryReferent(iter.Get()->GetKey());
+  for (const auto& candidate : aCandidates) {
+    nsCOMPtr<Element> elem = do_QueryReferent(candidate);
     if (!elem) {
       continue;
     }
 
     Element* key = elem.get();
-    mCandidates.Put(key, elem.forget());
+    mCandidates.InsertOrUpdate(key, elem.forget());
   }
 }
 
@@ -612,8 +612,7 @@ void CustomElementRegistry::UpgradeCandidates(
     return;
   }
 
-  mozilla::UniquePtr<nsTHashtable<nsRefPtrHashKey<nsIWeakReference>>>
-      candidates;
+  mozilla::UniquePtr<nsTHashSet<RefPtr<nsIWeakReference>>> candidates;
   if (mCandidatesMap.Remove(aKey, &candidates)) {
     MOZ_ASSERT(candidates);
     CustomElementReactionsStack* reactionsStack =
@@ -984,7 +983,7 @@ void CustomElementRegistry::Define(
       disableInternals, disableShadow);
 
   CustomElementDefinition* def = definition.get();
-  mCustomDefinitions.Put(nameAtom, std::move(definition));
+  mCustomDefinitions.InsertOrUpdate(nameAtom, std::move(definition));
 
   MOZ_ASSERT(mCustomDefinitions.Count() == mConstructors.count(),
              "Number of entries should be the same");
@@ -1043,7 +1042,7 @@ void CustomElementRegistry::SetElementCreationCallback(
   }
 
   RefPtr<CustomElementCreationCallback> callback = &aCallback;
-  mElementCreationCallbacks.Put(nameAtom, std::move(callback));
+  mElementCreationCallbacks.InsertOrUpdate(nameAtom, std::move(callback));
 }
 
 void CustomElementRegistry::Upgrade(nsINode& aRoot) {
@@ -1083,36 +1082,48 @@ void CustomElementRegistry::Get(JSContext* aCx, const nsAString& aName,
 
 already_AddRefed<Promise> CustomElementRegistry::WhenDefined(
     const nsAString& aName, ErrorResult& aRv) {
-  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(mWindow);
-  RefPtr<Promise> promise = Promise::Create(global, aRv);
+  // Define a function that lazily creates a Promise and perform some action on
+  // it when creation succeeded. It's needed in multiple cases below, but not in
+  // all of them.
+  auto createPromise = [&](auto&& action) -> already_AddRefed<Promise> {
+    nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(mWindow);
+    RefPtr<Promise> promise = Promise::Create(global, aRv);
 
-  if (aRv.Failed()) {
-    return nullptr;
-  }
+    if (aRv.Failed()) {
+      return nullptr;
+    }
+
+    action(promise);
+
+    return promise.forget();
+  };
 
   RefPtr<nsAtom> nameAtom(NS_Atomize(aName));
   Document* doc = mWindow->GetExtantDoc();
   uint32_t nameSpaceID =
       doc ? doc->GetDefaultNamespaceID() : kNameSpaceID_XHTML;
   if (!nsContentUtils::IsCustomElementName(nameAtom, nameSpaceID)) {
-    promise->MaybeReject(NS_ERROR_DOM_SYNTAX_ERR);
-    return promise.forget();
+    return createPromise([](const RefPtr<Promise>& promise) {
+      promise->MaybeReject(NS_ERROR_DOM_SYNTAX_ERR);
+    });
   }
 
   if (CustomElementDefinition* definition =
           mCustomDefinitions.GetWeak(nameAtom)) {
-    promise->MaybeResolve(definition->mConstructor);
-    return promise.forget();
+    return createPromise([&](const RefPtr<Promise>& promise) {
+      promise->MaybeResolve(definition->mConstructor);
+    });
   }
 
-  auto entry = mWhenDefinedPromiseMap.LookupForAdd(nameAtom);
-  if (entry) {
-    promise = entry.Data();
-  } else {
-    entry.OrInsert([&promise]() { return promise; });
-  }
-
-  return promise.forget();
+  return mWhenDefinedPromiseMap.WithEntryHandle(
+      nameAtom, [&](auto&& entry) -> already_AddRefed<Promise> {
+        if (!entry) {
+          return createPromise([&entry](const RefPtr<Promise>& promise) {
+            entry.Insert(promise);
+          });
+        }
+        return do_AddRef(entry.Data());
+      });
 }
 
 namespace {
@@ -1273,8 +1284,8 @@ already_AddRefed<nsISupports> CustomElementRegistry::CallGetCustomInterface(
 }
 
 void CustomElementRegistry::TraceDefinitions(JSTracer* aTrc) {
-  for (auto iter = mCustomDefinitions.Iter(); !iter.Done(); iter.Next()) {
-    RefPtr<CustomElementDefinition>& definition = iter.Data();
+  for (const RefPtr<CustomElementDefinition>& definition :
+       mCustomDefinitions.Values()) {
     if (definition && definition->mConstructor) {
       mozilla::TraceScriptHolder(definition->mConstructor, aTrc);
     }

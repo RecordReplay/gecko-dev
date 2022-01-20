@@ -223,13 +223,13 @@ void nsPrintSettingsWin::InitWithInitializer(
         MOZ_ASSERT_UNREACHABLE("bad value for dmDuplex field");
         [[fallthrough]];
       case DMDUP_SIMPLEX:
-        SetDuplex(kSimplex);
+        SetDuplex(kDuplexNone);
         break;
       case DMDUP_VERTICAL:
-        SetDuplex(kDuplexHorizontal);
+        SetDuplex(kDuplexFlipOnLongEdge);
         break;
       case DMDUP_HORIZONTAL:
-        SetDuplex(kDuplexVertical);
+        SetDuplex(kDuplexFlipOnShortEdge);
         break;
     }
   }
@@ -349,13 +349,13 @@ void nsPrintSettingsWin::CopyFromNative(HDC aHdc, DEVMODEW* aDevMode) {
         MOZ_ASSERT_UNREACHABLE("bad value for dmDuplex field");
         [[fallthrough]];
       case DMDUP_SIMPLEX:
-        mDuplex = kSimplex;
+        mDuplex = kDuplexNone;
         break;
       case DMDUP_VERTICAL:
-        mDuplex = kDuplexHorizontal;
+        mDuplex = kDuplexFlipOnLongEdge;
         break;
       case DMDUP_HORIZONTAL:
-        mDuplex = kDuplexVertical;
+        mDuplex = kDuplexFlipOnShortEdge;
         break;
     }
   }
@@ -477,15 +477,15 @@ void nsPrintSettingsWin::CopyToNative(DEVMODEW* aDevMode) {
 
   // Setup Simplex/Duplex mode
   switch (mDuplex) {
-    case kSimplex:
+    case kDuplexNone:
       aDevMode->dmDuplex = DMDUP_SIMPLEX;
       aDevMode->dmFields |= DM_DUPLEX;
       break;
-    case kDuplexHorizontal:
+    case kDuplexFlipOnLongEdge:
       aDevMode->dmDuplex = DMDUP_VERTICAL;
       aDevMode->dmFields |= DM_DUPLEX;
       break;
-    case kDuplexVertical:
+    case kDuplexFlipOnShortEdge:
       aDevMode->dmDuplex = DMDUP_HORIZONTAL;
       aDevMode->dmFields |= DM_DUPLEX;
       break;

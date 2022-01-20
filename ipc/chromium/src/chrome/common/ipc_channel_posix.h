@@ -11,6 +11,7 @@
 
 #include <sys/socket.h>  // for CMSG macros
 
+#include <atomic>
 #include <string>
 #include <vector>
 #include <list>
@@ -50,6 +51,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   int GetFileDescriptor() const { return pipe_; }
   void CloseClientFileDescriptor();
 
+  int32_t OtherPid() const { return other_pid_; }
+
   // See the comment in ipc_channel.h for info on Unsound_IsClosed() and
   // Unsound_NumQueuedMessages().
   bool Unsound_IsClosed() const;
@@ -58,6 +61,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
  private:
   void Init(Mode mode, Listener* listener);
   bool CreatePipe(Mode mode);
+  void SetPipe(int fd);
+  bool PipeBufHasSpaceAfter(size_t already_written);
   bool EnqueueHelloMessage();
 
   bool ProcessIncomingMessages();
@@ -92,7 +97,8 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
 
   int server_listen_pipe_;
   int pipe_;
-  int client_pipe_;  // The client end of our socketpair().
+  int client_pipe_;        // The client end of our socketpair().
+  unsigned pipe_buf_len_;  // The SO_SNDBUF value of pipe_, or 0 if unknown.
 
   Listener* listener_;
 
@@ -136,7 +142,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   bool processing_incoming_;
 
   // This flag is set after we've closed the channel.
-  bool closed_;
+  std::atomic<bool> closed_;
 
   // We keep track of the PID of the other side of this channel so that we can
   // record this when generating logs of IPC messages.
@@ -162,7 +168,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   // read output_queue_length_ from any thread (if we're OK getting an
   // occasional out-of-date or bogus value).  We use output_queue_length_ to
   // implement Unsound_NumQueuedMessages.
-  size_t output_queue_length_;
+  std::atomic<size_t> output_queue_length_;
 
   ScopedRunnableMethodFactory<ChannelImpl> factory_;
 

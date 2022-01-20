@@ -25,6 +25,7 @@
 #  include "poll.h"
 #  include "sys/stat.h"
 #  if defined(XP_LINUX)
+#    include <sys/prctl.h>
 #    include <sys/vfs.h>
 #    define statvfs statfs
 #    define f_frsize f_bsize
@@ -457,6 +458,7 @@ static const dom::ConstantSpec gLibcProperties[] = {
 #endif  // defined(EOVERFLOW)
     INT_CONSTANT(EPERM),
     INT_CONSTANT(ERANGE),
+    INT_CONSTANT(ENOSYS),
 #if defined(ETIMEDOUT)  // not defined with VC 9
     INT_CONSTANT(ETIMEDOUT),
 #endif                    // defined(ETIMEDOUT)
@@ -490,6 +492,11 @@ static const dom::ConstantSpec gLibcProperties[] = {
 #endif                       // defined(XP_UNIX)
 
     INT_CONSTANT(PATH_MAX),
+
+#if defined(XP_LINUX)
+    // prctl options
+    INT_CONSTANT(PR_CAPBSET_READ),
+#endif
 
 // Constants used to define data structures
 //

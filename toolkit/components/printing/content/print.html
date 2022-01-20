@@ -41,14 +41,14 @@
 
     <template id="scale-template">
       <div role="radiogroup" aria-labelledby="scale-label">
-        <div class="row cols-2">
+        <label class="row cols-2">
           <input type="radio" name="scale-choice" id="fit-choice" value="fit" checked>
-          <label for="fit-choice" data-l10n-id="printui-scale-fit-to-page-width" class="col"></label>
-        </div>
-        <div class="row cols-2">
+          <span data-l10n-id="printui-scale-fit-to-page-width" class="col"></span>
+        </label>
+        <label class="row cols-2" for="percent-scale-choice">
           <input type="radio" name="scale-choice" id="percent-scale-choice">
           <span class="col">
-            <label id="percent-scale-label" for="percent-scale-choice" data-l10n-id="printui-scale-pcent"></label>
+            <span id="percent-scale-label" data-l10n-id="printui-scale-pcent"></span>
             <!-- Note that here and elsewhere, we're setting aria-errormessage
                  attributes to a list of all possible errors. The a11y APIs
                  will filter this down to visible items only. -->
@@ -59,9 +59,14 @@
               aria-errormessage="error-invalid-scale"
               disabled required>
           </span>
-        </div>
+        </label>
         <p id="error-invalid-scale" hidden data-l10n-id="printui-error-invalid-scale" class="error-message" role="alert"></p>
       </div>
+    </template>
+
+    <template id="copy-template">
+      <input id="copies-count" is="setting-number" data-setting-name="numCopies" min="1" max="10000" class="copy-count-input photon-number" aria-errormessage="error-invalid-copies" required>
+      <p id="error-invalid-copies" hidden data-l10n-id="printui-error-invalid-copies" class="error-message" role="alert"></p>
     </template>
 
     <template id="margins-template">
@@ -70,7 +75,7 @@
         <option value="default" data-l10n-id="printui-margins-default"></option>
         <option value="minimum" data-l10n-id="printui-margins-min"></option>
         <option value="none" data-l10n-id="printui-margins-none"></option>
-        <option value="custom" data-l10n-id="printui-margins-custom-inches"></option>
+        <option value="custom" data-unit-prefix-l10n-id="printui-margins-custom-"></option>
       </select>
       <div id="custom-margins" class="margin-group" role="group" hidden>
         <div class="vertical-margins">
@@ -80,7 +85,7 @@
                    aria-describedby="margins-custom-margin-top-desc"
                    min="0" step="0.01" required>
             <label for="custom-margin-top" class="margin-descriptor" data-l10n-id="printui-margins-custom-top"></label>
-            <label hidden id="margins-custom-margin-top-desc" data-l10n-id="printui-margins-custom-top-inches"></label>
+            <label hidden id="margins-custom-margin-top-desc" data-unit-prefix-l10n-id="printui-margins-custom-top-"></label>
           </div>
           <div class="margin-pair">
             <input is="setting-number"
@@ -88,7 +93,7 @@
                    aria-describedby="margins-custom-margin-bottom-desc"
                    min="0" step="0.01" required>
             <label for="custom-margin-bottom" class="margin-descriptor" data-l10n-id="printui-margins-custom-bottom"></label>
-            <label hidden id="margins-custom-margin-bottom-desc" data-l10n-id="printui-margins-custom-bottom-inches"></label>
+            <label hidden id="margins-custom-margin-bottom-desc" data-unit-prefix-l10n-id="printui-margins-custom-bottom-"></label>
           </div>
         </div>
         <div class="horizontal-margins">
@@ -98,7 +103,7 @@
                    aria-describedby="margins-custom-margin-left-desc"
                    min="0" step="0.01" required>
             <label for="custom-margin-left" class="margin-descriptor" data-l10n-id="printui-margins-custom-left"></label>
-            <label hidden id="margins-custom-margin-left-desc" data-l10n-id="printui-margins-custom-left-inches"></label>
+            <label hidden id="margins-custom-margin-left-desc" data-unit-prefix-l10n-id="printui-margins-custom-left-"></label>
           </div>
           <div class="margin-pair">
             <input is="setting-number"
@@ -106,7 +111,7 @@
                    aria-describedby="margins-custom-margin-right-desc"
                    min="0" step="0.01" required>
             <label for="custom-margin-right" class="margin-descriptor" data-l10n-id="printui-margins-custom-right"></label>
-            <label hidden id="margins-custom-margin-right-desc" data-l10n-id="printui-margins-custom-right-inches"></label>
+            <label hidden id="margins-custom-margin-right-desc" data-unit-prefix-l10n-id="printui-margins-custom-right-"></label>
           </div>
         </div>
         <p id="error-invalid-margin" hidden data-l10n-id="printui-error-invalid-margin" class="error-message" role="alert"></p>
@@ -120,6 +125,8 @@
       </div>
     </header>
 
+    <hr>
+
     <form id="print" is="print-form" aria-labelledby="page-header">
       <section class="body-container">
         <section id="destination" class="section-block">
@@ -131,7 +138,7 @@
         <section id="settings">
           <section id="copies" class="section-block">
             <label for="copies-count" class="block-label" data-l10n-id="printui-copies-label"></label>
-            <input id="copies-count" is="setting-number" data-setting-name="numCopies" min="1" max="10000" class="copy-count-input photon-number" required>
+            <copy-count-input></copy-count-input>
           </section>
 
           <section id="orientation" class="section-block">
@@ -151,6 +158,8 @@
               <option value="bw" data-l10n-id="printui-color-mode-bw"></option>
             </select>
           </section>
+
+          <hr>
 
           <details id="more-settings" class="twisty">
             <summary class="block-label section-block" is="twisty-summary"
@@ -185,27 +194,42 @@
             </section>
 
             <section id="two-sided-printing" class="section-block">
-              <label class="block-label" data-l10n-id="printui-two-sided-printing"></label>
-              <div class="row cols-2">
-                <input is="setting-checkbox" id="duplex-enabled" data-setting-name="printDuplex">
-                <label for="duplex-enabled" data-l10n-id="printui-duplex-checkbox"></label>
+              <label class="block-label" for="duplex-select" data-l10n-id="printui-two-sided-printing"></label>
+              <select is="setting-select" id="duplex-select" name="duplex-type" class="row" data-setting-name="printDuplex">
+                <option value="off" data-l10n-id="printui-two-sided-printing-off" selected></option>
+                <option value="long-edge" data-l10n-id="printui-two-sided-printing-long-edge"></option>
+                <option value="short-edge" data-l10n-id="printui-two-sided-printing-short-edge"></option>
+              </select>
+            </section>
+
+            <section id="source-version-section" class="section-block">
+              <label id="source-version-label" data-l10n-id="printui-source-label"></label>
+              <div role="radiogroup" aria-labelledby="source-version-label">
+                <label id="source-version-source" class="row cols-2">
+                  <input is="setting-radio" name="source-version" value="source" id="source-version-source-radio" data-setting-name="sourceVersion" checked>
+                  <span data-l10n-id="printui-source-radio"></span>
+                </label>
+                <label id="source-version-selection" class="row cols-2">
+                  <input is="setting-radio" name="source-version" value="selection" id="source-version-selection-radio" data-setting-name="sourceVersion">
+                  <span data-l10n-id="printui-selection-radio"></span>
+                </label>
+                <label id="source-version-simplified" class="row cols-2">
+                  <input is="setting-radio" name="source-version" value="simplified" id="source-version-simplified-radio" data-setting-name="sourceVersion">
+                  <span data-l10n-id="printui-simplify-page-radio"></span>
+                </label>
               </div>
             </section>
 
             <section id="more-settings-options" class="section-block">
               <label class="block-label" data-l10n-id="printui-options"></label>
-              <div id="headers-footers" class="row cols-2">
+              <label id="headers-footers" class="row cols-2">
                 <input is="setting-checkbox" id="headers-footers-enabled" data-setting-name="printFootersHeaders">
-                <label for="headers-footers-enabled" data-l10n-id="printui-headers-footers-checkbox"></label>
-              </div>
-              <div id="backgrounds" class="row cols-2">
-                <input is="setting-checkbox" id="backgrounds-enabled" data-setting-name="printBackgrounds">
-                <label for="backgrounds-enabled" data-l10n-id="printui-backgrounds-checkbox"></label>
-              </div>
-              <div id="print-selection-container" class="row cols-2" hidden>
-                <input is="setting-checkbox" id="print-selection-enabled" data-setting-name="printSelectionOnly">
-                <label for="print-selection-enabled" data-l10n-id="printui-selection-checkbox"></label>
-              </div>
+                <span data-l10n-id="printui-headers-footers-checkbox"></span>
+              </label>
+              <label id="backgrounds" class="row cols-2">
+                <input is="print-backgrounds" id="backgrounds-enabled" data-setting-name="printBackgrounds">
+                <span data-l10n-id="printui-backgrounds-checkbox"></span>
+              </label>
             </section>
 
           </details>
@@ -215,6 +239,8 @@
           <a href="#" id="open-dialog-link" data-l10n-id="printui-system-dialog-link"></a>
         </section>
       </section>
+
+      <hr>
 
       <footer class="footer-container" id="print-footer" role="none">
         <p id="print-progress" class="section-block" data-l10n-id="printui-print-progress-indicator" hidden></p>

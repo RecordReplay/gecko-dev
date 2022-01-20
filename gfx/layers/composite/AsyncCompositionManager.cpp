@@ -9,6 +9,7 @@
 #include "LayerManagerComposite.h"  // for LayerManagerComposite, etc
 #include "Layers.h"                 // for Layer, ContainerLayer, etc
 #include "gfxPoint.h"               // for gfxPoint, gfxSize
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/ServoBindings.h"  // for Servo_AnimationValue_GetOpacity, etc
 #include "mozilla/ScopeExit.h"      // for MakeScopeExit
 #include "mozilla/StaticPrefs_apz.h"
@@ -44,7 +45,6 @@
 #  include "mozilla/layers/UiCompositorControllerParent.h"
 #  include "mozilla/widget/AndroidCompositorWidget.h"
 #endif
-#include "GeckoProfiler.h"
 #include "FrameUniformityData.h"
 #include "TreeTraversal.h"  // for ForEachNode, BreadthFirstSearch
 #include "VsyncSource.h"
@@ -80,30 +80,17 @@ AsyncCompositionManager::AsyncCompositionManager(
 AsyncCompositionManager::~AsyncCompositionManager() = default;
 
 void AsyncCompositionManager::ResolveRefLayers(
-    CompositorBridgeParent* aCompositor, bool* aHasRemoteContent,
-    bool* aResolvePlugins) {
+    CompositorBridgeParent* aCompositor, bool* aHasRemoteContent) {
   if (aHasRemoteContent) {
     *aHasRemoteContent = false;
   }
 
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-  // If valid *aResolvePlugins indicates if we need to update plugin geometry
-  // when we walk the tree.
-  bool resolvePlugins = (aCompositor && aResolvePlugins && *aResolvePlugins);
-#endif
-
   if (!mLayerManager->GetRoot()) {
-    // Updated the return value since this result controls completing
-    // composition.
-    if (aResolvePlugins) {
-      *aResolvePlugins = false;
-    }
     return;
   }
 
   mReadyForCompose = true;
   bool hasRemoteContent = false;
-  bool didResolvePlugins = false;
 
   ForEachNode<ForwardIterator>(mLayerManager->GetRoot(), [&](Layer* layer) {
     RefLayer* refLayer = layer->AsRefLayer();
@@ -136,20 +123,10 @@ void AsyncCompositionManager::ResolveRefLayers(
     }
 
     refLayer->ConnectReferentLayer(referent);
-
-#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-    if (resolvePlugins) {
-      didResolvePlugins |=
-          aCompositor->UpdatePluginWindowState(refLayer->GetReferentId());
-    }
-#endif
   });
 
   if (aHasRemoteContent) {
     *aHasRemoteContent = hasRemoteContent;
-  }
-  if (aResolvePlugins) {
-    *aResolvePlugins = didResolvePlugins;
   }
 }
 
@@ -717,7 +694,7 @@ bool AsyncCompositionManager::ApplyAsyncContentTransformToTree(
         // scroll portion of the async transform to those layers (as the zoom
         // portion will go on the async zoom container).
         if (Maybe<ScrollableLayerGuid::ViewID> zoomedScrollId =
-                layer->IsAsyncZoomContainer()) {
+                layer->GetAsyncZoomContainerId()) {
           zoomContainer = layer;
           ForEachNode<ForwardIterator>(
               LayerMetricsWrapper(layer),
@@ -823,9 +800,9 @@ bool AsyncCompositionManager::ApplyAsyncContentTransformToTree(
                  sampler->GetGuid(*zoomedMetrics) == sampler->GetGuid(wrapper))
                     ? AsyncTransformComponents{AsyncTransformComponent::eLayout}
                     : LayoutAndVisual;
-            AsyncTransform asyncTransformWithoutOverscroll =
-                sampler->GetCurrentAsyncTransform(wrapper,
-                                                  asyncTransformComponents);
+            AsyncTransformComponentMatrix asyncTransform =
+                sampler->GetCurrentAsyncTransformWithOverscroll(
+                    wrapper, asyncTransformComponents);
             Maybe<CompositionPayload> payload =
                 sampler->NotifyScrollSampling(wrapper);
             // The scroll latency should be measured between composition and the
@@ -834,12 +811,6 @@ bool AsyncCompositionManager::ApplyAsyncContentTransformToTree(
             if (payload.isSome()) {
               mLayerManager->RegisterPayload(*payload);
             }
-
-            AsyncTransformComponentMatrix overscrollTransform =
-                sampler->GetOverscrollTransform(wrapper);
-            AsyncTransformComponentMatrix asyncTransform =
-                AsyncTransformComponentMatrix(asyncTransformWithoutOverscroll) *
-                overscrollTransform;
 
             if (!layer->IsScrollableWithoutContent()) {
               sampler->MarkAsyncTransformAppliedToContent(wrapper);
@@ -989,13 +960,13 @@ bool AsyncCompositionManager::ApplyAsyncContentTransformToTree(
           }
 
           if (Maybe<ScrollableLayerGuid::ViewID> zoomedScrollId =
-                  layer->IsAsyncZoomContainer()) {
+                  layer->GetAsyncZoomContainerId()) {
             if (zoomedMetrics) {
-              AsyncTransform zoomTransform = sampler->GetCurrentAsyncTransform(
-                  *zoomedMetrics, {AsyncTransformComponent::eVisual});
+              AsyncTransformComponentMatrix zoomTransform =
+                  sampler->GetCurrentAsyncTransformWithOverscroll(
+                      *zoomedMetrics, {AsyncTransformComponent::eVisual});
               hasAsyncTransform = true;
-              combinedAsyncTransform *=
-                  AsyncTransformComponentMatrix(zoomTransform);
+              combinedAsyncTransform *= zoomTransform;
             } else {
               // TODO: Is this normal? It happens on some pages, such as
               // about:config on mobile, for just one frame or so, before the

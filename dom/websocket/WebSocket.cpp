@@ -80,10 +80,38 @@ using namespace mozilla::net;
 namespace mozilla {
 namespace dom {
 
+class WebSocketImpl;
+
+// This class is responsible for proxying nsIObserver and nsIWebSocketImpl
+// interfaces to WebSocketImpl. WebSocketImplProxy should be only accessed on
+// main thread, so we can let it support weak reference.
+class WebSocketImplProxy final : public nsIObserver,
+                                 public nsSupportsWeakReference,
+                                 public nsIWebSocketImpl {
+ public:
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIOBSERVER
+  NS_DECL_NSIWEBSOCKETIMPL
+
+  explicit WebSocketImplProxy(WebSocketImpl* aOwner) : mOwner(aOwner) {
+    MOZ_ASSERT(NS_IsMainThread());
+  }
+
+  void Disconnect() {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    mOwner = nullptr;
+  }
+
+ private:
+  ~WebSocketImplProxy() = default;
+
+  RefPtr<WebSocketImpl> mOwner;
+};
+
 class WebSocketImpl final : public nsIInterfaceRequestor,
                             public nsIWebSocketListener,
                             public nsIObserver,
-                            public nsSupportsWeakReference,
                             public nsIRequest,
                             public nsIEventTarget,
                             public nsIWebSocketImpl {
@@ -203,8 +231,9 @@ class WebSocketImpl final : public nsIInterfaceRequestor,
   // - the script file name, UTF8 encoded.
   // - source code line number and column number where the Web Socket object
   //   was constructed.
-  // - the ID of the inner window where the script lives. Note that this may not
-  //   be the same as the Web Socket owner window.
+  // - the ID of the Web Socket owner window. Note that this may not
+  //   be the same as the inner window where the script lives.
+  //   e.g within iframes
   // These attributes are used for error reporting.
   nsCString mScriptFile;
   uint32_t mScriptLine;
@@ -229,6 +258,8 @@ class WebSocketImpl final : public nsIInterfaceRequestor,
   // For dispatching runnables to main thread.
   nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
 
+  RefPtr<WebSocketImplProxy> mImplProxy;
+
  private:
   ~WebSocketImpl() {
     MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread() == mIsMainThread ||
@@ -241,9 +272,30 @@ class WebSocketImpl final : public nsIInterfaceRequestor,
   }
 };
 
+NS_IMPL_ISUPPORTS(WebSocketImplProxy, nsIObserver, nsISupportsWeakReference,
+                  nsIWebSocketImpl)
+
+NS_IMETHODIMP
+WebSocketImplProxy::Observe(nsISupports* aSubject, const char* aTopic,
+                            const char16_t* aData) {
+  if (!mOwner) {
+    return NS_OK;
+  }
+
+  return mOwner->Observe(aSubject, aTopic, aData);
+}
+
+NS_IMETHODIMP
+WebSocketImplProxy::SendMessage(const nsAString& aMessage) {
+  if (!mOwner) {
+    return NS_OK;
+  }
+
+  return mOwner->SendMessage(aMessage);
+}
+
 NS_IMPL_ISUPPORTS(WebSocketImpl, nsIInterfaceRequestor, nsIWebSocketListener,
-                  nsIObserver, nsISupportsWeakReference, nsIRequest,
-                  nsIEventTarget, nsIWebSocketImpl)
+                  nsIObserver, nsIRequest, nsIEventTarget, nsIWebSocketImpl)
 
 class CallDispatchConnectionCloseEvents final : public DiscardableRunnable {
  public:
@@ -523,6 +575,11 @@ void WebSocketImpl::FailConnection(uint16_t aReasonCode,
   ConsoleError();
   mFailed = true;
   CloseConnection(aReasonCode, aReasonString);
+
+  if (NS_IsMainThread() && mImplProxy) {
+    mImplProxy->Disconnect();
+    mImplProxy = nullptr;
+  }
 }
 
 namespace {
@@ -612,9 +669,14 @@ void WebSocketImpl::DisconnectInternal() {
   if (!mWorkerRef) {
     nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
     if (os) {
-      os->RemoveObserver(this, DOM_WINDOW_DESTROYED_TOPIC);
-      os->RemoveObserver(this, DOM_WINDOW_FROZEN_TOPIC);
+      os->RemoveObserver(mImplProxy, DOM_WINDOW_DESTROYED_TOPIC);
+      os->RemoveObserver(mImplProxy, DOM_WINDOW_FROZEN_TOPIC);
     }
+  }
+
+  if (mImplProxy) {
+    mImplProxy->Disconnect();
+    mImplProxy = nullptr;
   }
 }
 
@@ -1159,7 +1221,7 @@ class AsyncOpenRunnable final : public WebSocketMainThreadRunnable {
 
     uint64_t windowID = 0;
     if (WindowContext* wc = aWindow->GetWindowContext()) {
-      windowID = wc->TopWindowContext()->InnerWindowId();
+      windowID = wc->InnerWindowId();
     }
 
     mErrorCode = mImpl->AsyncOpen(principal, windowID, nullptr, ""_ns,
@@ -1214,13 +1276,6 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
       aRv.Throw(NS_ERROR_FAILURE);
       return nullptr;
     }
-
-    nsCOMPtr<nsIScriptGlobalObject> sgo =
-        do_QueryInterface(aGlobal.GetAsSupports());
-    if (!sgo) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return nullptr;
-    }
   }
 
   nsTArray<nsString> protocolArray;
@@ -1252,7 +1307,9 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
   if (NS_IsMainThread()) {
     // We're keeping track of all main thread web sockets to be able to
     // avoid throttling timeouts when we have active web sockets.
-    webSocket->GetOwner()->UpdateWebSocketCount(1);
+    if (webSocket->GetOwner()) {
+      webSocket->GetOwner()->UpdateWebSocketCount(1);
+    }
 
     nsCOMPtr<nsIPrincipal> loadingPrincipal;
     aRv = webSocketImpl->GetLoadingPrincipal(getter_AddRefs(loadingPrincipal));
@@ -1367,14 +1424,17 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
     nsCOMPtr<nsPIDOMWindowInner> ownerWindow = do_QueryInterface(global);
 
     UniquePtr<SerializedStackHolder> stack;
-    BrowsingContext* browsingContext = ownerWindow->GetBrowsingContext();
-    if (browsingContext && browsingContext->WatchedByDevTools()) {
-      stack = GetCurrentStackForNetMonitor(aGlobal.Context());
-    }
-
     uint64_t windowID = 0;
-    if (WindowContext* wc = ownerWindow->GetWindowContext()) {
-      windowID = wc->TopWindowContext()->InnerWindowId();
+
+    if (ownerWindow) {
+      BrowsingContext* browsingContext = ownerWindow->GetBrowsingContext();
+      if (browsingContext && browsingContext->WatchedByDevTools()) {
+        stack = GetCurrentStackForNetMonitor(aGlobal.Context());
+      }
+
+      if (WindowContext* wc = ownerWindow->GetWindowContext()) {
+        windowID = wc->InnerWindowId();
+      }
     }
 
     aRv = webSocket->mImpl->AsyncOpen(principal, windowID, aTransportProvider,
@@ -1486,16 +1546,18 @@ nsresult WebSocketImpl::Init(JSContext* aCx, nsIPrincipal* aLoadingPrincipal,
 
   // Shut down websocket if window is frozen or destroyed (only needed for
   // "ghost" websockets--see bug 696085)
+  RefPtr<WebSocketImplProxy> proxy;
   if (mIsMainThread) {
     nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
     if (NS_WARN_IF(!os)) {
       return NS_ERROR_FAILURE;
     }
 
-    rv = os->AddObserver(this, DOM_WINDOW_DESTROYED_TOPIC, true);
+    proxy = new WebSocketImplProxy(this);
+    rv = os->AddObserver(proxy, DOM_WINDOW_DESTROYED_TOPIC, true);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = os->AddObserver(this, DOM_WINDOW_FROZEN_TOPIC, true);
+    rv = os->AddObserver(proxy, DOM_WINDOW_FROZEN_TOPIC, true);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -1521,7 +1583,9 @@ nsresult WebSocketImpl::Init(JSContext* aCx, nsIPrincipal* aLoadingPrincipal,
   // inner-windowID. This can happen in sharedWorkers and ServiceWorkers or in
   // DedicateWorkers created by JSM.
   if (aCx) {
-    mInnerWindowID = nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(aCx);
+    if (nsPIDOMWindowInner* ownerWindow = mWebSocket->GetOwner()) {
+      mInnerWindowID = ownerWindow->WindowID();
+    }
   }
 
   mPrivateBrowsing = !!aPrincipal->OriginAttributesRef().mPrivateBrowsingId;
@@ -1650,6 +1714,9 @@ nsresult WebSocketImpl::Init(JSContext* aCx, nsIPrincipal* aLoadingPrincipal,
     AppendUTF16toUTF8(aProtocolArray[index], mRequestedProtocolList);
   }
 
+  if (mIsMainThread) {
+    mImplProxy = std::move(proxy);
+  }
   return NS_OK;
 }
 
@@ -1778,7 +1845,9 @@ nsresult WebSocketImpl::InitializeConnection(
   mChannel = wsChannel;
 
   if (mIsMainThread) {
-    mService->AssociateWebSocketImplWithSerialID(this, mChannel->Serial());
+    MOZ_ASSERT(mImplProxy);
+    mService->AssociateWebSocketImplWithSerialID(mImplProxy,
+                                                 mChannel->Serial());
   }
 
   if (mIsMainThread && doc) {

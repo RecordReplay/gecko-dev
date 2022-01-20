@@ -27,7 +27,8 @@ namespace dom {
 // ScriptFetchOptions
 //////////////////////////////////////////////////////////////
 
-NS_IMPL_CYCLE_COLLECTION(ScriptFetchOptions, mElement, mTriggeringPrincipal)
+NS_IMPL_CYCLE_COLLECTION(ScriptFetchOptions, mElement, mTriggeringPrincipal,
+                         mWebExtGlobal)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(ScriptFetchOptions, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(ScriptFetchOptions, Release)
@@ -35,12 +36,14 @@ NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(ScriptFetchOptions, Release)
 ScriptFetchOptions::ScriptFetchOptions(mozilla::CORSMode aCORSMode,
                                        ReferrerPolicy aReferrerPolicy,
                                        Element* aElement,
-                                       nsIPrincipal* aTriggeringPrincipal)
+                                       nsIPrincipal* aTriggeringPrincipal,
+                                       nsIGlobalObject* aWebExtGlobal)
     : mCORSMode(aCORSMode),
       mReferrerPolicy(aReferrerPolicy),
       mIsPreload(false),
       mElement(aElement),
-      mTriggeringPrincipal(aTriggeringPrincipal) {
+      mTriggeringPrincipal(aTriggeringPrincipal),
+      mWebExtGlobal(aWebExtGlobal) {
   MOZ_ASSERT(mTriggeringPrincipal);
 }
 
@@ -59,6 +62,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(ScriptLoadRequest)
 NS_IMPL_CYCLE_COLLECTION_CLASS(ScriptLoadRequest)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(ScriptLoadRequest)
+  // XXX missing mLoadBlockedDocument ?
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFetchOptions, mCacheInfo)
   tmp->mScript = nullptr;
   if (Runnable* runnable = tmp->mRunnable.exchange(nullptr)) {
@@ -180,7 +184,6 @@ void ScriptLoadRequest::MaybeCancelOffThreadScript() {
 
 void ScriptLoadRequest::DropBytecodeCacheReferences() {
   mCacheInfo = nullptr;
-  mScript = nullptr;
   DropJSObjects(this);
 }
 
@@ -217,22 +220,14 @@ void ScriptLoadRequest::SetTextSource() {
   }
 }
 
-void ScriptLoadRequest::SetBinASTSource() { MOZ_CRASH("BinAST not supported"); }
-
 void ScriptLoadRequest::SetBytecode() {
   MOZ_ASSERT(IsUnknownDataType());
   mDataType = DataType::eBytecode;
 }
 
-bool ScriptLoadRequest::ShouldAcceptBinASTEncoding() const {
-  MOZ_CRASH("BinAST not supported");
-}
-
 void ScriptLoadRequest::ClearScriptSource() {
   if (IsTextSource()) {
     ClearScriptText();
-  } else if (IsBinASTSource()) {
-    ScriptBinASTData().clearAndFree();
   }
 }
 

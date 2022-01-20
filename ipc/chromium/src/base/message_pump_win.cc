@@ -12,8 +12,8 @@
 #include "base/histogram.h"
 #include "base/win_util.h"
 #include "mozilla/RecordReplay.h"
+#include "mozilla/ProfilerLabels.h"
 #include "WinUtils.h"
-#include "GeckoProfiler.h"
 
 using base::Time;
 
@@ -483,6 +483,7 @@ bool MessagePumpForIO::GetIOItem(DWORD timeout, IOItem* item) {
   memset(item, 0, sizeof(*item));
   ULONG_PTR key = 0;
   OVERLAPPED* overlapped = NULL;
+  AUTO_PROFILER_LABEL("MessagePumpForIO::GetIOItem::Wait", IDLE);
   if (!GetQueuedCompletionStatus(port_.Get(), &item->bytes_transfered, &key,
                                  &overlapped, timeout)) {
     if (!overlapped) return false;  // Nothing in the queue.

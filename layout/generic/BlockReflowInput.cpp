@@ -621,7 +621,7 @@ static nscoord FloatMarginISize(const ReflowInput& aCBReflowInput,
       aCBReflowInput.mRenderingContext, wm, aCBReflowInput.ComputedSize(wm),
       aFloatAvailableISize,
       aFloatOffsetState.ComputedLogicalMargin(wm).Size(wm),
-      aFloatOffsetState.ComputedLogicalBorderPadding(wm).Size(wm),
+      aFloatOffsetState.ComputedLogicalBorderPadding(wm).Size(wm), {},
       ComputeSizeFlag::ShrinkWrap);
 
   WritingMode cbwm = aCBReflowInput.GetWritingMode();
@@ -865,8 +865,7 @@ bool BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat) {
 
   // Update the float combined area state
   // XXX Floats should really just get invalidated here if necessary
-  mFloatOverflowAreas.UnionWith(aFloat->GetOverflowAreas() +
-                                aFloat->GetPosition());
+  mFloatOverflowAreas.UnionWith(aFloat->GetOverflowAreasRelativeToParent());
 
   // Place the float in the float manager
   // calculate region

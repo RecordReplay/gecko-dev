@@ -8,16 +8,6 @@
 
 ChromeUtils.defineModuleGetter(
   this,
-  "AppConstants",
-  "resource://gre/modules/AppConstants.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "Services",
-  "resource://gre/modules/Services.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
   "AboutNewTab",
   "resource:///modules/AboutNewTab.jsm"
 );
@@ -71,21 +61,49 @@ ExtensionPreferencesManager.addSetting("closeTabsByDoubleClick", {
   },
 });
 
+ExtensionPreferencesManager.addSetting("colorManagement.mode", {
+  permission: "browserSettings",
+  prefNames: ["gfx.color_management.mode"],
+
+  setCallback(value) {
+    switch (value) {
+      case "off":
+        return { [this.prefNames[0]]: 0 };
+      case "full":
+        return { [this.prefNames[0]]: 1 };
+      case "tagged_only":
+        return { [this.prefNames[0]]: 2 };
+    }
+  },
+});
+
+ExtensionPreferencesManager.addSetting("colorManagement.useNativeSRGB", {
+  permission: "browserSettings",
+  prefNames: ["gfx.color_management.native_srgb"],
+
+  setCallback(value) {
+    return { [this.prefNames[0]]: value };
+  },
+});
+
+ExtensionPreferencesManager.addSetting(
+  "colorManagement.useWebRenderCompositor",
+  {
+    permission: "browserSettings",
+    prefNames: ["gfx.webrender.compositor"],
+
+    setCallback(value) {
+      return { [this.prefNames[0]]: value };
+    },
+  }
+);
+
 ExtensionPreferencesManager.addSetting("contextMenuShowEvent", {
   permission: "browserSettings",
   prefNames: ["ui.context_menus.after_mouseup"],
 
   setCallback(value) {
     return { [this.prefNames[0]]: value === "mouseup" };
-  },
-});
-
-ExtensionPreferencesManager.addSetting("ftpProtocolEnabled", {
-  permission: "browserSettings",
-  prefNames: ["network.ftp.enabled"],
-
-  setCallback(value) {
-    return { [this.prefNames[0]]: value };
   },
 });
 
@@ -264,8 +282,9 @@ this.browserSettings = class extends ExtensionAPI {
         ftpProtocolEnabled: getSettingsAPI({
           context,
           name: "ftpProtocolEnabled",
+          readOnly: true,
           callback() {
-            return Services.prefs.getBoolPref("network.ftp.enabled");
+            return false;
           },
         }),
         homepageOverride: getSettingsAPI({
@@ -457,6 +476,38 @@ this.browserSettings = class extends ExtensionAPI {
             return Services.prefs.getBoolPref("browser.zoom.siteSpecific");
           },
         }),
+        colorManagement: {
+          mode: getSettingsAPI({
+            context,
+            name: "colorManagement.mode",
+            callback() {
+              switch (Services.prefs.getIntPref("gfx.color_management.mode")) {
+                case 0:
+                  return "off";
+                case 1:
+                  return "full";
+                case 2:
+                  return "tagged_only";
+              }
+            },
+          }),
+          useNativeSRGB: getSettingsAPI({
+            context,
+            name: "colorManagement.useNativeSRGB",
+            callback() {
+              return Services.prefs.getBoolPref(
+                "gfx.color_management.native_srgb"
+              );
+            },
+          }),
+          useWebRenderCompositor: getSettingsAPI({
+            context,
+            name: "colorManagement.useWebRenderCompositor",
+            callback() {
+              return Services.prefs.getBoolPref("gfx.webrender.compositor");
+            },
+          }),
+        },
       },
     };
   }

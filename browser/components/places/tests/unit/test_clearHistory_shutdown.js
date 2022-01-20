@@ -152,15 +152,15 @@ function getFormHistoryCount() {
 
 function storeCache(aURL, aContent) {
   let cache = Services.cache2;
-  let storage = cache.diskCacheStorage(Services.loadContextInfo.default, false);
+  let storage = cache.diskCacheStorage(Services.loadContextInfo.default);
 
   return new Promise(resolve => {
     let storeCacheListener = {
-      onCacheEntryCheck(entry, appcache) {
+      onCacheEntryCheck(entry) {
         return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
       },
 
-      onCacheEntryAvailable(entry, isnew, appcache, status) {
+      onCacheEntryAvailable(entry, isnew, status) {
         Assert.equal(status, Cr.NS_OK);
 
         entry.setMetaDataElement("servertype", "0");
@@ -195,11 +195,11 @@ function storeCache(aURL, aContent) {
 
 function checkCache(aURL) {
   let cache = Services.cache2;
-  let storage = cache.diskCacheStorage(Services.loadContextInfo.default, false);
+  let storage = cache.diskCacheStorage(Services.loadContextInfo.default);
 
   return new Promise(resolve => {
     let checkCacheListener = {
-      onCacheEntryAvailable(entry, isnew, appcache, status) {
+      onCacheEntryAvailable(entry, isnew, status) {
         Assert.equal(status, Cr.NS_ERROR_CACHE_KEY_NOT_FOUND);
         resolve();
       },

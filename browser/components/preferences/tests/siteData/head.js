@@ -32,9 +32,6 @@ const { DownloadUtils } = ChromeUtils.import(
 const { SiteDataManager } = ChromeUtils.import(
   "resource:///modules/SiteDataManager.jsm"
 );
-const { OfflineAppCacheHelper } = ChromeUtils.import(
-  "resource://gre/modules/offlineAppCache.jsm"
-);
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -203,8 +200,12 @@ function assertSitesListed(doc, hosts) {
   is(removeAllBtn.disabled, false, "Should enable the removeAllBtn button");
 }
 
+// Counter used by addTestData to generate unique cookie names across function
+// calls.
+let cookieID = 0;
+
 async function addTestData(data) {
-  let hosts = [];
+  let hosts = new Set();
 
   for (let site of data) {
     is(
@@ -221,16 +222,20 @@ async function addTestData(data) {
     }
 
     for (let i = 0; i < (site.cookies || 0); i++) {
-      SiteDataTestUtils.addToCookies(site.origin, Cu.now());
+      SiteDataTestUtils.addToCookies({
+        origin: site.origin,
+        name: `cookie${cookieID++}`,
+      });
     }
 
     let principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
       site.origin
     );
-    hosts.push(principal.host);
+
+    hosts.add(principal.baseDomain || principal.host);
   }
 
-  return hosts;
+  return Array.from(hosts);
 }
 
 function promiseCookiesCleared() {
@@ -241,7 +246,7 @@ function promiseCookiesCleared() {
 
 async function loadServiceWorkerTestPage(url) {
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
-  await BrowserTestUtils.waitForCondition(() => {
+  await TestUtils.waitForCondition(() => {
     return SpecialPowers.spawn(
       tab.linkedBrowser,
       [],
@@ -255,7 +260,7 @@ async function loadServiceWorkerTestPage(url) {
 }
 
 function promiseServiceWorkersCleared() {
-  return BrowserTestUtils.waitForCondition(() => {
+  return TestUtils.waitForCondition(() => {
     let serviceWorkers = serviceWorkerManager.getAllRegistrations();
     if (!serviceWorkers.length) {
       ok(true, "Cleared all service workers");
@@ -266,7 +271,7 @@ function promiseServiceWorkersCleared() {
 }
 
 function promiseServiceWorkerRegisteredFor(url) {
-  return BrowserTestUtils.waitForCondition(() => {
+  return TestUtils.waitForCondition(() => {
     try {
       let principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
         url

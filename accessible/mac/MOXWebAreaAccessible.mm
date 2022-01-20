@@ -68,7 +68,8 @@ using namespace mozilla::a11y;
 
 - (NSArray*)moxUIElementsForSearchPredicate:(NSDictionary*)searchPredicate {
   MOXSearchInfo* search =
-      [[MOXSearchInfo alloc] initWithParameters:searchPredicate andRoot:self];
+      [[[MOXSearchInfo alloc] initWithParameters:searchPredicate
+                                         andRoot:self] autorelease];
 
   return [search performSearch];
 }
@@ -124,7 +125,7 @@ using namespace mozilla::a11y;
     DocAccessible* acc = mGeckoAccessible.AsAccessible()->AsDoc();
     acc->URL(url);
   } else {
-    ProxyAccessible* proxy = mGeckoAccessible.AsProxy();
+    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
     proxy->URL(url);
   }
 

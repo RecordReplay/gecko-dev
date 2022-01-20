@@ -18,6 +18,9 @@ loader.lazyRequireGetter(
   true
 );
 
+/**
+ * Handles network events from the parent process
+ */
 class NetworkEventWatcher {
   /**
    * Start watching for all network events related to a given Watcher Actor.
@@ -45,6 +48,14 @@ class NetworkEventWatcher {
     );
 
     this.listener.init();
+  }
+
+  get conn() {
+    return this.watcherActor.conn;
+  }
+
+  get browserId() {
+    return this.watcherActor.browserId;
   }
 
   /**
@@ -197,7 +208,8 @@ class NetworkEventWatcher {
       !types.includes("requestHeaders") ||
       !types.includes("requestCookies") ||
       !types.includes("eventTimings") ||
-      !types.includes("responseContent")
+      !types.includes("responseContent") ||
+      !types.includes("securityInfo")
     ) {
       return;
     }

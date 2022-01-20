@@ -9,6 +9,7 @@
 #include "jit/LIR.h"
 #include "jit/Lowering.h"
 #include "jit/MIR.h"
+#include "jit/ScalarTypeUtils.h"
 
 #include "vm/SymbolType.h"
 
@@ -141,6 +142,20 @@ bool LRecoverInfo::OperandIter::canOptimizeOutIfUnused() {
   return true;
 }
 #endif
+
+LAllocation LIRGeneratorShared::useRegisterOrIndexConstant(
+    MDefinition* mir, Scalar::Type type, int32_t offsetAdjustment) {
+  if (CanUseInt32Constant(mir)) {
+    MConstant* cst = mir->toConstant();
+    int32_t val =
+        cst->type() == MIRType::Int32 ? cst->toInt32() : cst->toIntPtr();
+    int32_t offset;
+    if (ArrayOffsetFitsInInt32(val, type, offsetAdjustment, &offset)) {
+      return LAllocation(mir->toConstant());
+    }
+  }
+  return useRegister(mir);
+}
 
 #ifdef JS_NUNBOX32
 LSnapshot* LIRGeneratorShared::buildSnapshot(MResumePoint* rp,
@@ -302,6 +317,26 @@ void LIRGeneratorShared::assignWasmSafepoint(LInstruction* ins,
     abort(AbortReason::Alloc, "noteNeedsSafepoint failed");
     return;
   }
+}
+
+// Simple shared compare-and-select for all platforms that don't specialize
+// further.  See emitWasmCompareAndSelect in CodeGenerator.cpp.
+bool LIRGeneratorShared::canSpecializeWasmCompareAndSelect(
+    MCompare::CompareType compTy, MIRType insTy) {
+  return insTy == MIRType::Int32 && (compTy == MCompare::Compare_Int32 ||
+                                     compTy == MCompare::Compare_UInt32);
+}
+
+void LIRGeneratorShared::lowerWasmCompareAndSelect(MWasmSelect* ins,
+                                                   MDefinition* lhs,
+                                                   MDefinition* rhs,
+                                                   MCompare::CompareType compTy,
+                                                   JSOp jsop) {
+  MOZ_ASSERT(canSpecializeWasmCompareAndSelect(compTy, ins->type()));
+  auto* lir = new (alloc()) LWasmCompareAndSelect(
+      useRegister(lhs), useAny(rhs), compTy, jsop,
+      useRegisterAtStart(ins->trueExpr()), useAny(ins->falseExpr()));
+  defineReuseInput(lir, ins, LWasmCompareAndSelect::IfTrueExprIndex);
 }
 
 #ifdef ENABLE_WASM_SIMD
@@ -490,15 +525,21 @@ static bool TryPermute32x4(SimdConstant* control) {
 // just lanes[0], and *control is unchanged.
 static bool TryRotateRight8x16(SimdConstant* control) {
   const SimdConstant::I8x16& lanes = control->asInt8x16();
-  // Look for the first run of consecutive bytes.
+  // Look for the end of the first run of consecutive bytes.
   int i = ScanIncreasingMasked(lanes, 0);
 
-  // If we reach the end of the vector, the vector must start at 0.
-  if (i == 16) {
-    return lanes[0] == 0;
+  // First run must start at a value s.t. we have a rotate if all remaining
+  // bytes are a run.
+  if (lanes[0] != 16 - i) {
+    return false;
   }
 
-  // Second run must start at source lane zero
+  // If we reached the end of the vector, we're done.
+  if (i == 16) {
+    return true;
+  }
+
+  // Second run must start at source lane zero.
   if (lanes[i] != 0) {
     return false;
   }
@@ -507,43 +548,13 @@ static bool TryRotateRight8x16(SimdConstant* control) {
   return ScanIncreasingMasked(lanes, i) == 16;
 }
 
-// We can permute by words if the mask is reducible to a word mask, but the x64
-// lowering is only efficient if we can permute the high and low quadwords
-// separately, possibly after swapping quadwords.
+// We can permute by words if the mask is reducible to a word mask.
 static bool TryPermute16x8(SimdConstant* control) {
   SimdConstant tmp = *control;
   if (!ByteMaskToWordMask(&tmp)) {
     return false;
   }
-  const SimdConstant::I16x8& lanes = tmp.asInt16x8();
-  SimdConstant::I16x8 mapped;
-  MapLanes(mapped, lanes, [](int x) -> int { return x < 4 ? 0 : 1; });
-  int i = ScanConstant(mapped, mapped[0], 0);
-  if (i != 4) {
-    return false;
-  }
-  i = ScanConstant(mapped, mapped[4], 4);
-  if (i != 8) {
-    return false;
-  }
-  // Now compute the operation bits.  `mapped` holds the adjusted lane mask.
-  memcpy(mapped, lanes, sizeof(mapped));
-  int16_t op = 0;
-  if (mapped[0] > mapped[4]) {
-    op |= LWasmPermuteSimd128::SWAP_QWORDS;
-  }
-  for (int i = 0; i < 8; i++) {
-    mapped[i] &= 3;
-  }
-  if (!IsIdentity(mapped, 0, 4, 0)) {
-    op |= LWasmPermuteSimd128::PERM_LOW;
-  }
-  if (!IsIdentity(mapped, 4, 4, 0)) {
-    op |= LWasmPermuteSimd128::PERM_HIGH;
-  }
-  MOZ_ASSERT(op != 0);
-  mapped[0] |= op << 8;
-  *control = SimdConstant::CreateX8(mapped);
+  *control = tmp;
   return true;
 }
 
@@ -606,11 +617,11 @@ static LWasmPermuteSimd128::Op AnalyzePermute(SimdConstant* control) {
   if (TryRotateRight8x16(control)) {
     return LWasmPermuteSimd128::ROTATE_RIGHT_8x16;
   }
-  if (TryPermute16x8(control)) {
-    return LWasmPermuteSimd128::PERMUTE_16x8;
-  }
   if (TryBroadcast16x8(control)) {
     return LWasmPermuteSimd128::BROADCAST_16x8;
+  }
+  if (TryPermute16x8(control)) {
+    return LWasmPermuteSimd128::PERMUTE_16x8;
   }
   if (TryBroadcast8x16(control)) {
     return LWasmPermuteSimd128::BROADCAST_8x16;
@@ -1001,16 +1012,9 @@ void LIRGeneratorShared::ReportShuffleSpecialization(const Shuffle& s) {
         case LWasmPermuteSimd128::PERMUTE_8x16:
           js::wasm::ReportSimdAnalysis("shuffle -> permute 8x16");
           break;
-        case LWasmPermuteSimd128::PERMUTE_16x8: {
-          int op = s.control.asInt16x8()[0] >> 8;
-          char buf[256];
-          sprintf(buf, "shuffle -> permute 16x8%s%s%s",
-                  op & LWasmPermuteSimd128::SWAP_QWORDS ? " swap" : "",
-                  op & LWasmPermuteSimd128::PERM_HIGH ? " high" : "",
-                  op & LWasmPermuteSimd128::PERM_LOW ? " low" : "");
-          js::wasm::ReportSimdAnalysis(buf);
+        case LWasmPermuteSimd128::PERMUTE_16x8:
+          js::wasm::ReportSimdAnalysis("shuffle -> permute 16x8");
           break;
-        }
         case LWasmPermuteSimd128::PERMUTE_32x4:
           js::wasm::ReportSimdAnalysis("shuffle -> permute 32x4");
           break;

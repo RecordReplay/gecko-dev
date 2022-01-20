@@ -4,7 +4,6 @@
 
 package org.mozilla.geckoview.test
 
-import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.filters.MediumTest
@@ -16,7 +15,6 @@ import org.junit.runner.RunWith
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.*
 import org.mozilla.geckoview.test.util.Callbacks
-import org.mozilla.geckoview.test.util.UiThreadUtils
 
 @RunWith(AndroidJUnit4::class)
 @MediumTest
@@ -32,7 +30,7 @@ class ProgressDelegateTest : BaseSessionTest() {
         sessionRule.forCallbacksDuringWait(object : Callbacks.ProgressDelegate,
                 Callbacks.NavigationDelegate {
             @AssertCalled
-            override fun onLocationChange(session: GeckoSession, url: String?) {
+            override fun onLocationChange(session: GeckoSession, url: String?, perms : MutableList<GeckoSession.PermissionDelegate.ContentPermission>) {
                 assertThat("LocationChange is called", url, endsWith(path))
             }
             @AssertCalled
@@ -361,7 +359,7 @@ class ProgressDelegateTest : BaseSessionTest() {
 
         session.forCallbacksDuringWait(object : Callbacks.NavigationDelegate {
             @AssertCalled
-            override fun onLocationChange(session: GeckoSession, url: String?) {
+            override fun onLocationChange(session: GeckoSession, url: String?, perms : MutableList<GeckoSession.PermissionDelegate.ContentPermission>) {
                 assertThat("URI should match", url, equalTo(startUri))
             }
         })
@@ -379,7 +377,7 @@ class ProgressDelegateTest : BaseSessionTest() {
         session.goBack()
 
         session.waitUntilCalled(object: Callbacks.NavigationDelegate {
-            override fun onLocationChange(session: GeckoSession, url: String?) {
+            override fun onLocationChange(session: GeckoSession, url: String?, perms : MutableList<GeckoSession.PermissionDelegate.ContentPermission>) {
                 assertThat("History should be preserved", url, equalTo(helloUri))
             }
         })
@@ -445,6 +443,12 @@ class ProgressDelegateTest : BaseSessionTest() {
         })
     }
 
+    @Test fun nullState() {
+        val stateFromNull : GeckoSession.SessionState? = GeckoSession.SessionState.fromString(null)
+        val nullState : GeckoSession.SessionState? = null
+        assertThat("Null string should result in null state", stateFromNull, equalTo(nullState))
+    }
+
     @NullDelegate(GeckoSession.HistoryDelegate::class)
     @Test fun noHistoryDelegateOnSessionStateChange() {
         // TODO: Bug 1648158
@@ -457,48 +461,5 @@ class ProgressDelegateTest : BaseSessionTest() {
             override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
             }
         })
-    }
-
-    private fun createDataUri(bytes: ByteArray,
-                              mimeType: String?): String {
-        return String.format("data:%s;base64,%s", mimeType ?: "",
-                Base64.encodeToString(bytes, Base64.NO_WRAP))
-    }
-
-    @Test(expected = UiThreadUtils.TimeoutException::class)
-    fun handlingLargeDataURIs() {
-        sessionRule.delegateUntilTestEnd(object : Callbacks.ProgressDelegate {
-            @AssertCalled(count = 1)
-            override fun onPageStart(session: GeckoSession, url: String) {
-            }
-        });
-
-        val dataBytes = ByteArray(3 * 1024 * 1024)
-        val uri = createDataUri(dataBytes, "*/*")
-
-        sessionRule.session.loadTestPath(DATA_URI_PATH)
-        sessionRule.session.waitForPageStop()
-
-        sessionRule.session.evaluateJS("document.querySelector('#largeLink').href = \"$uri\"")
-        sessionRule.session.evaluateJS("document.querySelector('#largeLink').click()")
-        sessionRule.session.waitForPageStop()
-    }
-
-    @Test fun handlingSmallDataURIs() {
-        sessionRule.delegateUntilTestEnd(object : Callbacks.ProgressDelegate {
-            @AssertCalled(count = 2)
-            override fun onPageStart(session: GeckoSession, url: String) {
-            }
-        });
-
-        val dataBytes = this.getTestBytes("/assets/www/images/test.gif")
-        val uri = createDataUri(dataBytes, "image/*")
-
-        sessionRule.session.loadTestPath(DATA_URI_PATH)
-        sessionRule.session.waitForPageStop()
-
-        sessionRule.session.evaluateJS("document.querySelector('#smallLink').href = \"$uri\"")
-        sessionRule.session.evaluateJS("document.querySelector('#smallLink').click()")
-        sessionRule.session.waitForPageStop()
     }
 }

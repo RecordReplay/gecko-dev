@@ -11,7 +11,7 @@
 #include "VRProcessManager.h"
 #include "gfxConfig.h"
 #include "gfxPlatform.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryIPC.h"
@@ -31,10 +31,7 @@
 #include "mozilla/layers/LayerTreeOwnerTracker.h"
 #include "nsIGfxInfo.h"
 #include "nsIObserverService.h"
-
-#ifdef MOZ_GECKO_PROFILER
-#  include "ProfilerParent.h"
-#endif
+#include "ProfilerParent.h"
 
 namespace mozilla {
 namespace gfx {
@@ -56,7 +53,6 @@ void GPUChild::Init() {
       gfxConfig::GetValue(Feature::D3D11_COMPOSITING);
   devicePrefs.oglCompositing() =
       gfxConfig::GetValue(Feature::OPENGL_COMPOSITING);
-  devicePrefs.advancedLayers() = gfxConfig::GetValue(Feature::ADVANCED_LAYERS);
   devicePrefs.useD2D1() = gfxConfig::GetValue(Feature::DIRECT2D);
   devicePrefs.webGPU() = gfxConfig::GetValue(Feature::WEBGPU);
   devicePrefs.d3d11HwAngle() = gfxConfig::GetValue(Feature::D3D11_HW_ANGLE);
@@ -67,7 +63,7 @@ void GPUChild::Init() {
         mappings.AppendElement(LayerTreeIdMapping(aLayersId, aProcessId));
       });
 
-  nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+  nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
   nsTArray<GfxInfoFeatureStatus> features;
   if (gfxInfo) {
     auto* gfxInfoRaw = static_cast<widget::GfxInfoBase*>(gfxInfo.get());
@@ -78,9 +74,7 @@ void GPUChild::Init() {
 
   gfxVars::AddReceiver(this);
 
-#ifdef MOZ_GECKO_PROFILER
   Unused << SendInitProfiler(ProfilerParent::CreateForProcess(OtherPid()));
-#endif
 }
 
 void GPUChild::OnVarChanged(const GfxVarUpdate& aVar) { SendUpdateVar(aVar); }
@@ -116,6 +110,11 @@ mozilla::ipc::IPCResult GPUChild::RecvInitComplete(const GPUDeviceData& aData) {
   Telemetry::AccumulateTimeDelta(Telemetry::GPU_PROCESS_LAUNCH_TIME_MS_2,
                                  mHost->GetLaunchTime());
   mGPUReady = true;
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult GPUChild::RecvDeclareStable() {
+  mHost->mListener->OnProcessDeclaredStable();
   return IPC_OK();
 }
 
@@ -214,6 +213,14 @@ mozilla::ipc::IPCResult GPUChild::RecvNotifyDeviceReset(
     const GPUDeviceData& aData) {
   gfxPlatform::GetPlatform()->ImportGPUDeviceData(aData);
   mHost->mListener->OnRemoteProcessDeviceReset(mHost);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult GPUChild::RecvFlushMemory(const nsString& aReason) {
+  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+  if (os) {
+    os->NotifyObservers(nullptr, "memory-pressure", aReason.get());
+  }
   return IPC_OK();
 }
 

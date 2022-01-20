@@ -7,14 +7,15 @@
 #include "mozilla/ThreadEventQueue.h"
 #include "mozilla/EventQueue.h"
 
-#include "GeckoProfiler.h"
 #include "LeakRefPtr.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIThreadInternal.h"
 #include "nsThreadUtils.h"
 #include "nsThread.h"
 #include "ThreadEventTarget.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/TaskController.h"
+#include "mozilla/StaticPrefs_threads.h"
 
 using namespace mozilla;
 
@@ -81,8 +82,10 @@ bool ThreadEventQueue::PutEventInternal(already_AddRefed<nsIRunnable>&& aEvent,
       if (nsCOMPtr<nsIRunnablePriority> runnablePrio = do_QueryInterface(e)) {
         uint32_t prio = nsIRunnablePriority::PRIORITY_NORMAL;
         runnablePrio->GetPriority(&prio);
-        if (prio == nsIRunnablePriority::PRIORITY_HIGH) {
-          aPriority = EventQueuePriority::High;
+        if (prio == nsIRunnablePriority::PRIORITY_CONTROL) {
+          aPriority = EventQueuePriority::Control;
+        } else if (prio == nsIRunnablePriority::PRIORITY_VSYNC) {
+          aPriority = EventQueuePriority::Vsync;
         } else if (prio == nsIRunnablePriority::PRIORITY_INPUT_HIGH) {
           aPriority = EventQueuePriority::InputHigh;
         } else if (prio == nsIRunnablePriority::PRIORITY_MEDIUMHIGH) {
@@ -92,6 +95,11 @@ bool ThreadEventQueue::PutEventInternal(already_AddRefed<nsIRunnable>&& aEvent,
         } else if (prio == nsIRunnablePriority::PRIORITY_IDLE) {
           aPriority = EventQueuePriority::Idle;
         }
+      }
+
+      if (aPriority == EventQueuePriority::Control &&
+          !StaticPrefs::threads_control_event_queue_enabled()) {
+        aPriority = EventQueuePriority::MediumHigh;
       }
     }
 
@@ -251,7 +259,8 @@ already_AddRefed<nsIThreadObserver> ThreadEventQueue::GetObserverOnThread() {
 
 void ThreadEventQueue::SetObserver(nsIThreadObserver* aObserver) {
   MutexAutoLock lock(mLock);
-  mObserver = aObserver;
+  nsCOMPtr observer = aObserver;
+  mObserver.swap(observer);
   if (NS_IsMainThread()) {
     TaskController::Get()->SetThreadObserver(aObserver);
   }

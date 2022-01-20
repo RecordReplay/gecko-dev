@@ -38,103 +38,51 @@ function setup() {
   Assert.notEqual(h3Port, null);
   Assert.notEqual(h3Port, "");
 
-  // Set to allow the cert presented by our H2 server
-  do_get_profile();
-  prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
+  trr_test_setup();
 
-  prefs.setBoolPref("network.security.esni.enabled", false);
-  prefs.setBoolPref("network.http.spdy.enabled", true);
-  prefs.setBoolPref("network.http.spdy.enabled.http2", true);
-  // the TRR server is on 127.0.0.1
-  prefs.setCharPref("network.trr.bootstrapAddress", "127.0.0.1");
-
-  // make all native resolve calls "secretly" resolve localhost instead
-  prefs.setBoolPref("network.dns.native-is-localhost", true);
-
-  // 0 - off, 1 - race, 2 TRR first, 3 TRR only, 4 shadow
-  prefs.setIntPref("network.trr.mode", 2); // TRR first
-  prefs.setBoolPref("network.trr.wait-for-portal", false);
-  // don't confirm that TRR is working, just go!
-  prefs.setCharPref("network.trr.confirmationNS", "skip");
-
-  // So we can change the pref without clearing the cache to check a pushed
-  // record with a TRR path that fails.
-  Services.prefs.setBoolPref("network.trr.clear-cache-on-pref-change", false);
-
+  Services.prefs.setIntPref("network.trr.mode", 2); // TRR first
   Services.prefs.setBoolPref("network.http.http3.enabled", true);
-
-  // The moz-http2 cert is for foo.example.com and is signed by http2-ca.pem
-  // so add that cert to the trust list as a signing cert.  // the foo.example.com domain name.
-  const certdb = Cc["@mozilla.org/security/x509certdb;1"].getService(
-    Ci.nsIX509CertDB
-  );
-  addCertFromFile(certdb, "http2-ca.pem", "CTu,u,u");
+  Services.prefs.setIntPref("network.http.speculative-parallel-limit", 6);
 }
 
 setup();
 registerCleanupFunction(async () => {
-  prefs.clearUserPref("network.security.esni.enabled");
-  prefs.clearUserPref("network.http.spdy.enabled");
-  prefs.clearUserPref("network.http.spdy.enabled.http2");
-  prefs.clearUserPref("network.dns.localDomains");
-  prefs.clearUserPref("network.dns.native-is-localhost");
-  prefs.clearUserPref("network.trr.mode");
-  prefs.clearUserPref("network.trr.uri");
-  prefs.clearUserPref("network.trr.credentials");
-  prefs.clearUserPref("network.trr.wait-for-portal");
-  prefs.clearUserPref("network.trr.allow-rfc1918");
-  prefs.clearUserPref("network.trr.useGET");
-  prefs.clearUserPref("network.trr.confirmationNS");
-  prefs.clearUserPref("network.trr.bootstrapAddress");
-  prefs.clearUserPref("network.trr.request-timeout");
-  prefs.clearUserPref("network.trr.clear-cache-on-pref-change");
-  prefs.clearUserPref("network.dns.upgrade_with_https_rr");
-  prefs.clearUserPref("network.dns.use_https_rr_as_altsvc");
-  prefs.clearUserPref("network.dns.echconfig.enabled");
-  prefs.clearUserPref("network.dns.echconfig.fallback_to_origin");
-  prefs.clearUserPref("network.dns.httpssvc.reset_exclustion_list");
-  prefs.clearUserPref("network.http.http3.enabled");
-  prefs.clearUserPref("network.dns.httpssvc.http3_fast_fallback_timeout");
+  trr_clear_prefs();
+  Services.prefs.clearUserPref("network.dns.upgrade_with_https_rr");
+  Services.prefs.clearUserPref("network.dns.use_https_rr_as_altsvc");
+  Services.prefs.clearUserPref("network.dns.echconfig.enabled");
+  Services.prefs.clearUserPref("network.dns.echconfig.fallback_to_origin");
+  Services.prefs.clearUserPref("network.dns.httpssvc.reset_exclustion_list");
+  Services.prefs.clearUserPref("network.http.http3.enabled");
+  Services.prefs.clearUserPref(
+    "network.dns.httpssvc.http3_fast_fallback_timeout"
+  );
   Services.prefs.clearUserPref(
     "network.http.http3.alt-svc-mapping-for-testing"
   );
   Services.prefs.clearUserPref("network.http.http3.backup_timer_delay");
   Services.prefs.clearUserPref("network.http.speculative-parallel-limit");
+  Services.prefs.clearUserPref(
+    "network.http.http3.parallel_fallback_conn_limit"
+  );
   if (trrServer) {
     await trrServer.stop();
   }
 });
 
-class DNSListener {
-  constructor() {
-    this.promise = new Promise(resolve => {
-      this.resolve = resolve;
-    });
-  }
-  onLookupComplete(inRequest, inRecord, inStatus) {
-    this.resolve([inRequest, inRecord, inStatus]);
-  }
-  // So we can await this as a promise.
-  then() {
-    return this.promise.then.apply(this.promise, arguments);
-  }
-}
-
-DNSListener.prototype.QueryInterface = ChromeUtils.generateQI([
-  "nsIDNSListener",
-]);
-
 function makeChan(url) {
   let chan = NetUtil.newChannel({
     uri: url,
     loadUsingSystemPrincipal: true,
+    contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
   }).QueryInterface(Ci.nsIHttpChannel);
   chan.loadFlags = Ci.nsIChannel.LOAD_INITIAL_DOCUMENT_URI;
   return chan;
 }
 
-function channelOpenPromise(chan, flags) {
-  return new Promise(resolve => {
+function channelOpenPromise(chan, flags, delay) {
+  // eslint-disable-next-line no-async-promise-executor
+  return new Promise(async resolve => {
     function finish(req, buffer) {
       resolve([req, buffer]);
       certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyData(
@@ -146,6 +94,9 @@ function channelOpenPromise(chan, flags) {
     certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyData(
       true
     );
+    if (delay) {
+      await new Promise(r => setTimeout(r, delay));
+    }
     chan.asyncOpen(new ChannelListener(finish, null, flags));
   });
 }
@@ -203,41 +154,13 @@ add_task(async function test_fast_fallback_with_speculative_connection() {
   // Set AltSvc to point to not existing HTTP3 server on port 443
   Services.prefs.setCharPref(
     "network.http.http3.alt-svc-mapping-for-testing",
-    "foo.example.com;h3-27=:" + h3Port
+    "foo.example.com;h3-29=:" + h3Port
   );
   Services.prefs.setBoolPref("network.dns.disableIPv6", true);
   Services.prefs.setIntPref("network.http.speculative-parallel-limit", 6);
 
   await fast_fallback_test();
 });
-
-let HTTPObserver = {
-  observeActivity(
-    aChannel,
-    aType,
-    aSubtype,
-    aTimestamp,
-    aSizeData,
-    aStringData
-  ) {
-    aChannel.QueryInterface(Ci.nsIChannel);
-    if (aChannel.URI.spec == `https://foo.example.com:${h2Port}/`) {
-      if (
-        aType == Ci.nsIHttpActivityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION &&
-        aSubtype ==
-          Ci.nsIHttpActivityDistributor.ACTIVITY_SUBTYPE_REQUEST_HEADER
-      ) {
-        // We need to enable speculative connection again, since the backup
-        // connection is done by using speculative connection.
-        Services.prefs.setIntPref("network.http.speculative-parallel-limit", 6);
-        let observerService = Cc[
-          "@mozilla.org/network/http-activity-distributor;1"
-        ].getService(Ci.nsIHttpActivityDistributor);
-        observerService.removeObserver(HTTPObserver);
-      }
-    }
-  },
-};
 
 // Test the case when speculative connection is disabled. In this case, when the
 // back connection is ready, the http transaction is already activated,
@@ -249,11 +172,6 @@ add_task(async function test_fast_fallback_without_speculative_connection() {
   // Clear the h3 excluded list, otherwise the Alt-Svc mapping will not be used.
   Services.obs.notifyObservers(null, "network:reset-http3-excluded-list");
   Services.prefs.setIntPref("network.http.speculative-parallel-limit", 0);
-
-  let observerService = Cc[
-    "@mozilla.org/network/http-activity-distributor;1"
-  ].getService(Ci.nsIHttpActivityDistributor);
-  observerService.addObserver(HTTPObserver);
 
   await fast_fallback_test();
 
@@ -284,58 +202,64 @@ add_task(async function testFastfallback() {
     1000
   );
 
-  await trrServer.registerDoHAnswers("test.fastfallback.com", "HTTPS", [
-    {
-      name: "test.fastfallback.com",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 1,
+  await trrServer.registerDoHAnswers("test.fastfallback.com", "HTTPS", {
+    answers: [
+      {
+        name: "test.fastfallback.com",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "test.fastfallback1.com",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+      {
+        name: "test.fastfallback.com",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 2,
+          name: "test.fastfallback2.com",
+          values: [
+            { key: "alpn", value: "h2" },
+            { key: "port", value: h2Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.fastfallback1.com", "A", {
+    answers: [
+      {
         name: "test.fastfallback1.com",
-        values: [
-          { key: "alpn", value: "h3-27" },
-          { key: "port", value: h3Port },
-          { key: "echconfig", value: "456..." },
-        ],
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
       },
-    },
-    {
-      name: "test.fastfallback.com",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 2,
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.fastfallback2.com", "A", {
+    answers: [
+      {
         name: "test.fastfallback2.com",
-        values: [
-          { key: "alpn", value: "h2" },
-          { key: "port", value: h2Port },
-          { key: "echconfig", value: "456..." },
-        ],
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
       },
-    },
-  ]);
-
-  await trrServer.registerDoHAnswers("test.fastfallback1.com", "A", [
-    {
-      name: "test.fastfallback1.com",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
-
-  await trrServer.registerDoHAnswers("test.fastfallback2.com", "A", [
-    {
-      name: "test.fastfallback2.com",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
+    ],
+  });
 
   let chan = makeChan(`https://test.fastfallback.com/server-timing`);
   let [req] = await channelOpenPromise(chan);
@@ -367,58 +291,64 @@ add_task(async function testFastfallback1() {
     10
   );
 
-  await trrServer.registerDoHAnswers("test.fastfallback.org", "HTTPS", [
-    {
-      name: "test.fastfallback.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 1,
+  await trrServer.registerDoHAnswers("test.fastfallback.org", "HTTPS", {
+    answers: [
+      {
+        name: "test.fastfallback.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "test.fastfallback1.org",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+      {
+        name: "test.fastfallback.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 2,
+          name: "test.fastfallback2.org",
+          values: [
+            { key: "alpn", value: "h2" },
+            { key: "port", value: h2Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.fastfallback1.org", "A", {
+    answers: [
+      {
         name: "test.fastfallback1.org",
-        values: [
-          { key: "alpn", value: "h3-27" },
-          { key: "port", value: h3Port },
-          { key: "echconfig", value: "456..." },
-        ],
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
       },
-    },
-    {
-      name: "test.fastfallback.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 2,
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.fastfallback2.org", "A", {
+    answers: [
+      {
         name: "test.fastfallback2.org",
-        values: [
-          { key: "alpn", value: "h2" },
-          { key: "port", value: h2Port },
-          { key: "echconfig", value: "456..." },
-        ],
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
       },
-    },
-  ]);
-
-  await trrServer.registerDoHAnswers("test.fastfallback1.org", "A", [
-    {
-      name: "test.fastfallback1.org",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
-
-  await trrServer.registerDoHAnswers("test.fastfallback2.org", "A", [
-    {
-      name: "test.fastfallback2.org",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
+    ],
+  });
 
   let chan = makeChan(`https://test.fastfallback.org/server-timing`);
   let [req] = await channelOpenPromise(chan);
@@ -447,76 +377,82 @@ add_task(async function testFastfallbackWithEchConfig() {
 
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
-    1000
+    50
   );
 
-  await trrServer.registerDoHAnswers("test.ech.org", "HTTPS", [
-    {
-      name: "test.ech.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 1,
+  await trrServer.registerDoHAnswers("test.ech.org", "HTTPS", {
+    answers: [
+      {
+        name: "test.ech.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "test.ech1.org",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+      {
+        name: "test.ech.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 2,
+          name: "test.ech2.org",
+          values: [
+            { key: "alpn", value: "h2" },
+            { key: "port", value: h2Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+      {
+        name: "test.ech.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 3,
+          name: "test.ech3.org",
+          values: [
+            { key: "alpn", value: "h2" },
+            { key: "port", value: h2Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.ech1.org", "A", {
+    answers: [
+      {
         name: "test.ech1.org",
-        values: [
-          { key: "alpn", value: "h3-27" },
-          { key: "port", value: h3Port },
-          { key: "echconfig", value: "456..." },
-        ],
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
       },
-    },
-    {
-      name: "test.ech.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 2,
-        name: "test.ech2.org",
-        values: [
-          { key: "alpn", value: "h2" },
-          { key: "port", value: h2Port },
-          { key: "echconfig", value: "456..." },
-        ],
-      },
-    },
-    {
-      name: "test.ech.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 3,
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.ech3.org", "A", {
+    answers: [
+      {
         name: "test.ech3.org",
-        values: [
-          { key: "alpn", value: "h2" },
-          { key: "port", value: h2Port },
-          { key: "echconfig", value: "456..." },
-        ],
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
       },
-    },
-  ]);
-
-  await trrServer.registerDoHAnswers("test.ech1.org", "A", [
-    {
-      name: "test.ech1.org",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
-
-  await trrServer.registerDoHAnswers("test.ech3.org", "A", [
-    {
-      name: "test.ech3.org",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
+    ],
+  });
 
   let chan = makeChan(`https://test.ech.org/server-timing`);
   let [req] = await channelOpenPromise(chan);
@@ -545,53 +481,354 @@ add_task(async function testFastfallbackWithpartialEchConfig() {
 
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
-    1000
+    50
   );
 
-  await trrServer.registerDoHAnswers("test.partial_ech.org", "HTTPS", [
-    {
-      name: "test.partial_ech.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 1,
-        name: "test.partial_ech1.org",
-        values: [
-          { key: "alpn", value: "h3-27" },
-          { key: "port", value: h3Port },
-          { key: "echconfig", value: "456..." },
-        ],
+  await trrServer.registerDoHAnswers("test.partial_ech.org", "HTTPS", {
+    answers: [
+      {
+        name: "test.partial_ech.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "test.partial_ech1.org",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+            { key: "echconfig", value: "456..." },
+          ],
+        },
       },
-    },
-    {
-      name: "test.partial_ech.org",
-      ttl: 55,
-      type: "HTTPS",
-      flush: false,
-      data: {
-        priority: 2,
-        name: "test.partial_ech2.org",
-        values: [
-          { key: "alpn", value: "h2" },
-          { key: "port", value: h2Port },
-        ],
+      {
+        name: "test.partial_ech.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 2,
+          name: "test.partial_ech2.org",
+          values: [
+            { key: "alpn", value: "h2" },
+            { key: "port", value: h2Port },
+          ],
+        },
       },
-    },
-  ]);
+    ],
+  });
 
-  await trrServer.registerDoHAnswers("test.partial_ech1.org", "A", [
-    {
-      name: "test.partial_ech1.org",
-      ttl: 55,
-      type: "A",
-      flush: false,
-      data: "127.0.0.1",
-    },
-  ]);
+  await trrServer.registerDoHAnswers("test.partial_ech1.org", "A", {
+    answers: [
+      {
+        name: "test.partial_ech1.org",
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
+      },
+    ],
+  });
 
   let chan = makeChan(`https://test.partial_ech.org/server-timing`);
   await channelOpenPromise(chan, CL_EXPECT_LATE_FAILURE | CL_ALLOW_UNKNOWN_CL);
+
+  await trrServer.stop();
+});
+
+add_task(async function testFastfallbackWithoutEchConfig() {
+  trrServer = new TRRServer();
+  await trrServer.start();
+  Services.prefs.setBoolPref("network.dns.upgrade_with_https_rr", true);
+  Services.prefs.setBoolPref("network.dns.use_https_rr_as_altsvc", true);
+
+  Services.prefs.setIntPref("network.trr.mode", 3);
+  Services.prefs.setCharPref(
+    "network.trr.uri",
+    `https://foo.example.com:${trrServer.port}/dns-query`
+  );
+  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+
+  Services.prefs.setIntPref(
+    "network.dns.httpssvc.http3_fast_fallback_timeout",
+    50
+  );
+
+  await trrServer.registerDoHAnswers("test.no_ech_h2.org", "HTTPS", {
+    answers: [
+      {
+        name: "test.no_ech_h2.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "test.no_ech_h3.org",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+          ],
+        },
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.no_ech_h3.org", "A", {
+    answers: [
+      {
+        name: "test.no_ech_h3.org",
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.no_ech_h2.org", "A", {
+    answers: [
+      {
+        name: "test.no_ech_h2.org",
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
+      },
+    ],
+  });
+
+  let chan = makeChan(`https://test.no_ech_h2.org:${h2Port}/server-timing`);
+  let [req] = await channelOpenPromise(chan);
+  Assert.equal(req.protocolVersion, "h2");
+  let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
+  Assert.equal(internal.remotePort, h2Port);
+
+  await trrServer.stop();
+});
+
+add_task(async function testH3FallbackWithMultipleTransactions() {
+  trrServer = new TRRServer();
+  await trrServer.start();
+  Services.prefs.setBoolPref("network.dns.upgrade_with_https_rr", true);
+  Services.prefs.setBoolPref("network.dns.use_https_rr_as_altsvc", true);
+  Services.prefs.setBoolPref("network.dns.echconfig.enabled", false);
+
+  Services.prefs.setIntPref("network.trr.mode", 3);
+  Services.prefs.setCharPref(
+    "network.trr.uri",
+    `https://foo.example.com:${trrServer.port}/dns-query`
+  );
+  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+
+  // Disable fast fallback.
+  Services.prefs.setIntPref(
+    "network.http.http3.parallel_fallback_conn_limit",
+    0
+  );
+  Services.prefs.setIntPref("network.http.speculative-parallel-limit", 0);
+
+  await trrServer.registerDoHAnswers("test.multiple_trans.org", "HTTPS", {
+    answers: [
+      {
+        name: "test.multiple_trans.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "test.multiple_trans.org",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+          ],
+        },
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("test.multiple_trans.org", "A", {
+    answers: [
+      {
+        name: "test.multiple_trans.org",
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
+      },
+    ],
+  });
+
+  let promises = [];
+  for (let i = 0; i < 2; ++i) {
+    let chan = makeChan(
+      `https://test.multiple_trans.org:${h2Port}/server-timing`
+    );
+    promises.push(channelOpenPromise(chan));
+  }
+
+  let res = await Promise.all(promises);
+  res.forEach(function(e) {
+    let [req] = e;
+    Assert.equal(req.protocolVersion, "h2");
+    let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
+    Assert.equal(internal.remotePort, h2Port);
+  });
+
+  await trrServer.stop();
+});
+
+add_task(async function testTwoFastFallbackTimers() {
+  trrServer = new TRRServer();
+  await trrServer.start();
+  Services.prefs.setBoolPref("network.dns.upgrade_with_https_rr", true);
+  Services.prefs.setBoolPref("network.dns.use_https_rr_as_altsvc", true);
+  Services.prefs.setBoolPref("network.dns.echconfig.enabled", false);
+
+  Services.prefs.setIntPref("network.trr.mode", 3);
+  Services.prefs.setCharPref(
+    "network.trr.uri",
+    `https://foo.example.com:${trrServer.port}/dns-query`
+  );
+  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+
+  Services.prefs.setIntPref("network.http.speculative-parallel-limit", 6);
+  Services.prefs.clearUserPref(
+    "network.http.http3.parallel_fallback_conn_limit"
+  );
+
+  Services.prefs.setCharPref(
+    "network.http.http3.alt-svc-mapping-for-testing",
+    "foo.fallback.org;h3-29=:" + h3Port
+  );
+
+  Services.prefs.setIntPref(
+    "network.dns.httpssvc.http3_fast_fallback_timeout",
+    10
+  );
+  Services.prefs.setIntPref("network.http.http3.backup_timer_delay", 100);
+
+  await trrServer.registerDoHAnswers("foo.fallback.org", "HTTPS", {
+    answers: [
+      {
+        name: "foo.fallback.org",
+        ttl: 55,
+        type: "HTTPS",
+        flush: false,
+        data: {
+          priority: 1,
+          name: "foo.fallback.org",
+          values: [
+            { key: "alpn", value: "h3-29" },
+            { key: "port", value: h3Port },
+          ],
+        },
+      },
+    ],
+  });
+
+  await trrServer.registerDoHAnswers("foo.fallback.org", "A", {
+    answers: [
+      {
+        name: "foo.fallback.org",
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
+      },
+    ],
+  });
+
+  // Test the case that http3 backup timer is triggered after
+  // fast fallback timer or HTTPS RR.
+  Services.prefs.setIntPref(
+    "network.dns.httpssvc.http3_fast_fallback_timeout",
+    10
+  );
+  Services.prefs.setIntPref("network.http.http3.backup_timer_delay", 100);
+
+  async function createChannelAndStartTest() {
+    let chan = makeChan(`https://foo.fallback.org:${h2Port}/server-timing`);
+    let [req] = await channelOpenPromise(chan);
+    Assert.equal(req.protocolVersion, "h2");
+    let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
+    Assert.equal(internal.remotePort, h2Port);
+  }
+
+  await createChannelAndStartTest();
+
+  Services.obs.notifyObservers(null, "net:prune-all-connections");
+  Services.obs.notifyObservers(null, "network:reset-http3-excluded-list");
+  dns.clearCache(true);
+
+  // Do the same test again, but with a different configuration.
+  Services.prefs.setIntPref(
+    "network.dns.httpssvc.http3_fast_fallback_timeout",
+    100
+  );
+  Services.prefs.setIntPref("network.http.http3.backup_timer_delay", 10);
+
+  await createChannelAndStartTest();
+
+  await trrServer.stop();
+});
+
+add_task(async function testH3FastFallbackWithMultipleTransactions() {
+  trrServer = new TRRServer();
+  await trrServer.start();
+  Services.prefs.setBoolPref("network.dns.upgrade_with_https_rr", true);
+  Services.prefs.setBoolPref("network.dns.use_https_rr_as_altsvc", true);
+  Services.prefs.setBoolPref("network.dns.echconfig.enabled", false);
+
+  Services.prefs.setIntPref("network.trr.mode", 3);
+  Services.prefs.setCharPref(
+    "network.trr.uri",
+    `https://foo.example.com:${trrServer.port}/dns-query`
+  );
+  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+
+  Services.prefs.setIntPref("network.http.speculative-parallel-limit", 6);
+  Services.prefs.clearUserPref(
+    "network.http.http3.parallel_fallback_conn_limit"
+  );
+
+  Services.prefs.setIntPref("network.http.http3.backup_timer_delay", 500);
+
+  Services.prefs.setCharPref(
+    "network.http.http3.alt-svc-mapping-for-testing",
+    "test.multiple_fallback_trans.org;h3-29=:" + h3Port
+  );
+
+  await trrServer.registerDoHAnswers("test.multiple_fallback_trans.org", "A", {
+    answers: [
+      {
+        name: "test.multiple_fallback_trans.org",
+        ttl: 55,
+        type: "A",
+        flush: false,
+        data: "127.0.0.1",
+      },
+    ],
+  });
+
+  let promises = [];
+  for (let i = 0; i < 3; ++i) {
+    let chan = makeChan(
+      `https://test.multiple_fallback_trans.org:${h2Port}/server-timing`
+    );
+    if (i == 0) {
+      promises.push(channelOpenPromise(chan));
+    } else {
+      promises.push(channelOpenPromise(chan, null, 500));
+    }
+  }
+
+  let res = await Promise.all(promises);
+  res.forEach(function(e) {
+    let [req] = e;
+    Assert.equal(req.protocolVersion, "h2");
+    let internal = req.QueryInterface(Ci.nsIHttpChannelInternal);
+    Assert.equal(internal.remotePort, h2Port);
+  });
 
   await trrServer.stop();
 });

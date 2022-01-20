@@ -144,7 +144,9 @@ class WebRenderBridgeParent final : public PWebRenderBridgeParent,
   mozilla::ipc::IPCResult RecvInvalidateRenderedFrame() override;
   mozilla::ipc::IPCResult RecvScheduleComposite() override;
   mozilla::ipc::IPCResult RecvCapture() override;
-  mozilla::ipc::IPCResult RecvToggleCaptureSequence() override;
+  mozilla::ipc::IPCResult RecvStartCaptureSequence(
+      const nsCString& path, const uint32_t& aFlags) override;
+  mozilla::ipc::IPCResult RecvStopCaptureSequence() override;
   mozilla::ipc::IPCResult RecvSyncWithCompositor() override;
 
   mozilla::ipc::IPCResult RecvSetConfirmedTargetAPZC(
@@ -202,12 +204,12 @@ class WebRenderBridgeParent final : public PWebRenderBridgeParent,
       nsTArray<CompositionPayload>&& aPayloads,
       const bool aUseForTelemetry = true);
   TransactionId LastPendingTransactionId();
-  TransactionId FlushTransactionIdsForEpoch(
+  void FlushTransactionIdsForEpoch(
       const wr::Epoch& aEpoch, const VsyncId& aCompositeStartId,
       const TimeStamp& aCompositeStartTime, const TimeStamp& aRenderStartTime,
       const TimeStamp& aEndTime, UiCompositorControllerParent* aUiController,
-      wr::RendererStats* aStats = nullptr,
-      nsTArray<FrameStats>* aOutputStats = nullptr);
+      wr::RendererStats* aStats, nsTArray<FrameStats>& aOutputStats,
+      nsTArray<TransactionId>& aOutputTransactions);
   void NotifySceneBuiltForEpoch(const wr::Epoch& aEpoch,
                                 const TimeStamp& aEndTime);
 
@@ -347,10 +349,10 @@ class WebRenderBridgeParent final : public PWebRenderBridgeParent,
                        const nsTArray<RefCountedShmem>& aSmallShmems,
                        const nsTArray<ipc::Shmem>& aLargeShmems,
                        wr::TransactionBuilder& aUpdates);
-  bool AddPrivateExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
+  void AddPrivateExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
                                wr::ImageDescriptor aDesc,
                                wr::TransactionBuilder& aResources);
-  bool UpdatePrivateExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
+  void UpdatePrivateExternalImage(wr::ExternalImageId aExtId, wr::ImageKey aKey,
                                   const wr::ImageDescriptor& aDesc,
                                   const ImageIntRect& aDirtyRect,
                                   wr::TransactionBuilder& aResources);
@@ -498,7 +500,6 @@ class WebRenderBridgeParent final : public PWebRenderBridgeParent,
 #if defined(MOZ_WIDGET_ANDROID)
   UiCompositorControllerParent* mScreenPixelsTarget;
 #endif
-  bool mPaused;
   bool mDestroyed;
   bool mReceivedDisplayList;
   bool mIsFirstPaint;

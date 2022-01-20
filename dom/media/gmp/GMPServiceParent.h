@@ -10,8 +10,9 @@
 #include "mozilla/gmp/PGMPServiceParent.h"
 #include "mozIGeckoMediaPluginChromeService.h"
 #include "nsClassHashtable.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "mozilla/Atomics.h"
+#include "nsNetUtil.h"
 #include "nsIAsyncShutdown.h"
 #include "nsRefPtrHashtable.h"
 #include "nsThreadUtils.h"
@@ -63,6 +64,8 @@ class GeckoMediaPluginServiceParent final
   nsresult ForgetThisSiteNative(
       const nsAString& aSite, const mozilla::OriginAttributesPattern& aPattern);
 
+  nsresult ForgetThisBaseDomainNative(const nsAString& aBaseDomain);
+
   // Notifies that some user of this class is created/destroyed.
   void ServiceUserCreated(GMPServiceParent* aServiceParent);
   void ServiceUserDestroyed(GMPServiceParent* aServiceParent);
@@ -102,8 +105,9 @@ class GeckoMediaPluginServiceParent final
   void ClearNodeIdAndPlugin(nsIFile* aPluginStorageDir,
                             DirectoryFilter& aFilter);
   void ForgetThisSiteOnGMPThread(
-      const nsACString& aOrigin,
+      const nsACString& aSite,
       const mozilla::OriginAttributesPattern& aPattern);
+  void ForgetThisBaseDomainOnGMPThread(const nsACString& aBaseDomain);
   void ClearRecentHistoryOnGMPThread(PRTime aSince);
 
   already_AddRefed<GMPParent> GetById(uint32_t aPluginId);
@@ -191,7 +195,7 @@ class GeckoMediaPluginServiceParent final
 
   // Hashes node id to whether that node id is allowed to store data
   // persistently on disk.
-  nsDataHashtable<nsCStringHashKey, bool> mPersistentStorageAllowed;
+  nsTHashMap<nsCStringHashKey, bool> mPersistentStorageAllowed;
 
   // Synchronization for barrier that ensures we've loaded GMPs from
   // MOZ_GMP_PATH before allowing GetContentParentFrom() to proceed.
@@ -208,9 +212,12 @@ class GeckoMediaPluginServiceParent final
   nsTArray<GMPServiceParent*> mServiceParents;
 };
 
+nsresult WriteToFile(nsIFile* aPath, const nsCString& aFileName,
+                     const nsCString& aData);
 nsresult ReadSalt(nsIFile* aPath, nsACString& aOutData);
 bool MatchOrigin(nsIFile* aPath, const nsACString& aSite,
                  const mozilla::OriginAttributesPattern& aPattern);
+bool MatchBaseDomain(nsIFile* aPath, const nsACString& aBaseDomain);
 
 class GMPServiceParent final : public PGMPServiceParent {
  public:

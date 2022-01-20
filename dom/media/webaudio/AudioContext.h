@@ -21,9 +21,9 @@
 #include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 #include "js/TypeDecls.h"
 #include "nsIMemoryReporter.h"
 
@@ -337,7 +337,7 @@ class AudioContext final : public DOMEventTargetHelper,
                                  AudioParamDescriptorMap* aParamMap);
   const AudioParamDescriptorMap* GetParamMapForWorkletName(
       const nsAString& aName) {
-    return mWorkletParamDescriptors.GetValue(aName);
+    return mWorkletParamDescriptors.Lookup(aName).DataPtrOrNull();
   }
 
   void Dispatch(already_AddRefed<nsIRunnable>&& aRunnable);
@@ -399,11 +399,10 @@ class AudioContext final : public DOMEventTargetHelper,
   nsTArray<RefPtr<Promise>> mPendingResumePromises;
   // See RegisterActiveNode.  These will keep the AudioContext alive while it
   // is rendering and the window remains alive.
-  nsTHashtable<nsRefPtrHashKey<AudioNode>> mActiveNodes;
+  nsTHashSet<RefPtr<AudioNode>> mActiveNodes;
   // Raw (non-owning) references to all AudioNodes for this AudioContext.
-  nsTHashtable<nsPtrHashKey<AudioNode>> mAllNodes;
-  nsDataHashtable<nsStringHashKey, AudioParamDescriptorMap>
-      mWorkletParamDescriptors;
+  nsTHashSet<AudioNode*> mAllNodes;
+  nsTHashMap<nsStringHashKey, AudioParamDescriptorMap> mWorkletParamDescriptors;
   // Cache to avoid recomputing basic waveforms all the time.
   RefPtr<BasicWaveFormCache> mBasicWaveFormCache;
   // Number of channels passed in the OfflineAudioContext ctor.

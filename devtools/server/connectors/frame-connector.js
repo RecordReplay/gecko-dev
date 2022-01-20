@@ -217,11 +217,17 @@ function connectToFrame(connection, frame, onDestroy, { addonId } = {}) {
       spawnInParentActorPool.destroy();
 
       if (actor) {
-        // The FrameTargetActor within the child process doesn't necessary
-        // have time to uninitialize itself when the frame is closed/killed.
-        // So ensure telling the client that the related actor is detached.
-        connection.send({ from: actor.actor, type: "tabDetached" });
         actor = null;
+      }
+
+      // Notify the tab descriptor about the destruction before the call to
+      // `cancelForwarding`, so that we notify about the target destruction
+      // *before* we purge all request for this prefix.
+      // When we purge the requests, we also destroy all related fronts,
+      // including the target front. This clears all event listeners
+      // and ultimately prevent target-destroyed from firing.
+      if (onDestroy) {
+        onDestroy(mm);
       }
 
       if (childTransport) {
@@ -244,10 +250,6 @@ function connectToFrame(connection, frame, onDestroy, { addonId } = {}) {
         // had a chance to be created, so we are not able to create
         // the actor.
         resolve(null);
-      }
-
-      if (onDestroy) {
-        onDestroy(mm);
       }
 
       // Cleanup all listeners

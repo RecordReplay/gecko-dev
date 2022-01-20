@@ -66,9 +66,6 @@ declare namespace MockedExports {
      * Then add the file path to the KnownModules above.
      */
     import: <S extends keyof KnownModules>(module: S) => KnownModules[S];
-    createObjectIn: (content: ContentWindow) => object;
-    exportFunction: (fn: Function, scope: object, options?: object) => void;
-    cloneInto: (value: any, scope: object, options?: object) => void;
     defineModuleGetter: (target: any, variable: string, path: string) => void;
   }
 
@@ -101,7 +98,17 @@ declare namespace MockedExports {
   }
 
   interface BrowsingContext {
-    id: number;
+    /**
+     * A unique identifier for the browser element that is hosting this
+     * BrowsingContext tree. Every BrowsingContext in the element's tree will
+     * return the same ID in all processes and it will remain stable regardless of
+     * process changes. When a browser element's frameloader is switched to
+     * another browser element this ID will remain the same but hosted under the
+     * under the new browser element.
+     * We are using this identifier for getting the active tab ID and passing to
+     * the profiler back-end. See `getActiveBrowserID` for the usage.
+     */
+    browserId: number;
   }
 
   type GetPref<T> = (prefName: string, defaultValue?: T) => T;
@@ -232,23 +239,46 @@ declare namespace MockedExports {
   class nsIEnvironment {}
 
   interface Environment {
+    exists(envName: string): boolean;
     get(envName: string): string;
     set(envName: string, value: string): void;
   }
 
+  interface Cc {
+    "@mozilla.org/process/environment;1": {
+      getService(service: nsIEnvironment): Environment
+    },
+    "@mozilla.org/filepicker;1": {
+      createInstance(instance: nsIFilePicker): FilePicker
+    }
+  }
+
+  interface Ci {
+    nsIFilePicker: nsIFilePicker;
+    nsIEnvironment: nsIEnvironment;
+  }
+
+  interface Cu {
+    /**
+     * This function reads the KnownModules and resolves which import to use.
+     * If you are getting the TS2345 error:
+     *
+     *  Argument of type '"resource:///.../file.jsm"' is not assignable to parameter
+     *  of type
+     *
+     * Then add the file path to the KnownModules above.
+     */
+    import: <S extends keyof KnownModules>(module: S) => KnownModules[S];
+    createObjectIn: (content: ContentWindow) => object;
+    exportFunction: (fn: Function, scope: object, options?: object) => void;
+    cloneInto: (value: any, scope: object, options?: object) => void;
+    isInAutomation: boolean;
+  }
+
   const chrome: {
-    Cc: {
-      "@mozilla.org/process/environment;1": {
-        getService(service: nsIEnvironment): Environment
-      },
-      "@mozilla.org/filepicker;1": {
-        createInstance(instance: nsIFilePicker): FilePicker
-      }
-    },
-    Ci: {
-      nsIFilePicker: nsIFilePicker;
-      nsIEnvironment: nsIEnvironment;
-    },
+    Cc: Cc,
+    Ci: Ci,
+    Cu: Cu,
   };
 }
 
@@ -336,7 +366,12 @@ declare module "resource://devtools/shared/Loader.jsm" {
 }
 
 declare var ChromeUtils: MockedExports.ChromeUtils;
-declare var Cu: MockedExports.ChromeUtils;
+
+// These global objects can be used directly in JSM files only.
+// In a CommonJS context you need to import them with `require("chrome")`.
+declare var Cu: MockedExports.Cu;
+declare var Cc: MockedExports.Cc;
+declare var Ci: MockedExports.Ci;
 
 /**
  * This is a variant on the normal Document, as it contains chrome-specific properties.

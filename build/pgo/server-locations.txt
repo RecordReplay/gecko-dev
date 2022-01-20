@@ -74,6 +74,7 @@ http://test2.mochi.test:8888
 http://example.org:80                privileged
 http://test1.example.org:80          privileged
 http://test2.example.org:80          privileged
+http://test3.example.org:80          privileged
 http://sub1.test1.example.org:80     privileged
 http://sub1.test2.example.org:80     privileged
 http://sub2.test1.example.org:80     privileged
@@ -305,6 +306,10 @@ https://127.0.0.3:433                                             privileged,cer
 https://badcertdomain.example.com:82                              privileged,cert=badCertDomain
 https://mismatch.badcertdomain.example.com:443                    privileged,cert=badCertDomain
 
+# Hosts for HTTPS-First upgrades/downgrades
+http://httpsfirst.com:80                                          privileged
+https://httpsfirst.com:443                                        privileged,nocert
+
 # Hosts for sha1 console warning tests
 https://sha1ee.example.com:443                                    privileged,cert=sha1_end_entity
 https://sha256ee.example.com:443                                  privileged,cert=sha256_end_entity
@@ -336,3 +341,15 @@ https://www.mozilla.org:443
 # local-IP origins for password manager tests (Bug 1582499)
 http://10.0.0.0:80                 privileged
 http://192.168.0.0:80              privileged
+
+# testing HTTPS-Only Suggestions on the Error Page (Bug 1665057)
+https://www.suggestion-example.com:443      privileged,cert=bug1665057cert
+http://suggestion-example.com:80            privileged
+https://suggestion-example.com:443          privileged,cert=badCertDomain
+http://no-suggestion-example.com:80         privileged
+https://no-suggestion-example.com:443       privileged,cert=badCertDomain
+
+# testing HTTPS-First behaviour for redirection (Bug 1706126)
+http://redirect-example.com:80              privileged
+https://redirect-example.com:443            privileged,cert=bug1706126cert
+https://www.redirect-example.com:443        privileged,cert=bug1706126cert

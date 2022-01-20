@@ -180,8 +180,7 @@ NS_IMETHODIMP nsDeviceContextSpecWin::Init(nsIWidget* aWidget,
 
     // If we're in the child and printing via the parent or we're printing to
     // PDF we only need information from the print settings.
-    if ((XRE_IsContentProcess() &&
-         Preferences::GetBool("print.print_via_parent")) ||
+    if ((XRE_IsContentProcess() && StaticPrefs::print_print_via_parent()) ||
         mOutputFormat == nsIPrintSettings::kOutputFormatPDF) {
       return NS_OK;
     }
@@ -590,10 +589,11 @@ RefPtr<nsIPrinter> nsPrinterListWin::CreatePrinter(PrinterInfo aInfo) const {
 }
 
 nsresult nsPrinterListWin::SystemDefaultPrinterName(nsAString& aName) const {
-  if (GetDefaultPrinterName(aName)) {
-    return NS_OK;
+  if (!GetDefaultPrinterName(aName)) {
+    NS_WARNING("Uh oh, GetDefaultPrinterName failed");
+    // Indicate failure by leaving aName untouched, i.e. the empty string.
   }
-  return NS_ERROR_NOT_AVAILABLE;
+  return NS_OK;
 }
 
 NS_IMETHODIMP

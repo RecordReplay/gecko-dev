@@ -8,18 +8,19 @@ from __future__ import absolute_import, print_function, unicode_literals
 import fnmatch
 import multiprocessing
 import os
-import re
 import subprocess
 import sys
 import time
 import yaml
 import uuid
+import mozpack.path as mozpath
 
 from functools import partial
 from pprint import pprint
 
 from mach.registrar import Registrar
 from mozbuild.base import MachCommandBase
+from mozbuild.util import memoize
 from mach.decorators import (
     Command,
     CommandArgument,
@@ -31,27 +32,11 @@ here = os.path.abspath(os.path.dirname(__file__))
 topsrcdir = os.path.abspath(os.path.dirname(os.path.dirname(here)))
 DOC_ROOT = os.path.join(topsrcdir, "docs")
 BASE_LINK = "http://gecko-docs.mozilla.org-l1.s3-website.us-west-2.amazonaws.com/"
-JSDOC_NOT_FOUND = """\
-JSDoc==3.5.5 is required to build the docs but was not found on your system.
-Please install it globally by running:
-
-    $ mach npm install -g jsdoc@3.5.5
-
-Bug 1498604 tracks bootstrapping jsdoc properly.
-Bug 1556460 tracks supporting newer versions of jsdoc.
-"""
 
 
 @CommandProvider
 class Documentation(MachCommandBase):
     """Helps manage in-tree documentation."""
-
-    def __init__(self, *args, **kwargs):
-        super(Documentation, self).__init__(*args, **kwargs)
-
-        self._manager = None
-        self._project = None
-        self._version = None
 
     @Command(
         "doc",
@@ -116,6 +101,7 @@ class Documentation(MachCommandBase):
     )
     def build_docs(
         self,
+        command_context,
         path=None,
         fmt="html",
         outdir=None,
@@ -128,8 +114,27 @@ class Documentation(MachCommandBase):
         write_url=None,
         verbose=None,
     ):
-        if self.check_jsdoc():
-            return die(JSDOC_NOT_FOUND)
+
+        # TODO: Bug 1704891 - move the ESLint setup tools to a shared place.
+        sys.path.append(mozpath.join(self.topsrcdir, "tools", "lint", "eslint"))
+        import setup_helper
+
+        setup_helper.set_project_root(self.topsrcdir)
+
+        if not setup_helper.check_node_executables_valid():
+            return 1
+
+        setup_helper.eslint_maybe_setup()
+
+        # Set the path so that Sphinx can find jsdoc, unfortunately there isn't
+        # a way to pass this to Sphinx itself at the moment.
+        os.environ["PATH"] = (
+            mozpath.join(self.topsrcdir, "node_modules", ".bin")
+            + os.pathsep
+            + self._node_path()
+            + os.pathsep
+            + os.environ["PATH"]
+        )
 
         self.activate_virtualenv()
         self.virtualenv_manager.install_pip_requirements(
@@ -140,7 +145,7 @@ class Documentation(MachCommandBase):
         from livereload import Server
         from moztreedocs.package import create_tarball
 
-        unique_id = "%s/%s" % (self.project, str(uuid.uuid1()))
+        unique_id = "%s/%s" % (self.project(), str(uuid.uuid1()))
 
         outdir = outdir or os.path.join(self.topobjdir, "docs")
         savedir = os.path.join(outdir, fmt)
@@ -166,9 +171,6 @@ class Documentation(MachCommandBase):
         else:
             print("\nGenerated documentation:\n%s" % savedir)
 
-        print("Post processing HTML files")
-        self._post_process_html(savedir)
-
         # Upload the artifact containing the link to S3
         # This would be used by code-review to post the link to Phabricator
         if write_url is not None:
@@ -179,12 +181,12 @@ class Documentation(MachCommandBase):
             print("Generated " + write_url)
 
         if archive:
-            archive_path = os.path.join(outdir, "%s.tar.gz" % self.project)
+            archive_path = os.path.join(outdir, "%s.tar.gz" % self.project())
             create_tarball(archive_path, savedir)
             print("Archived to %s" % archive_path)
 
         if upload:
-            self._s3_upload(savedir, self.project, unique_id, self.version)
+            self._s3_upload(savedir, self.project(), unique_id, self.version())
 
         if not serve:
             index_path = os.path.join(savedir, "index.html")
@@ -202,7 +204,7 @@ class Documentation(MachCommandBase):
 
         server = Server()
 
-        sphinx_trees = self.manager.trees or {savedir: docdir}
+        sphinx_trees = self.manager().trees or {savedir: docdir}
         for _, src in sphinx_trees.items():
             run_sphinx = partial(
                 self._run_sphinx, src, savedir, fmt=fmt, jobs=jobs, verbose=verbose
@@ -245,7 +247,7 @@ class Documentation(MachCommandBase):
     ):
         import sphinx.cmd.build
 
-        config = config or self.manager.conf_py_path
+        config = config or self.manager().conf_py_path
         args = [
             "-T",
             "-b",
@@ -263,48 +265,16 @@ class Documentation(MachCommandBase):
         print(args)
         return sphinx.cmd.build.build_main(args)
 
-    def _post_process_html(self, savedir):
-        """
-        Perform some operations on the generated html to fix some URL
-        """
-        MERMAID_VERSION = "8.4.4"
-        for root, _, files in os.walk(savedir):
-            for file in files:
-                if file.endswith(".html"):
-                    p = os.path.join(root, file)
-
-                    with open(p, "r") as file:
-                        filedata = file.read()
-
-                    # Workaround https://bugzilla.mozilla.org/show_bug.cgi?id=1607143
-                    # to avoid a CSP error
-                    # This method should be removed once
-                    # https://github.com/mgaitan/sphinxcontrib-mermaid/pull/37 is merged
-                    # As sphinx-mermaid currently uses an old version, also force
-                    # a more recent version
-                    filedata = re.sub(
-                        r"https://unpkg.com/mermaid@.*/dist",
-                        r"https://cdnjs.cloudflare.com/ajax/libs/mermaid/{}".format(
-                            MERMAID_VERSION
-                        ),
-                        filedata,
-                    )
-
-                    with open(p, "w") as file:
-                        file.write(filedata)
-
-    @property
     def manager(self):
-        if not self._manager:
-            from moztreedocs import manager
+        from moztreedocs import manager
 
-            self._manager = manager
-        return self._manager
+        return manager
 
+    @memoize
     def _read_project_properties(self):
         import imp
 
-        path = os.path.normpath(self.manager.conf_py_path)
+        path = os.path.normpath(self.manager().conf_py_path)
         with open(path, "r") as fh:
             conf = imp.load_module("doc_conf", fh, path, (".py", "r", imp.PY_SOURCE))
 
@@ -314,20 +284,20 @@ class Documentation(MachCommandBase):
         if not project:
             project = conf.project.replace(" ", "_")
 
-        self._project = project
-        self._version = getattr(conf, "version", None)
+        return {"project": project, "version": getattr(conf, "version", None)}
 
-    @property
     def project(self):
-        if not self._project:
-            self._read_project_properties()
-        return self._project
+        return self._read_project_properties()["project"]
 
-    @property
     def version(self):
-        if not self._version:
-            self._read_project_properties()
-        return self._version
+        return self._read_project_properties()["version"]
+
+    def _node_path(self):
+        from mozbuild.nodeutil import find_node_executable
+
+        node, _ = find_node_executable()
+
+        return os.path.dirname(node)
 
     def _find_doc_dir(self, path):
         if os.path.isfile(path):
@@ -406,9 +376,10 @@ class Documentation(MachCommandBase):
         "mach-telemetry",
         description="Generate documentation from Glean metrics.yaml files",
     )
-    def generate_telemetry_docs(self):
+    def generate_telemetry_docs(self, command_context):
         args = [
-            "glean_parser",
+            sys.executable,
+            "-m" "glean_parser",
             "translate",
             "-f",
             "markdown",
@@ -423,22 +394,7 @@ class Documentation(MachCommandBase):
             if handler.metrics_path is not None
         ]
         args.extend([os.path.join(self.topsrcdir, path) for path in set(metrics_paths)])
-        subprocess.check_output(args)
-
-    def check_jsdoc(self):
-        try:
-            from mozfile import which
-
-            exe_name = which("jsdoc")
-            if not exe_name:
-                return 1
-            out = subprocess.check_output([exe_name, "--version"])
-            version = out.split()[1]
-        except subprocess.CalledProcessError:
-            version = None
-
-        if not version or not version.startswith(b"3.5"):
-            return 1
+        subprocess.check_call(args)
 
 
 def die(msg, exit_code=1):

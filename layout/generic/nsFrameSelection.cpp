@@ -22,6 +22,7 @@
 #include "mozilla/StaticPrefs_bidi.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/Unused.h"
 
 #include "nsCOMPtr.h"
 #include "nsDebug.h"
@@ -79,14 +80,12 @@ static NS_DEFINE_CID(kFrameTraversalCID, NS_FRAMETRAVERSAL_CID);
 #include "mozilla/dom/SelectionBinding.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/layers/ScrollInputMethods.h"
 
 #include "nsFocusManager.h"
 #include "nsPIDOMWindow.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using mozilla::layers::ScrollInputMethod;
 
 static LazyLogModule sFrameSelectionLog("FrameSelection");
 
@@ -371,23 +370,15 @@ nsFrameSelection::nsFrameSelection(PresShell* aPresShell, nsIContent* aLimiter,
   // This should only ever be initialized on the main thread, so we are OK here.
   MOZ_ASSERT(NS_IsMainThread());
 
+  int8_t index = GetIndexFromSelectionType(SelectionType::eNormal);
+
   mAccessibleCaretEnabled = aAccessibleCaretEnabled;
   if (mAccessibleCaretEnabled) {
-    int8_t index = GetIndexFromSelectionType(SelectionType::eNormal);
     mDomSelections[index]->MaybeNotifyAccessibleCaretEventHub(aPresShell);
   }
 
-  bool plaintextControl = (aLimiter != nullptr);
-  bool initSelectEvents =
-      plaintextControl ? StaticPrefs::dom_select_events_textcontrols_enabled()
-                       : StaticPrefs::dom_select_events_enabled();
-
-  Document* doc = aPresShell->GetDocument();
-  if (initSelectEvents || (doc && doc->NodePrincipal()->IsSystemPrincipal())) {
-    int8_t index = GetIndexFromSelectionType(SelectionType::eNormal);
-    if (mDomSelections[index]) {
-      mDomSelections[index]->EnableSelectionChangeEvent();
-    }
+  if (mDomSelections[index]) {
+    mDomSelections[index]->EnableSelectionChangeEvent();
   }
 }
 
@@ -770,7 +761,7 @@ nsresult nsFrameSelection::MoveCaret(nsDirection aDirection,
     const nsRange* anchorFocusRange = sel->GetAnchorFocusRange();
     if (anchorFocusRange) {
       RefPtr<nsINode> node;
-      int32_t offset;
+      uint32_t offset;
       if (visualMovement && nsBidiPresUtils::IsReversedDirectionFrame(frame)) {
         direction = nsDirection(1 - direction);
       }
@@ -806,7 +797,7 @@ nsresult nsFrameSelection::MoveCaret(nsDirection aDirection,
       // hint to ASSOCIATE_BEFORE to indicate that we want the caret displayed
       // at the end of this frame, not at the beginning of the next one.
       theFrame = pos.mResultFrame;
-      theFrame->GetOffsets(frameStart, frameEnd);
+      std::tie(frameStart, frameEnd) = theFrame->GetOffsets();
       currentOffset = pos.mContentOffset;
       if (frameEnd == currentOffset && !(frameStart == 0 && frameEnd == 0))
         tHint = CARET_ASSOCIATE_BEFORE;
@@ -821,7 +812,7 @@ nsresult nsFrameSelection::MoveCaret(nsDirection aDirection,
                                        tHint, &currentOffset);
       if (!theFrame) return NS_ERROR_FAILURE;
 
-      theFrame->GetOffsets(frameStart, frameEnd);
+      std::tie(frameStart, frameEnd) = theFrame->GetOffsets();
     }
 
     if (context->BidiEnabled()) {
@@ -857,7 +848,7 @@ nsresult nsFrameSelection::MoveCaret(nsDirection aDirection,
     const FocusMode focusMode = aContinueSelection
                                     ? FocusMode::kExtendSelection
                                     : FocusMode::kCollapseToNewPoint;
-    rv = TakeFocus(MOZ_KnownLive(pos.mResultContent), pos.mContentOffset,
+    rv = TakeFocus(MOZ_KnownLive(*pos.mResultContent), pos.mContentOffset,
                    pos.mContentOffset, tHint, focusMode);
   } else if (aAmount <= eSelectWordNoSpace && direction == eDirNext &&
              !aContinueSelection) {
@@ -934,25 +925,26 @@ nsPrevNextBidiLevels nsFrameSelection::GetPrevNextBidiLevels(
   // Get the level of the frames on each side
   nsIFrame* currentFrame;
   int32_t currentOffset;
-  int32_t frameStart, frameEnd;
   nsDirection direction;
 
-  nsPrevNextBidiLevels levels;
+  nsPrevNextBidiLevels levels{};
   levels.SetData(nullptr, nullptr, 0, 0);
 
-  currentFrame =
-      GetFrameForNodeOffset(aNode, aContentOffset, aHint, &currentOffset);
-  if (!currentFrame) return levels;
+  currentFrame = GetFrameForNodeOffset(
+      aNode, static_cast<int32_t>(aContentOffset), aHint, &currentOffset);
+  if (!currentFrame) {
+    return levels;
+  }
 
-  currentFrame->GetOffsets(frameStart, frameEnd);
+  auto [frameStart, frameEnd] = currentFrame->GetOffsets();
 
-  if (0 == frameStart && 0 == frameEnd)
+  if (0 == frameStart && 0 == frameEnd) {
     direction = eDirPrevious;
-  else if (frameStart == currentOffset)
+  } else if (frameStart == currentOffset) {
     direction = eDirPrevious;
-  else if (frameEnd == currentOffset)
+  } else if (frameEnd == currentOffset) {
     direction = eDirNext;
-  else {
+  } else {
     // we are neither at the beginning nor at the end of the frame, so we have
     // no worries
     nsBidiLevel currentLevel = currentFrame->GetEmbeddingLevel();
@@ -1238,7 +1230,7 @@ nsresult nsFrameSelection::HandleClick(nsIContent* aNewFocus,
 
     AutoPrepareFocusRange prep(selection,
                                aFocusMode == FocusMode::kMultiRangeSelection);
-    return TakeFocus(aNewFocus, aContentOffset, aContentEndOffset, aHint,
+    return TakeFocus(*aNewFocus, aContentOffset, aContentEndOffset, aHint,
                      aFocusMode);
   }
 
@@ -1345,24 +1337,20 @@ struct ParentAndOffset {
 /**
 hard to go from nodes to frames, easy the other way!
  */
-nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
+nsresult nsFrameSelection::TakeFocus(nsIContent& aNewFocus,
                                      uint32_t aContentOffset,
                                      uint32_t aContentEndOffset,
                                      CaretAssociateHint aHint,
                                      const FocusMode aFocusMode) {
-  if (!aNewFocus) {
-    return NS_ERROR_NULL_POINTER;
-  }
-
   NS_ENSURE_STATE(mPresShell);
 
-  if (!IsValidSelectionPoint(aNewFocus)) {
+  if (!IsValidSelectionPoint(&aNewFocus)) {
     return NS_ERROR_FAILURE;
   }
 
   MOZ_LOG(sFrameSelectionLog, LogLevel::Verbose,
           ("%s: new focus=%p, offsets=(%u, %u), hint=%i, focusMode=%i",
-           __FUNCTION__, aNewFocus, aContentOffset, aContentEndOffset,
+           __FUNCTION__, &aNewFocus, aContentOffset, aContentEndOffset,
            static_cast<int>(aHint), static_cast<int>(aFocusMode)));
 
   mPresShell->FrameSelectionWillTakeFocus(*this);
@@ -1393,27 +1381,27 @@ nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
           mBatching;  // hack to use the collapse code.
       mBatching.mCounter = 1;
 
+      RefPtr<Selection> selection = mDomSelections[index];
+
       if (aFocusMode == FocusMode::kMultiRangeSelection) {
         // Remove existing collapsed ranges as there's no point in having
         // non-anchor/focus collapsed ranges.
-        mDomSelections[index]->RemoveCollapsedRanges();
+        selection->RemoveCollapsedRanges();
 
         ErrorResult error;
         RefPtr<nsRange> newRange = nsRange::Create(
-            aNewFocus, aContentOffset, aNewFocus, aContentOffset, error);
+            &aNewFocus, aContentOffset, &aNewFocus, aContentOffset, error);
         if (NS_WARN_IF(error.Failed())) {
           return error.StealNSResult();
         }
         MOZ_ASSERT(newRange);
-        const RefPtr<Selection> selection{mDomSelections[index]};
         selection->AddRangeAndSelectFramesAndNotifyListeners(*newRange,
                                                              IgnoreErrors());
       } else {
         bool oldDesiredPosSet =
             mDesiredCaretPos.mIsSet;  // need to keep old desired
                                       // position if it was set.
-        RefPtr<Selection> selection = mDomSelections[index];
-        selection->CollapseInLimiter(aNewFocus, aContentOffset);
+        selection->CollapseInLimiter(&aNewFocus, aContentOffset);
         mDesiredCaretPos.mIsSet =
             oldDesiredPosSet;  // now reset desired pos back.
       }
@@ -1421,7 +1409,7 @@ nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
       mBatching = saveBatching;
 
       if (aContentEndOffset != aContentOffset) {
-        mDomSelections[index]->Extend(aNewFocus, aContentEndOffset);
+        selection->Extend(&aNewFocus, aContentEndOffset);
       }
 
       // find out if we are inside a table. if so, find out which one and which
@@ -1433,8 +1421,8 @@ nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
       RefPtr<nsPresContext> context = mPresShell->GetPresContext();
       mTableSelection.mClosestInclusiveTableCellAncestor = nullptr;
       if (nsINode* inclusiveTableCellAncestor =
-              TableSelection::IsContentInActivelyEditableTableCell(context,
-                                                                   aNewFocus)) {
+              TableSelection::IsContentInActivelyEditableTableCell(
+                  context, &aNewFocus)) {
         mTableSelection.mClosestInclusiveTableCellAncestor =
             inclusiveTableCellAncestor;
         MOZ_LOG(sFrameSelectionLog, LogLevel::Debug,
@@ -1446,7 +1434,7 @@ nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
     case FocusMode::kExtendSelection: {
       // Now update the range list:
       nsINode* inclusiveTableCellAncestor =
-          GetClosestInclusiveTableCellAncestor(aNewFocus);
+          GetClosestInclusiveTableCellAncestor(&aNewFocus);
       if (mTableSelection.mClosestInclusiveTableCellAncestor &&
           inclusiveTableCellAncestor &&
           inclusiveTableCellAncestor !=
@@ -1490,16 +1478,16 @@ nsresult nsFrameSelection::TakeFocus(nsIContent* const aNewFocus,
           }
         }
       } else {
+        RefPtr<Selection> selection = mDomSelections[index];
         // XXXX Problem: Shift+click in browser is appending text selection to
         // selected table!!!
-        //   is this the place to erase seleced cells ?????
-        if (mDomSelections[index]->GetDirection() == eDirNext &&
-            aContentEndOffset > aContentOffset)  // didn't go far enough
-        {
-          mDomSelections[index]->Extend(
-              aNewFocus, aContentEndOffset);  // this will only redraw the diff
-        } else
-          mDomSelections[index]->Extend(aNewFocus, aContentOffset);
+        //   is this the place to erase selected cells ?????
+        uint32_t offset =
+            (selection->GetDirection() == eDirNext &&
+             aContentEndOffset > aContentOffset)  // didn't go far enough
+                ? aContentEndOffset  // this will only redraw the diff
+                : aContentOffset;
+        selection->Extend(&aNewFocus, offset);
       }
       break;
     }
@@ -1608,6 +1596,28 @@ nsresult nsFrameSelection::RepaintSelection(SelectionType aSelectionType) {
 
 static bool IsDisplayContents(const nsIContent* aContent) {
   return aContent->IsElement() && aContent->AsElement()->IsDisplayContents();
+}
+
+bool nsFrameSelection::AdjustFrameForLineStart(nsIFrame*& aFrame,
+                                               int32_t& aFrameOffset) {
+  if (!aFrame->HasSignificantTerminalNewline()) {
+    return false;
+  }
+
+  auto [start, end] = aFrame->GetOffsets();
+  if (aFrameOffset != end) {
+    return false;
+  }
+
+  nsIFrame* nextSibling = aFrame->GetNextSibling();
+  if (!nextSibling) {
+    return false;
+  }
+
+  aFrame = nextSibling;
+  std::tie(start, end) = aFrame->GetOffsets();
+  aFrameOffset = start;
+  return true;
 }
 
 // static
@@ -1918,10 +1928,6 @@ nsresult nsFrameSelection::PageMove(bool aForward, bool aExtend,
 
   // Then, scroll the given frame one page.
   if (scrollableFrame) {
-    mozilla::Telemetry::Accumulate(
-        mozilla::Telemetry::SCROLL_INPUT_METHODS,
-        (uint32_t)ScrollInputMethod::MainThreadScrollPage);
-
     // If we'll call ScrollSelectionIntoView later and selection wasn't
     // changed and we scroll outside of selection limiter, we shouldn't use
     // smooth scroll here because nsIScrollableFrame uses normal runnable,
@@ -2143,7 +2149,8 @@ nsresult nsFrameSelection::NotifySelectionListeners(
   int8_t index = GetIndexFromSelectionType(aSelectionType);
   if (index >= 0 && mDomSelections[index]) {
     RefPtr<Selection> selection = mDomSelections[index];
-    return selection->NotifySelectionListeners();
+    selection->NotifySelectionListeners();
+    return NS_OK;
   }
   return NS_ERROR_FAILURE;
 }
@@ -2164,10 +2171,13 @@ nsITableCellLayout* nsFrameSelection::GetCellLayout(
 
 nsresult nsFrameSelection::ClearNormalSelection() {
   int8_t index = GetIndexFromSelectionType(SelectionType::eNormal);
-  if (!mDomSelections[index]) return NS_ERROR_NULL_POINTER;
+  RefPtr<Selection> selection = mDomSelections[index];
+  if (!selection) {
+    return NS_ERROR_NULL_POINTER;
+  }
 
   ErrorResult err;
-  mDomSelections[index]->RemoveAllRanges(err);
+  selection->RemoveAllRanges(err);
   return err.StealNSResult();
 }
 
@@ -3061,8 +3071,10 @@ void nsFrameSelection::SetAncestorLimiter(nsIContent* aLimiter) {
       if (mLimiters.mAncestorLimiter) {
         SetChangeReasons(nsISelectionListener::NO_REASON);
         nsCOMPtr<nsIContent> limiter(mLimiters.mAncestorLimiter);
-        TakeFocus(limiter, 0, 0, CARET_ASSOCIATE_BEFORE,
-                  FocusMode::kCollapseToNewPoint);
+        const nsresult rv = TakeFocus(*limiter, 0, 0, CARET_ASSOCIATE_BEFORE,
+                                      FocusMode::kCollapseToNewPoint);
+        Unused << NS_WARN_IF(NS_FAILED(rv));
+        // TODO: in case of failure, propagate it to the callers.
       }
     }
   }

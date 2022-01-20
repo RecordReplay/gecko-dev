@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
-// @flow
-
 import { Component } from "react";
 import { connect } from "../../utils/connect";
 import { showMenu } from "../../context-menu/menu";
@@ -12,47 +10,22 @@ import { getSourceLocationFromMouseEvent } from "../../utils/editor";
 import { isPretty } from "../../utils/source";
 import {
   getPrettySource,
-  getIsPaused,
-  getCurrentThread,
+  getIsCurrentThreadPaused,
   getThreadContext,
   isSourceWithMap,
 } from "../../selectors";
 
 import { editorMenuItems, editorItemActions } from "./menus/editor";
 
-import type { SourceWithContent, ThreadContext } from "../../types";
-import type { EditorItemActions } from "./menus/editor";
-import type SourceEditor from "../../utils/editor/source-editor";
-
-type OwnProps = {|
-  selectedSource: SourceWithContent,
-  contextMenu: ?MouseEvent,
-  clearContextMenu: () => void,
-  editor: SourceEditor,
-  editorWrappingEnabled: boolean,
-|};
-
-type Props = {
-  cx: ThreadContext,
-  contextMenu: ?MouseEvent,
-  editorActions: EditorItemActions,
-  clearContextMenu: () => void,
-  editor: SourceEditor,
-  hasMappedLocation: boolean,
-  isPaused: boolean,
-  editorWrappingEnabled: boolean,
-  selectedSource: SourceWithContent,
-};
-
-class EditorMenu extends Component<Props> {
-  componentWillUpdate(nextProps: Props) {
+class EditorMenu extends Component {
+  componentWillUpdate(nextProps) {
     this.props.clearContextMenu();
     if (nextProps.contextMenu) {
       this.showMenu(nextProps);
     }
   }
 
-  showMenu(props: Props) {
+  showMenu(props) {
     const {
       cx,
       editor,
@@ -68,7 +41,7 @@ class EditorMenu extends Component<Props> {
       editor,
       selectedSource,
       // Use a coercion, as contextMenu is optional
-      (event: any)
+      event
     );
 
     showMenu(
@@ -94,7 +67,7 @@ class EditorMenu extends Component<Props> {
 
 const mapStateToProps = (state, props) => ({
   cx: getThreadContext(state),
-  isPaused: getIsPaused(state, getCurrentThread(state)),
+  isPaused: getIsCurrentThreadPaused(state),
   hasMappedLocation:
     (props.selectedSource.isOriginal ||
       isSourceWithMap(state, props.selectedSource.id) ||
@@ -106,7 +79,4 @@ const mapDispatchToProps = dispatch => ({
   editorActions: editorItemActions(dispatch),
 });
 
-export default connect<Props, OwnProps, _, _, _, _>(
-  mapStateToProps,
-  mapDispatchToProps
-)(EditorMenu);
+export default connect(mapStateToProps, mapDispatchToProps)(EditorMenu);

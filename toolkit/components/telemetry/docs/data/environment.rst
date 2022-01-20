@@ -37,7 +37,7 @@ Structure:
       settings: {
         addonCompatibilityCheckEnabled: <bool>, // Whether application compatibility is respected for add-ons
         blocklistEnabled: <bool>, // true on failure
-        isDefaultBrowser: <bool>, // null on failure and until session restore completes, not available on Android
+        isDefaultBrowser: <bool>, // whether Firefox is the default browser. On Windows, this is operationalized as whether Firefox is the default HTTP protocol handler and the default HTML file handler.
         defaultSearchEngine: <string>, // e.g. "yahoo"
         defaultSearchEngineData: {, // data about the current default engine
           name: <string>, // engine name, e.g. "Yahoo"; or "NONE" if no default
@@ -67,6 +67,7 @@ Structure:
           channel: <string>, // e.g. "release", null on failure
           enabled: <bool>, // true on failure
           autoDownload: <bool>, // true on failure
+          background: <bool>, // Indicates whether updates may be installed when Firefox is not running.
         },
         userPrefs: {
           // Only prefs which are changed are listed in this block
@@ -87,6 +88,7 @@ Structure:
         },
         sandbox: {
           effectiveContentProcessLevel: <integer>,
+          contentWin32kLockdownState: <integer>,
         }
       },
       // Optional, missing if fetching the information failed or had not yet completed.
@@ -100,7 +102,6 @@ Structure:
         creationDate: <integer>, // integer days since UNIX epoch, e.g. 16446
         resetDate: <integer>, // integer days since UNIX epoch, e.g. 16446 - optional
         firstUseDate: <integer>, // integer days since UNIX epoch, e.g. 16446 - optional
-        wasCanary: <bool>, // Android only: true if this profile previously had a canary client ID
       },
       partner: { // This section may not be immediately available on startup
         distributionId: <string>, // pref "distribution.id", null on failure
@@ -295,19 +296,6 @@ Structure:
           installDay: <number>, // days since UNIX epoch, 0 on failure
           updateDay: <number>, // days since UNIX epoch, 0 on failure
         },
-        activePlugins: [
-          {
-            name: <string>,
-            version: <string>,
-            description: <string>,
-            blocklisted: <bool>,
-            disabled: <bool>,
-            clicktoplay: <bool>,
-            mimeTypes: [<string>, ...],
-            updateDay: <number>, // days since UNIX epoch, 0 on failure
-          },
-          ...
-        ],
         activeGMPlugins: {
             <gmp id>: {
                 version: <string>,
@@ -393,11 +381,19 @@ The following is a partial list of `collected preferences <https://searchfox.org
 
 - ``browser.search.suggest.enabled``: The "master switch" for search suggestions everywhere in Firefox (search bar, urlbar, etc.). Defaults to true.
 
+- ``browser.touchmode.auto``: False if the user has overridden the default UI density. Defaults to true.
+
+- ``browser.uidensity``: The current UI density. 0 is normal, 1 is compact, 2 is touch. Defaults to 0.
+
 - ``browser.urlbar.suggest.searches``: True if search suggestions are enabled in the urlbar. Defaults to false.
 
 - ``browser.zoom.full`` (deprecated): True if zoom is enabled for both text and images, that is if "Zoom Text Only" is not enabled. Defaults to true. This preference was collected in Firefox 50 to 52 (`Bug 979323 <https://bugzilla.mozilla.org/show_bug.cgi?id=979323>`_).
 
 - ``security.tls.version.enable-deprecated``: True if deprecated versions of TLS (1.0 and 1.1) have been enabled by the user. Defaults to false.
+
+- ``privacy.firstparty.isolate``: True if the user has changed the (unsupported, hidden) First Party Isolation preference. Defaults to false.
+
+- ``privacy.resistFingerprinting``: True if the user has changed the (unsupported, hidden) Resist Fingerprinting preference. Defaults to false.
 
 - ``toolkit.telemetry.pioneerId``: The state of the Pioneer ID. If set, then user is enrolled in Pioneer. Note that this does *not* collect the value.
 
@@ -424,6 +420,7 @@ This object contains data about the state of Firefox's sandbox.
 Specific keys are:
 
 - ``effectiveContentProcessLevel``: The meanings of the values are OS dependent. Details of the meanings can be found in the `Firefox prefs file <https://hg.mozilla.org/mozilla-central/file/tip/browser/app/profile/firefox.js>`_. The value here is the effective value, not the raw value, some platforms enforce a minimum sandbox level. If there is an error calculating this, it will be ``null``.
+- ``contentWin32kLockdownState``: The status of Win32k Lockdown for Content process. 1 = "Lockdown enabled", 2 = "Lockdown disabled -- Missing WebRender", 3 = "Lockdown disabled -- Unsupported OS", 4 = "Lockdown disabled -- User pref not set". If there is an error calculating this, it will be ``null``.
 
 profile
 -------
@@ -453,12 +450,6 @@ firstUseDate
 The time of the first use of profile. If this is an old profile where we can't
 determine this this field will not be present.
 It's read from a file-stored timestamp from the client's profile directory.
-
-wasCanary
-~~~~~~~~~
-
-Android-only. This attribute is set to ``true`` if the client ID was erroneously set to a canary client ID before
-and later reset to a new random client ID. The attribute is not included if the client ID was not changed.
 
 partner
 -------
@@ -498,19 +489,14 @@ addons
 activeAddons
 ~~~~~~~~~~~~
 
-Starting from Firefox 44, the length of the following string fields: ``name``, ``description`` and ``version`` is limited to 100 characters. The same limitation applies to the same fields in ``theme`` and ``activePlugins``.
+Starting from Firefox 44, the length of the following string fields: ``name``, ``description`` and ``version`` is limited to 100 characters. The same limitation applies to the same fields in ``theme``.
 
 Some of the fields in the record for each add-on are not available during startup.  The fields that will always be present are ``id``, ``version``, ``type``, ``updateDate``, ``scope``, ``isSystem``, ``isWebExtension``, and ``multiprocessCompatible``.  All the other fields documented above become present shortly after the ``sessionstore-windows-restored`` observer topic is notified.
-
-activePlugins
-~~~~~~~~~~~~~
-
-Just like activeAddons, up-to-date information is not available immediately during startup. The field will be populated with dummy information until the blocklist is loaded. At the latest, this will happen just after the ``sessionstore-windows-restored`` observer topic is notified.
 
 activeGMPPlugins
 ~~~~~~~~~~~~~~~~
 
-Just like activePlugins, this will report dummy values until the blocklist is loaded.
+Up-to-date information is not available immediately during startup. The field will be populated with dummy information until the blocklist is loaded. At the latest, this will happen just after the ``sessionstore-windows-restored`` observer topic is notified.
 
 experiments
 -----------
@@ -521,10 +507,16 @@ For each experiment we collect the
 - ``type`` (Optional. Like ``normandy-exp``, max length 20 characters)
 - ``enrollmentId`` (Optional. Like ``5bae2134-e121-46c2-aa00-232f3f5855c5``, max length 40 characters)
 
-In the event any of these fields are truncated, a warning is printed to the console.
+In the event any of these fields are truncated, a warning is printed to the console
+
+Note that this list includes other types of deliveries, including Normandy rollouts and Nimbus feature defaults.
 
 Version History
 ---------------
+
+- Firefox 88:
+
+  - Removed ``addons.activePlugins`` as part of removing NPAPI plugin support. (`bug 1682030 <https://bugzilla.mozilla.org/show_bug.cgi?id=1682030>`_)
 
 - Firefox 70:
 

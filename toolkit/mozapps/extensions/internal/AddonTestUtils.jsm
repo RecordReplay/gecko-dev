@@ -37,19 +37,15 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Management: "resource://gre/modules/Extension.jsm",
   ExtensionAddonObserver: "resource://gre/modules/Extension.jsm",
   FileTestUtils: "resource://testing-common/FileTestUtils.jsm",
-  HttpServer: "resource://testing-common/httpd.js",
   L10nRegistry: "resource://gre/modules/L10nRegistry.jsm",
   MockRegistrar: "resource://testing-common/MockRegistrar.jsm",
+  XPCShellContentUtils: "resource://testing-common/XPCShellContentUtils.jsm",
 });
 
 XPCOMUtils.defineLazyServiceGetters(this, {
   aomStartup: [
     "@mozilla.org/addons/addon-manager-startup;1",
     "amIAddonManagerStartup",
-  ],
-  proxyService: [
-    "@mozilla.org/network/protocol-proxy-service;1",
-    "nsIProtocolProxyService",
   ],
   uuidGen: ["@mozilla.org/uuid-generator;1", "nsIUUIDGenerator"],
 });
@@ -210,10 +206,7 @@ class MockBlocklist {
     return null;
   }
 
-  async getPluginBlocklistState(plugin, version, appVersion, toolkitVersion) {
-    await new Promise(r => setTimeout(r, 150));
-    return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
-  }
+  recordAddonBlockChangeTelemetry(addon, reason) {}
 }
 
 MockBlocklist.prototype.QueryInterface = ChromeUtils.generateQI([
@@ -310,6 +303,7 @@ var AddonTestUtils = {
   testUnpacked: false,
   useRealCertChecks: false,
   usePrivilegedSignatures: true,
+  certSignatureDate: null,
   overrideEntry: null,
 
   maybeInit(testScope) {
@@ -529,60 +523,13 @@ var AddonTestUtils = {
    * @returns {HttpServer}
    *        The HTTP server instance.
    */
-  createHttpServer({ port = -1, hosts } = {}) {
-    let server = new HttpServer();
-    server.start(port);
-
-    if (hosts) {
-      hosts = new Set(hosts);
-      const serverHost = "localhost";
-      const serverPort = server.identity.primaryPort;
-
-      for (let host of hosts) {
-        server.identity.add("http", host, 80);
-      }
-
-      const proxyFilter = {
-        proxyInfo: proxyService.newProxyInfo(
-          "http",
-          serverHost,
-          serverPort,
-          "",
-          "",
-          0,
-          4096,
-          null
-        ),
-
-        applyFilter(channel, defaultProxyInfo, callback) {
-          if (hosts.has(channel.URI.host)) {
-            callback.onProxyFilterResult(this.proxyInfo);
-          } else {
-            callback.onProxyFilterResult(defaultProxyInfo);
-          }
-        },
-      };
-
-      proxyService.registerChannelFilter(proxyFilter, 0);
-      this.testScope.registerCleanupFunction(() => {
-        proxyService.unregisterChannelFilter(proxyFilter);
-      });
-    }
-
-    this.testScope.registerCleanupFunction(() => {
-      return new Promise(resolve => {
-        server.stop(resolve);
-      });
-    });
-
-    return server;
+  createHttpServer(...args) {
+    XPCShellContentUtils.ensureInitialized(this.testScope);
+    return XPCShellContentUtils.createHttpServer(...args);
   },
 
-  registerJSON(server, path, obj) {
-    server.registerPathHandler(path, (request, response) => {
-      response.setHeader("content-type", "application/json", true);
-      response.write(JSON.stringify(obj));
-    });
+  registerJSON(...args) {
+    return XPCShellContentUtils.registerJSON(...args);
   },
 
   info(msg) {
@@ -618,39 +565,6 @@ var AddonTestUtils = {
         }
       }
     }
-  },
-
-  /**
-   * Helper to spin the event loop until a promise resolves or rejects
-   *
-   * @param {Promise} promise
-   *        The promise to wait on.
-   * @returns {*} The promise's resolution value.
-   * @throws The promise's rejection value, if it rejects.
-   */
-  awaitPromise(promise) {
-    let done = false;
-    let result;
-    let error;
-    promise
-      .then(
-        val => {
-          result = val;
-        },
-        err => {
-          error = err;
-        }
-      )
-      .then(() => {
-        done = true;
-      });
-
-    Services.tm.spinEventLoopUntil(() => done);
-
-    if (error !== undefined) {
-      throw error;
-    }
-    return result;
   },
 
   createAppInfo(ID, name, version, platformVersion = "1.0") {
@@ -737,6 +651,12 @@ var AddonTestUtils = {
               fakeCert.organizationalUnit = "Mozilla Extensions";
             }
           }
+          if (this.certSignatureDate) {
+            // addon.signedDate is derived from this, used by the blocklist.
+            fakeCert.validity = {
+              notBefore: this.certSignatureDate * 1000,
+            };
+          }
 
           return [callback, Cr.NS_OK, fakeCert];
         } catch (e) {
@@ -822,24 +742,21 @@ var AddonTestUtils = {
    *        The directory in which the files live.
    * @param {string} prefix
    *        a prefix for the files which ought to be loaded.
-   *        This method will suffix -extensions.json and -plugins.json
-   *        to the prefix it is given, and attempt to load both.
-   *        Insofar as either exists, their data will be dumped into
-   *        the respective store, and the respective update handlers
+   *        This method will suffix -extensions.json
+   *        to the prefix it is given, and attempt to load it.
+   *        If it exists, its data will be dumped into
+   *        the respective store, and the update handler
    *        will be called.
    */
   async loadBlocklistData(dir, prefix) {
     let loadedData = {};
-    for (let fileSuffix of ["extensions", "plugins"]) {
-      const fileName = `${prefix}-${fileSuffix}.json`;
-      let jsonStr = await OS.File.read(OS.Path.join(dir.path, fileName), {
-        encoding: "UTF-8",
-      }).catch(() => {});
-      if (!jsonStr) {
-        continue;
-      }
+    let fileSuffix = "extensions";
+    const fileName = `${prefix}-${fileSuffix}.json`;
+    let jsonStr = await OS.File.read(OS.Path.join(dir.path, fileName), {
+      encoding: "UTF-8",
+    }).catch(() => {});
+    if (jsonStr) {
       this.info(`Loaded ${fileName}`);
-
       loadedData[fileSuffix] = JSON.parse(jsonStr);
     }
     return this.loadBlocklistRawData(loadedData);
@@ -863,7 +780,6 @@ var AddonTestUtils = {
     const blocklistMapping = {
       extensions: bsPass.ExtensionBlocklistRS,
       extensionsMLBF: bsPass.ExtensionBlocklistMLBF,
-      plugins: bsPass.PluginBlocklistRS,
     };
 
     // Since we load the specified test data, we shouldn't let the
@@ -993,7 +909,10 @@ var AddonTestUtils = {
     );
   },
 
-  async promiseShutdownManager(clearOverrides = true) {
+  async promiseShutdownManager({
+    clearOverrides = true,
+    clearL10nRegistry = true,
+  } = {}) {
     if (!this.addonIntegrationService) {
       return false;
     }
@@ -1037,7 +956,9 @@ var AddonTestUtils = {
     }
 
     // Clear L10nRegistry entries so restaring the AOM will work correctly with locales.
-    L10nRegistry.clearSources();
+    if (clearL10nRegistry) {
+      L10nRegistry.clearSources();
+    }
 
     // Clear any crash report annotations
     this.appInfo.annotations = {};
@@ -1082,7 +1003,7 @@ var AddonTestUtils = {
    *        after the AddonManager is shut down, before it is re-started.
    */
   async promiseRestartManager(newVersion) {
-    await this.promiseShutdownManager(false);
+    await this.promiseShutdownManager({ clearOverrides: false });
     await this.promiseStartupManager(newVersion);
   },
 
@@ -1531,17 +1452,25 @@ var AddonTestUtils = {
   promiseCompleteInstall(install) {
     let listener;
     return new Promise(resolve => {
+      let installPromise;
       listener = {
         onDownloadFailed: resolve,
         onDownloadCancelled: resolve,
         onInstallFailed: resolve,
         onInstallCancelled: resolve,
-        onInstallEnded: resolve,
+        onInstallEnded() {
+          // onInstallEnded is called right when an add-on has been installed.
+          // install() may still be pending, e.g. for updates, and be awaiting
+          // the completion of the update, part of which is the removal of the
+          // temporary XPI file of the downloaded update. To avoid intermittent
+          // test failures due to lingering temporary files, await install().
+          resolve(installPromise);
+        },
         onInstallPostponed: resolve,
       };
 
       install.addListener(listener);
-      install.install();
+      installPromise = install.install();
     }).then(() => {
       install.removeListener(listener);
       return install;

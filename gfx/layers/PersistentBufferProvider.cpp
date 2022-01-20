@@ -11,6 +11,7 @@
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "pratom.h"
 #include "gfxPlatform.h"
@@ -364,31 +365,35 @@ PersistentBufferProviderShared::BorrowDrawTarget(
     }
   }
 
-  if (!tex || !tex->Lock(OpenMode::OPEN_READ_WRITE)) {
+  if (!tex) {
     return nullptr;
+  }
+
+  {
+    Maybe<TextureClientAutoLock> autoReadLock;
+    TextureClient* previous = nullptr;
+    if (mBack != previousBackBuffer && !aPersistedRect.IsEmpty()) {
+      previous = GetTexture(previousBackBuffer);
+      if (previous) {
+        autoReadLock.emplace(previous, OpenMode::OPEN_READ);
+      }
+    }
+
+    if (!tex->Lock(OpenMode::OPEN_READ_WRITE)) {
+      return nullptr;
+    }
+
+    if (autoReadLock.isSome() && autoReadLock->Succeeded() && previous) {
+      DebugOnly<bool> success =
+          previous->CopyToTextureClient(tex, &aPersistedRect, nullptr);
+      MOZ_ASSERT(success);
+    }
   }
 
   // Clear dirty texture, since new back texture is selected.
   mTextureLockIsUnreliable = Nothing();
 
   mDrawTarget = tex->BorrowDrawTarget();
-  if (mBack != previousBackBuffer && !aPersistedRect.IsEmpty()) {
-    if (mPreviousSnapshot) {
-      mDrawTarget->CopySurface(mPreviousSnapshot, aPersistedRect,
-                               gfx::IntPoint(0, 0));
-    } else {
-      TextureClient* previous = GetTexture(previousBackBuffer);
-      if (previous && previous->Lock(OpenMode::OPEN_READ)) {
-        DebugOnly<bool> success =
-            previous->CopyToTextureClient(tex, &aPersistedRect, nullptr);
-        MOZ_ASSERT(success);
-
-        previous->Unlock();
-      }
-    }
-  }
-  mPreviousSnapshot = nullptr;
-
   if (mDrawTarget) {
     // This is simply to ensure the DrawTarget gets initialized, and will detect
     // a device reset, even if we're on the main thread.
@@ -413,17 +418,6 @@ bool PersistentBufferProviderShared::ReturnDrawTarget(
   TextureClient* back = GetTexture(mBack);
   MOZ_ASSERT(back);
 
-  // If our TextureClients have internal synchronization then, if locks are
-  // needed for reading and writing, this can cause locking issues with the
-  // compositor. To prevent this we take a snapshot when the DrawTarget is
-  // returned, so this can be used when our own BorrowSnapshot is called and
-  // also for copying to the next TextureClient. Using this snapshot outside of
-  // the locks is safe, because the TextureClient calls DetachAllSnapshots on
-  // its DrawTarget when we Unlock below.
-  if (back->HasSynchronization()) {
-    mPreviousSnapshot = back->BorrowSnapshot();
-  }
-
   mDrawTarget = nullptr;
   dt = nullptr;
 
@@ -442,17 +436,33 @@ TextureClient* PersistentBufferProviderShared::GetTextureClient() {
   if (!texture) {
     gfxCriticalNote
         << "PersistentBufferProviderShared: front buffer unavailable";
+    return nullptr;
   }
+
+  // Sometimes, for example on tab switch, we re-forward our texture. So if we
+  // are and it is still read locked, then borrow and return our DrawTarget to
+  // force it to be copied to a texture that we will safely read lock.
+  if (texture->IsReadLocked()) {
+    RefPtr<DrawTarget> dt =
+        BorrowDrawTarget(IntRect(0, 0, mSize.width, mSize.height));
+    ReturnDrawTarget(dt.forget());
+    texture = GetTexture(mFront);
+    if (!texture) {
+      gfxCriticalNote
+          << "PersistentBufferProviderShared: front buffer unavailable";
+      return nullptr;
+    }
+  } else {
+    // If it isn't read locked then make sure it is set as updated, so that we
+    // will always read lock even if we've forwarded the texture before.
+    texture->SetUpdated();
+  }
+
   return texture;
 }
 
 already_AddRefed<gfx::SourceSurface>
 PersistentBufferProviderShared::BorrowSnapshot() {
-  if (mPreviousSnapshot) {
-    mSnapshot = mPreviousSnapshot;
-    return do_AddRef(mSnapshot);
-  }
-
   if (mDrawTarget) {
     auto back = GetTexture(mBack);
     MOZ_ASSERT(back && back->IsLocked());
@@ -483,7 +493,7 @@ void PersistentBufferProviderShared::ReturnSnapshot(
   mSnapshot = nullptr;
   snapshot = nullptr;
 
-  if (mPreviousSnapshot || mDrawTarget) {
+  if (mDrawTarget) {
     return;
   }
 
@@ -525,7 +535,6 @@ void PersistentBufferProviderShared::ClearCachedResources() {
 
 void PersistentBufferProviderShared::Destroy() {
   mSnapshot = nullptr;
-  mPreviousSnapshot = nullptr;
   mDrawTarget = nullptr;
 
   for (auto& mTexture : mTextures) {

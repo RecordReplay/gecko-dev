@@ -8,6 +8,9 @@
 // This is loaded into all XUL windows. Wrap in a block to prevent
 // leaking to window scope.
 {
+  /**
+   * Custom element definition for the places tree.
+   */
   class MozPlacesTree extends customElements.get("tree") {
     constructor() {
       super();
@@ -157,6 +160,7 @@
     }
     /**
      * overriding
+     * @param {object} val
      */
     set view(val) {
       // We save the view so that we can avoid expensive get calls when
@@ -192,9 +196,6 @@
       return this.getAttribute("flatList") == "true";
     }
 
-    /**
-     * nsIPlacesView
-     */
     get result() {
       try {
         return this.view.QueryInterface(Ci.nsINavHistoryResultObserver).result;
@@ -202,9 +203,7 @@
         return null;
       }
     }
-    /**
-     * nsIPlacesView
-     */
+
     set place(val) {
       this.setAttribute("place", val);
 
@@ -217,15 +216,11 @@
     get place() {
       return this.getAttribute("place");
     }
-    /**
-     * nsIPlacesView
-     */
+
     get hasSelection() {
       return this.view && this.view.selection.count >= 1;
     }
-    /**
-     * nsIPlacesView
-     */
+
     get selectedNodes() {
       let nodes = [];
       if (!this.hasSelection) {
@@ -245,9 +240,7 @@
       }
       return nodes;
     }
-    /**
-     * nsIPlacesView
-     */
+
     get removableSelectionRanges() {
       // This property exists in addition to selectedNodes because it
       // encodes selection ranges (which only occur in list views) into
@@ -303,15 +296,11 @@
       }
       return nodes;
     }
-    /**
-     * nsIPlacesView
-     */
+
     get draggableSelection() {
       return this.selectedNodes;
     }
-    /**
-     * nsIPlacesView
-     */
+
     get selectedNode() {
       var view = this.view;
       if (!view || view.selection.count != 1) {
@@ -325,9 +314,11 @@
 
       return this.view.nodeForTreeIndex(min.value);
     }
-    /**
-     * nsIPlacesView
-     */
+
+    get singleClickOpens() {
+      return this.getAttribute("singleclickopens") == "true";
+    }
+
     get insertionPoint() {
       // invalidated on selection and focus changes
       if (this._cachedInsertionPoint !== undefined) {
@@ -473,6 +464,8 @@
      * Causes a particular node represented by the specified placeURI to be
      * selected in the tree. All containers above the node in the hierarchy
      * will be opened, so that the node is visible.
+     *
+     * @param {string} placeURI
      */
     selectPlaceURI(placeURI) {
       // Do nothing if a node matching the given uri is already selected
@@ -539,6 +532,8 @@
      * Causes a particular node to be selected in the tree, resulting in all
      * containers above the node in the hierarchy to be opened, so that the
      * node is visible.
+     *
+     * @param {object} node
      */
     selectNode(node) {
       var view = this.view;
@@ -664,9 +659,6 @@
       });
     }
 
-    /**
-     * nsIPlacesView
-     */
     selectAll() {
       this.view.selection.selectAll();
     }
@@ -675,6 +667,11 @@
      * This method will select the first node in the tree that matches
      * each given item guid. It will open any folder nodes that it needs
      * to in order to show the selected items.
+     *
+     * @param {array} aGuids
+     *   Guids to select.
+     * @param {boolean} aOpenContainers
+     *   Whether or not to open containers.
      */
     selectItems(aGuids, aOpenContainers) {
       // Never open containers in flat lists.
@@ -709,6 +706,10 @@
        *
        * NOTE: This method will leave open any node that had matching items
        * in its subtree.
+       *
+       * @param {object} node
+       * @returns {boolean}
+       *   Returns true if at least one item was found.
        */
       function findNodes(node) {
         var foundOne = false;

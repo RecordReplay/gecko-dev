@@ -6,10 +6,13 @@ function wasmValid(mod) {
   assertEq(WebAssembly.validate(mod), true);
 }
 
-// Note: the pattern variable is ignored until compilation is implemented
-// for exception instructions, which allows checking error messages.
 function wasmInvalid(mod, pattern) {
   assertEq(WebAssembly.validate(mod), false);
+  assertErrorMessage(
+    () => new WebAssembly.Module(mod),
+    WebAssembly.CompileError,
+    pattern
+  );
 }
 
 const emptyType = { args: [], ret: VoidCode };
@@ -72,29 +75,52 @@ function testValidateDecode() {
     /expected event index/
   );
 
-  // Try blocks must have a second branch after the main body.
+  // Rethrow must have a depth argument.
   wasmInvalid(
     moduleWithSections([
       sigSection([emptyType]),
       declSection([0]),
       eventSection([{ type: 0 }]),
       bodySection([
-        funcBody({
-          locals: [],
-          body: [
-            TryCode,
-            I32Code,
-            I32ConstCode,
-            0x01,
-            // Missing instruction here.
-            EndCode,
-            DropCode,
-            ReturnCode,
-          ],
-        }),
+        funcBody(
+          {
+            locals: [],
+            body: [
+              RethrowCode,
+              // Index missing.
+            ],
+          },
+          (withEndCode = false)
+        ),
       ]),
     ]),
-    /try without catch or unwind not allowed/
+    /unable to read rethrow depth/
+  );
+
+  // Delegate must have a depth argument.
+  wasmInvalid(
+    moduleWithSections([
+      sigSection([emptyType]),
+      declSection([0]),
+      eventSection([{ type: 0 }]),
+      bodySection([
+        funcBody(
+          {
+            locals: [],
+            body: [
+              TryCode,
+              I32Code,
+              I32ConstCode,
+              0x01,
+              DelegateCode,
+              // Index missing.
+            ],
+          },
+          (withEndCode = false)
+        ),
+      ]),
+    ]),
+    /unable to read delegate depth/
   );
 }
 
@@ -193,6 +219,27 @@ function testValidateTryCatch() {
   wasmValid(valid1);
   wasmInvalid(invalid1, /unused values not explicitly dropped/);
   wasmValid(valid2);
+
+  // Test handler-less try blocks.
+  wasmValidateText(
+    `(module (func try end))`
+  );
+
+  wasmValidateText(
+    `(module (func (result i32) try (result i32) (i32.const 1) end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (func (result i32)
+         try (result i32) (i32.const 1) (br 0) end))`
+  );
+
+  wasmFailValidateText(
+    `(module
+       (func try (result i32) end))`,
+    /popping value from empty stack/
+  );
 }
 
 function testValidateCatch() {
@@ -208,6 +255,61 @@ function testValidateCatch() {
       ]),
     ]),
     /event index out of range/
+  );
+}
+
+function testValidateCatchAll() {
+  wasmValidateText(
+    `(module
+       (event $exn)
+       (func try catch $exn catch_all end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (func (result i32)
+         try (result i32)
+           (i32.const 0)
+         catch_all
+           (i32.const 1)
+         end))`
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn)
+       (func try catch_all catch 0 end))`,
+    /catch cannot follow a catch_all/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn)
+       (func try (result i32) (i32.const 1) catch_all end drop))`,
+    /popping value from empty stack/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param i32))
+       (func try catch $exn drop catch_all drop end))`,
+    /popping value from empty stack/
+  );
+
+  // We can't distinguish `else` and `catch_all` in error messages since they
+  // share the binary opcode.
+  wasmFailValidateText(
+    `(module
+       (event $exn)
+       (func try catch_all catch_all end))`,
+    /catch_all can only be used within a try/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn)
+       (func catch_all))`,
+    /catch_all can only be used within a try/
   );
 }
 
@@ -334,8 +436,217 @@ function testValidateExnPayload() {
   wasmInvalid(invalid1, /event index out of range/);
 }
 
+function testValidateRethrow() {
+  wasmValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           nop
+         catch $exn
+           rethrow 0
+         end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           nop
+         catch_all
+           rethrow 0
+         end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (func (result i32)
+         try (result i32)
+           (i32.const 1)
+         catch_all
+           rethrow 0
+         end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           nop
+         catch $exn
+           block
+             try
+             catch $exn
+               rethrow 0
+             end
+           end
+         end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           nop
+         catch $exn
+           block
+             try
+             catch $exn
+               rethrow 2
+             end
+           end
+         end))`
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           nop
+         catch $exn
+           block
+             try
+             catch $exn
+               rethrow 1
+             end
+           end
+         end))`,
+    /rethrow target was not a catch block/
+  );
+
+  wasmFailValidateText(
+    `(module (func rethrow 0))`,
+    /rethrow target was not a catch block/
+  );
+
+  wasmFailValidateText(
+    `(module (func try rethrow 0 end))`,
+    /rethrow target was not a catch block/
+  );
+
+  wasmFailValidateText(
+    `(module (func try rethrow 0 catch_all end))`,
+    /rethrow target was not a catch block/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           nop
+         catch $exn
+           block
+             try
+             catch $exn
+               rethrow 4
+             end
+           end
+         end))`,
+    /rethrow depth exceeds current nesting level/
+  );
+}
+
+function testValidateDelegate() {
+  wasmValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           try
+             throw $exn
+           delegate 0
+         catch $exn
+         end))`
+  );
+
+  wasmValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           try
+             throw $exn
+           delegate 1
+         catch $exn
+         end))`
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func (result i32)
+         try
+           throw $exn
+         delegate 0
+         (i64.const 0)
+         end))`,
+    /type mismatch: expression has type i64 but expected i32/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try (result i32)
+           (i64.const 0)
+         delegate 0))`,
+    /type mismatch: expression has type i64 but expected i32/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+           try
+             throw $exn
+           delegate 2
+         catch $exn
+         end))`,
+    /delegate depth exceeds current nesting level/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         block
+           try
+             throw $exn
+           delegate 0
+         end))`,
+    /delegate target was not a try or function body/
+  );
+
+  wasmFailValidateText(
+    `(module
+       (event $exn (param))
+       (func
+         try
+         catch $exn
+           try
+             throw $exn
+           delegate 0
+         end))`,
+    /delegate target was not a try or function body/
+  );
+
+  wasmFailValidateText(
+    `(module (func delegate 0))`,
+    /delegate can only be used within a try/
+  );
+}
+
 testValidateDecode();
 testValidateThrow();
 testValidateTryCatch();
 testValidateCatch();
+testValidateCatchAll();
 testValidateExnPayload();
+testValidateRethrow();
+testValidateDelegate();

@@ -54,10 +54,10 @@ namespace IOUtils {
   /**
    * Attempts to safely write |data| to a file at |path|.
    *
-   * This operation can be made atomic by specifying the |tmpFile| option. If
+   * This operation can be made atomic by specifying the |tmpPath| option. If
    * specified, then this method ensures that the destination file is not
    * modified until the data is entirely written to the temporary file, after
-   * which point the |tmpFile| is moved to the specified |path|.
+   * which point the |tmpPath| is moved to the specified |path|.
    *
    * The target file can also be backed up to a |backupFile| before any writes
    * are performed to prevent data loss in case of corruption.
@@ -75,6 +75,7 @@ namespace IOUtils {
    *
    * @param path      An absolute file path.
    * @param string    A string to write to the file at path.
+   * @param options   Options for writing the file.
    *
    * @return Resolves with the number of bytes successfully written to the file,
    *         otherwise rejects with a DOMException.
@@ -85,8 +86,9 @@ namespace IOUtils {
    * UTF-8 string, then safely write the result to a file at |path|. Works
    * exactly like |write|.
    *
-   * @param path   An absolute file path
-   * @param value  The value to be serialized.
+   * @param path      An absolute file path
+   * @param value     The value to be serialized.
+   * @param options   Options for writing the file. The "append" mode is not supported.
    *
    * @return Resolves with the number of bytes successfully written to the file,
    *         otherwise rejects with a DOMException.
@@ -187,11 +189,15 @@ namespace IOUtils {
    *
    * @param path        An absolute file path
    * @param permissions The UNIX file mode representing the permissions.
+   * @param honorUmask  If omitted or true, any UNIX file mode value is
+   *                    modified by the process umask. If false, the exact value
+   *                    of UNIX file mode will be applied. This value has no effect
+   *                    on Windows.
    *
    * @return Resolves if the permissions were set successfully, otherwise
    *         rejects with a DOMException.
    */
-  Promise<void> setPermissions(DOMString path, unsigned long permissions);
+  Promise<void> setPermissions(DOMString path, unsigned long permissions, optional boolean honorUmask = true);
   /**
    * Return whether or not the file exists at the given path.
    *
@@ -200,6 +206,12 @@ namespace IOUtils {
    * @return A promise that resolves to whether or not the given file exists.
    */
   Promise<boolean> exists(DOMString path);
+};
+
+[Exposed=Window]
+partial namespace IOUtils {
+  [Throws]
+  readonly attribute any profileBeforeChange;
 };
 
 /**
@@ -219,10 +231,40 @@ dictionary ReadUTF8Options {
  */
 dictionary ReadOptions : ReadUTF8Options {
   /**
+   * The offset into the file to read from. If unspecified, the file will be read
+   * from the start.
+   */
+  unsigned long offset = 0;
+
+  /**
    * The max bytes to read from the file at path. If unspecified, the entire
    * file will be read. This option is incompatible with |decompress|.
    */
   unsigned long? maxBytes = null;
+};
+
+/**
+ * Modes for writing to a file.
+ */
+enum WriteMode {
+  /**
+   * Overwrite the contents of the file.
+   *
+   * The file will be created if it does not exist.
+   */
+  "overwrite",
+  /**
+   * Append to the end of the file.
+   *
+   * This mode will refuse to create the file if it does not exist.
+   */
+  "append",
+  /**
+   * Create a new file.
+   *
+   * This mode will refuse to overwrite an existing file.
+   */
+  "create",
 };
 
 /**
@@ -242,9 +284,9 @@ dictionary WriteOptions {
    */
   DOMString tmpPath;
   /**
-   * If true, fail if the destination already exists.
+   * The mode used to write to the file.
    */
-  boolean noOverwrite = false;
+  WriteMode mode = "overwrite";
   /**
    * If true, force the OS to write its internal buffers to the disk.
    * This is considerably slower for the whole system, but safer in case of

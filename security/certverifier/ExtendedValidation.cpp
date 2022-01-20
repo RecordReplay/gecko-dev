@@ -369,19 +369,6 @@ static const struct EVInfo kEVInfos[] = {
     "Ag==",
   },
   {
-    // CN=Chambers of Commerce Root - 2008,O=AC Camerfirma S.A.,serialNumber=A82743287,L=Madrid (see current address at www.camerfirma.com/address),C=EU
-    "1.3.6.1.4.1.17326.10.14.2.1.2",
-    "Camerfirma EV OID a",
-    { 0x06, 0x3E, 0x4A, 0xFA, 0xC4, 0x91, 0xDF, 0xD3, 0x32, 0xF3, 0x08,
-      0x9B, 0x85, 0x42, 0xE9, 0x46, 0x17, 0xD8, 0x93, 0xD7, 0xFE, 0x94,
-      0x4E, 0x10, 0xA7, 0x93, 0x7E, 0xE2, 0x9D, 0x96, 0x93, 0xC0 },
-    "MIGuMQswCQYDVQQGEwJFVTFDMEEGA1UEBxM6TWFkcmlkIChzZWUgY3VycmVudCBh"
-    "ZGRyZXNzIGF0IHd3dy5jYW1lcmZpcm1hLmNvbS9hZGRyZXNzKTESMBAGA1UEBRMJ"
-    "QTgyNzQzMjg3MRswGQYDVQQKExJBQyBDYW1lcmZpcm1hIFMuQS4xKTAnBgNVBAMT"
-    "IENoYW1iZXJzIG9mIENvbW1lcmNlIFJvb3QgLSAyMDA4",
-    "AKPaQn6ksa7a",
-  },
-  {
     // CN=AffirmTrust Commercial,O=AffirmTrust,C=US
     "1.3.6.1.4.1.34697.2.1",
     "AffirmTrust EV OID a",
@@ -984,77 +971,106 @@ static const struct EVInfo kEVInfos[] = {
     "cml0eQ==",
     "CL2Fl2yZJ6SAaEc7",
   },
+  {
+    // CN=GlobalSign Root R46,O=GlobalSign nv-sa,C=BE
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0x4F, 0xA3, 0x12, 0x6D, 0x8D, 0x3A, 0x11, 0xD1, 0xC4, 0x85, 0x5A, 0x4F, 0x80, 0x7C, 0xBA, 0xD6, 0xCF, 0x91, 0x9D, 0x3A, 0x5A, 0x88, 0xB0, 0x3B, 0xEA, 0x2C, 0x63, 0x72, 0xD9, 0x3C, 0x40, 0xC9 },
+    "MEYxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMRwwGgYD"
+    "VQQDExNHbG9iYWxTaWduIFJvb3QgUjQ2",
+    "EdK7udcjGJ5AXwqdLdDfJWfR",
+  },
+  {
+    // CN=GlobalSign Root E46,O=GlobalSign nv-sa,C=BE
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0xCB, 0xB9, 0xC4, 0x4D, 0x84, 0xB8, 0x04, 0x3E, 0x10, 0x50, 0xEA, 0x31, 0xA6, 0x9F, 0x51, 0x49, 0x55, 0xD7, 0xBF, 0xD2, 0xE2, 0xC6, 0xB4, 0x93, 0x01, 0x01, 0x9A, 0xD6, 0x1D, 0x9F, 0x50, 0x58 },
+    "MEYxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMRwwGgYD"
+    "VQQDExNHbG9iYWxTaWduIFJvb3QgRTQ2",
+    "EdK7ujNu1LzmJGjFDYQdmOhD",
+  },
+  {
+    // "CN=AC RAIZ FNMT-RCM SERVIDORES SEGUROS,OID.2.5.4.97=VATES-Q2826004J,OU=Ceres,O=FNMT-RCM,C=E
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0x55, 0x41, 0x53, 0xB1, 0x3D, 0x2C, 0xF9, 0xDD, 0xB7, 0x53, 0xBF, 0xBE, 0x1A, 0x4E, 0x0A, 0xE0, 0x8D, 0x0A, 0xA4, 0x18, 0x70, 0x58, 0xFE, 0x60, 0xA2, 0xB8, 0x62, 0xB2, 0xE4, 0xB8, 0x7B, 0xCB },
+    "MHgxCzAJBgNVBAYTAkVTMREwDwYDVQQKDAhGTk1ULVJDTTEOMAwGA1UECwwFQ2Vy"
+    "ZXMxGDAWBgNVBGEMD1ZBVEVTLVEyODI2MDA0SjEsMCoGA1UEAwwjQUMgUkFJWiBG"
+    "Tk1ULVJDTSBTRVJWSURPUkVTIFNFR1VST1M=",
+    "YvYybOXE42hcG2LdnC6dlQ==",
+  },
+  {
+    // CN=GLOBALTRUST 2020,O=e-commerce monitoring GmbH,C=AT
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0x9A, 0x29, 0x6A, 0x51, 0x82, 0xD1, 0xD4, 0x51, 0xA2, 0xE3, 0x7F, 0x43, 0x9B, 0x74, 0xDA, 0xAF, 0xA2, 0x67, 0x52, 0x33, 0x29, 0xF9, 0x0F, 0x9A, 0x0D, 0x20, 0x07, 0xC3, 0x34, 0xE2, 0x3C, 0x9A },
+    "ME0xCzAJBgNVBAYTAkFUMSMwIQYDVQQKExplLWNvbW1lcmNlIG1vbml0b3Jpbmcg"
+    "R21iSDEZMBcGA1UEAxMQR0xPQkFMVFJVU1QgMjAyMA==",
+    "Wku9WvtPilv6ZeU=",
+  },
+  {
+    // CN=Certum Extended Validation ECC CA,OU=Certum Certification Authority,O=Asseco Data Systems S.A.,C=PL
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0x6B, 0x32, 0x80, 0x85, 0x62, 0x53, 0x18, 0xAA, 0x50, 0xD1, 0x73, 0xC9, 0x8D, 0x8B, 0xDA, 0x09, 0xD5, 0x7E, 0x27, 0x41, 0x3D, 0x11, 0x4C, 0xF7, 0x87, 0xA0, 0xF5, 0xD0, 0x6C, 0x03, 0x0C, 0xF6 },
+    "MHQxCzAJBgNVBAYTAlBMMSEwHwYDVQQKExhBc3NlY28gRGF0YSBTeXN0ZW1zIFMu"
+    "QS4xJzAlBgNVBAsTHkNlcnR1bSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTEZMBcG"
+    "A1UEAxMQQ2VydHVtIEVDLTM4NCBDQQ==",
+    "eI8nXIESUiClBNAt3bpz9A==",
+  },
+  {
+    // CN=Certum Extended Validation RSA CA,OU=Certum Certification Authority,O=Asseco Data Systems S.A.,C=PL
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0xFE, 0x76, 0x96, 0x57, 0x38, 0x55, 0x77, 0x3E, 0x37, 0xA9, 0x5E, 0x7A, 0xD4, 0xD9, 0xCC, 0x96, 0xC3, 0x01, 0x57, 0xC1, 0x5D, 0x31, 0x76, 0x5B, 0xA9, 0xB1, 0x57, 0x04, 0xE1, 0xAE, 0x78, 0xFD },
+    "MHoxCzAJBgNVBAYTAlBMMSEwHwYDVQQKExhBc3NlY28gRGF0YSBTeXN0ZW1zIFMu"
+    "QS4xJzAlBgNVBAsTHkNlcnR1bSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTEfMB0G"
+    "A1UEAxMWQ2VydHVtIFRydXN0ZWQgUm9vdCBDQQ==",
+    "Hr9ZULjJgDdMBvfrVU+17Q==",
+  },
+  {
+    // CN=ANF Secure Server Root CA,OU=ANF CA Raiz,O=ANF Autoridad de Certificacion,C=ES,serialNumber=G63287510
+    "2.23.140.1.1",
+    "CA/Browser Forum EV OID",
+    { 0xFB, 0x8F, 0xEC, 0x75, 0x91, 0x69, 0xB9, 0x10, 0x6B, 0x1E, 0x51, 0x16, 0x44, 0xC6, 0x18, 0xC5, 0x13, 0x04, 0x37, 0x3F, 0x6C, 0x06, 0x43, 0x08, 0x8D, 0x8B, 0xEF, 0xFD, 0x1B, 0x99, 0x75, 0x99 },
+    "MIGEMRIwEAYDVQQFEwlHNjMyODc1MTAxCzAJBgNVBAYTAkVTMScwJQYDVQQKEx5B"
+    "TkYgQXV0b3JpZGFkIGRlIENlcnRpZmljYWNpb24xFDASBgNVBAsTC0FORiBDQSBS"
+    "YWl6MSIwIAYDVQQDExlBTkYgU2VjdXJlIFNlcnZlciBSb290IENB",
+    "DdPjvGz5a7E=",
+  },
     // clang-format on
 };
 
-static SECOidTag sEVInfoOIDTags[ArrayLength(kEVInfos)];
-
-static_assert(SEC_OID_UNKNOWN == 0,
-              "We depend on zero-initialized globals being interpreted as "
-              "SEC_OID_UNKNOWN.");
+static CertPolicyId sEVInfoIds[ArrayLength(kEVInfos)];
 static_assert(
-    ArrayLength(sEVInfoOIDTags) == ArrayLength(kEVInfos),
+    ArrayLength(sEVInfoIds) == ArrayLength(kEVInfos),
     "These arrays are used in parallel and must have the same length.");
+static CertPolicyId sCABForumEVId = {};
 
-static SECOidTag RegisterOID(const SECItem& oidItem, const char* oidName) {
-  SECOidData od;
-  od.oid.len = oidItem.len;
-  od.oid.data = oidItem.data;
-  od.offset = SEC_OID_UNKNOWN;
-  od.desc = oidName;
-  od.mechanism = CKM_INVALID_MECHANISM;
-  od.supportedExtension = INVALID_CERT_EXTENSION;
-  return SECOID_AddEntry(&od);
-}
-
-static SECOidTag sCABForumEVOIDTag = SEC_OID_UNKNOWN;
-
-static bool isEVPolicy(SECOidTag policyOIDTag) {
-  if (policyOIDTag != SEC_OID_UNKNOWN && policyOIDTag == sCABForumEVOIDTag) {
-    return true;
-  }
-
-  for (const SECOidTag& oidTag : sEVInfoOIDTags) {
-    if (policyOIDTag == oidTag) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool CertIsAuthoritativeForEVPolicy(const UniqueCERTCertificate& cert,
+bool CertIsAuthoritativeForEVPolicy(const nsTArray<uint8_t>& certBytes,
                                     const mozilla::pkix::CertPolicyId& policy) {
-  MOZ_ASSERT(cert);
-  if (!cert) {
+  nsTArray<uint8_t> fingerprint;
+  nsresult rv = Digest::DigestBuf(SEC_OID_SHA256, certBytes.Elements(),
+                                  certBytes.Length(), fingerprint);
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+  if (fingerprint.Length() != SHA256_LENGTH) {
     return false;
   }
 
-  unsigned char fingerprint[SHA256_LENGTH];
-  SECStatus srv = PK11_HashBuf(SEC_OID_SHA256, fingerprint, cert->derCert.data,
-                               AssertedCast<int32_t>(cert->derCert.len));
-  if (srv != SECSuccess) {
-    return false;
-  }
-
-  const SECOidData* cabforumOIDData = SECOID_FindOIDByTag(sCABForumEVOIDTag);
   for (size_t i = 0; i < ArrayLength(kEVInfos); ++i) {
     const EVInfo& entry = kEVInfos[i];
 
     // This check ensures that only the specific roots we approve for EV get
     // that status, and not certs (roots or otherwise) that happen to have an
     // OID that's already been approved for EV.
-    if (!ArrayEqual(fingerprint, entry.sha256Fingerprint)) {
+    if (!ArrayEqual(&fingerprint[0], &entry.sha256Fingerprint[0],
+                    SHA256_LENGTH)) {
       continue;
     }
 
-    if (cabforumOIDData && cabforumOIDData->oid.len == policy.numBytes &&
-        ArrayEqual(cabforumOIDData->oid.data, policy.bytes, policy.numBytes)) {
-      return true;
-    }
-    const SECOidData* oidData = SECOID_FindOIDByTag(sEVInfoOIDTags[i]);
-    if (oidData && oidData->oid.len == policy.numBytes &&
-        ArrayEqual(oidData->oid.data, policy.bytes, policy.numBytes)) {
+    if (policy == sCABForumEVId || policy == sEVInfoIds[i]) {
       return true;
     }
   }
@@ -1064,17 +1080,18 @@ bool CertIsAuthoritativeForEVPolicy(const UniqueCERTCertificate& cert,
 
 nsresult LoadExtendedValidationInfo() {
   static const char* sCABForumOIDString = "2.23.140.1.1";
-  static const char* sCABForumOIDDescription = "CA/Browser Forum EV OID";
 
   ScopedAutoSECItem cabforumOIDItem;
   if (SEC_StringToOID(nullptr, &cabforumOIDItem, sCABForumOIDString, 0) !=
       SECSuccess) {
     return NS_ERROR_FAILURE;
   }
-  sCABForumEVOIDTag = RegisterOID(cabforumOIDItem, sCABForumOIDDescription);
-  if (sCABForumEVOIDTag == SEC_OID_UNKNOWN) {
-    return NS_ERROR_FAILURE;
+  if (cabforumOIDItem.len > CertPolicyId::MAX_BYTES) {
+    return NS_ERROR_UNEXPECTED;
   }
+
+  sCABForumEVId.numBytes = cabforumOIDItem.len;
+  PodCopy(sCABForumEVId.bytes, cabforumOIDItem.data, sCABForumEVId.numBytes);
 
   for (size_t i = 0; i < ArrayLength(kEVInfos); ++i) {
     const EVInfo& entry = kEVInfos[i];
@@ -1142,71 +1159,91 @@ nsresult LoadExtendedValidationInfo() {
     if (srv != SECSuccess) {
       return NS_ERROR_FAILURE;
     }
-    sEVInfoOIDTags[i] = RegisterOID(evOIDItem, entry.oidName);
-    if (sEVInfoOIDTags[i] == SEC_OID_UNKNOWN) {
-      return NS_ERROR_FAILURE;
+    if (evOIDItem.len > CertPolicyId::MAX_BYTES) {
+      return NS_ERROR_UNEXPECTED;
     }
+    sEVInfoIds[i].numBytes = evOIDItem.len;
+    PodCopy(sEVInfoIds[i].bytes, evOIDItem.data, sEVInfoIds[i].numBytes);
   }
 
   return NS_OK;
 }
 
-// Helper function for GetFirstEVPolicy(): returns the first suitable policy
-// from the given list of policies.
-bool GetFirstEVPolicyFromPolicyList(
-    const UniqueCERTCertificatePolicies& policies,
-    /*out*/ mozilla::pkix::CertPolicyId& policy,
-    /*out*/ SECOidTag& policyOidTag) {
-  for (size_t i = 0; policies->policyInfos[i]; i++) {
-    const CERTPolicyInfo* policyInfo = policies->policyInfos[i];
-    SECOidTag policyInfoOID = policyInfo->oid;
-    if (policyInfoOID == SEC_OID_UNKNOWN || !isEVPolicy(policyInfoOID)) {
-      continue;
-    }
-
-    const SECOidData* oidData = SECOID_FindOIDByTag(policyInfoOID);
-    MOZ_ASSERT(oidData);
-    MOZ_ASSERT(oidData->oid.data);
-    MOZ_ASSERT(oidData->oid.len > 0);
-    MOZ_ASSERT(oidData->oid.len <= mozilla::pkix::CertPolicyId::MAX_BYTES);
-    if (!oidData || !oidData->oid.data || oidData->oid.len == 0 ||
-        oidData->oid.len > mozilla::pkix::CertPolicyId::MAX_BYTES) {
-      continue;
-    }
-
-    policy.numBytes = AssertedCast<uint16_t>(oidData->oid.len);
-    PodCopy(policy.bytes, oidData->oid.data, policy.numBytes);
-    policyOidTag = policyInfoOID;
+// Helper function for GetFirstEVPolicy(): reads an EV Policy if there is one
+bool FindMatchingEVPolicy(Reader& idReader,
+                          mozilla::pkix::CertPolicyId& policy) {
+  Input cabForumEVIdBytes;
+  Result rv =
+      cabForumEVIdBytes.Init(sCABForumEVId.bytes, sCABForumEVId.numBytes);
+  if (rv == Success && idReader.MatchRest(cabForumEVIdBytes)) {
+    policy = sCABForumEVId;
     return true;
   }
 
-  return false;
-}
-
-bool GetFirstEVPolicy(CERTCertificate& cert,
-                      /*out*/ mozilla::pkix::CertPolicyId& policy,
-                      /*out*/ SECOidTag& policyOidTag) {
-  if (!cert.extensions) {
-    return false;
-  }
-
-  for (size_t i = 0; cert.extensions[i]; i++) {
-    const CERTCertExtension* extension = cert.extensions[i];
-    if (SECOID_FindOIDTag(&extension->id) !=
-        SEC_OID_X509_CERTIFICATE_POLICIES) {
-      continue;
-    }
-
-    UniqueCERTCertificatePolicies policies(
-        CERT_DecodeCertificatePoliciesExtension(&extension->value));
-    if (!policies) {
-      continue;
-    }
-
-    if (GetFirstEVPolicyFromPolicyList(policies, policy, policyOidTag)) {
+  for (const CertPolicyId& id : sEVInfoIds) {
+    Input idBytes;
+    rv = idBytes.Init(id.bytes, id.numBytes);
+    if (rv == Success && idReader.MatchRest(idBytes)) {
+      policy = id;
       return true;
     }
   }
+  return false;
+}
+
+bool GetFirstEVPolicy(const nsTArray<uint8_t>& certBytes,
+                      /*out*/ mozilla::pkix::CertPolicyId& policy) {
+  Input certInput;
+  Result rv = certInput.Init(certBytes.Elements(), certBytes.Length());
+  if (rv != Success) {
+    return false;
+  }
+  // we don't use the certificate for path building, so this parameter
+  // doesn't matter
+  EndEntityOrCA notUsedForPaths = EndEntityOrCA::MustBeEndEntity;
+  BackCert cert(certInput, notUsedForPaths, nullptr);
+  rv = cert.Init();
+  if (rv != Success) {
+    return false;
+  }
+
+  const Input* policies = cert.GetCertificatePolicies();
+  if (!policies) {
+    return false;
+  }
+
+  Reader extension(*policies);
+  Reader certificatePolicies;
+  // certificatePolicies ::= SEQUENCE SIZE (1..MAX) OF PolicyInformation
+  // PolicyInformation ::= SEQUENCE {
+  //   policyIdentifier   CertPolicyId,
+  //   ...
+  // }
+  // CertPolicyId ::= OBJECT IDENTIFIER
+  rv = der::ExpectTagAndGetValue(extension, der::SEQUENCE, certificatePolicies);
+  if (rv != Success || !extension.AtEnd()) {
+    return false;
+  }
+
+  do {
+    Reader policyInformation;
+    rv = der::ExpectTagAndGetValue(certificatePolicies, der::SEQUENCE,
+                                   policyInformation);
+    if (rv != Success) {
+      return false;
+    }
+
+    Reader policyOid;
+    rv = der::ExpectTagAndGetValue(policyInformation, der::OIDTag, policyOid);
+    if (rv != Success) {
+      return false;
+    }
+
+    // we don't validate policy qualifiers here
+    if (FindMatchingEVPolicy(policyOid, policy)) {
+      return true;
+    }
+  } while (!certificatePolicies.AtEnd());
 
   return false;
 }

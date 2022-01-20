@@ -25,9 +25,9 @@ class RemoteLookAndFeel final : public nsXPLookAndFeel {
 
   void NativeInit() override {}
 
-  nsresult NativeGetInt(IntID aID, int32_t& aResult) override;
-  nsresult NativeGetFloat(FloatID aID, float& aResult) override;
-  nsresult NativeGetColor(ColorID aID, nscolor& aResult) override;
+  nsresult NativeGetInt(IntID, int32_t& aResult) override;
+  nsresult NativeGetFloat(FloatID, float& aResult) override;
+  nsresult NativeGetColor(ColorID, ColorScheme, nscolor& aResult) override;
   bool NativeGetFont(FontID aID, nsString& aFontName,
                      gfxFontStyle& aFontStyle) override;
 
@@ -56,14 +56,6 @@ class RemoteLookAndFeel final : public nsXPLookAndFeel {
 
  private:
   LookAndFeelTables mTables;
-
-  // A cached copy of the data extracted by ExtractData.
-  //
-  // Storing this lets us avoid doing most of the work of ExtractData each
-  // time we create a new content process.
-  //
-  // Only used in the parent process.
-  static StaticAutoPtr<FullLookAndFeel> sCachedLookAndFeelData;
 };
 
 }  // namespace mozilla::widget

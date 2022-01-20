@@ -36,6 +36,13 @@ export interface Toolbox {
 }
 
 /**
+ * TS-TODO - Stub.
+ */
+export interface Commands {
+  client: any;
+}
+
+/**
  * The actor version of the ActorReadyGeckoProfilerInterface returns promises,
  * while if it's instantiated directly it will not return promises.
  */
@@ -194,9 +201,9 @@ export type GetEnvironmentVariable = (envName: string) => string;
 
 /**
  * This is the type signature for a function to query the browser for the
- * ID of BrowsingContext of active tab.
+ * ID of the active tab.
  */
-export type GetActiveBrowsingContextID = () => number;
+export type GetActiveBrowserID = () => number;
 
 /**
  * This interface is injected into profiler.firefox.com

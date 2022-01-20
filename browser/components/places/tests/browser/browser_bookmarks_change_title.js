@@ -63,8 +63,8 @@ add_task(async function test_change_title_from_BookmarkStar() {
 
   let bookmarkPanelTitle = document.getElementById("editBookmarkPanelTitle");
   Assert.equal(
-    bookmarkPanelTitle.value,
-    gNavigatorBundle.getString("editBookmarkPanel.editBookmarkTitle"),
+    bookmarkPanelTitle.textContent,
+    gFluentStrings.formatValueSync("bookmarks-edit-bookmark"),
     "Bookmark title is correct"
   );
 
@@ -116,8 +116,10 @@ add_task(async function test_change_title_from_Toolbar() {
       });
       await promisePopup;
 
-      let properties = document.getElementById("placesContext_show:info");
-      EventUtils.synthesizeMouseAtCenter(properties, {});
+      let properties = document.getElementById(
+        "placesContext_show_bookmark:info"
+      );
+      placesContext.activateItem(properties, {});
     },
     async function test(dialogWin) {
       // Ensure the dialog has initialized.
@@ -126,10 +128,17 @@ add_task(async function test_change_title_from_Toolbar() {
       let namepicker = dialogWin.document.getElementById(
         "editBMPanel_namePicker"
       );
-      Assert.ok(
-        dialogWin.document.title.includes(titleAfterFirstUpdate),
-        "Dialog window title should include bookmark title."
+
+      let editBookmarkDialogTitle = dialogWin.document.getElementById(
+        "titleText"
       );
+      let bundle = dialogWin.document.getElementById("stringBundle");
+
+      Assert.equal(
+        bundle.getString("dialogTitleEditBookmark2"),
+        editBookmarkDialogTitle.textContent
+      );
+
       Assert.equal(
         namepicker.value,
         titleAfterFirstUpdate,

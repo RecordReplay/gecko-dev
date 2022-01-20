@@ -122,7 +122,6 @@ class MOZ_STACK_CLASS ElemOpEmitter {
   enum class Kind {
     Get,
     Call,
-    Set,
     Delete,
     PostIncrement,
     PreIncrement,
@@ -139,7 +138,6 @@ class MOZ_STACK_CLASS ElemOpEmitter {
 
   Kind kind_;
   ObjKind objKind_;
-  NameVisibility visibility_ = NameVisibility::Public;
 
 #ifdef DEBUG
   // The state of this emitter.
@@ -212,65 +210,55 @@ class MOZ_STACK_CLASS ElemOpEmitter {
 #endif
 
  public:
-  ElemOpEmitter(BytecodeEmitter* bce, Kind kind, ObjKind objKind,
-                NameVisibility visibility);
+  ElemOpEmitter(BytecodeEmitter* bce, Kind kind, ObjKind objKind);
 
  private:
-  MOZ_MUST_USE bool isCall() const { return kind_ == Kind::Call; }
+  [[nodiscard]] bool isCall() const { return kind_ == Kind::Call; }
 
-  MOZ_MUST_USE bool isSimpleAssignment() const {
+  [[nodiscard]] bool isSimpleAssignment() const {
     return kind_ == Kind::SimpleAssignment;
   }
 
-  bool isPrivate() { return visibility_ == NameVisibility::Private; }
+  [[nodiscard]] bool isPropInit() const { return kind_ == Kind::PropInit; }
 
-  MOZ_MUST_USE bool isPropInit() const { return kind_ == Kind::PropInit; }
+  [[nodiscard]] bool isDelete() const { return kind_ == Kind::Delete; }
 
-  MOZ_MUST_USE bool isPrivateGet() const {
-    return visibility_ == NameVisibility::Private && kind_ == Kind::Get;
-  }
-
-  MOZ_MUST_USE bool isDelete() const { return kind_ == Kind::Delete; }
-
-  MOZ_MUST_USE bool isCompoundAssignment() const {
+  [[nodiscard]] bool isCompoundAssignment() const {
     return kind_ == Kind::CompoundAssignment;
   }
 
-  MOZ_MUST_USE bool isIncDec() const { return isPostIncDec() || isPreIncDec(); }
+  [[nodiscard]] bool isIncDec() const {
+    return isPostIncDec() || isPreIncDec();
+  }
 
-  MOZ_MUST_USE bool isPostIncDec() const {
+  [[nodiscard]] bool isPostIncDec() const {
     return kind_ == Kind::PostIncrement || kind_ == Kind::PostDecrement;
   }
 
-  MOZ_MUST_USE bool isPreIncDec() const {
+  [[nodiscard]] bool isPreIncDec() const {
     return kind_ == Kind::PreIncrement || kind_ == Kind::PreDecrement;
   }
 
-  MOZ_MUST_USE bool isInc() const {
+  [[nodiscard]] bool isInc() const {
     return kind_ == Kind::PostIncrement || kind_ == Kind::PreIncrement;
   }
 
-  MOZ_MUST_USE bool isSuper() const { return objKind_ == ObjKind::Super; }
+  [[nodiscard]] bool isSuper() const { return objKind_ == ObjKind::Super; }
 
  public:
-  MOZ_MUST_USE bool prepareForObj();
-  MOZ_MUST_USE bool prepareForKey();
+  [[nodiscard]] bool prepareForObj();
+  [[nodiscard]] bool prepareForKey();
 
-  MOZ_MUST_USE bool emitGet();
+  [[nodiscard]] bool emitGet();
 
-  MOZ_MUST_USE bool prepareForRhs();
-  MOZ_MUST_USE bool skipObjAndKeyAndRhs();
+  [[nodiscard]] bool prepareForRhs();
+  [[nodiscard]] bool skipObjAndKeyAndRhs();
 
-  MOZ_MUST_USE bool emitDelete();
+  [[nodiscard]] bool emitDelete();
 
-  MOZ_MUST_USE bool emitAssignment();
+  [[nodiscard]] bool emitAssignment();
 
-  MOZ_MUST_USE bool emitIncDec();
-
- private:
-  // When we have private names, we may need to emit a CheckPrivateField
-  // op to potentially throw errors where required.
-  MOZ_MUST_USE bool emitPrivateGuard();
+  [[nodiscard]] bool emitIncDec();
 };
 
 } /* namespace frontend */

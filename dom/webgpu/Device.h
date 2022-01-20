@@ -6,6 +6,7 @@
 #ifndef GPU_DEVICE_H_
 #define GPU_DEVICE_H_
 
+#include "ObjectModel.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/webgpu/WebGPUTypes.h"
@@ -86,7 +87,8 @@ class Device final : public DOMEventTargetHelper {
   RefPtr<MappingPromise> MapBufferAsync(RawId aId, uint32_t aMode,
                                         size_t aOffset, size_t aSize,
                                         ErrorResult& aRv);
-  void UnmapBuffer(RawId aId, ipc::Shmem&& aShmem, bool aFlush);
+  void UnmapBuffer(RawId aId, ipc::Shmem&& aShmem, bool aFlush,
+                   bool aKeepShmem);
   already_AddRefed<Texture> InitSwapChain(
       const dom::GPUSwapChainDescriptor& aDesc,
       const dom::GPUExtent3DDict& aExtent3D,
@@ -105,7 +107,7 @@ class Device final : public DOMEventTargetHelper {
   void GetLabel(nsAString& aValue) const;
   void SetLabel(const nsAString& aLabel);
 
-  Queue* DefaultQueue() const;
+  const RefPtr<Queue>& GetQueue() const;
 
   already_AddRefed<Buffer> CreateBuffer(const dom::GPUBufferDescriptor& aDesc,
                                         ErrorResult& aRv);
@@ -117,6 +119,8 @@ class Device final : public DOMEventTargetHelper {
 
   already_AddRefed<CommandEncoder> CreateCommandEncoder(
       const dom::GPUCommandEncoderDescriptor& aDesc);
+  already_AddRefed<RenderBundleEncoder> CreateRenderBundleEncoder(
+      const dom::GPURenderBundleEncoderDescriptor& aDesc);
 
   already_AddRefed<BindGroupLayout> CreateBindGroupLayout(
       const dom::GPUBindGroupLayoutDescriptor& aDesc);
@@ -126,11 +130,16 @@ class Device final : public DOMEventTargetHelper {
       const dom::GPUBindGroupDescriptor& aDesc);
 
   already_AddRefed<ShaderModule> CreateShaderModule(
-      const dom::GPUShaderModuleDescriptor& aDesc);
+      JSContext* aCx, const dom::GPUShaderModuleDescriptor& aDesc);
   already_AddRefed<ComputePipeline> CreateComputePipeline(
       const dom::GPUComputePipelineDescriptor& aDesc);
   already_AddRefed<RenderPipeline> CreateRenderPipeline(
       const dom::GPURenderPipelineDescriptor& aDesc);
+
+  void PushErrorScope(const dom::GPUErrorFilter& aFilter);
+  already_AddRefed<dom::Promise> PopErrorScope(ErrorResult& aRv);
+
+  void Destroy();
 
   IMPL_EVENT_HANDLER(uncapturederror)
 };

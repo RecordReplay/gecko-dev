@@ -7,6 +7,7 @@
 #include "Worklet.h"
 #include "WorkletThread.h"
 
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/WorkletBinding.h"
 #include "mozilla/dom/WorkletGlobalScope.h"
 #include "mozilla/dom/BlobBinding.h"
@@ -125,7 +126,7 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
     RequestOrUSVString requestInput;
     requestInput.SetAsUSVString().ShareOrDependUpon(aModuleURL);
 
-    RequestInit requestInit;
+    RootedDictionary<RequestInit> requestInit(aCx);
     requestInit.mCredentials.Construct(aOptions.mCredentials);
 
     SafeRefPtr<Request> request =
@@ -405,8 +406,20 @@ void ExecutionRunnable::RunOnWorkletThread() {
   // https://html.spec.whatwg.org/multipage/webappapis.html#run-a-module-script
   // without /rethrow errors/ and so unhandled exceptions do not cause the
   // promise to be rejected.
-  JS::Rooted<JS::Value> ignored(cx);
-  JS::ModuleEvaluate(cx, module, &ignored);
+  JS::Rooted<JS::Value> rval(cx);
+  JS::ModuleEvaluate(cx, module, &rval);
+  // With top-level await, we need to unwrap the module promise, or we end up
+  // with less helpfull error messages. A modules return value can either be a
+  // promise or undefined. If the value is defined, we have an async module and
+  // can unwrap it.
+  if (!rval.isUndefined() && rval.isObject()) {
+    JS::Rooted<JSObject*> aEvaluationPromise(cx);
+    aEvaluationPromise.set(&rval.toObject());
+    if (!JS::ThrowOnModuleEvaluationFailure(cx, aEvaluationPromise)) {
+      mResult = NS_ERROR_DOM_ABORT_ERR;
+      return;
+    }
+  }
 
   // All done.
   mResult = NS_OK;
@@ -485,7 +498,7 @@ void Worklet::AddImportFetchHandler(const nsACString& aURI,
   MOZ_ASSERT(!mImportHandlers.GetWeak(aURI));
   MOZ_ASSERT(NS_IsMainThread());
 
-  mImportHandlers.Put(aURI, RefPtr{aHandler});
+  mImportHandlers.InsertOrUpdate(aURI, RefPtr{aHandler});
 }
 
 }  // namespace dom

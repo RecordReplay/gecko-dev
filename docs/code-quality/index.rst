@@ -10,7 +10,7 @@ In this document, we try to list these all tools.
   :maxdepth: 1
   :glob:
 
-  static-analysis.rst
+  static-analysis/index.rst
   lint/index.rst
   coding-style/index.rst
 
@@ -31,7 +31,7 @@ In this document, we try to list these all tools.
    * - Clang-Tidy
      - Yes
      - `bug 712350 <https://bugzilla.mozilla.org/show_bug.cgi?id=712350>`__
-     - :ref:`Static analysis <Mach static analysis>`
+     - :ref:`Static analysis <Static Analysis>`
      - https://clang.llvm.org/extra/clang-tidy/checks/list.html
    * - Clang analyzer
      -

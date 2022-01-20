@@ -281,7 +281,6 @@ var DownloadsPanel = {
       this.panel.removeAttribute("keyfocus");
       this.panel.removeEventListener("mousemove", this);
     }
-    return aValue;
   },
 
   /**
@@ -564,15 +563,24 @@ var DownloadsPanel = {
     }
 
     DownloadsCommon.log("Opening downloads panel popup.");
-    PanelMultiView.openPopup(
-      this.panel,
-      anchor,
-      "bottomcenter topright",
-      0,
-      0,
-      false,
-      null
-    ).catch(Cu.reportError);
+
+    // Delay displaying the panel because this function will sometimes be
+    // called while another window is closing (like the window for selecting
+    // whether to save or open the file), and that would cause the panel to
+    // close immediately.
+    setTimeout(
+      () =>
+        PanelMultiView.openPopup(
+          this.panel,
+          anchor,
+          "bottomcenter topright",
+          0,
+          0,
+          false,
+          null
+        ).catch(Cu.reportError),
+      0
+    );
   },
 };
 
@@ -592,11 +600,6 @@ var DownloadsView = {
    * Maximum number of items shown by the list at any given time.
    */
   kItemCountLimit: 5,
-
-  /**
-   * Indicates whether there is an open contextMenu for a download item.
-   */
-  contextMenuOpen: false,
 
   /**
    * Indicates whether there is a DownloadsBlockedSubview open.
@@ -777,6 +780,8 @@ var DownloadsView = {
     );
 
     let element = document.createXULElement("richlistitem");
+    element.setAttribute("align", "center");
+
     let viewItem = new DownloadsViewItem(download, element);
     this._visibleViewItems.set(download, viewItem);
     this._itemsForElements.set(element, viewItem);
@@ -833,6 +838,17 @@ var DownloadsView = {
           command += ":" + openWhere;
         }
       }
+      // Toggle opening the file after the download has completed
+      if (
+        !download.stopped &&
+        command.startsWith("downloadsCmd_open") &&
+        Services.prefs.getBoolPref(
+          "browser.download.improvements_to_download_panel"
+        )
+      ) {
+        download.launchWhenSucceeded = !download.launchWhenSucceeded;
+      }
+
       DownloadsCommon.log("onDownloadClick, resolved command: ", command);
       goDoCommand(command);
     }
@@ -867,28 +883,20 @@ var DownloadsView = {
     }
   },
 
-  /**
-   * Event handlers to keep track of context menu state (open/closed) for
-   * download items.
-   */
-  onContextPopupShown(aEvent) {
-    // Ignore events raised by nested popups.
-    if (aEvent.target != aEvent.currentTarget) {
-      return;
+  get contextMenu() {
+    let menu = document.getElementById("downloadsContextMenu");
+    if (menu) {
+      delete this.contextMenu;
+      this.contextMenu = menu;
     }
-
-    DownloadsCommon.log("Context menu has shown.");
-    this.contextMenuOpen = true;
+    return menu;
   },
 
-  onContextPopupHidden(aEvent) {
-    // Ignore events raised by nested popups.
-    if (aEvent.target != aEvent.currentTarget) {
-      return;
-    }
-
-    DownloadsCommon.log("Context menu has hidden.");
-    this.contextMenuOpen = false;
+  /**
+   * Indicates whether there is an open contextMenu for a download item.
+   */
+  get contextMenuOpen() {
+    return this.contextMenu.state != "closed";
   },
 
   /**
@@ -938,46 +946,7 @@ var DownloadsView = {
 
     DownloadsViewController.updateCommands();
 
-    let download = element._shell.download;
-    let mimeInfo = DownloadsCommon.getMimeInfo(download);
-    let { preferredAction, useSystemDefault } = mimeInfo ? mimeInfo : {};
-
-    // Set the state attribute so that only the appropriate items are displayed.
-    let contextMenu = document.getElementById("downloadsContextMenu");
-    contextMenu.setAttribute("state", element.getAttribute("state"));
-    if (element.hasAttribute("exists")) {
-      contextMenu.setAttribute("exists", "true");
-    } else {
-      contextMenu.removeAttribute("exists");
-    }
-    contextMenu.classList.toggle(
-      "temporary-block",
-      element.classList.contains("temporary-block")
-    );
-    if (element.hasAttribute("viewable-internally")) {
-      contextMenu.setAttribute("viewable-internally", "true");
-      let alwaysUseSystemViewerItem = contextMenu.querySelector(
-        ".downloadAlwaysUseSystemDefaultMenuItem"
-      );
-      if (preferredAction === useSystemDefault) {
-        alwaysUseSystemViewerItem.setAttribute("checked", "true");
-      } else {
-        alwaysUseSystemViewerItem.removeAttribute("checked");
-      }
-      alwaysUseSystemViewerItem.toggleAttribute(
-        "enabled",
-        DownloadsCommon.alwaysOpenInSystemViewerItemEnabled
-      );
-      let useSystemViewerItem = contextMenu.querySelector(
-        ".downloadUseSystemDefaultMenuItem"
-      );
-      useSystemViewerItem.toggleAttribute(
-        "enabled",
-        DownloadsCommon.openInSystemViewerItemEnabled
-      );
-    } else {
-      contextMenu.removeAttribute("viewable-internally");
-    }
+    DownloadsViewUI.updateContextMenuForElement(this.contextMenu, element);
   },
 
   onDownloadDragStart(aEvent) {
@@ -1306,7 +1275,7 @@ var DownloadsSummary = {
    */
   set active(aActive) {
     if (aActive == this._active || !this._summaryNode) {
-      return this._active;
+      return;
     }
     if (aActive) {
       DownloadsCommon.getSummary(
@@ -1317,7 +1286,7 @@ var DownloadsSummary = {
       DownloadsFooter.showingSummary = false;
     }
 
-    return (this._active = aActive);
+    this._active = aActive;
   },
 
   /**
@@ -1342,7 +1311,7 @@ var DownloadsSummary = {
       this._summaryNode.removeAttribute("inprogress");
     }
     // If progress isn't being shown, then we simply do not show the summary.
-    return (DownloadsFooter.showingSummary = aShowingProgress);
+    DownloadsFooter.showingSummary = aShowingProgress;
   },
 
   /**
@@ -1356,7 +1325,6 @@ var DownloadsSummary = {
     if (this._progressNode) {
       this._progressNode.setAttribute("value", aValue);
     }
-    return aValue;
   },
 
   /**
@@ -1371,7 +1339,6 @@ var DownloadsSummary = {
       this._descriptionNode.setAttribute("value", aValue);
       this._descriptionNode.setAttribute("tooltiptext", aValue);
     }
-    return aValue;
   },
 
   /**
@@ -1387,7 +1354,6 @@ var DownloadsSummary = {
       this._detailsNode.setAttribute("value", aValue);
       this._detailsNode.setAttribute("tooltiptext", aValue);
     }
-    return aValue;
   },
 
   /**
@@ -1481,19 +1447,19 @@ XPCOMUtils.defineConstant(this, "DownloadsSummary", DownloadsSummary);
 
 /**
  * Manages events sent to to the footer vbox, which contains both the
- * DownloadsSummary as well as the "Show All Downloads" button.
+ * DownloadsSummary as well as the "Show all downloads" button.
  */
 var DownloadsFooter = {
   /**
    * Focuses the appropriate element within the footer. If the summary
-   * is visible, focus it. If not, focus the "Show All Downloads"
+   * is visible, focus it. If not, focus the "Show all downloads"
    * button.
    */
   focus() {
     if (this._showingSummary) {
       DownloadsSummary.focus();
     } else {
-      DownloadsView.downloadsHistory.focus();
+      DownloadsView.downloadsHistory.focus({ preventFocusRing: true });
     }
   },
 
@@ -1501,7 +1467,7 @@ var DownloadsFooter = {
 
   /**
    * Sets whether or not the Downloads Summary should be displayed in the
-   * footer. If not, the "Show All Downloads" button is shown instead.
+   * footer. If not, the "Show all downloads" button is shown instead.
    */
   set showingSummary(aValue) {
     if (this._footerNode) {
@@ -1512,7 +1478,6 @@ var DownloadsFooter = {
       }
       this._showingSummary = aValue;
     }
-    return aValue;
   },
 
   /**

@@ -202,6 +202,8 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
     return mDocShellHasBeenActiveSinceNavigationStart;
   }
 
+  mozilla::TimeStamp LoadEventEnd() { return mLoadEventEnd; }
+
  private:
   friend class nsDocShell;
   nsDOMNavigationTiming(nsDocShell* aDocShell, nsDOMNavigationTiming* aOther);
@@ -214,8 +216,6 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
   mozilla::TimeStamp GetUnloadEventEndTimeStamp() const;
 
   bool IsTopLevelContentDocumentInContentProcess() const;
-  void MaybeSubmitTimeToLoadEventPreloadTelemetry(
-      mozilla::TimeStamp aLoadEventEnd) const;
 
   // Should those be amended, the IPC serializer should be updated
   // accordingly.
@@ -245,8 +245,6 @@ class nsDOMNavigationTiming final : public mozilla::RelativeTimeline {
   mozilla::TimeStamp mDOMComplete;
 
   mozilla::TimeStamp mTTFI;
-
-  mozilla::TimeStamp mLoadEventStartForTelemetry;
 
   bool mDocShellHasBeenActiveSinceNavigationStart;
 

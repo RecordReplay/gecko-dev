@@ -180,254 +180,6 @@ TEST_F(APZCBasicTester, Fling) {
   }
 }
 
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-TEST_F(APZCBasicTester, FlingIntoOverscroll) {
-  // Enable overscrolling.
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-  SCOPED_GFX_PREF_FLOAT("apz.fling_min_velocity_threshold", 0.0f);
-
-  // Scroll down by 25 px. Don't fling for simplicity.
-  Pan(apzc, 50, 25, PanOptions::NoFling);
-
-  // Now scroll back up by 20px, this time flinging after.
-  // The fling should cover the remaining 5 px of room to scroll, then
-  // go into overscroll, and finally snap-back to recover from overscroll.
-  Pan(apzc, 25, 45);
-  const TimeDuration increment = TimeDuration::FromMilliseconds(1);
-  bool reachedOverscroll = false;
-  bool recoveredFromOverscroll = false;
-  while (apzc->AdvanceAnimations(mcc->GetSampleTime())) {
-    if (!reachedOverscroll && apzc->IsOverscrolled()) {
-      reachedOverscroll = true;
-    }
-    if (reachedOverscroll && !apzc->IsOverscrolled()) {
-      recoveredFromOverscroll = true;
-    }
-    mcc->AdvanceBy(increment);
-  }
-  EXPECT_TRUE(reachedOverscroll);
-  EXPECT_TRUE(recoveredFromOverscroll);
-}
-#endif
-
-TEST_F(APZCBasicTester, PanningTransformNotifications) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-
-  // Scroll down by 25 px. Ensure we only get one set of
-  // state change notifications.
-  //
-  // Then, scroll back up by 20px, this time flinging after.
-  // The fling should cover the remaining 5 px of room to scroll, then
-  // go into overscroll, and finally snap-back to recover from overscroll.
-  // Again, ensure we only get one set of state change notifications for
-  // this entire procedure.
-
-  MockFunction<void(std::string checkPointName)> check;
-  {
-    InSequence s;
-    EXPECT_CALL(check, Call("Simple pan"));
-    EXPECT_CALL(*mcc,
-                NotifyAPZStateChange(
-                    _, GeckoContentController::APZStateChange::eStartTouch, _))
-        .Times(1);
-    EXPECT_CALL(
-        *mcc,
-        NotifyAPZStateChange(
-            _, GeckoContentController::APZStateChange::eTransformBegin, _))
-        .Times(1);
-    EXPECT_CALL(
-        *mcc, NotifyAPZStateChange(
-                  _, GeckoContentController::APZStateChange::eStartPanning, _))
-        .Times(1);
-    EXPECT_CALL(*mcc,
-                NotifyAPZStateChange(
-                    _, GeckoContentController::APZStateChange::eEndTouch, _))
-        .Times(1);
-    EXPECT_CALL(
-        *mcc, NotifyAPZStateChange(
-                  _, GeckoContentController::APZStateChange::eTransformEnd, _))
-        .Times(1);
-    EXPECT_CALL(check, Call("Complex pan"));
-    EXPECT_CALL(*mcc,
-                NotifyAPZStateChange(
-                    _, GeckoContentController::APZStateChange::eStartTouch, _))
-        .Times(1);
-    EXPECT_CALL(
-        *mcc,
-        NotifyAPZStateChange(
-            _, GeckoContentController::APZStateChange::eTransformBegin, _))
-        .Times(1);
-    EXPECT_CALL(
-        *mcc, NotifyAPZStateChange(
-                  _, GeckoContentController::APZStateChange::eStartPanning, _))
-        .Times(1);
-    EXPECT_CALL(*mcc,
-                NotifyAPZStateChange(
-                    _, GeckoContentController::APZStateChange::eEndTouch, _))
-        .Times(1);
-    EXPECT_CALL(
-        *mcc, NotifyAPZStateChange(
-                  _, GeckoContentController::APZStateChange::eTransformEnd, _))
-        .Times(1);
-    EXPECT_CALL(check, Call("Done"));
-  }
-
-  check.Call("Simple pan");
-  Pan(apzc, 50, 25, PanOptions::NoFling);
-  check.Call("Complex pan");
-  Pan(apzc, 25, 45);
-  apzc->AdvanceAnimationsUntilEnd();
-  check.Call("Done");
-}
-
-void APZCBasicTester::PanIntoOverscroll() {
-  int touchStart = 500;
-  int touchEnd = 10;
-  Pan(apzc, touchStart, touchEnd);
-  EXPECT_TRUE(apzc->IsOverscrolled());
-}
-
-void APZCBasicTester::TestOverscroll() {
-  // Pan sufficiently to hit overscroll behavior
-  PanIntoOverscroll();
-
-  // Check that we recover from overscroll via an animation.
-  ParentLayerPoint expectedScrollOffset(0, GetScrollRange().YMost());
-  SampleAnimationUntilRecoveredFromOverscroll(expectedScrollOffset);
-}
-
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-TEST_F(APZCBasicTester, OverScrollPanning) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-
-  TestOverscroll();
-}
-#endif
-
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-// Tests that an overscroll animation doesn't trigger an assertion failure
-// in the case where a sample has a velocity of zero.
-TEST_F(APZCBasicTester, OverScroll_Bug1152051a) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-
-  // Doctor the prefs to make the velocity zero at the end of the first sample.
-
-  // This ensures our incoming velocity to the overscroll animation is
-  // a round(ish) number, 4.9 (that being the distance of the pan before
-  // overscroll, which is 500 - 10 = 490 pixels, divided by the duration of
-  // the pan, which is 100 ms).
-  SCOPED_GFX_PREF_FLOAT("apz.fling_friction", 0);
-
-  TestOverscroll();
-}
-#endif
-
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-// Tests that ending an overscroll animation doesn't leave around state that
-// confuses the next overscroll animation.
-TEST_F(APZCBasicTester, OverScroll_Bug1152051b) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-  SCOPED_GFX_PREF_FLOAT("apz.overscroll.stop_distance_threshold", 0.1f);
-
-  // Pan sufficiently to hit overscroll behavior
-  PanIntoOverscroll();
-
-  // Sample animations once, to give the fling animation started on touch-up
-  // a chance to realize it's overscrolled, and schedule a call to
-  // HandleFlingOverscroll().
-  SampleAnimationOnce();
-
-  // This advances the time and runs the HandleFlingOverscroll task scheduled in
-  // the previous call, which starts an overscroll animation. It then samples
-  // the overscroll animation once, to get it to initialize the first overscroll
-  // sample.
-  SampleAnimationOnce();
-
-  // Do a touch-down to cancel the overscroll animation, and then a touch-up
-  // to schedule a new one since we're still overscrolled. We don't pan because
-  // panning can trigger functions that clear the overscroll animation state
-  // in other ways.
-  APZEventResult result = TouchDown(apzc, ScreenIntPoint(10, 10), mcc->Time());
-  if (StaticPrefs::layout_css_touch_action_enabled() &&
-      result.mStatus != nsEventStatus_eConsumeNoDefault) {
-    SetDefaultAllowedTouchBehavior(apzc, result.mInputBlockId);
-  }
-  TouchUp(apzc, ScreenIntPoint(10, 10), mcc->Time());
-
-  // Sample the second overscroll animation to its end.
-  // If the ending of the first overscroll animation fails to clear state
-  // properly, this will assert.
-  ParentLayerPoint expectedScrollOffset(0, GetScrollRange().YMost());
-  SampleAnimationUntilRecoveredFromOverscroll(expectedScrollOffset);
-}
-#endif
-
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-// Tests that the page doesn't get stuck in an
-// overscroll animation after a low-velocity pan.
-TEST_F(APZCBasicTester, OverScrollAfterLowVelocityPan_Bug1343775) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-
-  // Pan into overscroll with a velocity less than the
-  // apz.fling_min_velocity_threshold preference.
-  Pan(apzc, 10, 30);
-
-  EXPECT_TRUE(apzc->IsOverscrolled());
-
-  apzc->AdvanceAnimationsUntilEnd();
-
-  // Check that we recovered from overscroll.
-  EXPECT_FALSE(apzc->IsOverscrolled());
-}
-#endif
-
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-TEST_F(APZCBasicTester, OverScrollAbort) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-
-  // Pan sufficiently to hit overscroll behavior
-  int touchStart = 500;
-  int touchEnd = 10;
-  Pan(apzc, touchStart, touchEnd);
-  EXPECT_TRUE(apzc->IsOverscrolled());
-
-  ParentLayerPoint pointOut;
-  AsyncTransform viewTransformOut;
-
-  // This sample call will run to the end of the fling animation
-  // and will schedule the overscroll animation.
-  apzc->SampleContentTransformForFrame(&viewTransformOut, pointOut,
-                                       TimeDuration::FromMilliseconds(10000));
-  EXPECT_TRUE(apzc->IsOverscrolled());
-
-  // At this point, we have an active overscroll animation.
-  // Check that cancelling the animation clears the overscroll.
-  apzc->CancelAnimation();
-  EXPECT_FALSE(apzc->IsOverscrolled());
-  apzc->AssertStateIsReset();
-}
-#endif
-
-#ifndef MOZ_WIDGET_ANDROID  // Currently fails on Android
-TEST_F(APZCBasicTester, OverScrollPanningAbort) {
-  SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
-
-  // Pan sufficiently to hit overscroll behaviour. Keep the finger down so
-  // the pan does not end.
-  int touchStart = 500;
-  int touchEnd = 10;
-  Pan(apzc, touchStart, touchEnd, PanOptions::KeepFingerDown);
-  EXPECT_TRUE(apzc->IsOverscrolled());
-
-  // Check that calling CancelAnimation() while the user is still panning
-  // (and thus no fling or snap-back animation has had a chance to start)
-  // clears the overscroll.
-  apzc->CancelAnimation();
-  EXPECT_FALSE(apzc->IsOverscrolled());
-  apzc->AssertStateIsReset();
-}
-#endif
-
 #ifndef MOZ_WIDGET_ANDROID  // Maybe fails on Android
 TEST_F(APZCBasicTester, ResumeInterruptedTouchDrag_Bug1592435) {
   // Start a touch-drag and scroll some amount, not lifting the finger.
@@ -527,4 +279,221 @@ TEST_F(APZCBasicTester, RelativeScrollOffset) {
   metrics = apzc->GetFrameMetrics();
   EXPECT_EQ(metrics.GetLayoutScrollOffset(), CSSPoint(200, 200));
   EXPECT_EQ(metrics.GetVisualScrollOffset(), CSSPoint(220, 220));
+}
+
+TEST_F(APZCBasicTester, MultipleSmoothScrollsSmooth) {
+  // We want to test that if we send multiple smooth scroll requests that we
+  // still smoothly animate, ie that we get non-zero change every frame while
+  // the animation is running.
+
+  ScrollMetadata metadata;
+  FrameMetrics& metrics = metadata.GetMetrics();
+  metrics.SetScrollableRect(CSSRect(0, 0, 100, 10000));
+  metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
+  metrics.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  metrics.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
+  metrics.SetVisualScrollOffset(CSSPoint(0, 0));
+  metrics.SetIsRootContent(true);
+  apzc->SetFrameMetrics(metrics);
+
+  // Structure of this test.
+  //   -send a pure relative smooth scroll request via NotifyLayersUpdated
+  //   -advance animations a few times, check that scroll offset is increasing
+  //    after the first few advances
+  //   -send a pure relative smooth scroll request via NotifyLayersUpdated
+  //   -advance animations a few times, check that scroll offset is increasing
+  //   -send a pure relative smooth scroll request via NotifyLayersUpdated
+  //   -advance animations a few times, check that scroll offset is increasing
+
+  ScrollMetadata metadata2 = metadata;
+  nsTArray<ScrollPositionUpdate> scrollUpdates2;
+  scrollUpdates2.AppendElement(ScrollPositionUpdate::NewPureRelativeScroll(
+      ScrollOrigin::Other, ScrollMode::Smooth,
+      CSSPoint::ToAppUnits(CSSPoint(0, 200))));
+  metadata2.SetScrollUpdates(scrollUpdates2);
+  metadata2.GetMetrics().SetScrollGeneration(
+      scrollUpdates2.LastElement().GetGeneration());
+  apzc->NotifyLayersUpdated(metadata2, /*isFirstPaint=*/false,
+                            /*thisLayerTreeUpdated=*/true);
+
+  // Get the animation going
+  for (uint32_t i = 0; i < 3; i++) {
+    SampleAnimationOneFrame();
+  }
+
+  float offset =
+      apzc->GetCurrentAsyncScrollOffset(AsyncPanZoomController::eForCompositing)
+          .y;
+  ASSERT_GT(offset, 0);
+  float lastOffset = offset;
+
+  for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t j = 0; j < 3; j++) {
+      SampleAnimationOneFrame();
+      offset = apzc->GetCurrentAsyncScrollOffset(
+                       AsyncPanZoomController::eForCompositing)
+                   .y;
+      ASSERT_GT(offset, lastOffset);
+      lastOffset = offset;
+    }
+
+    ScrollMetadata metadata3 = metadata;
+    nsTArray<ScrollPositionUpdate> scrollUpdates3;
+    scrollUpdates3.AppendElement(ScrollPositionUpdate::NewPureRelativeScroll(
+        ScrollOrigin::Other, ScrollMode::Smooth,
+        CSSPoint::ToAppUnits(CSSPoint(0, 200))));
+    metadata3.SetScrollUpdates(scrollUpdates3);
+    metadata3.GetMetrics().SetScrollGeneration(
+        scrollUpdates3.LastElement().GetGeneration());
+    apzc->NotifyLayersUpdated(metadata3, /*isFirstPaint=*/false,
+                              /*thisLayerTreeUpdated=*/true);
+  }
+
+  for (uint32_t j = 0; j < 7; j++) {
+    SampleAnimationOneFrame();
+    offset = apzc->GetCurrentAsyncScrollOffset(
+                     AsyncPanZoomController::eForCompositing)
+                 .y;
+    ASSERT_GT(offset, lastOffset);
+    lastOffset = offset;
+  }
+}
+
+TEST_F(APZCBasicTester, ZoomAndScrollableRectChangeAfterZoomChange) {
+  // We want to check that a small scrollable rect change (which causes us to
+  // reclamp our scroll position, including in the sampled state) does not move
+  // the scroll offset in the sample state based the zoom in the apzc, only
+  // based on the zoom in the sampled state.
+
+  // First we zoom in to the right hand side. Then start zooming out, then send
+  // a scrollable rect change and check that it doesn't change the sampled state
+  // scroll offset.
+
+  ScrollMetadata metadata;
+  FrameMetrics& metrics = metadata.GetMetrics();
+  metrics.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
+  metrics.SetScrollableRect(CSSRect(0, 0, 100, 1000));
+  metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
+  metrics.SetVisualScrollOffset(CSSPoint(0, 0));
+  metrics.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  metrics.SetIsRootContent(true);
+  apzc->SetFrameMetrics(metrics);
+
+  MakeApzcZoomable();
+
+  // Zoom to right side.
+  ZoomTarget zoomTarget{CSSRect(75, 25, 25, 25), Nothing()};
+  apzc->ZoomToRect(zoomTarget, 0);
+
+  // Run the animation to completion, should take 250ms/16.67ms = 15 frames, but
+  // do extra to make sure.
+  for (uint32_t i = 0; i < 30; i++) {
+    SampleAnimationOneFrame();
+  }
+
+  EXPECT_FALSE(apzc->IsAsyncZooming());
+
+  // Zoom out.
+  ZoomTarget zoomTarget2{CSSRect(0, 0, 100, 100), Nothing()};
+  apzc->ZoomToRect(zoomTarget2, 0);
+
+  // Run the animation a few times to get it going.
+  for (uint32_t i = 0; i < 2; i++) {
+    SampleAnimationOneFrame();
+  }
+
+  // Check that it is decreasing in scale.
+  float prevScale =
+      apzc->GetCurrentPinchZoomScale(AsyncPanZoomController::eForCompositing)
+          .scale;
+  for (uint32_t i = 0; i < 2; i++) {
+    SampleAnimationOneFrame();
+    float scale =
+        apzc->GetCurrentPinchZoomScale(AsyncPanZoomController::eForCompositing)
+            .scale;
+    ASSERT_GT(prevScale, scale);
+    prevScale = scale;
+  }
+
+  float offset =
+      apzc->GetCurrentAsyncScrollOffset(AsyncPanZoomController::eForCompositing)
+          .x;
+
+  // Change the scrollable rect slightly to trigger a reclamp.
+  ScrollMetadata metadata2 = metadata;
+  metadata2.GetMetrics().SetScrollableRect(CSSRect(0, 0, 100, 1000.2));
+  apzc->NotifyLayersUpdated(metadata2, /*isFirstPaint=*/false,
+                            /*thisLayerTreeUpdated=*/true);
+
+  float newOffset =
+      apzc->GetCurrentAsyncScrollOffset(AsyncPanZoomController::eForCompositing)
+          .x;
+
+  ASSERT_EQ(newOffset, offset);
+}
+
+TEST_F(APZCBasicTester, ZoomToRectAndCompositionBoundsChange) {
+  // We want to check that content sending a composition bounds change (due to
+  // addition of scrollbars) during a zoom animation does not cause us to take
+  // the out of date content resolution.
+
+  ScrollMetadata metadata;
+  FrameMetrics& metrics = metadata.GetMetrics();
+  metrics.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
+  metrics.SetCompositionBoundsWidthIgnoringScrollbars(ParentLayerCoord{100});
+  metrics.SetScrollableRect(CSSRect(0, 0, 100, 1000));
+  metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
+  metrics.SetVisualScrollOffset(CSSPoint(0, 0));
+  metrics.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  metrics.SetIsRootContent(true);
+  apzc->SetFrameMetrics(metrics);
+
+  MakeApzcZoomable();
+
+  // Start a zoom to a rect.
+  ZoomTarget zoomTarget{CSSRect(25, 25, 25, 25), Nothing()};
+  apzc->ZoomToRect(zoomTarget, 0);
+
+  // Run the animation a few times to get it going.
+  // Check that it is increasing in scale.
+  float prevScale =
+      apzc->GetCurrentPinchZoomScale(AsyncPanZoomController::eForCompositing)
+          .scale;
+  for (uint32_t i = 0; i < 3; i++) {
+    SampleAnimationOneFrame();
+    float scale =
+        apzc->GetCurrentPinchZoomScale(AsyncPanZoomController::eForCompositing)
+            .scale;
+    ASSERT_GE(scale, prevScale);
+    prevScale = scale;
+  }
+
+  EXPECT_TRUE(apzc->IsAsyncZooming());
+
+  // Simulate the appearance of a scrollbar by reducing the width of
+  // the composition bounds, while keeping
+  // mCompositionBoundsWidthIgnoringScrollbars unchanged.
+  ScrollMetadata metadata2 = metadata;
+  metadata2.GetMetrics().SetCompositionBounds(ParentLayerRect(0, 0, 90, 100));
+  apzc->NotifyLayersUpdated(metadata2, /*isFirstPaint=*/false,
+                            /*thisLayerTreeUpdated=*/true);
+
+  float scale =
+      apzc->GetCurrentPinchZoomScale(AsyncPanZoomController::eForCompositing)
+          .scale;
+
+  ASSERT_EQ(scale, prevScale);
+
+  // Run the rest of the animation to completion, should take 250ms/16.67ms = 15
+  // frames total, but do extra to make sure.
+  for (uint32_t i = 0; i < 30; i++) {
+    SampleAnimationOneFrame();
+    scale =
+        apzc->GetCurrentPinchZoomScale(AsyncPanZoomController::eForCompositing)
+            .scale;
+    ASSERT_GE(scale, prevScale);
+    prevScale = scale;
+  }
+
+  EXPECT_FALSE(apzc->IsAsyncZooming());
 }

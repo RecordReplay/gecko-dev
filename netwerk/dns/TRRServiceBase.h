@@ -8,14 +8,18 @@
 
 #include "mozilla/Atomics.h"
 #include "nsString.h"
+#include "nsIDNSService.h"
 
 namespace mozilla {
 namespace net {
 
+static const char kRolloutURIPref[] = "doh-rollout.uri";
+static const char kRolloutModePref[] = "doh-rollout.mode";
+
 class TRRServiceBase {
  public:
   TRRServiceBase();
-  uint32_t Mode() { return mMode; }
+  nsIDNSService::ResolverMode Mode() { return mMode; }
 
  protected:
   ~TRRServiceBase() = default;
@@ -37,11 +41,11 @@ class TRRServiceBase {
 
   nsCString mPrivateURI;
   // Pref caches should only be used on the main thread.
-  bool mURIPrefHasUserValue = false;
   nsCString mURIPref;
   nsCString mRolloutURIPref;
+  nsCString mDefaultURIPref;
 
-  Atomic<uint32_t, Relaxed> mMode;
+  Atomic<nsIDNSService::ResolverMode, Relaxed> mMode;
   Atomic<bool, Relaxed> mURISetByDetection;
 };
 

@@ -12,8 +12,7 @@ const TEST_URI =
 // console is opened first.
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
-  const target = await TargetFactory.forTab(gBrowser.selectedTab);
-  const toolbox = gDevTools.getToolbox(target);
+  const toolbox = await gDevTools.getToolboxForTab(gBrowser.selectedTab);
 
   let messageNode = await waitFor(() => findMessage(hud, "BAR"));
   await clickFirstStackElement(hud, messageNode, true);
@@ -58,6 +57,6 @@ async function clickFirstStackElement(hud, message, needsExpansion) {
   });
 
   const onSourceOpenedInDebugger = once(hud, "source-in-debugger-opened");
-  await EventUtils.sendMouseEvent({ type: "mousedown" }, frame);
+  EventUtils.sendMouseEvent({ type: "mousedown" }, frame);
   await onSourceOpenedInDebugger;
 }

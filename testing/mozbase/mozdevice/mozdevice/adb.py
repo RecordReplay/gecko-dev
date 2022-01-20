@@ -6,6 +6,7 @@ from __future__ import absolute_import, division, print_function
 
 import io
 import os
+import sys
 import pipes
 import posixpath
 import re
@@ -16,6 +17,7 @@ import subprocess
 import tempfile
 import time
 import traceback
+from threading import Thread
 
 from distutils import dir_util
 import six
@@ -30,12 +32,22 @@ _TEST_ROOT = None
 class ADBProcess(object):
     """ADBProcess encapsulates the data related to executing the adb process."""
 
-    def __init__(self, args):
+    def __init__(self, args, use_stdout_pipe=False, timeout=None):
         #: command argument list.
         self.args = args
+        Popen_args = {}
 
         #: Temporary file handle to be used for stdout.
-        self.stdout_file = tempfile.NamedTemporaryFile(mode="w+b")
+        if use_stdout_pipe:
+            self.stdout_file = subprocess.PIPE
+            # Reading utf-8 from the stdout pipe
+            if sys.version_info >= (3, 6):
+                Popen_args["encoding"] = "utf-8"
+            else:
+                Popen_args["universal_newlines"] = True
+        else:
+            self.stdout_file = tempfile.NamedTemporaryFile(mode="w+b")
+        Popen_args["stdout"] = self.stdout_file
 
         #: boolean indicating if the command timed out.
         self.timedout = None
@@ -44,13 +56,33 @@ class ADBProcess(object):
         self.exitcode = None
 
         #: subprocess Process object used to execute the command.
-        self.proc = subprocess.Popen(
-            args, stdout=self.stdout_file, stderr=subprocess.STDOUT
-        )
+        Popen_args["stderr"] = subprocess.STDOUT
+        self.proc = subprocess.Popen(args, **Popen_args)
+
+        # If a timeout is set, then create a thread responsible for killing the
+        # process, as well as updating the exitcode and timedout status.
+        def timeout_thread(adb_process, timeout):
+            start_time = time.time()
+            polling_interval = 0.001
+            adb_process.exitcode = adb_process.proc.poll()
+            while (time.time() - start_time) <= float(
+                timeout
+            ) and adb_process.exitcode is None:
+                time.sleep(polling_interval)
+                adb_process.exitcode = adb_process.proc.poll()
+
+            if adb_process.exitcode is None:
+                adb_process.proc.kill()
+                adb_process.timedout = True
+                adb_process.exitcode = adb_process.proc.poll()
+
+        if timeout:
+            Thread(target=timeout_thread, args=(self, timeout), daemon=True).start()
 
     @property
     def stdout(self):
         """Return the contents of stdout."""
+        assert not self.stdout_file == subprocess.PIPE
         if not self.stdout_file or self.stdout_file.closed:
             content = ""
         else:
@@ -68,6 +100,20 @@ class ADBProcess(object):
             self.exitcode,
             self.stdout,
         )
+
+    def __iter__(self):
+        assert self.stdout_file == subprocess.PIPE
+        return self
+
+    def __next__(self):
+        assert self.stdout_file == subprocess.PIPE
+        try:
+            return next(self.proc.stdout)
+        except StopIteration:
+            # Wait until the process ends.
+            while self.exitcode is None or self.timedout:
+                time.sleep(0.001)
+            raise StopIteration
 
 
 # ADBError and ADBTimeoutError are treated differently in order that
@@ -222,7 +268,6 @@ class ADBCommand(object):
         level = "DEBUG" if verbose else "INFO"
         try:
             import mozlog
-            import sys
 
             logger = mozlog.get_default_logger(logger_name)
             if not logger:
@@ -1195,16 +1240,30 @@ class ADBDevice(ADBCommand):
                 except ADBError:
                     self._logger.debug("Check for root adbd failed")
 
-    def _pidof(self, appname, timeout=None):
+    def pidof(self, app_name, timeout=None):
+        """
+        Return a list of pids for all extant processes running within the
+        specified application package.
+
+        :param str app_name: The name of the application package to examine
+        :param int timeout: The maximum time in
+            seconds for any spawned adb process to complete before
+            throwing an ADBTimeoutError.  This timeout is per
+            adb call. The total time spent may exceed this
+            value. If it is not specified, the value set
+            in the ADBDevice constructor is used.
+        :return: List of integers containing the pid(s) of the various processes.
+        :raises: :exc:`ADBTimeoutError`
+        """
         if self._have_pidof:
             try:
-                pid_output = self.shell_output("pidof %s" % appname, timeout=timeout)
+                pid_output = self.shell_output("pidof %s" % app_name, timeout=timeout)
                 re_pids = re.compile(r"[0-9]+")
                 pids = re_pids.findall(pid_output)
                 if self._have_flaky_pidof and not pids:
                     time.sleep(0.1)
                     pid_output = self.shell_output(
-                        "pidof %s" % appname, timeout=timeout
+                        "pidof %s" % app_name, timeout=timeout
                     )
                     pids = re_pids.findall(pid_output)
             except ADBError:
@@ -1213,8 +1272,9 @@ class ADBDevice(ADBCommand):
             procs = self.get_process_list(timeout=timeout)
             # limit the comparion to the first 75 characters due to a
             # limitation in processname length in android.
-            pids = [proc[0] for proc in procs if proc[1] == appname[:75]]
-        return pids
+            pids = [proc[0] for proc in procs if proc[1] == app_name[:75]]
+
+        return [int(pid) for pid in pids]
 
     def _sync(self, timeout=None):
         """Sync the file system using shell_output in order that exceptions
@@ -1736,6 +1796,8 @@ class ADBDevice(ADBCommand):
             for any spawned adb process to complete before throwing
             an ADBTimeoutError. If it is not specified, the value
             set in the ADBDevice constructor is used.
+        :return: When forwarding from "tcp:0", an int containing the port number
+                 of the local port assigned by adb, otherwise None.
         :raises: :exc:`ValueError`
                  :exc:`ADBTimeoutError`
                  :exc:`ADBError`
@@ -1751,7 +1813,18 @@ class ADBDevice(ADBCommand):
             cmd.insert(1, "--no-rebind")
 
         # execute commands to establish socket connection.
-        self.command_output(cmd, timeout=timeout)
+        cmd_output = self.command_output(cmd, timeout=timeout)
+
+        # If we want to forward using local port "tcp:0", then we're letting
+        # adb assign the port for us, so we need to return that assignment.
+        if (
+            direction == self.SOCKET_DIRECTION_FORWARD
+            and local == "tcp:0"
+            and cmd_output
+        ):
+            return int(cmd_output)
+
+        return None
 
     def list_socket_connections(self, direction, timeout=None):
         """Return a list of tuples specifying active socket connectionss.
@@ -1806,9 +1879,12 @@ class ADBDevice(ADBCommand):
     def forward(self, local, remote, allow_rebind=True, timeout=None):
         """Forward a local port to a specific port on the device.
 
+        :return: When forwarding from "tcp:0", an int containing the port number
+                 of the local port assigned by adb, otherwise None.
+
         See `ADBDevice.create_socket_connection`.
         """
-        self.create_socket_connection(
+        return self.create_socket_connection(
             self.SOCKET_DIRECTION_FORWARD, local, remote, allow_rebind, timeout
         )
 
@@ -1860,6 +1936,7 @@ class ADBDevice(ADBCommand):
         cwd=None,
         timeout=None,
         stdout_callback=None,
+        yield_stdout=None,
         enable_run_as=False,
     ):
         """Executes a shell command on the device.
@@ -1874,6 +1951,9 @@ class ADBDevice(ADBCommand):
             total time spent may exceed this value. If it is not
             specified, the value set in the ADBDevice constructor is used.
         :param function stdout_callback: Function called for each line of output.
+        :param bool yield_stdout: Flag used to make the returned process
+            iteratable. The return process can be used in a loop to get the output
+            and the loop would exit as the process ends.
         :param bool enable_run_as: Flag used to temporarily enable use
             of run-as to execute the command.
         :return: :class:`ADBProcess`
@@ -1911,6 +1991,11 @@ class ADBDevice(ADBCommand):
 
         It is the caller's responsibilty to clean up by closing
         the stdout temporary files.
+
+        If the yield_stdout flag is set, then the returned ADBProcess
+        can be iterated over to get the output as it is produced by
+        adb command. The iterator ends when the process timed out or
+        if it exited. This flag is incompatible with stdout_callback.
 
         """
 
@@ -1984,10 +2069,17 @@ class ADBDevice(ADBCommand):
         if self._device_serial:
             args.extend(["-s", self._device_serial])
         args.extend(["wait-for-device", "shell", cmd])
-        adb_process = ADBProcess(args)
 
         if timeout is None:
             timeout = self._timeout
+
+        if yield_stdout:
+            # When using yield_stdout, rely on the timeout implemented in
+            # ADBProcess instead of relying on our own here.
+            assert not stdout_callback
+            return ADBProcess(args, use_stdout_pipe=yield_stdout, timeout=timeout)
+        else:
+            adb_process = ADBProcess(args)
 
         start_time = time.time()
         exitcode = adb_process.proc.poll()
@@ -3274,7 +3366,7 @@ class ADBDevice(ADBCommand):
         :raises: :exc:`ADBTimeoutError`
                  :exc:`ADBError`
         """
-        pids = self._pidof(appname, timeout=timeout)
+        pids = self.pidof(appname, timeout=timeout)
 
         if not pids:
             return
@@ -3320,7 +3412,7 @@ class ADBDevice(ADBCommand):
         parts = pieces[0].split("/")
         app = parts[-1]
 
-        if self._pidof(app, timeout=timeout):
+        if self.pidof(app, timeout=timeout):
             return True
         return False
 
@@ -3865,6 +3957,7 @@ class ADBDevice(ADBCommand):
         fail_if_running=True,
         grant_runtime_permissions=True,
         timeout=None,
+        is_service=False,
     ):
         """Launches an Android application
 
@@ -3885,6 +3978,7 @@ class ADBDevice(ADBCommand):
             This timeout is per adb call. The total time spent
             may exceed this value. If it is not specified, the value
             set in the ADB constructor is used.
+        :param bool is_service: Whether we want to launch a service or not.
         :raises: :exc:`ADBTimeoutError`
                  :exc:`ADBError`
         """
@@ -3900,7 +3994,8 @@ class ADBDevice(ADBCommand):
         if grant_runtime_permissions:
             self.grant_runtime_permissions(app_name)
 
-        acmd = ["am", "start"] + [
+        acmd = ["am"] + [
+            "startservice" if is_service else "start",
             "-W" if wait else "",
             "-n",
             "%s/%s" % (app_name, activity_name),
@@ -3992,6 +4087,76 @@ class ADBDevice(ADBCommand):
             timeout=timeout,
         )
 
+    def launch_service(
+        self,
+        app_name,
+        activity_name=None,
+        intent="android.intent.action.MAIN",
+        moz_env=None,
+        extra_args=None,
+        url=None,
+        e10s=False,
+        wait=True,
+        grant_runtime_permissions=False,
+        out_file=None,
+        timeout=None,
+    ):
+        """Convenience method to launch a service on Android with various
+        debugging arguments; convenient for geckoview apps.
+
+        :param str app_name: Name of application (e.g.
+            `org.mozilla.geckoview_example` or `org.mozilla.geckoview.test`)
+        :param str activity_name: Activity name, like `GeckoViewActivity`, or
+            `TestRunnerActivity`.
+        :param str intent: Intent to launch application.
+        :param str moz_env: Mozilla specific environment to pass into
+            application.
+        :param str extra_args: Extra arguments to be parsed by the app.
+        :param str url: URL to open
+        :param bool e10s: If True, run in multiprocess mode.
+        :param bool wait: If True, wait for application to start before
+            returning.
+        :param bool grant_runtime_permissions: Grant special runtime
+            permissions.
+        :param str out_file: File where to redirect the output to
+        :param int timeout: The maximum time in
+            seconds for any spawned adb process to complete before
+            throwing an ADBTimeoutError.
+            This timeout is per adb call. The total time spent
+            may exceed this value. If it is not specified, the value
+            set in the ADB constructor is used.
+        :raises: :exc:`ADBTimeoutError`
+                 :exc:`ADBError`
+        """
+        extras = {}
+
+        if moz_env:
+            # moz_env is expected to be a dictionary of environment variables:
+            # geckoview_example itself will set them when launched
+            for (env_count, (env_key, env_val)) in enumerate(moz_env.items()):
+                extras["env" + str(env_count)] = env_key + "=" + env_val
+
+        # Additional command line arguments that the app will read and use (e.g.
+        # with a custom profile)
+        if extra_args:
+            for (arg_count, arg) in enumerate(extra_args):
+                extras["arg" + str(arg_count)] = arg
+
+        extras["use_multiprocess"] = e10s
+        extras["out_file"] = out_file
+        self.launch_application(
+            app_name,
+            "%s.%s" % (app_name, activity_name),
+            intent,
+            url=url,
+            extras=extras,
+            wait=wait,
+            grant_runtime_permissions=grant_runtime_permissions,
+            timeout=timeout,
+            is_service=True,
+            fail_if_running=False,
+        )
+
     def launch_activity(
         self,
         app_name,
@@ -4042,7 +4207,9 @@ class ADBDevice(ADBCommand):
         # Additional command line arguments that the app will read and use (e.g.
         # with a custom profile)
         if extra_args:
-            extras["args"] = " ".join(extra_args)
+            for (arg_count, arg) in enumerate(extra_args):
+                extras["arg" + str(arg_count)] = arg
+
         extras["use_multiprocess"] = e10s
         self.launch_application(
             app_name,

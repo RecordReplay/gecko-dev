@@ -10,6 +10,7 @@ mozperftest
    running
    writing
    developing
+   vision
 
 The following documents all testing we have for mozperftest.
 If the owner does not specify the Usage and Description, it's marked N/A.
@@ -199,6 +200,16 @@ perftest_pageload.js
 :name: pageload
 
 **Measures time to load mozilla page**
+
+perftest_perfstats.js
+=====================
+
+:owner: Performance Team
+:name: perfstats
+
+**Collect perfstats for the given site**
+
+This test launches browsertime with the perfStats option (will collect low-overhead timings, see Bug 1553254). The test currently runs a short user journey. A selection of popular sites are visited, first as cold pageloads, and then as warm.
 
 
 If you have any questions, please see this `wiki page <https://wiki.mozilla.org/TestEngineering/Performance#Where_to_find_us>`_.

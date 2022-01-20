@@ -13,28 +13,19 @@
 #include <limits.h>
 #include <type_traits>
 
-#include "jspubtd.h"
-
 #include "js/GCAnnotations.h"
 #include "js/shadow/String.h"  // JS::shadow::String
 #include "js/shadow/Symbol.h"  // JS::shadow::Symbol
 #include "js/shadow/Zone.h"    // JS::shadow::Zone
 #include "js/TraceKind.h"
-#include "js/Utility.h"
-
-#ifndef JS_BITS_PER_WORD
-#  error \
-      "JS_BITS_PER_WORD must be defined. Did you forget to include js-config.h?"
-#endif
-
-struct JSExternalStringCallbacks;
+#include "js/TypeDecls.h"
 
 /* These values are private to the JS engine. */
 namespace js {
 
 class NurseryDecommitTask;
 
-JS_FRIEND_API bool CurrentThreadCanAccessZone(JS::Zone* zone);
+JS_PUBLIC_API bool CurrentThreadCanAccessZone(JS::Zone* zone);
 
 namespace gc {
 
@@ -47,6 +38,16 @@ class TenuredCell;
 const size_t ArenaShift = 12;
 const size_t ArenaSize = size_t(1) << ArenaShift;
 const size_t ArenaMask = ArenaSize - 1;
+
+#if defined(XP_MACOSX) && defined(__aarch64__)
+const size_t PageShift = 14;
+#else
+const size_t PageShift = 12;
+#endif
+// Expected page size, so we could initialze ArenasPerPage at compile-time.
+// The actual system page size should be queried by SystemPageSize().
+const size_t PageSize = size_t(1) << PageShift;
+constexpr size_t ArenasPerPage = PageSize / ArenaSize;
 
 #ifdef JS_GC_SMALL_CHUNK_SIZE
 const size_t ChunkShift = 18;
@@ -98,15 +99,15 @@ struct TenuredChunkInfo {
   TenuredChunk* prev = nullptr;
 
  public:
-  /* Free arenas are linked together with arena.next. */
+  /* List of free committed arenas, linked together with arena.next. */
   Arena* freeArenasHead;
 
   /*
-   * Decommitted arenas are tracked by a bitmap in the TenuredChunkBase. We use
+   * Decommitted pages are tracked by a bitmap in the TenuredChunkBase. We use
    * this offset to start our search iteration close to a decommitted arena that
    * we can allocate.
    */
-  uint32_t lastDecommittedArenaOffset;
+  uint32_t lastDecommittedPageOffset;
 
   /* Number of free arenas, either committed or decommitted. */
   uint32_t numArenasFree;
@@ -122,9 +123,9 @@ struct TenuredChunkInfo {
  * extra space is available after we allocate the header data. This is a problem
  * because the header size depends on the number of arenas in the chunk.
  *
- * The two dependent fields are bitmap and decommittedArenas. bitmap needs
- * ArenaBitmapBytes bytes per arena and decommittedArenas needs one bit per
- * arena.
+ * The two dependent fields are bitmap and decommittedPages. bitmap needs
+ * ArenaBitmapBytes bytes per arena and decommittedPages needs one bit per
+ * page.
  *
  * We can calculate an approximate value by dividing the number of bits of free
  * space in the chunk by the number of bits needed per arena. This is an
@@ -136,16 +137,20 @@ struct TenuredChunkInfo {
  * approximation turns out to be correct. If it were not we might need to adjust
  * the arena count down by one to allow more space for the padding.
  */
-const size_t BitsPerArenaWithHeaders =
-    (ArenaSize + ArenaBitmapBytes) * CHAR_BIT + 1;
+const size_t BitsPerPageWithHeaders =
+    (ArenaSize + ArenaBitmapBytes) * ArenasPerPage * CHAR_BIT + 1;
 const size_t ChunkBitsAvailable =
     (ChunkSize - sizeof(ChunkBase) - sizeof(TenuredChunkInfo)) * CHAR_BIT;
-const size_t ArenasPerChunk = ChunkBitsAvailable / BitsPerArenaWithHeaders;
+const size_t PagesPerChunk = ChunkBitsAvailable / BitsPerPageWithHeaders;
+const size_t DecommitBits = PagesPerChunk;
+const size_t ArenasPerChunk = PagesPerChunk * ArenasPerPage;
+const size_t BitsPerArenaWithHeaders =
+    (ArenaSize + ArenaBitmapBytes) * CHAR_BIT + (DecommitBits / ArenasPerChunk);
 
 const size_t CalculatedChunkSizeRequired =
     sizeof(ChunkBase) + sizeof(TenuredChunkInfo) +
     RoundUp(ArenasPerChunk * ArenaBitmapBytes, sizeof(uintptr_t)) +
-    RoundUp(ArenasPerChunk, sizeof(uint32_t) * CHAR_BIT) / CHAR_BIT +
+    RoundUp(DecommitBits, sizeof(uint32_t) * CHAR_BIT) / CHAR_BIT +
     ArenasPerChunk * ArenaSize;
 static_assert(CalculatedChunkSizeRequired <= ChunkSize,
               "Calculated ArenasPerChunk is too large");
@@ -159,7 +164,7 @@ static_assert(CalculatedChunkPadSize * CHAR_BIT < BitsPerArenaWithHeaders,
 #ifdef JS_GC_SMALL_CHUNK_SIZE
 #  define EXPECTED_ARENA_COUNT 63
 #else
-# define EXPECTED_ARENA_COUNT 252
+#  define EXPECTED_ARENA_COUNT 252
 #endif
 static_assert(ArenasPerChunk == EXPECTED_ARENA_COUNT,
               "Do not accidentally change our heap's density.");
@@ -212,14 +217,14 @@ static_assert(ArenaBitmapBytes * ArenasPerChunk == sizeof(MarkBitmap),
               "Ensure our MarkBitmap actually covers all arenas.");
 
 // Decommit bitmap for a heap chunk.
-using DecommitBitmap = mozilla::BitSet<ArenasPerChunk, uint32_t>;
+using DecommitBitmap = mozilla::BitSet<PagesPerChunk, uint32_t>;
 
 // Base class containing data members for a tenured heap chunk.
 class TenuredChunkBase : public ChunkBase {
  public:
   TenuredChunkInfo info;
   MarkBitmap markBits;
-  DecommitBitmap decommittedArenas;
+  DecommitBitmap decommittedPages;
 
  protected:
   explicit TenuredChunkBase(JSRuntime* runtime) : ChunkBase(runtime, nullptr) {}
@@ -247,9 +252,9 @@ const size_t ChunkStoreBufferOffset = offsetof(ChunkBase, storeBuffer);
 const size_t ChunkMarkBitmapOffset = offsetof(TenuredChunkBase, markBits);
 
 // Hardcoded offsets into Arena class.
-const size_t ArenaZoneOffset = sizeof(size_t);
-const size_t ArenaHeaderSize =
-    sizeof(size_t) + 2 * sizeof(uintptr_t) + sizeof(size_t) + sizeof(uintptr_t);
+const size_t ArenaZoneOffset = 2 * sizeof(uint32_t);
+const size_t ArenaHeaderSize = ArenaZoneOffset + 2 * sizeof(uintptr_t) +
+                               sizeof(size_t) + sizeof(uintptr_t);
 
 // The first word of a GC thing has certain requirements from the GC and is used
 // to store flags in the low bits.
@@ -261,7 +266,7 @@ const size_t JSClassAlignBytes = size_t(1) << CellFlagBitsReservedForGC;
 
 #ifdef JS_DEBUG
 /* When downcasting, ensure we are actually the right type. */
-extern JS_FRIEND_API void AssertGCThingHasType(js::gc::Cell* cell,
+extern JS_PUBLIC_API void AssertGCThingHasType(js::gc::Cell* cell,
                                                JS::TraceKind kind);
 #else
 inline void AssertGCThingHasType(js::gc::Cell* cell, JS::TraceKind kind) {}
@@ -344,7 +349,7 @@ const uint32_t DefaultHeapMaxBytes = 32 * 1024 * 1024;
  * is for use when that is not possible because a single pointer must point
  * to several kinds of GC thing.
  */
-class JS_FRIEND_API GCCellPtr {
+class JS_PUBLIC_API GCCellPtr {
  public:
   GCCellPtr() : GCCellPtr(nullptr) {}
 
@@ -367,9 +372,9 @@ class JS_FRIEND_API GCCellPtr {
   explicit GCCellPtr(const Value& v);
 
   JS::TraceKind kind() const {
-    JS::TraceKind traceKind = JS::TraceKind(ptr & OutOfLineTraceKindMask);
-    if (uintptr_t(traceKind) != OutOfLineTraceKindMask) {
-      return traceKind;
+    uintptr_t kindBits = ptr & OutOfLineTraceKindMask;
+    if (kindBits != OutOfLineTraceKindMask) {
+      return JS::TraceKind(kindBits);
     }
     return outOfLineKind();
   }
@@ -430,12 +435,12 @@ class JS_FRIEND_API GCCellPtr {
     auto* cell = static_cast<js::gc::Cell*>(p);
     MOZ_ASSERT((uintptr_t(p) & OutOfLineTraceKindMask) == 0);
     AssertGCThingHasType(cell, traceKind);
-    // Note: the OutOfLineTraceKindMask bits are set on all out-of-line kinds
-    // so that we can mask instead of branching.
-    MOZ_ASSERT_IF(uintptr_t(traceKind) >= OutOfLineTraceKindMask,
-                  (uintptr_t(traceKind) & OutOfLineTraceKindMask) ==
-                      OutOfLineTraceKindMask);
-    return uintptr_t(p) | (uintptr_t(traceKind) & OutOfLineTraceKindMask);
+    // Store trace in the bottom bits of pointer for common kinds.
+    uintptr_t kindBits = uintptr_t(traceKind);
+    if (kindBits >= OutOfLineTraceKindMask) {
+      kindBits = OutOfLineTraceKindMask;
+    }
+    return uintptr_t(p) | kindBits;
   }
 
   JS::TraceKind outOfLineKind() const;
@@ -682,7 +687,7 @@ extern JS_PUBLIC_API void IncrementalPreWriteBarrier(GCCellPtr thing);
  * JS::TraceKind::Shape. |thing| should be non-null. The return value indicates
  * if anything was unmarked.
  */
-extern JS_FRIEND_API bool UnmarkGrayGCThingRecursively(GCCellPtr thing);
+extern JS_PUBLIC_API bool UnmarkGrayGCThingRecursively(GCCellPtr thing);
 
 }  // namespace JS
 

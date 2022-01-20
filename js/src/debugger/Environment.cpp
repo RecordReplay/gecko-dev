@@ -27,9 +27,8 @@
 #include "vm/JSAtom.h"                // for Atomize, PinAtom
 #include "vm/JSContext.h"             // for JSContext
 #include "vm/JSFunction.h"            // for JSFunction
-#include "vm/JSObject.h"              // for JSObject, RequireObject
+#include "vm/JSObject.h"              // for JSObject, RequireObject,
 #include "vm/NativeObject.h"          // for NativeObject, JSObject::is
-#include "vm/ObjectGroup.h"           // for GenericObject, NewObjectKind
 #include "vm/Realm.h"                 // for AutoRealm, ErrorCopier
 #include "vm/Scope.h"                 // for ScopeKind, ScopeKindString
 #include "vm/StringType.h"            // for JSAtom
@@ -530,7 +529,7 @@ bool DebuggerEnvironment::getNames(JSContext* cx,
 
   for (size_t i = 0; i < ids.length(); ++i) {
     jsid id = ids[i];
-    if (JSID_IS_ATOM(id) && IsIdentifier(JSID_TO_ATOM(id))) {
+    if (id.isAtom() && IsIdentifier(id.toAtom())) {
       cx->markId(id);
       if (!result.append(id)) {
         return false;

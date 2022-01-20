@@ -9,6 +9,15 @@ add_task(async function() {
     "Check that performing a search fires a search event and records to Telemetry."
   );
 
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      [
+        "browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar",
+        false,
+      ],
+    ],
+  });
+
   await BrowserTestUtils.withNewTab(
     { gBrowser, url: "about:home" },
     async function(browser) {
@@ -16,7 +25,9 @@ add_task(async function() {
 
       let engine;
       await promiseContentSearchChange(browser, async () => {
-        engine = await promiseNewEngine("searchSuggestionEngine.xml");
+        engine = await SearchTestUtils.promiseNewSearchEngine(
+          getRootDirectory(gTestPath) + "searchSuggestionEngine.xml"
+        );
         await Services.search.setDefault(engine);
         return engine.name;
       });
@@ -89,4 +100,5 @@ add_task(async function() {
       } catch (ex) {}
     }
   );
+  await SpecialPowers.popPrefEnv();
 });

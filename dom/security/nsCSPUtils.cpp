@@ -22,6 +22,7 @@
 #include "nsSandboxFlags.h"
 #include "nsServiceManagerUtils.h"
 
+#include "mozilla/Components.h"
 #include "mozilla/dom/CSPDictionariesBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/StaticPrefs_security.h"
@@ -158,7 +159,7 @@ void CSP_GetLocalizedStr(const char* aName, const nsTArray<nsString>& aParams,
                          nsAString& outResult) {
   nsCOMPtr<nsIStringBundle> keyStringBundle;
   nsCOMPtr<nsIStringBundleService> stringBundleService =
-      mozilla::services::GetStringBundleService();
+      mozilla::components::StringBundle::Service();
 
   NS_ASSERTION(stringBundleService, "String bundle service must be present!");
   stringBundleService->CreateBundle(
@@ -338,6 +339,7 @@ CSPDirective CSP_ContentTypeToDirective(nsContentPolicyType aType) {
       return nsIContentSecurityPolicy::NO_DIRECTIVE;
 
     case nsIContentPolicy::TYPE_SAVEAS_DOWNLOAD:
+    case nsIContentPolicy::TYPE_UA_FONT:
       return nsIContentSecurityPolicy::NO_DIRECTIVE;
 
     // Fall through to error for all other directives

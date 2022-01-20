@@ -358,7 +358,7 @@ var ExtensionsUI = {
       collapseOrigins: true,
     });
     strings.addonName = info.addon.name;
-    strings.learnMore = bundle.GetStringFromName("webextPerms.learnMore");
+    strings.learnMore = bundle.GetStringFromName("webextPerms.learnMore2");
     return strings;
   },
 
@@ -381,7 +381,7 @@ var ExtensionsUI = {
 
           let listIntroEl = doc.getElementById("addon-webext-perm-intro");
           listIntroEl.textContent = strings.listIntro;
-          listIntroEl.hidden = !strings.msgs.length;
+          listIntroEl.hidden = !strings.msgs.length || !strings.listIntro;
 
           let listInfoEl = doc.getElementById("addon-webext-perm-info");
           listInfoEl.textContent = strings.learnMore;
@@ -394,11 +394,23 @@ var ExtensionsUI = {
           while (list.firstChild) {
             list.firstChild.remove();
           }
+          let singleEntryEl = doc.getElementById(
+            "addon-webext-perm-single-entry"
+          );
+          singleEntryEl.textContent = "";
+          singleEntryEl.hidden = true;
+          list.hidden = true;
 
-          for (let msg of strings.msgs) {
-            let item = doc.createElementNS(HTML_NS, "li");
-            item.textContent = msg;
-            list.appendChild(item);
+          if (strings.msgs.length === 1) {
+            singleEntryEl.textContent = strings.msgs[0];
+            singleEntryEl.hidden = false;
+          } else if (strings.msgs.length) {
+            for (let msg of strings.msgs) {
+              let item = doc.createElementNS(HTML_NS, "li");
+              item.textContent = msg;
+              list.appendChild(item);
+            }
+            list.hidden = false;
           }
         } else if (topic == "swapping") {
           return true;
@@ -507,14 +519,10 @@ var ExtensionsUI = {
 
   async showInstallNotification(target, addon) {
     let { window } = getTabBrowser(target);
-
-    let brandBundle = window.document.getElementById("bundle_brand");
-    let appName = brandBundle.getString("brandShortName");
     let bundle = window.gNavigatorBundle;
 
-    let message = bundle.getFormattedString("addonPostInstall.message1", [
+    let message = bundle.getFormattedString("addonPostInstall.message3", [
       "<>",
-      appName,
     ]);
     const permissionName = "internal:privateBrowsingAllowed";
     const { permissions } = await ExtensionPermissions.get(addon.id);

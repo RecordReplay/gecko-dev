@@ -14,10 +14,6 @@ const InspectorUtils = require("InspectorUtils");
 const {
   EXCLUDED_LISTENER,
 } = require("devtools/server/actors/inspector/constants");
-const {
-  TYPES,
-  getResourceWatcher,
-} = require("devtools/server/actors/resources/index");
 
 loader.lazyRequireGetter(
   this,
@@ -98,6 +94,12 @@ loader.lazyRequireGetter(
   "devtools/server/actors/utils/walker-search",
   true
 );
+loader.lazyRequireGetter(
+  this,
+  "hasStyleSheetWatcherSupportForTarget",
+  "devtools/server/actors/utils/stylesheets-manager",
+  true
+);
 
 // ContentDOMReference requires ChromeUtils, which isn't available in worker context.
 if (!isWorker) {
@@ -161,11 +163,6 @@ const HELPER_SHEET =
   encodeURIComponent(`
   .__fx-devtools-hide-shortcut__ {
     visibility: hidden !important;
-  }
-
-  :-moz-devtools-highlighted {
-    outline: 2px dashed #F06!important;
-    outline-offset: -2px !important;
   }
 `);
 
@@ -231,8 +228,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     // list contains orphaned nodes that were so retained.
     this._retainedOrphans = new Set();
 
-    this.onNodeInserted = this.onNodeInserted.bind(this);
-    this.onNodeInserted[EXCLUDED_LISTENER] = true;
+    this.onSubtreeModified = this.onSubtreeModified.bind(this);
+    this.onSubtreeModified[EXCLUDED_LISTENER] = true;
     this.onNodeRemoved = this.onNodeRemoved.bind(this);
     this.onNodeRemoved[EXCLUDED_LISTENER] = true;
     this.onAttributeModified = this.onAttributeModified.bind(this);
@@ -260,11 +257,15 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     // Keep a reference to the chromeEventHandler for the current targetActor, to make
     // sure we will be able to remove the listener during the WalkerActor destroy().
     this.chromeEventHandler = targetActor.chromeEventHandler;
-    // shadowrootattached is a chrome-only event.
+    // shadowrootattached is a chrome-only event. We enable it below.
     this.chromeEventHandler.addEventListener(
       "shadowrootattached",
       this.onShadowrootattached
     );
+
+    for (const { document } of this.targetActor.windows) {
+      document.shadowRootAttachedEventEnabled = true;
+    }
 
     // Ensure that the root document node actor is ready and
     // managed.
@@ -398,6 +399,11 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
         "shadowrootattached",
         this.onShadowrootattached
       );
+
+      // This event is just for devtools, so we can unset once we're done.
+      for (const { document } of this.targetActor.windows) {
+        document.shadowRootAttachedEventEnabled = false;
+      }
 
       this.onFrameLoad = null;
       this.onFrameUnload = null;
@@ -1443,21 +1449,18 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       const firstA = a[0].substring(0, 1);
       const firstB = b[0].substring(0, 1);
 
-      if (firstA === "#") {
-        sortA = "2" + sortA;
-      } else if (firstA === ".") {
-        sortA = "1" + sortA;
-      } else {
-        sortA = "0" + sortA;
-      }
+      const getSortKeyPrefix = firstLetter => {
+        if (firstLetter === "#") {
+          return "2";
+        }
+        if (firstLetter === ".") {
+          return "1";
+        }
+        return "0";
+      };
 
-      if (firstB === "#") {
-        sortB = "2" + sortB;
-      } else if (firstB === ".") {
-        sortB = "1" + sortB;
-      } else {
-        sortB = "0" + sortB;
-      }
+      sortA = getSortKeyPrefix(firstA) + sortA;
+      sortB = getSortKeyPrefix(firstB) + sortB;
 
       // String compare
       return sortA.localeCompare(sortB);
@@ -1699,7 +1702,9 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       // created nodes can be adopted into rawNode.parentNode.
       parser = new win.DOMParser();
     }
-    const parsedDOM = parser.parseFromString(value, "text/html");
+
+    const mimeType = rawNode.tagName === "svg" ? "image/svg+xml" : "text/html";
+    const parsedDOM = parser.parseFromString(value, mimeType);
     const parentNode = rawNode.parentNode;
 
     // Special case for head and body.  Setting document.body.outerHTML
@@ -1721,8 +1726,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
         rawNode.outerHTML = value;
       }
     } else if (node.isDocumentElement()) {
-      // Unable to set outerHTML on the document element.  Fall back by
-      // setting attributes manually, then replace the body and head elements.
+      // Unable to set outerHTML on the document element. Fall back by
+      // setting attributes manually. Then replace all the child nodes.
       const finalAttributeModifications = [];
       const attributeModifications = {};
       for (const attribute of rawNode.attributes) {
@@ -1738,8 +1743,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
         });
       }
       node.modifyAttributes(finalAttributeModifications);
-      rawNode.replaceChild(parsedDOM.head, rawNode.querySelector("head"));
-      rawNode.replaceChild(parsedDOM.body, rawNode.querySelector("body"));
+
+      rawNode.replaceChildren(...parsedDOM.firstElementChild.childNodes);
     } else {
       // eslint-disable-next-line no-unsanitized/property
       rawNode.outerHTML = value;
@@ -2065,65 +2070,58 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
   _updateDocumentMutationListeners(rawDoc) {
     const docMutationBreakpoints = this._mutationBreakpointsForDoc(rawDoc);
     if (!docMutationBreakpoints) {
+      rawDoc.devToolsWatchingDOMMutations = false;
       return;
     }
 
-    const origFlag = rawDoc.dontWarnAboutMutationEventsAndAllowSlowDOMMutations;
-    rawDoc.dontWarnAboutMutationEventsAndAllowSlowDOMMutations = true;
+    const anyBreakpoint =
+      docMutationBreakpoints.counts.subtree > 0 ||
+      docMutationBreakpoints.counts.removal > 0 ||
+      docMutationBreakpoints.counts.attribute > 0;
+
+    rawDoc.devToolsWatchingDOMMutations = anyBreakpoint;
 
     if (docMutationBreakpoints.counts.subtree > 0) {
-      eventListenerService.addSystemEventListener(
-        rawDoc,
-        "DOMNodeInserted",
-        this.onNodeInserted,
+      this.chromeEventHandler.addEventListener(
+        "devtoolschildinserted",
+        this.onSubtreeModified,
         true /* capture */
       );
     } else {
-      eventListenerService.removeSystemEventListener(
-        rawDoc,
-        "DOMNodeInserted",
-        this.onNodeInserted,
+      this.chromeEventHandler.removeEventListener(
+        "devtoolschildinserted",
+        this.onSubtreeModified,
         true /* capture */
       );
     }
 
-    if (
-      docMutationBreakpoints.counts.subtree > 0 ||
-      docMutationBreakpoints.counts.removal > 0 ||
-      docMutationBreakpoints.counts.attribute > 0
-    ) {
-      eventListenerService.addSystemEventListener(
-        rawDoc,
-        "DOMNodeRemoved",
+    if (anyBreakpoint) {
+      this.chromeEventHandler.addEventListener(
+        "devtoolschildremoved",
         this.onNodeRemoved,
         true /* capture */
       );
     } else {
-      eventListenerService.removeSystemEventListener(
-        rawDoc,
-        "DOMNodeRemoved",
+      this.chromeEventHandler.removeEventListener(
+        "devtoolschildremoved",
         this.onNodeRemoved,
         true /* capture */
       );
     }
 
     if (docMutationBreakpoints.counts.attribute > 0) {
-      eventListenerService.addSystemEventListener(
-        rawDoc,
-        "DOMAttrModified",
+      this.chromeEventHandler.addEventListener(
+        "devtoolsattrmodified",
         this.onAttributeModified,
         true /* capture */
       );
     } else {
-      eventListenerService.removeSystemEventListener(
-        rawDoc,
-        "DOMAttrModified",
+      this.chromeEventHandler.removeEventListener(
+        "devtoolsattrmodified",
         this.onAttributeModified,
         true /* capture */
       );
     }
-
-    rawDoc.dontWarnAboutMutationEventsAndAllowSlowDOMMutations = origFlag;
   },
 
   _breakOnMutation: function(mutationType, targetNode, ancestorNode, action) {
@@ -2161,20 +2159,15 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     );
   },
 
-  onNodeInserted: function(evt) {
-    this.onSubtreeModified(evt, "add");
-  },
-
   onNodeRemoved: function(evt) {
     const mutationBpInfo = this._breakpointInfoForNode(evt.target);
     const hasNodeRemovalEvent = mutationBpInfo?.removal;
 
     this._clearMutationBreakpointsFromSubtree(evt.target);
-
     if (hasNodeRemovalEvent) {
       this._breakOnMutation("nodeRemoved", evt.target);
     } else {
-      this.onSubtreeModified(evt, "remove");
+      this.onSubtreeModified(evt);
     }
   },
 
@@ -2185,7 +2178,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     }
   },
 
-  onSubtreeModified: function(evt, action) {
+  onSubtreeModified: function(evt) {
+    const action = evt.type === "devtoolschildinserted" ? "add" : "remove";
     let node = evt.target;
     while ((node = node.parentNode) !== null) {
       const mutationBpInfo = this._breakpointInfoForNode(node);
@@ -2478,6 +2472,10 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
   },
 
   onFrameLoad: function({ window, isTopLevel }) {
+    // By the time we receive the DOMContentLoaded event, we might have been destroyed
+    if (this._destroyed) {
+      return;
+    }
     const { readyState } = window.document;
     if (readyState != "interactive" && readyState != "complete") {
       // The document is not loaded, so we want to register to fire again when the
@@ -2489,6 +2487,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       );
       return;
     }
+
+    window.document.shadowRootAttachedEventEnabled = true;
 
     if (isTopLevel) {
       // If we initialize the inspector while the document is loading,
@@ -2520,12 +2520,12 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
 
   // Returns true if domNode is in window or a subframe.
   _childOfWindow: function(window, domNode) {
-    let win = nodeDocument(domNode).defaultView;
-    while (win) {
+    while (domNode) {
+      const win = nodeDocument(domNode).defaultView;
       if (win === window) {
         return true;
       }
-      win = getFrameElement(win);
+      domNode = getFrameElement(win);
     }
     return false;
   },
@@ -2674,9 +2674,9 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
    * Note that getNodeFromActor was added later and can now be used instead.
    */
   getStyleSheetOwnerNode: function(resourceId) {
-    const watcher = getResourceWatcher(this.targetActor, TYPES.STYLESHEET);
-    if (watcher) {
-      const ownerNode = watcher.getOwnerNode(resourceId);
+    if (hasStyleSheetWatcherSupportForTarget(this.targetActor)) {
+      const manager = this.targetActor.getStyleSheetManager();
+      const ownerNode = manager.getOwnerNode(resourceId);
       return this.attachElement(ownerNode);
     }
 

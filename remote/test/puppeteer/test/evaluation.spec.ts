@@ -20,6 +20,8 @@ import {
   getTestState,
   setupTestBrowserHooks,
   setupTestPageAndContextHooks,
+  itFailsFirefox,
+  describeFailsFirefox,
 } from './mocha-utils'; // eslint-disable-line import/extensions
 
 const bigint = typeof BigInt !== 'undefined';
@@ -276,7 +278,7 @@ describe('Evaluation specs', function () {
 
       const windowHandle = await page.evaluateHandle(() => window);
       const errorText = await windowHandle
-        .jsonValue()
+        .jsonValue<string>()
         .catch((error_) => error_.message);
       const error = await page
         .evaluate<(errorText: string) => Error>((errorText) => {

@@ -62,14 +62,11 @@ static bool jsfuzz_init(JSContext** cx, JS::PersistentRootedObject* global) {
 
 static void jsfuzz_uninit(JSContext* cx) {
   if (cx) {
+    JS::LeaveRealm(cx, nullptr);
     JS_DestroyContext(cx);
     cx = nullptr;
   }
 }
-
-#ifdef LIBFUZZER
-static void jsfuzz_atexit() { JS_ShutDown(); }
-#endif
 
 int main(int argc, char* argv[]) {
   if (!JS_Init()) {
@@ -81,11 +78,6 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "Error: Call to jsfuzz_init() failed\n");
     return 1;
   }
-
-#ifdef LIBFUZZER
-  // This is required because libFuzzer can exit() in various cases
-  std::atexit(jsfuzz_atexit);
-#endif
 
   const char* fuzzerEnv = getenv("FUZZER");
   if (!fuzzerEnv) {

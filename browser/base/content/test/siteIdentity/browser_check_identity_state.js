@@ -9,6 +9,7 @@ const INSECURE_ICON_PREF = "security.insecure_connection_icon.enabled";
 const INSECURE_TEXT_PREF = "security.insecure_connection_text.enabled";
 const INSECURE_PBMODE_ICON_PREF =
   "security.insecure_connection_icon.pbmode.enabled";
+const HTTPS_FIRST_PBM_PREF = "dom.security.https_first_pbm";
 
 function loadNewTab(url) {
   return BrowserTestUtils.openNewForegroundTab(gBrowser, url, true);
@@ -20,14 +21,14 @@ function getIdentityMode(aWindow = window) {
 
 function getConnectionState() {
   // Prevents items that are being lazy loaded causing issues
-  document.getElementById("identity-box").click();
+  document.getElementById("identity-icon-box").click();
   gIdentityHandler.refreshIdentityPopup();
   return document.getElementById("identity-popup").getAttribute("connection");
 }
 
 function getSecurityConnectionBG() {
   // Get the background image of the security connection.
-  document.getElementById("identity-box").click();
+  document.getElementById("identity-icon-box").click();
   gIdentityHandler.refreshIdentityPopup();
   return gBrowser.ownerGlobal
     .getComputedStyle(
@@ -38,12 +39,18 @@ function getSecurityConnectionBG() {
     .getPropertyValue("background-image");
 }
 
-function getReaderModeURL() {
+async function getReaderModeURL() {
   // Gets the reader mode URL from "identity-popup mainView panel header span"
-  document.getElementById("identity-box").click();
+  document.getElementById("identity-icon-box").click();
   gIdentityHandler.refreshIdentityPopup();
-  return document.getElementById("identity-popup-mainView-panel-header-span")
-    .innerHTML;
+
+  let headerSpan = document.getElementById(
+    "identity-popup-mainView-panel-header-span"
+  );
+  await BrowserTestUtils.waitForCondition(() =>
+    headerSpan.innerHTML.includes("example.com")
+  );
+  return headerSpan.innerHTML;
 }
 
 // This test is slow on Linux debug e10s
@@ -493,6 +500,45 @@ add_task(async function test_about_net_error_uri_from_navigation_tab() {
   await noCertErrorFromNavigationTest(false);
 });
 
+add_task(async function netErrorPageTest() {
+  const TLS10_PAGE = "https://tls1.example.com/";
+  Services.prefs.setIntPref("security.tls.version.min", 3);
+  Services.prefs.setIntPref("security.tls.version.max", 4);
+
+  let browser;
+  let pageLoaded;
+  await BrowserTestUtils.openNewForegroundTab(
+    gBrowser,
+    () => {
+      gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, TLS10_PAGE);
+      browser = gBrowser.selectedBrowser;
+      pageLoaded = BrowserTestUtils.waitForErrorPage(browser);
+    },
+    false
+  );
+
+  info("Loading and waiting for the net error");
+  await pageLoaded;
+
+  await SpecialPowers.spawn(browser, [], function() {
+    const doc = content.document;
+    ok(
+      doc.documentURI.startsWith("about:neterror"),
+      "Should be showing error page"
+    );
+  });
+
+  is(
+    getConnectionState(),
+    "net-error-page",
+    "Connection should be the net error page."
+  );
+
+  BrowserTestUtils.removeTab(gBrowser.selectedTab);
+
+  await SpecialPowers.popPrefEnv();
+});
+
 async function aboutBlockedTest(secureCheck) {
   let url = "http://www.itisatrap.org/firefox/its-an-attack.html";
   let oldTab = await loadNewTab("about:robots");
@@ -544,7 +590,7 @@ add_task(async function noCertErrorSecurityConnectionBGTest() {
 
   is(
     getSecurityConnectionBG(),
-    `url("chrome://global/skin/icons/connection-mixed-passive-loaded.svg")`,
+    `url("chrome://global/skin/icons/security-warning.svg")`,
     "Security connection should show a warning lock icon."
   );
 
@@ -581,10 +627,10 @@ async function readerUriTest(secureCheck) {
 
   let newTab = await loadNewTab("about:reader?url=http://example.com");
   gBrowser.selectedTab = newTab;
-  let readerURL = getReaderModeURL();
+  let readerURL = await getReaderModeURL();
   is(
     readerURL,
-    "Site Information for example.com",
+    "Site information for example.com",
     "should be the correct URI in reader mode"
   );
 
@@ -691,16 +737,48 @@ add_task(async function test_pb_mode() {
   let prefs = [
     [INSECURE_ICON_PREF, true],
     [INSECURE_PBMODE_ICON_PREF, true],
+    [HTTPS_FIRST_PBM_PREF, false],
   ];
   await pbModeTest(prefs, true);
   prefs = [
     [INSECURE_ICON_PREF, false],
     [INSECURE_PBMODE_ICON_PREF, true],
+    [HTTPS_FIRST_PBM_PREF, false],
   ];
   await pbModeTest(prefs, true);
   prefs = [
     [INSECURE_ICON_PREF, false],
     [INSECURE_PBMODE_ICON_PREF, false],
+    [HTTPS_FIRST_PBM_PREF, false],
   ];
   await pbModeTest(prefs, false);
+});
+
+/**
+ * Tests that sites opened via the PDF viewer have the correct identity state.
+ */
+add_task(async function test_pdf() {
+  const PDF_URI_NOSCHEME =
+    getRootDirectory(gTestPath).replace(
+      "chrome://mochitests/content",
+      "example.com"
+    ) + "file_pdf.pdf";
+
+  const PDF_URI_SECURE = "https://" + PDF_URI_NOSCHEME;
+  const PDF_URI_INSECURE = "http://" + PDF_URI_NOSCHEME;
+
+  await BrowserTestUtils.withNewTab(PDF_URI_INSECURE, async () => {
+    is(
+      getIdentityMode(),
+      "notSecure",
+      "Identity should be notSecure for a PDF served via HTTP."
+    );
+  });
+  await BrowserTestUtils.withNewTab(PDF_URI_SECURE, async () => {
+    is(
+      getIdentityMode(),
+      "verifiedDomain",
+      "Identity should be verifiedDomain for a PDF served via HTTPS."
+    );
+  });
 });

@@ -131,6 +131,10 @@ class nsDocShellLoadState final {
 
   void SetForceAllowDataURI(bool aForceAllowDataURI);
 
+  bool IsExemptFromHTTPSOnlyMode() const;
+
+  void SetIsExemptFromHTTPSOnlyMode(bool aIsExemptFromHTTPSOnlyMode);
+
   bool OriginalFrameSrc() const;
 
   void SetOriginalFrameSrc(bool aOriginalFrameSrc);
@@ -182,7 +186,11 @@ class nsDocShellLoadState final {
     return mSourceBrowsingContext;
   }
 
-  void SetSourceBrowsingContext(BrowsingContext* aSourceBrowsingContext);
+  void SetSourceBrowsingContext(BrowsingContext*);
+
+  void SetAllowFocusMove(bool aAllow) { mAllowFocusMove = aAllow; }
+
+  bool AllowFocusMove() const { return mAllowFocusMove; }
 
   const MaybeDiscarded<BrowsingContext>& TargetBrowsingContext() const {
     return mTargetBrowsingContext;
@@ -213,6 +221,16 @@ class nsDocShellLoadState final {
 
   bool HasLoadFlags(uint32_t aFlag);
 
+  uint32_t InternalLoadFlags() const;
+
+  void SetInternalLoadFlags(uint32_t aFlags);
+
+  void SetInternalLoadFlag(uint32_t aFlag);
+
+  void UnsetInternalLoadFlag(uint32_t aFlag);
+
+  bool HasInternalLoadFlags(uint32_t aFlag);
+
   bool FirstParty() const;
 
   void SetFirstParty(bool aFirstParty);
@@ -228,6 +246,8 @@ class nsDocShellLoadState final {
   const nsString& FileName() const;
 
   void SetFileName(const nsAString& aFileName);
+
+  nsIURI* GetUnstrippedURI() const;
 
   // Give the type of DocShell we're loading into (chrome/content/etc) and
   // origin attributes for the URI we're loading, figure out if we should
@@ -280,6 +300,10 @@ class nsDocShellLoadState final {
 
   bool GetChannelInitialized() const { return mChannelInitialized; }
 
+  void SetIsMetaRefresh(bool aMetaRefresh) { mIsMetaRefresh = aMetaRefresh; }
+
+  bool IsMetaRefresh() const { return mIsMetaRefresh; }
+
   // When loading a document through nsDocShell::LoadURI(), a special set of
   // flags needs to be set based on other values in nsDocShellLoadState. This
   // function calculates those flags, before the LoadState is passed to
@@ -298,6 +322,9 @@ class nsDocShellLoadState final {
                                    int32_t aSessionHistoryLength,
                                    bool aLoadingFromActiveEntry);
   void ClearLoadIsFromSessionHistory();
+
+  void MaybeStripTrackerQueryStrings(mozilla::dom::BrowsingContext* aContext,
+                                     nsIURI* aCurrentUnstrippedURI = nullptr);
 
  protected:
   // Destructor can't be defaulted or inlined, as header doesn't have all type
@@ -386,6 +413,10 @@ class nsDocShellLoadState final {
   // to a data URI will be allowed.
   bool mForceAllowDataURI;
 
+  // If this attribute is true, then the top-level navigaion
+  // will be exempt from HTTPS-Only-Mode upgrades.
+  bool mIsExemptFromHTTPSOnlyMode;
+
   // If this attribute is true, this load corresponds to a frame
   // element loading its original src (or srcdoc) attribute.
   bool mOriginalFrameSrc;
@@ -434,11 +465,17 @@ class nsDocShellLoadState final {
   // Set of Load Flags, taken from nsDocShellLoadTypes.h and nsIWebNavigation
   uint32_t mLoadFlags;
 
+  // Set of internal load flags
+  uint32_t mInternalLoadFlags;
+
   // Is this a First Party Load?
   bool mFirstParty;
 
   // Is this load triggered by a user gesture?
   bool mHasValidUserGestureActivation;
+
+  // Whether this load can steal the focus from the source browsing context.
+  bool mAllowFocusMove;
 
   // A hint as to the content-type of the resulting data. If no hint, IsVoid()
   // should return true.
@@ -480,6 +517,13 @@ class nsDocShellLoadState final {
   // Optional value to indicate that a channel has been
   // pre-initialized in the parent process.
   bool mChannelInitialized;
+
+  // True if the load was triggered by a meta refresh.
+  bool mIsMetaRefresh;
+
+  // The original URI before query stripping happened. If it's present, it shows
+  // the query stripping happened. Otherwise, it will be a nullptr.
+  nsCOMPtr<nsIURI> mUnstrippedURI;
 };
 
 #endif /* nsDocShellLoadState_h__ */

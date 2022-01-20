@@ -9,7 +9,7 @@ use crate::ipc::need_ipc;
 /// A Glean ping.
 ///
 /// See [Glean Pings](https://mozilla.github.io/glean/book/user/pings/index.html).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Ping {
     Parent(glean::private::PingType),
     Child,
@@ -42,10 +42,27 @@ impl Ping {
             ))
         }
     }
+
+    /// **Test-only API**
+    ///
+    /// Attach a callback to be called right before a new ping is submitted.
+    /// The provided function is called exactly once before submitting a ping.
+    ///
+    /// Note: The callback will be called on any call to submit.
+    /// A ping might not be sent afterwards, e.g. if the ping is otherwise empty (and
+    /// `send_if_empty` is `false`).
+    pub fn test_before_next_submit(&self, cb: impl FnOnce(Option<&str>) + Send + 'static) {
+        match self {
+            Ping::Parent(p) => p.test_before_next_submit(cb),
+            Ping::Child => {
+                panic!("Cannot use ping test API from non-parent process!");
+            }
+        };
+    }
 }
 
 #[inherent(pub)]
-impl glean_core::traits::Ping for Ping {
+impl glean::traits::Ping for Ping {
     /// Submits the ping for eventual uploading
     ///
     /// # Arguments
@@ -55,13 +72,10 @@ impl glean_core::traits::Ping for Ping {
     fn submit(&self, reason: Option<&str>) {
         match self {
             Ping::Parent(p) => {
-                glean_core::traits::Ping::submit(p, reason);
+                glean::traits::Ping::submit(p, reason);
             }
             Ping::Child => {
-                log::error!(
-                    "Unable to submit ping {:?} in non-main process. Ignoring.",
-                    self
-                );
+                log::error!("Unable to submit ping in non-main process. Ignoring.");
                 // TODO: Record an error.
             }
         };
@@ -75,6 +89,11 @@ mod test {
     use super::*;
     use crate::common_test::*;
 
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
     // Smoke test for what should be the generated code.
     static PROTOTYPE_PING: Lazy<Ping> = Lazy::new(|| Ping::new("prototype", false, true, vec![]));
 
@@ -82,8 +101,13 @@ mod test {
     fn smoke_test_custom_ping() {
         let _lock = lock_test();
 
-        // We can only check that nothing explodes.
-        // More comprehensive tests are blocked on bug 1673660.
+        let called = Arc::new(AtomicBool::new(false));
+        let rcalled = Arc::clone(&called);
+        PROTOTYPE_PING.test_before_next_submit(move |reason| {
+            (*rcalled).store(true, Ordering::Relaxed);
+            assert_eq!(None, reason);
+        });
         PROTOTYPE_PING.submit(None);
+        assert!((*called).load(Ordering::Relaxed));
     }
 }

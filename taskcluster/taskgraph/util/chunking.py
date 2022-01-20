@@ -22,7 +22,7 @@ from moztest.resolve import (
 )
 
 from taskgraph import GECKO
-from taskgraph.util.bugbug import BugbugTimeoutException, push_schedules
+from taskgraph.util.bugbug import BugbugTimeoutException, CT_LOW, push_schedules
 
 logger = logging.getLogger(__name__)
 here = os.path.abspath(os.path.dirname(__file__))
@@ -46,6 +46,7 @@ def guess_mozinfo_from_task(task):
         "asan": "asan" in task["build-attributes"]["build_platform"],
         "bits": 32 if "32" in task["build-attributes"]["build_platform"] else 64,
         "ccov": "ccov" in task["build-attributes"]["build_platform"],
+        "crashreporter": True,
         "debug": task["build-attributes"]["build_type"] == "debug",
         "e10s": task["attributes"]["e10s"],
         "fission": task["attributes"].get("unittest_variant") == "fission",
@@ -219,7 +220,7 @@ class BugbugLoader(DefaultLoader):
     """Load manifests using metadata from the TestResolver, and then
     filter them based on a query to bugbug."""
 
-    CONFIDENCE_THRESHOLD = 0.5
+    CONFIDENCE_THRESHOLD = CT_LOW
 
     def __init__(self, *args, **kwargs):
         super(BugbugLoader, self).__init__(*args, **kwargs)

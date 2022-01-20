@@ -336,6 +336,8 @@ XPCOMUtils.defineLazyGetter(this, "ProfilerPopupBackground", function () {
 function DevToolsStartup() {
   this.onEnabledPrefChanged = this.onEnabledPrefChanged.bind(this);
   this.onWindowReady = this.onWindowReady.bind(this);
+  this.addDevToolsItemsToSubview = this.addDevToolsItemsToSubview.bind(this);
+  this.onMoreToolsViewShowing = this.onMoreToolsViewShowing.bind(this);
   this.toggleProfilerKeyShortcuts = this.toggleProfilerKeyShortcuts.bind(this);
 }
 
@@ -416,6 +418,12 @@ DevToolsStartup.prototype = {
       Services.prefs.addObserver(
         DEVTOOLS_ENABLED_PREF,
         this.onEnabledPrefChanged
+      );
+
+      // Add DevTools menu items to the "More Tools" view.
+      Services.obs.addObserver(
+        this.onMoreToolsViewShowing,
+        "web-developer-tools-view-showing"
       );
       /* eslint-enable mozilla/balanced-observers */
 
@@ -513,14 +521,12 @@ DevToolsStartup.prototype = {
 
   removeDevToolsMenus(window) {
     // This will hide the "Tools > Web Developer" menu.
-    window.document
-      .getElementById("webDeveloperMenu")
-      .setAttribute("hidden", "true");
+    window.document.getElementById("webDeveloperMenu").hidden = true;
     // This will hide the "Web Developer" item in the hamburger menu.
     PanelMultiView.getViewNode(
       window.document,
       "appMenu-developer-button"
-    ).setAttribute("hidden", "true");
+    ).hidden = true;
   },
 
   onFirstWindowReady(window) {
@@ -589,40 +595,20 @@ DevToolsStartup.prototype = {
     if (widget && widget.provider == CustomizableUI.PROVIDER_API) {
       return;
     }
+
+    const panelviewId = "PanelUI-developer-tools";
+    const subviewId = "PanelUI-developer-tools-view";
+
     const item = {
       id: id,
       type: "view",
-      viewId: "PanelUI-developer",
+      viewId: panelviewId,
       shortcutId: "key_toggleToolbox",
       tooltiptext: "developer-button.tooltiptext2",
-      onViewShowing: (event) => {
-        if (Services.prefs.getBoolPref(DEVTOOLS_ENABLED_PREF)) {
-          // If DevTools are enabled, initialize DevTools to create all menuitems in the
-          // system menu before trying to copy them.
-          this.initDevTools("HamburgerMenu");
-        }
-
-        // Populate the subview with whatever menuitems are in the developer
-        // menu. We skip menu elements, because the menu panel has no way
-        // of dealing with those right now.
+      onViewShowing: event => {
         const doc = event.target.ownerDocument;
-
-        const menu = doc.getElementById("menuWebDeveloperPopup");
-
-        const itemsToDisplay = [...menu.children];
-        // Hardcode the addition of the "work offline" menuitem at the bottom:
-        itemsToDisplay.push({
-          localName: "menuseparator",
-          getAttribute: () => {},
-        });
-        itemsToDisplay.push(doc.getElementById("goOfflineMenuitem"));
-
-        const developerItems = PanelMultiView.getViewNode(
-          doc,
-          "PanelUI-developerItems"
-        );
-        CustomizableUI.clearSubview(developerItems);
-        CustomizableUI.fillSubviewFromMenuItems(itemsToDisplay, developerItems);
+        const developerItems = PanelMultiView.getViewNode(doc, subviewId);
+        this.addDevToolsItemsToSubview(developerItems);
       },
       onInit(anchor) {
         // Since onBeforeCreated already bails out when initialized, we can call
@@ -634,16 +620,6 @@ DevToolsStartup.prototype = {
         // In DEV EDITION, the toggle is added before 1st paint and hookKeyShortcuts() is
         // not called yet when CustomizableUI creates the widget.
         this.hookKeyShortcuts(doc.defaultView);
-
-        if (PanelMultiView.getViewNode(doc, "PanelUI-developerItems")) {
-          return;
-        }
-        const view = doc.createXULElement("panelview");
-        view.id = "PanelUI-developerItems";
-        const panel = doc.createXULElement("vbox");
-        panel.setAttribute("class", "panel-subview-body");
-        view.appendChild(panel);
-        doc.getElementById("PanelUI-multiView").appendChild(view);
       },
     };
     CustomizableUI.createWidget(item);
@@ -659,6 +635,28 @@ DevToolsStartup.prototype = {
     this.recordingButtonCreated = true;
 
     createRecordingButton();
+  },
+
+  addDevToolsItemsToSubview(subview) {
+    if (Services.prefs.getBoolPref(DEVTOOLS_ENABLED_PREF)) {
+      // If DevTools are enabled, initialize DevTools to create all menuitems in the
+      // system menu before trying to copy them.
+      this.initDevTools("HamburgerMenu");
+    }
+
+    // Populate the subview with whatever menuitems are in the developer
+    // menu. We skip menu elements, because the menu panel has no way
+    // of dealing with those right now.
+    const doc = subview.ownerDocument;
+    const menu = doc.getElementById("menuWebDeveloperPopup");
+    const itemsToDisplay = [...menu.children];
+
+    CustomizableUI.clearSubview(subview);
+    CustomizableUI.fillSubviewFromMenuItems(itemsToDisplay, subview);
+  },
+
+  onMoreToolsViewShowing(moreToolsView) {
+    this.addDevToolsItemsToSubview(moreToolsView);
   },
 
   /**
@@ -1070,9 +1068,7 @@ DevToolsStartup.prototype = {
   handleDevToolsFlag: async function (window) {
     const require = this.initDevTools("CommandLine");
     const { gDevTools } = require("devtools/client/framework/devtools");
-    const { TargetFactory } = require("devtools/client/framework/target");
-    const target = await TargetFactory.forTab(window.gBrowser.selectedTab);
-    gDevTools.showToolbox(target);
+    await gDevTools.showToolboxForTab(window.gBrowser.selectedTab);
   },
 
   _isRemoteDebuggingEnabled() {
@@ -1121,7 +1117,7 @@ DevToolsStartup.prototype = {
     if (pauseOnStartup) {
       // Spin the event loop until the debugger connects.
       const tm = Cc["@mozilla.org/thread-manager;1"].getService();
-      tm.spinEventLoopUntil(() => {
+      tm.spinEventLoopUntil("DevToolsStartup.jsm:handleDebuggerFlag", () => {
         return devtoolsThreadResumed;
       });
     }

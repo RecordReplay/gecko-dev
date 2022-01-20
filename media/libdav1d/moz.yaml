@@ -20,11 +20,11 @@ origin:
 
   # Human-readable identifier for this version/release
   # Generally "version NNN", "tag SSS", "bookmark SSS"
-  release: commit 2ca1bfc39fe5c182d885f2750779d5b1678d8ef9 (2020-11-23T21:17:09.000+01:00).
+  release: commit ddbbfde198aced0d02ea739c320d754d43406f7b (2021-06-12T07:58:29.000+00:00).
 
   # Revision to pull in
   # Must be a long or short commit SHA (long preferred)
-  revision: 2ca1bfc39fe5c182d885f2750779d5b1678d8ef9
+  revision: ddbbfde198aced0d02ea739c320d754d43406f7b
 
   # The package's license, where possible using the mnemonic from
   # https://spdx.org/licenses/
@@ -35,9 +35,12 @@ origin:
   license-file: COPYING
 
 updatebot:
-    enabled: True
-    maintainer-phab: tjr
-    maintainer-bz: tom@mozilla.com
+    maintainer-phab: jbauman
+    maintainer-bz: jbauman@mozilla.com
+    tasks:
+      - type: vendoring
+        enabled: true
+        frequency: release
 
 vendoring:
   url: https://code.videolan.org/videolan/dav1d.git

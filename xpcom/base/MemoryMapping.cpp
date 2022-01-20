@@ -8,6 +8,7 @@
 
 #include "mozilla/BinarySearch.h"
 #include "mozilla/FileUtils.h"
+#include "mozilla/RecordReplay.h"
 
 #include <fstream>
 #include <string>

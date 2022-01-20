@@ -55,7 +55,6 @@ add_task(async function() {
   ok(qoutaUsageSite, "Should list site using quota usage");
 
   // Always remember to clean up
-  OfflineAppCacheHelper.clear();
   await new Promise(resolve => {
     let principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
       TEST_QUOTA_USAGE_ORIGIN
@@ -153,7 +152,7 @@ add_task(async function() {
   BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
-// Test clearing service wroker through the settings panel
+// Test clearing service worker through the settings panel
 add_task(async function() {
   // Register a test service worker
   await loadServiceWorkerTestPage(TEST_SERVICE_WORKER_URL);

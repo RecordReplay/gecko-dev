@@ -1,14 +1,10 @@
 import logging
 import inspect
-import mock
-import os
-import pytest
 import subprocess
 import sys
+from unittest import mock
 
-here = os.path.dirname(__file__)
-root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-sys.path.insert(0, root)
+import pytest
 
 from tools.wpt import browser
 

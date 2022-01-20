@@ -21,7 +21,6 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/PresShellInlines.h"
 #include "mozilla/dom/ContentParent.h"
-#include "mozilla/dom/WindowGlobalChild.h"
 
 #include "base/basictypes.h"
 
@@ -48,14 +47,12 @@
 #include "nsViewManager.h"
 #include "mozilla/RestyleManager.h"
 #include "SurfaceCacheUtils.h"
-#include "nsMediaFeatures.h"
 #include "gfxPlatform.h"
 #include "nsFontFaceLoader.h"
 #include "mozilla/AnimationEventDispatcher.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EventListenerManager.h"
 #include "prenv.h"
-#include "nsPluginFrame.h"
 #include "nsTransitionManager.h"
 #include "nsAnimationManager.h"
 #include "CounterStyleManager.h"
@@ -222,6 +219,7 @@ nsPresContext::nsPresContext(dom::Document* aDocument, nsPresContextType aType)
       mQuirkSheetAdded(false),
       mHadNonBlankPaint(false),
       mHadContentfulPaint(false),
+      mHadNonTickContentfulPaint(false),
       mHadContentfulPaintComposite(false)
 #ifdef DEBUG
       ,
@@ -298,7 +296,7 @@ void nsPresContext::Destroy() {
                                    gExactCallbackPrefs, this);
 
   mRefreshDriver = nullptr;
-  MOZ_ASSERT(mOneShotPostRefreshObservers.IsEmpty());
+  MOZ_ASSERT(mManagedPostRefreshObservers.IsEmpty());
 }
 
 nsPresContext::~nsPresContext() {
@@ -454,7 +452,7 @@ void nsPresContext::AppUnitsPerDevPixelChanged() {
   // item gets created/removed.
   if (mPresShell) {
     if (nsIFrame* frame = mPresShell->GetRootFrame()) {
-      frame = nsLayoutUtils::GetCrossDocParentFrame(frame);
+      frame = nsLayoutUtils::GetCrossDocParentFrameInProcess(frame);
       if (frame) {
         int32_t parentAPD = frame->PresContext()->AppUnitsPerDevPixel();
         if ((parentAPD == oldAppUnitsPerDevPixel) !=
@@ -681,8 +679,7 @@ nsresult nsPresContext::Init(nsDeviceContext* aDeviceContext) {
       // XXX the document can change in AttachPresShell, does this work?
       dom::BrowsingContext* browsingContext = mDocument->GetBrowsingContext();
       if (browsingContext && !browsingContext->IsTop()) {
-        Element* containingElement =
-            parent->FindContentForSubDocument(mDocument);
+        Element* containingElement = mDocument->GetEmbedderElement();
         if (!containingElement->IsXULElement() ||
             !containingElement->HasAttr(kNameSpaceID_None,
                                         nsGkAtoms::forceOwnRefreshDriver)) {
@@ -770,11 +767,24 @@ void nsPresContext::RecomputeBrowsingContextDependentData() {
   if (!browsingContext) {
     // This can legitimately happen for e.g. SVG images. Those just get scaled
     // as a result of the zoom on the embedder document so it doesn't really
-    // matter...
+    // matter... Medium also doesn't affect those.
     return;
   }
   SetFullZoom(browsingContext->FullZoom());
   SetTextZoom(browsingContext->TextZoom());
+  SetOverrideDPPX(browsingContext->OverrideDPPX());
+  if (doc == mDocument) {
+    // Medium doesn't apply to resource documents, etc.
+    auto* top = browsingContext->Top();
+    RefPtr<nsAtom> mediumToEmulate;
+    if (MOZ_UNLIKELY(!top->GetMediumOverride().IsEmpty())) {
+      nsAutoString lower;
+      nsContentUtils::ASCIIToLower(top->GetMediumOverride(), lower);
+      mediumToEmulate = NS_Atomize(lower);
+    }
+    EmulateMedium(mediumToEmulate);
+  }
+
   mDocument->EnumerateExternalResources([](dom::Document& aSubResource) {
     if (nsPresContext* subResourcePc = aSubResource.GetPresContext()) {
       subResourcePc->RecomputeBrowsingContextDependentData();
@@ -820,14 +830,6 @@ void nsPresContext::DetachPresShell() {
   if (mRefreshDriver && mRefreshDriver->GetPresContext() == this) {
     mRefreshDriver->Disconnect();
     // Can't null out the refresh driver here.
-  }
-
-  if (IsRoot()) {
-    nsRootPresContext* thisRoot = static_cast<nsRootPresContext*>(this);
-
-    // Have to cancel our plugin geometry timer, because the
-    // callback for that depends on a non-null presshell.
-    thisRoot->CancelApplyPluginGeometryTimer();
   }
 }
 
@@ -1073,18 +1075,6 @@ void nsPresContext::SetOverrideDPPX(float aDPPX) {
                             MediaFeatureChangePropagation::JustThisDocument);
 }
 
-void nsPresContext::SetOverridePrefersColorScheme(
-    const Maybe<StylePrefersColorScheme>& aOverride) {
-  if (GetOverridePrefersColorScheme() == aOverride) {
-    return;
-  }
-  mMediaEmulationData.mPrefersColorScheme = aOverride;
-  // This is a bit of a lie, but it's the code-path that gets taken for regular
-  // system metrics changes via ThemeChanged().
-  MediaFeatureValuesChanged({MediaFeatureChangeReason::SystemMetricsChange},
-                            MediaFeatureChangePropagation::JustThisDocument);
-}
-
 gfxSize nsPresContext::ScreenSizeInchesForFontInflation(bool* aChanged) {
   if (aChanged) {
     *aChanged = false;
@@ -1185,6 +1175,8 @@ static Element* GetPropagatedScrollStylesForViewport(
 }
 
 Element* nsPresContext::UpdateViewportScrollStylesOverride() {
+  ScrollStyles oldViewportScrollStyles = mViewportScrollStyles;
+
   // Start off with our default styles, and then update them as needed.
   mViewportScrollStyles =
       ScrollStyles(StyleOverflow::Auto, StyleOverflow::Auto);
@@ -1208,6 +1200,15 @@ Element* nsPresContext::UpdateViewportScrollStylesOverride() {
           ScrollStyles(StyleOverflow::Hidden, StyleOverflow::Hidden);
     }
   }
+
+  if (mViewportScrollStyles != oldViewportScrollStyles) {
+    if (mPresShell) {
+      if (nsIFrame* frame = mPresShell->GetRootFrame()) {
+        frame->SchedulePaint();
+      }
+    }
+  }
+
   return mViewportScrollOverrideElement;
 }
 
@@ -1330,14 +1331,6 @@ void nsPresContext::RecordInteractionTime(InteractionType aType,
 
       if (isFirstInteraction) {
         Telemetry::Accumulate(Telemetry::TIME_TO_FIRST_INTERACTION_MS, millis);
-
-        if (Document()->ShouldIncludeInTelemetry(
-                /* aAllowExtensionURIs = */ false)) {
-          if (auto* wgc = Document()->GetWindowGlobalChild()) {
-            Unused << wgc->SendSubmitTimeToFirstInteractionPreloadTelemetry(
-                millis);
-          }
-        }
       }
     }
   } else {
@@ -1404,10 +1397,6 @@ void nsPresContext::ThemeChangedInternal() {
       ContentParent::BroadcastThemeUpdate(kind);
     }
   }
-
-  // This will force the system metrics to be generated the next time they're
-  // used.
-  nsMediaFeatures::FreeSystemMetrics();
 
   // Reset default background and foreground colors for the document since they
   // may be using system colors.
@@ -1510,31 +1499,39 @@ void nsPresContext::ContentLanguageChanged() {
                                RestyleHint::RecascadeSubtree());
 }
 
-bool nsPresContext::RegisterOneShotPostRefreshObserver(
-    mozilla::OneShotPostRefreshObserver* aObserver) {
+void nsPresContext::RegisterManagedPostRefreshObserver(
+    ManagedPostRefreshObserver* aObserver) {
+  if (MOZ_UNLIKELY(!mPresShell)) {
+    // If we're detached from our pres shell already, refuse to keep observer
+    // around, as that'd create a cycle.
+    RefPtr<ManagedPostRefreshObserver> obs = aObserver;
+    obs->Cancel();
+    return;
+  }
+
   RefreshDriver()->AddPostRefreshObserver(
       static_cast<nsAPostRefreshObserver*>(aObserver));
-  mOneShotPostRefreshObservers.AppendElement(aObserver);
-  return true;
+  mManagedPostRefreshObservers.AppendElement(aObserver);
 }
 
-void nsPresContext::UnregisterOneShotPostRefreshObserver(
-    mozilla::OneShotPostRefreshObserver* aObserver) {
+void nsPresContext::UnregisterManagedPostRefreshObserver(
+    ManagedPostRefreshObserver* aObserver) {
   RefreshDriver()->RemovePostRefreshObserver(
       static_cast<nsAPostRefreshObserver*>(aObserver));
   DebugOnly<bool> removed =
-      mOneShotPostRefreshObservers.RemoveElement(aObserver);
+      mManagedPostRefreshObservers.RemoveElement(aObserver);
   MOZ_ASSERT(removed,
-             "OneShotPostRefreshObserver should be owned by PresContext");
+             "ManagedPostRefreshObserver should be owned by PresContext");
 }
 
-void nsPresContext::ClearOneShotPostRefreshObservers() {
-  for (const auto& observer : mOneShotPostRefreshObservers) {
-    RefreshDriver()->RemovePostRefreshObserver(
+void nsPresContext::CancelManagedPostRefreshObservers() {
+  auto observers = std::move(mManagedPostRefreshObservers);
+  nsRefreshDriver* driver = RefreshDriver();
+  for (const auto& observer : observers) {
+    observer->Cancel();
+    driver->RemovePostRefreshObserver(
         static_cast<nsAPostRefreshObserver*>(observer));
   }
-
-  mOneShotPostRefreshObservers.Clear();
 }
 
 void nsPresContext::RebuildAllStyleData(nsChangeHint aExtraHint,
@@ -1682,8 +1679,9 @@ nsCompatibility nsPresContext::CompatibilityMode() const {
 }
 
 void nsPresContext::SetPaginatedScrolling(bool aPaginated) {
-  if (mType == eContext_PrintPreview || mType == eContext_PageLayout)
+  if (mType == eContext_PrintPreview || mType == eContext_PageLayout) {
     mCanPaginatedScroll = aPaginated;
+  }
 }
 
 void nsPresContext::SetPrintSettings(nsIPrintSettings* aPrintSettings) {
@@ -1697,7 +1695,7 @@ void nsPresContext::SetPrintSettings(nsIPrintSettings* aPrintSettings) {
     return;
   }
 
-  // set the presentation context to the value in the print settings
+  // Set the presentation context to the value in the print settings.
   mDrawColorBackground = mPrintSettings->GetPrintBGColors();
   mDrawImageBackground = mPrintSettings->GetPrintBGImages();
 
@@ -2170,7 +2168,8 @@ void nsPresContext::NotifyDidPaintForSubtree(
         nsCOMPtr<nsIRunnable> ev = new DelayedFireDOMPaintEvent(
             this, std::move(mTransactions[i].mInvalidations),
             mTransactions[i].mTransactionId, aTimeStamp);
-        nsContentUtils::AddScriptRunner(ev);
+        NS_DispatchToCurrentThreadQueue(ev.forget(),
+                                        EventQueuePriority::MediumHigh);
         sent = true;
       }
       mTransactions.RemoveElementAt(i);
@@ -2181,7 +2180,8 @@ void nsPresContext::NotifyDidPaintForSubtree(
         nsCOMPtr<nsIRunnable> ev = new DelayedFireDOMPaintEvent(
             this, std::move(mTransactions[i].mInvalidations),
             mTransactions[i].mTransactionId, aTimeStamp);
-        nsContentUtils::AddScriptRunner(ev);
+        NS_DispatchToCurrentThreadQueue(ev.forget(),
+                                        EventQueuePriority::MediumHigh);
         sent = true;
         mTransactions.RemoveElementAt(i);
         continue;
@@ -2194,7 +2194,8 @@ void nsPresContext::NotifyDidPaintForSubtree(
     nsTArray<nsRect> dummy;
     nsCOMPtr<nsIRunnable> ev = new DelayedFireDOMPaintEvent(
         this, std::move(dummy), aTransactionId, aTimeStamp);
-    nsContentUtils::AddScriptRunner(ev);
+    NS_DispatchToCurrentThreadQueue(ev.forget(),
+                                    EventQueuePriority::MediumHigh);
   }
 
   auto recurse = [&aTransactionId, &aTimeStamp](dom::Document& aSubDoc) {
@@ -2440,33 +2441,42 @@ void nsPresContext::NotifyNonBlankPaint() {
 }
 
 void nsPresContext::NotifyContentfulPaint() {
+  nsRootPresContext* rootPresContext = GetRootPresContext();
+  if (!rootPresContext) {
+    return;
+  }
   if (!mHadContentfulPaint) {
 #if defined(MOZ_WIDGET_ANDROID)
-    (new AsyncEventDispatcher(mDocument, u"MozFirstContentfulPaint"_ns,
-                              CanBubble::eYes, ChromeOnlyDispatch::eYes))
-        ->PostDOMEvent();
+    if (!mHadNonTickContentfulPaint) {
+      (new AsyncEventDispatcher(mDocument, u"MozFirstContentfulPaint"_ns,
+                                CanBubble::eYes, ChromeOnlyDispatch::eYes))
+          ->PostDOMEvent();
+    }
 #endif
+    if (!rootPresContext->RefreshDriver()->IsInRefresh()) {
+      if (!mHadNonTickContentfulPaint) {
+        rootPresContext->RefreshDriver()
+            ->AddForceNotifyContentfulPaintPresContext(this);
+        mHadNonTickContentfulPaint = true;
+      }
+      return;
+    }
     mHadContentfulPaint = true;
-    if (nsRootPresContext* rootPresContext = GetRootPresContext()) {
-      mFirstContentfulPaintTransactionId =
-          Some(rootPresContext->mRefreshDriver->LastTransactionId().Next());
-      if (nsPIDOMWindowInner* innerWindow = mDocument->GetInnerWindow()) {
-        if (Performance* perf = innerWindow->GetPerformance()) {
-          TimeStamp nowTime =
-              rootPresContext->RefreshDriver()->MostRecentRefresh(
-                  /* aEnsureTimerStarted */ false);
-          MOZ_ASSERT(
-              !nowTime.IsNull(),
-              "Most recent refresh timestamp should exist since we are in "
-              "a refresh driver tick");
-          MOZ_ASSERT(rootPresContext->RefreshDriver()->IsInRefresh(),
-                     "We should only notify contentful paint during refresh "
-                     "driver ticks");
-          RefPtr<PerformancePaintTiming> paintTiming =
-              new PerformancePaintTiming(perf, u"first-contentful-paint"_ns,
-                                         nowTime);
-          perf->SetFCPTimingEntry(paintTiming);
-        }
+    mFirstContentfulPaintTransactionId =
+        Some(rootPresContext->mRefreshDriver->LastTransactionId().Next());
+    if (nsPIDOMWindowInner* innerWindow = mDocument->GetInnerWindow()) {
+      if (Performance* perf = innerWindow->GetPerformance()) {
+        TimeStamp nowTime = rootPresContext->RefreshDriver()->MostRecentRefresh(
+            /* aEnsureTimerStarted */ false);
+        MOZ_ASSERT(!nowTime.IsNull(),
+                   "Most recent refresh timestamp should exist since we are in "
+                   "a refresh driver tick");
+        MOZ_ASSERT(rootPresContext->RefreshDriver()->IsInRefresh(),
+                   "We should only notify contentful paint during refresh "
+                   "driver ticks");
+        RefPtr<PerformancePaintTiming> paintTiming = new PerformancePaintTiming(
+            perf, u"first-contentful-paint"_ns, nowTime);
+        perf->SetFCPTimingEntry(paintTiming);
       }
     }
   }
@@ -2480,6 +2490,7 @@ void nsPresContext::NotifyPaintStatusReset() {
                             CanBubble::eYes, ChromeOnlyDispatch::eYes))
       ->PostDOMEvent();
 #endif
+  mHadNonTickContentfulPaint = false;
 }
 
 void nsPresContext::NotifyDOMContentFlushed() {
@@ -2566,7 +2577,7 @@ void nsPresContext::SetVisibleArea(const nsRect& r) {
       AdjustSizeForViewportUnits();
     }
     // Visible area does not affect media queries when paginated.
-    if (!IsPaginated()) {
+    if (!IsRootPaginatedDocument()) {
       MediaFeatureValuesChanged(
           {mozilla::MediaFeatureChangeReason::ViewportChange},
           MediaFeatureChangePropagation::JustThisDocument);
@@ -2691,244 +2702,6 @@ nsRootPresContext::nsRootPresContext(dom::Document* aDocument,
                                      nsPresContextType aType)
     : nsPresContext(aDocument, aType) {}
 
-nsRootPresContext::~nsRootPresContext() {
-  NS_ASSERTION(mRegisteredPlugins.Count() == 0,
-               "All plugins should have been unregistered");
-  CancelApplyPluginGeometryTimer();
-}
-
-void nsRootPresContext::RegisterPluginForGeometryUpdates(nsIContent* aPlugin) {
-  mRegisteredPlugins.PutEntry(aPlugin);
-}
-
-void nsRootPresContext::UnregisterPluginForGeometryUpdates(
-    nsIContent* aPlugin) {
-  mRegisteredPlugins.RemoveEntry(aPlugin);
-}
-
-void nsRootPresContext::ComputePluginGeometryUpdates(
-    nsIFrame* aFrame, nsDisplayListBuilder* aBuilder, nsDisplayList* aList) {
-  if (mRegisteredPlugins.Count() == 0) {
-    return;
-  }
-
-  // Initially make the next state for each plugin descendant of aFrame be
-  // "hidden". Plugins that are visible will have their next state set to
-  // unhidden by nsDisplayPlugin::ComputeVisibility.
-  for (auto iter = mRegisteredPlugins.Iter(); !iter.Done(); iter.Next()) {
-    auto f =
-        static_cast<nsPluginFrame*>(iter.Get()->GetKey()->GetPrimaryFrame());
-    if (!f) {
-      NS_WARNING("Null frame in ComputePluginGeometryUpdates");
-      continue;
-    }
-    if (!nsLayoutUtils::IsAncestorFrameCrossDoc(aFrame, f)) {
-      // f is not managed by this frame so we should ignore it.
-      continue;
-    }
-    f->SetEmptyWidgetConfiguration();
-  }
-
-  if (aBuilder) {
-    MOZ_ASSERT(aList);
-    nsIFrame* rootFrame = mPresShell->GetRootFrame();
-
-    if (rootFrame && aBuilder->ContainsPluginItem()) {
-      aBuilder->SetForPluginGeometry(true);
-      // Merging and flattening has already been done and we should not do it
-      // again. nsDisplayScroll(Info)Layer doesn't support trying to flatten
-      // again.
-      aBuilder->SetAllowMergingAndFlattening(false);
-      nsRegion region = rootFrame->InkOverflowRectRelativeToSelf();
-      // nsDisplayPlugin::ComputeVisibility will automatically set a non-hidden
-      // widget configuration for the plugin, if it's visible.
-      aList->ComputeVisibilityForRoot(aBuilder, &region);
-      aBuilder->SetForPluginGeometry(false);
-    }
-  }
-
-#ifdef XP_MACOSX
-  // We control painting of Mac plugins, so just apply geometry updates now.
-  // This is not happening during a paint event.
-  ApplyPluginGeometryUpdates();
-#else
-  if (XRE_IsParentProcess()) {
-    InitApplyPluginGeometryTimer();
-  }
-#endif
-}
-
-static void ApplyPluginGeometryUpdatesCallback(nsITimer* aTimer,
-                                               void* aClosure) {
-  static_cast<nsRootPresContext*>(aClosure)->ApplyPluginGeometryUpdates();
-}
-
-void nsRootPresContext::InitApplyPluginGeometryTimer() {
-  if (mApplyPluginGeometryTimer) {
-    return;
-  }
-
-  // We'll apply the plugin geometry updates during the next compositing paint
-  // in this presContext (either from PresShell::WillPaintWindow() or from
-  // PresShell::DidPaintWindow(), depending on the platform).  But paints might
-  // get optimized away if the old plugin geometry covers the invalid region,
-  // so set a backup timer to do this too.  We want to make sure this
-  // won't fire before our normal paint notifications, if those would
-  // update the geometry, so set it for double the refresh driver interval.
-  mApplyPluginGeometryTimer = CreateTimer(
-      ApplyPluginGeometryUpdatesCallback, "ApplyPluginGeometryUpdatesCallback",
-      nsRefreshDriver::DefaultInterval() * 2);
-}
-
-void nsRootPresContext::CancelApplyPluginGeometryTimer() {
-  if (mApplyPluginGeometryTimer) {
-    mApplyPluginGeometryTimer->Cancel();
-    mApplyPluginGeometryTimer = nullptr;
-  }
-}
-
-#ifndef XP_MACOSX
-
-static bool HasOverlap(const LayoutDeviceIntPoint& aOffset1,
-                       const nsTArray<LayoutDeviceIntRect>& aClipRects1,
-                       const LayoutDeviceIntPoint& aOffset2,
-                       const nsTArray<LayoutDeviceIntRect>& aClipRects2) {
-  LayoutDeviceIntPoint offsetDelta = aOffset1 - aOffset2;
-  for (uint32_t i = 0; i < aClipRects1.Length(); ++i) {
-    for (uint32_t j = 0; j < aClipRects2.Length(); ++j) {
-      if ((aClipRects1[i] + offsetDelta).Intersects(aClipRects2[j])) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Given a list of plugin windows to move to new locations, sort the list
- * so that for each window move, the window moves to a location that
- * does not intersect other windows. This minimizes flicker and repainting.
- * It's not always possible to do this perfectly, since in general
- * we might have cycles. But we do our best.
- * We need to take into account that windows are clipped to particular
- * regions and the clip regions change as the windows are moved.
- */
-static void SortConfigurations(
-    nsTArray<nsIWidget::Configuration>* aConfigurations) {
-  if (aConfigurations->Length() > 10) {
-    // Give up, we don't want to get bogged down here
-    return;
-  }
-
-  nsTArray<nsIWidget::Configuration> pluginsToMove =
-      std::move(*aConfigurations);
-
-  // Our algorithm is quite naive. At each step we try to identify
-  // a window that can be moved to its new location that won't overlap
-  // any other windows at the new location. If there is no such
-  // window, we just move the last window in the list anyway.
-  while (!pluginsToMove.IsEmpty()) {
-    // Find a window whose destination does not overlap any other window
-    uint32_t i;
-    for (i = 0; i + 1 < pluginsToMove.Length(); ++i) {
-      nsIWidget::Configuration* config = &pluginsToMove[i];
-      bool foundOverlap = false;
-      for (uint32_t j = 0; j < pluginsToMove.Length(); ++j) {
-        if (i == j) continue;
-        LayoutDeviceIntRect bounds = pluginsToMove[j].mChild->GetBounds();
-        AutoTArray<LayoutDeviceIntRect, 1> clipRects;
-        pluginsToMove[j].mChild->GetWindowClipRegion(&clipRects);
-        if (HasOverlap(bounds.TopLeft(), clipRects, config->mBounds.TopLeft(),
-                       config->mClipRegion)) {
-          foundOverlap = true;
-          break;
-        }
-      }
-      if (!foundOverlap) break;
-    }
-    // Note that we always move the last plugin in pluginsToMove, if we
-    // can't find any other plugin to move
-    aConfigurations->AppendElement(pluginsToMove[i]);
-    pluginsToMove.RemoveElementAt(i);
-  }
-}
-
-static void PluginGetGeometryUpdate(
-    nsTHashtable<nsRefPtrHashKey<nsIContent>>& aPlugins,
-    nsTArray<nsIWidget::Configuration>* aConfigurations) {
-  for (auto iter = aPlugins.Iter(); !iter.Done(); iter.Next()) {
-    auto f =
-        static_cast<nsPluginFrame*>(iter.Get()->GetKey()->GetPrimaryFrame());
-    if (!f) {
-      NS_WARNING("Null frame in PluginGeometryUpdate");
-      continue;
-    }
-    f->GetWidgetConfiguration(aConfigurations);
-  }
-}
-
-#endif  // #ifndef XP_MACOSX
-
-static void PluginDidSetGeometry(
-    nsTHashtable<nsRefPtrHashKey<nsIContent>>& aPlugins) {
-  for (auto iter = aPlugins.Iter(); !iter.Done(); iter.Next()) {
-    auto f =
-        static_cast<nsPluginFrame*>(iter.Get()->GetKey()->GetPrimaryFrame());
-    if (!f) {
-      NS_WARNING("Null frame in PluginDidSetGeometry");
-      continue;
-    }
-    f->DidSetWidgetGeometry();
-  }
-}
-
-void nsRootPresContext::ApplyPluginGeometryUpdates() {
-#ifndef XP_MACOSX
-  CancelApplyPluginGeometryTimer();
-
-  nsTArray<nsIWidget::Configuration> configurations;
-  PluginGetGeometryUpdate(mRegisteredPlugins, &configurations);
-  // Walk mRegisteredPlugins and ask each plugin for its configuration
-  if (!configurations.IsEmpty()) {
-    nsIWidget* widget = configurations[0].mChild->GetParent();
-    NS_ASSERTION(widget, "Plugins must have a parent window");
-    SortConfigurations(&configurations);
-    widget->ConfigureChildren(configurations);
-  }
-#endif  // #ifndef XP_MACOSX
-
-  PluginDidSetGeometry(mRegisteredPlugins);
-}
-
-void nsRootPresContext::CollectPluginGeometryUpdates(
-    LayerManager* aLayerManager) {
-#ifndef XP_MACOSX
-  // Collect and pass plugin widget configurations down to the compositor
-  // for transmission to the chrome process.
-  NS_ASSERTION(aLayerManager, "layer manager is invalid!");
-  mozilla::layers::ClientLayerManager* clm =
-      aLayerManager->AsClientLayerManager();
-
-  nsTArray<nsIWidget::Configuration> configurations;
-  // If there aren't any plugins to configure, clear the plugin data cache
-  // in the layer system.
-  if (!mRegisteredPlugins.Count() && clm) {
-    clm->StorePluginWidgetConfigurations(configurations);
-    return;
-  }
-  PluginGetGeometryUpdate(mRegisteredPlugins, &configurations);
-  if (configurations.IsEmpty()) {
-    PluginDidSetGeometry(mRegisteredPlugins);
-    return;
-  }
-  SortConfigurations(&configurations);
-  if (clm) {
-    clm->StorePluginWidgetConfigurations(configurations);
-  }
-  PluginDidSetGeometry(mRegisteredPlugins);
-#endif  // #ifndef XP_MACOSX
-}
-
 void nsRootPresContext::AddWillPaintObserver(nsIRunnable* aRunnable) {
   if (!mWillPaintFallbackEvent.IsPending()) {
     mWillPaintFallbackEvent = new RunWillPaintObservers(this);
@@ -2955,7 +2728,6 @@ size_t nsRootPresContext::SizeOfExcludingThis(
 
   // Measurement of the following members may be added later if DMD finds it is
   // worthwhile:
-  // - mRegisteredPlugins
   // - mWillPaintObservers
   // - mWillPaintFallbackEvent
 }

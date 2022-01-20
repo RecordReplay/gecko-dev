@@ -137,6 +137,12 @@ ProcessResult MinidumpProcessor::Process(
     }
   }
 
+  MinidumpMacCrashInfo *crash_info = dump->GetMacCrashInfo();
+  if (crash_info) {
+    process_state->mac_crash_info_ = crash_info->description();
+    process_state->mac_crash_info_records_ = crash_info->records();
+  }
+
   // This will just return an empty string if it doesn't exist.
   process_state->assertion_ = GetAssertion(dump);
 
@@ -170,6 +176,12 @@ ProcessResult MinidumpProcessor::Process(
   if (memory_list) {
     BPLOG(INFO) << "Found " << memory_list->region_count()
                 << " memory regions.";
+  }
+
+  MinidumpThreadNamesList* thread_names_list = dump->GetThreadNamesList();
+  if (thread_names_list) {
+    BPLOG(INFO) << "Found " << thread_names_list->name_count()
+                << " thread names.";
   }
 
   MinidumpThreadList *threads = dump->GetThreadList();
@@ -306,6 +318,10 @@ ProcessResult MinidumpProcessor::Process(
       BPLOG(ERROR) << "No stackwalker for " << thread_string;
     }
     stack->set_tid(thread_id);
+    stack->set_last_error(thread->GetLastError());
+    if (thread_names_list) {
+      stack->set_name(thread_names_list->GetNameForThreadId(thread_id));
+    }
     process_state->threads_.push_back(stack.release());
     process_state->thread_memory_regions_.push_back(thread_memory);
   }
@@ -1142,9 +1158,6 @@ string MinidumpProcessor::GetCrashReason(Minidump *dump, uint64_t *address) {
     case MD_OS_WIN32_NT:
     case MD_OS_WIN32_WINDOWS: {
       switch (exception_code) {
-        case MD_EXCEPTION_CODE_WIN_CONTROL_C:
-          reason = "DBG_CONTROL_C";
-          break;
         case MD_EXCEPTION_CODE_WIN_GUARD_PAGE_VIOLATION:
           reason = "EXCEPTION_GUARD_PAGE";
           break;
@@ -1249,7 +1262,7 @@ string MinidumpProcessor::GetCrashReason(Minidump *dump, uint64_t *address) {
           reason = "EXCEPTION_INVALID_DISPOSITION";
           break;
         case MD_EXCEPTION_CODE_WIN_ARRAY_BOUNDS_EXCEEDED:
-          reason = "EXCEPTION_BOUNDS_EXCEEDED";
+          reason = "EXCEPTION_ARRAY_BOUNDS_EXCEEDED";
           break;
         case MD_EXCEPTION_CODE_WIN_FLOAT_DENORMAL_OPERAND:
           reason = "EXCEPTION_FLT_DENORMAL_OPERAND";
@@ -1290,11 +1303,16 @@ string MinidumpProcessor::GetCrashReason(Minidump *dump, uint64_t *address) {
         case MD_EXCEPTION_CODE_WIN_POSSIBLE_DEADLOCK:
           reason = "EXCEPTION_POSSIBLE_DEADLOCK";
           break;
-        case MD_EXCEPTION_CODE_WIN_STACK_BUFFER_OVERRUN:
-          reason = "EXCEPTION_STACK_BUFFER_OVERRUN";
-          break;
-        case MD_EXCEPTION_CODE_WIN_HEAP_CORRUPTION:
-          reason = "EXCEPTION_HEAP_CORRUPTION";
+        case MD_NTSTATUS_WIN_STATUS_STACK_BUFFER_OVERRUN:
+          reason = "STATUS_STACK_BUFFER_OVERRUN";
+            if (raw_exception->exception_record.number_parameters > 0) {
+            uint32_t fast_fail_code =
+                static_cast<uint32_t>
+                (raw_exception->exception_record.exception_information[0]);
+            reason.append(" / ");
+            reason.append(FastFailToString(fast_fail_code));
+          }
+
           break;
         case MD_EXCEPTION_OUT_OF_MEMORY:
           reason = "Out of Memory";
@@ -1306,7 +1324,10 @@ string MinidumpProcessor::GetCrashReason(Minidump *dump, uint64_t *address) {
           reason = "Simulated Exception";
           break;
         default:
-          BPLOG(INFO) << "Unknown exception reason " << reason;
+          reason = NTStatusToString(exception_code);
+          if (reason.substr(0, 2) == "0x") {
+            BPLOG(INFO) << "Unknown exception reason " << reason;
+          }
           break;
       }
       break;

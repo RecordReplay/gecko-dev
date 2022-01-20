@@ -96,8 +96,8 @@
 #include "linux/minidump_writer/minidump_writer.h"
 #include "common/linux/eintr_wrapper.h"
 #include "third_party/lss/linux_syscall_support.h"
-#include "prenv.h"
 #if defined(MOZ_OXIDIZED_BREAKPAD)
+#include "nsString.h"
 #include "mozilla/toolkit/crashreporter/rust_minidump_writer_linux_ffi_generated.h"
 #endif
 
@@ -148,7 +148,7 @@ void InstallAlternateStackLocked() {
   // SIGSTKSZ may be too small to prevent the signal handlers from overrunning
   // the alternative stack. Ensure that the size of the alternative stack is
   // large enough.
-  static const unsigned kSigStackSize = std::max(16384, SIGSTKSZ);
+  static const size_t kSigStackSize = std::max(size_t(16384), size_t(SIGSTKSZ));
 
   // Only set an alternative stack if there isn't already one, or if the current
   // one is too small.
@@ -239,7 +239,7 @@ ExceptionHandler::ExceptionHandler(const MinidumpDescriptor& descriptor,
       minidump_descriptor_(descriptor),
       crash_handler_(NULL) {
 
-  g_skip_sigill_ = PR_GetEnv("MOZ_DISABLE_EXCEPTION_HANDLER_SIGILL") ? true : false;
+  g_skip_sigill_ = getenv("MOZ_DISABLE_EXCEPTION_HANDLER_SIGILL") ? true : false;
   if (server_fd >= 0)
     crash_generation_client_.reset(CrashGenerationClient::TryCreate(server_fd));
 
@@ -853,7 +853,8 @@ bool ExceptionHandler::WriteMinidumpForChild(pid_t child,
   MinidumpDescriptor descriptor(dump_path);
   descriptor.UpdatePath();
 #if defined(MOZ_OXIDIZED_BREAKPAD)
-  if (!write_minidump_linux(descriptor.path(), child, child_blamed_thread))
+  nsCString error_msg;
+  if (!write_minidump_linux(descriptor.path(), child, child_blamed_thread, &error_msg))
       return false;
 #else
   if (!google_breakpad::WriteMinidump(descriptor.path(),

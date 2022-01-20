@@ -7,11 +7,11 @@ platform(linux,mac) == image-rotated-clip.yaml image-rotated-clip.png
 platform(linux,mac) fuzzy(1,6) == rotated-image.yaml rotated-image.png
 == singular.yaml singular-ref.yaml
 platform(linux) fuzzy(1,630) == perspective.yaml perspective.png
-platform(linux,mac) fuzzy(1,156) == prim-suite.yaml prim-suite.png
-== segments-bug.yaml segments-bug-ref.yaml
+platform(linux,mac) fuzzy(3,8100) == prim-suite.yaml prim-suite.png
+fuzzy-if(platform(swgl),1,2) == segments-bug.yaml segments-bug-ref.yaml
 platform(linux,mac) == content-offset.yaml content-offset.png
 platform(linux,mac) == coord-system.yaml coord-system.png
-platform(linux,mac) fuzzy(1,15) zoom(4) == border-zoom.yaml border-zoom.png
+platform(linux,mac) fuzzy(1,15) == border-zoom.yaml border-zoom.png
 platform(linux) fuzzy(1,520) == perspective-origin.yaml perspective-origin.png
 platform(linux,mac) color_targets(3) alpha_targets(0) fuzzy(1,180) == screen-space-blit.yaml screen-space-blit.png
 platform(linux,mac) fuzzy(1,346) color_targets(2) alpha_targets(0) == screen-space-blit-trivial.yaml screen-space-blit-trivial.png
@@ -30,7 +30,7 @@ platform(linux,mac) fuzzy(1,2) == perspective-shadow.yaml perspective-shadow.png
 # The ref YAML here produces significantly worse quality
 fuzzy(200,4200) == perspective-box-shadow.yaml perspective-box-shadow-ref.yaml
 == complex-preserve-3d.yaml blank.yaml
-platform(linux,mac) fuzzy(9,348) == perspective-border-radius.yaml perspective-border-radius.png
+platform(linux,mac) fuzzy(38,348) == perspective-border-radius.yaml perspective-border-radius.png
 fuzzy(1,38) == snapped-preserve-3d.yaml snapped-preserve-3d-ref.yaml
 platform(linux,mac) fuzzy(1,122) == border-scale.yaml border-scale.png
 platform(linux,mac) fuzzy(1,16) == border-scale-2.yaml border-scale-2.png
@@ -40,6 +40,7 @@ platform(linux,mac) fuzzy(1,74) == border-scale-4.yaml border-scale-4.png
 != large-raster-root.yaml blank.yaml
 == flatten-preserve-3d-root.yaml flatten-preserve-3d-root-ref.yaml
 == flatten-twice.yaml flatten-twice-ref.yaml
+fuzzy(1,10) == flatten-all-flat.yaml flatten-all-flat-ref.yaml
 == strange-w.yaml strange-w-ref.yaml
 == big-axis-aligned-scale.yaml big-axis-aligned-scale-ref.yaml
 # Compare ~8K raster root (>MAX_SURFACE_SIZE) with ~2K raster root. fuzzy due to lerping on edges.

@@ -6,32 +6,36 @@
 
 #![deny(clippy::pedantic)]
 
-use super::{
-    Connection, ConnectionError, FixedConnectionIdManager, Output, State, LOCAL_IDLE_TIMEOUT,
-};
+use super::{Connection, ConnectionError, ConnectionId, Output, State, LOCAL_IDLE_TIMEOUT};
 use crate::addr_valid::{AddressValidation, ValidateAddress};
-use crate::cc::CWND_INITIAL_PKTS;
+use crate::cc::{CWND_INITIAL_PKTS, CWND_MIN};
+use crate::cid::ConnectionIdRef;
 use crate::events::ConnectionEvent;
-use crate::frame::StreamType;
 use crate::path::PATH_MTU_V6;
 use crate::recovery::ACK_ONLY_SIZE_LIMIT;
-use crate::ConnectionParameters;
+use crate::stats::MAX_PTO_COUNTS;
+use crate::{ConnectionIdDecoder, ConnectionIdGenerator, ConnectionParameters, Error, StreamType};
 
 use std::cell::RefCell;
+use std::convert::TryFrom;
 use std::mem;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use neqo_common::{event::Provider, qdebug, qtrace, Datagram};
-use neqo_crypto::{AllowZeroRtt, AuthenticationStatus, ResumptionToken};
-use test_fixture::{self, fixture_init, loopback, now};
+use neqo_common::{event::Provider, qdebug, qtrace, Datagram, Decoder};
+use neqo_crypto::{random, AllowZeroRtt, AuthenticationStatus, ResumptionToken};
+use test_fixture::{self, addr, fixture_init, now};
 
 // All the tests.
+mod ackrate;
 mod cc;
 mod close;
+mod fuzzing;
 mod handshake;
 mod idle;
 mod keys;
+mod migration;
+mod priority;
 mod recovery;
 mod resumption;
 mod stream;
@@ -41,38 +45,84 @@ mod zerortt;
 const DEFAULT_RTT: Duration = Duration::from_millis(100);
 const AT_LEAST_PTO: Duration = Duration::from_secs(1);
 const DEFAULT_STREAM_DATA: &[u8] = b"message";
+/// The number of 1-RTT packets sent in `force_idle` by a client.
+const FORCE_IDLE_CLIENT_1RTT_PACKETS: usize = 3;
+
+/// WARNING!  In this module, this version of the generator needs to be used.
+/// This copies the implementation from
+/// `test_fixture::CountingConnectionIdGenerator`, but it uses the different
+/// types that are exposed to this module.  See also `default_client`.
+///
+/// This version doesn't randomize the length; as the congestion control tests
+/// count the amount of data sent precisely.
+#[derive(Debug, Default)]
+pub struct CountingConnectionIdGenerator {
+    counter: u32,
+}
+
+impl ConnectionIdDecoder for CountingConnectionIdGenerator {
+    fn decode_cid<'a>(&self, dec: &mut Decoder<'a>) -> Option<ConnectionIdRef<'a>> {
+        let len = usize::from(dec.peek_byte().unwrap());
+        dec.decode(len).map(ConnectionIdRef::from)
+    }
+}
+
+impl ConnectionIdGenerator for CountingConnectionIdGenerator {
+    fn generate_cid(&mut self) -> Option<ConnectionId> {
+        let mut r = random(20);
+        r[0] = 8;
+        r[1] = u8::try_from(self.counter >> 24).unwrap();
+        r[2] = u8::try_from((self.counter >> 16) & 0xff).unwrap();
+        r[3] = u8::try_from((self.counter >> 8) & 0xff).unwrap();
+        r[4] = u8::try_from(self.counter & 0xff).unwrap();
+        self.counter += 1;
+        Some(ConnectionId::from(&r[..8]))
+    }
+
+    fn as_decoder(&self) -> &dyn ConnectionIdDecoder {
+        self
+    }
+}
 
 // This is fabulous: because test_fixture uses the public API for Connection,
 // it gets a different type to the ones that are referenced via super::super::*.
 // Thus, this code can't use default_client() and default_server() from
-// test_fixture because they produce different types.
+// test_fixture because they produce different - and incompatible - types.
 //
 // These are a direct copy of those functions.
-pub fn default_client() -> Connection {
+pub fn new_client(params: ConnectionParameters) -> Connection {
     fixture_init();
     Connection::new_client(
         test_fixture::DEFAULT_SERVER_NAME,
         test_fixture::DEFAULT_ALPN,
-        Rc::new(RefCell::new(FixedConnectionIdManager::new(3))),
-        loopback(),
-        loopback(),
-        &ConnectionParameters::default(),
+        Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
+        addr(),
+        addr(),
+        params,
+        now(),
     )
     .expect("create a default client")
 }
-pub fn default_server() -> Connection {
+pub fn default_client() -> Connection {
+    new_client(ConnectionParameters::default())
+}
+
+pub fn new_server(params: ConnectionParameters) -> Connection {
     fixture_init();
 
     let mut c = Connection::new_server(
         test_fixture::DEFAULT_KEYS,
         test_fixture::DEFAULT_ALPN,
-        Rc::new(RefCell::new(FixedConnectionIdManager::new(5))),
-        &ConnectionParameters::default(),
+        Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
+        params,
     )
     .expect("create a default server");
     c.server_enable_0rtt(&test_fixture::anti_replay(), AllowZeroRtt {})
         .expect("enable 0-RTT");
     c
+}
+pub fn default_server() -> Connection {
+    new_server(ConnectionParameters::default())
 }
 
 /// If state is `AuthenticationNeeded` call `authenticated()`. This function will
@@ -98,7 +148,12 @@ fn handshake(
     let mut now = now;
 
     let mut input = None;
-    let is_done = |c: &mut Connection| matches!(c.state(), State::Confirmed | State::Closing { .. } | State::Closed(..));
+    let is_done = |c: &mut Connection| {
+        matches!(
+            c.state(),
+            State::Confirmed | State::Closing { .. } | State::Closed(..)
+        )
+    };
 
     while !is_done(a) {
         let _ = maybe_authenticate(a);
@@ -106,12 +161,25 @@ fn handshake(
         let output = a.process(input, now).dgram();
         assert!(had_input || output.is_some());
         input = output;
-        qtrace!("t += {:?}", rtt / 2);
+        qtrace!("handshake: t += {:?}", rtt / 2);
         now += rtt / 2;
         mem::swap(&mut a, &mut b);
     }
-    let _ = a.process(input, now);
+    if let Some(d) = input {
+        a.process_input(d, now);
+    }
     now
+}
+
+fn connect_fail(
+    client: &mut Connection,
+    server: &mut Connection,
+    client_error: Error,
+    server_error: Error,
+) {
+    handshake(client, server, now(), Duration::new(0, 0));
+    assert_error(client, &ConnectionError::Transport(client_error));
+    assert_error(server, &ConnectionError::Transport(server_error));
 }
 
 fn connect_with_rtt(
@@ -122,10 +190,10 @@ fn connect_with_rtt(
 ) -> Instant {
     let now = handshake(client, server, now, rtt);
     assert_eq!(*client.state(), State::Confirmed);
-    assert_eq!(*client.state(), State::Confirmed);
+    assert_eq!(*server.state(), State::Confirmed);
 
-    assert_eq!(client.loss_recovery.rtt(), rtt);
-    assert_eq!(server.loss_recovery.rtt(), rtt);
+    assert_eq!(client.paths.rtt(), rtt);
+    assert_eq!(server.paths.rtt(), rtt);
     now
 }
 
@@ -158,33 +226,70 @@ fn exchange_ticket(
     get_tokens(client).pop().expect("should have token")
 }
 
-/// Connect with an RTT and then force both peers to be idle.
 /// Getting the client and server to reach an idle state is surprisingly hard.
 /// The server sends `HANDSHAKE_DONE` at the end of the handshake, and the client
 /// doesn't immediately acknowledge it.  Reordering packets does the trick.
-fn connect_rtt_idle(client: &mut Connection, server: &mut Connection, rtt: Duration) -> Instant {
-    let mut now = connect_with_rtt(client, server, now(), rtt);
-    let p1 = send_something(server, now);
-    let p2 = send_something(server, now);
+fn force_idle(
+    client: &mut Connection,
+    server: &mut Connection,
+    rtt: Duration,
+    mut now: Instant,
+) -> Instant {
+    // The client has sent NEW_CONNECTION_ID, so ensure that the server generates
+    // an acknowledgment by sending some reordered packets.
+    qtrace!("force_idle: send reordered client packets");
+    let c1 = send_something(client, now);
+    let c2 = send_something(client, now);
     now += rtt / 2;
-    // Delivering p2 first at the client causes it to want to ACK.
-    client.process_input(p2, now);
-    // Delivering p1 should not have the client change its mind about the ACK.
-    let ack = client.process(Some(p1), now).dgram();
+    server.process_input(c2, now);
+    server.process_input(c1, now);
+
+    // Now do the same for the server.  (The ACK is in the first one.)
+    qtrace!("force_idle: send reordered server packets");
+    let s1 = send_something(server, now);
+    let s2 = send_something(server, now);
+    now += rtt / 2;
+    // Delivering s2 first at the client causes it to want to ACK.
+    client.process_input(s2, now);
+    // Delivering s1 should not have the client change its mind about the ACK.
+    let ack = client.process(Some(s1), now).dgram();
     assert!(ack.is_some());
     assert_eq!(
-        server.process(ack, now),
+        client.process_output(now),
         Output::Callback(LOCAL_IDLE_TIMEOUT)
     );
+    now += rtt / 2;
     assert_eq!(
-        client.process_output(now),
+        server.process(ack, now),
         Output::Callback(LOCAL_IDLE_TIMEOUT)
     );
     now
 }
 
+/// Connect with an RTT and then force both peers to be idle.
+fn connect_rtt_idle(client: &mut Connection, server: &mut Connection, rtt: Duration) -> Instant {
+    let now = connect_with_rtt(client, server, now(), rtt);
+    let now = force_idle(client, server, rtt, now);
+    // Drain events from both as well.
+    let _ = client.events().count();
+    let _ = server.events().count();
+    qtrace!("----- connected and idle with RTT {:?}", rtt);
+    now
+}
+
 fn connect_force_idle(client: &mut Connection, server: &mut Connection) {
     connect_rtt_idle(client, server, Duration::new(0, 0));
+}
+
+fn fill_stream(c: &mut Connection, stream: u64) {
+    const BLOCK_SIZE: usize = 4_096;
+    loop {
+        let bytes_sent = c.stream_send(stream, &[0x42; BLOCK_SIZE]).unwrap();
+        qtrace!("fill_cwnd wrote {} bytes", bytes_sent);
+        if bytes_sent < BLOCK_SIZE {
+            break;
+        }
+    }
 }
 
 /// This fills the congestion window from a single source.
@@ -193,36 +298,25 @@ fn connect_force_idle(client: &mut Connection, server: &mut Connection) {
 /// from the return value whether a timeout is an ACK delay, PTO, or
 /// pacing, this looks at the congestion window to tell when to stop.
 /// Returns a list of datagrams and the new time.
-fn fill_cwnd(src: &mut Connection, stream: u64, mut now: Instant) -> (Vec<Datagram>, Instant) {
-    const BLOCK_SIZE: usize = 4_096;
-    let mut total_dgrams = Vec::new();
-
-    qtrace!(
-        "fill_cwnd starting cwnd: {}",
-        src.loss_recovery.cwnd_avail()
-    );
-
-    loop {
-        let bytes_sent = src.stream_send(stream, &[0x42; BLOCK_SIZE]).unwrap();
-        qtrace!("fill_cwnd wrote {} bytes", bytes_sent);
-        if bytes_sent < BLOCK_SIZE {
-            break;
-        }
+fn fill_cwnd(c: &mut Connection, stream: u64, mut now: Instant) -> (Vec<Datagram>, Instant) {
+    // Train wreck function to get the remaining congestion window on the primary path.
+    fn cwnd(c: &Connection) -> usize {
+        c.paths.primary().borrow().sender().cwnd_avail()
     }
 
+    qtrace!("fill_cwnd starting cwnd: {}", cwnd(c));
+    fill_stream(c, stream);
+
+    let mut total_dgrams = Vec::new();
     loop {
-        let pkt = src.process_output(now);
-        qtrace!(
-            "fill_cwnd cwnd remaining={}, output: {:?}",
-            src.loss_recovery.cwnd_avail(),
-            pkt
-        );
+        let pkt = c.process_output(now);
+        qtrace!("fill_cwnd cwnd remaining={}, output: {:?}", cwnd(c), pkt);
         match pkt {
             Output::Datagram(dgram) => {
                 total_dgrams.push(dgram);
             }
             Output::Callback(t) => {
-                if src.loss_recovery.cwnd_avail() < ACK_ONLY_SIZE_LIMIT {
+                if cwnd(c) < ACK_ONLY_SIZE_LIMIT {
                     break;
                 }
                 now += t;
@@ -231,7 +325,131 @@ fn fill_cwnd(src: &mut Connection, stream: u64, mut now: Instant) -> (Vec<Datagr
         }
     }
 
+    qtrace!(
+        "fill_cwnd sent {} bytes",
+        total_dgrams.iter().map(|d| d.len()).sum::<usize>()
+    );
     (total_dgrams, now)
+}
+
+/// This function is like the combination of `fill_cwnd` and `ack_bytes`.
+/// However, it acknowledges everything inline and preserves an RTT of `DEFAULT_RTT`.
+fn increase_cwnd(
+    sender: &mut Connection,
+    receiver: &mut Connection,
+    stream: u64,
+    mut now: Instant,
+) -> Instant {
+    fill_stream(sender, stream);
+    loop {
+        let pkt = sender.process_output(now);
+        match pkt {
+            Output::Datagram(dgram) => {
+                receiver.process_input(dgram, now + DEFAULT_RTT / 2);
+            }
+            Output::Callback(t) => {
+                if t < DEFAULT_RTT {
+                    now += t;
+                } else {
+                    break; // We're on PTO now.
+                }
+            }
+            Output::None => panic!(),
+        }
+    }
+
+    // Now acknowledge all those packets at once.
+    now += DEFAULT_RTT / 2;
+    let ack = receiver.process_output(now).dgram();
+    now += DEFAULT_RTT / 2;
+    sender.process_input(ack.unwrap(), now);
+    now
+}
+
+/// Receive multiple packets and generate an ack-only packet.
+/// # Panics
+/// The caller is responsible for ensuring that `dest` has received
+/// enough data that it wants to generate an ACK.  This panics if
+/// no ACK frame is generated.
+fn ack_bytes<D>(dest: &mut Connection, stream: u64, in_dgrams: D, now: Instant) -> Datagram
+where
+    D: IntoIterator<Item = Datagram>,
+    D::IntoIter: ExactSizeIterator,
+{
+    let mut srv_buf = [0; 4_096];
+
+    let in_dgrams = in_dgrams.into_iter();
+    qdebug!([dest], "ack_bytes {} datagrams", in_dgrams.len());
+    for dgram in in_dgrams {
+        dest.process_input(dgram, now);
+    }
+
+    loop {
+        let (bytes_read, _fin) = dest.stream_recv(stream, &mut srv_buf).unwrap();
+        qtrace!([dest], "ack_bytes read {} bytes", bytes_read);
+        if bytes_read == 0 {
+            break;
+        }
+    }
+
+    dest.process_output(now).dgram().unwrap()
+}
+
+// Get the current congestion window for the connection.
+fn cwnd(c: &Connection) -> usize {
+    c.paths.primary().borrow().sender().cwnd()
+}
+fn cwnd_avail(c: &Connection) -> usize {
+    c.paths.primary().borrow().sender().cwnd_avail()
+}
+
+fn induce_persistent_congestion(
+    client: &mut Connection,
+    server: &mut Connection,
+    stream: u64,
+    mut now: Instant,
+) -> Instant {
+    // Note: wait some arbitrary time that should be longer than pto
+    // timer. This is rather brittle.
+    qtrace!([client], "induce_persistent_congestion");
+    now += AT_LEAST_PTO;
+
+    let mut pto_counts = [0; MAX_PTO_COUNTS];
+    assert_eq!(client.stats.borrow().pto_counts, pto_counts);
+
+    qtrace!([client], "first PTO");
+    let (c_tx_dgrams, next_now) = fill_cwnd(client, stream, now);
+    now = next_now;
+    assert_eq!(c_tx_dgrams.len(), 2); // Two PTO packets
+
+    pto_counts[0] = 1;
+    assert_eq!(client.stats.borrow().pto_counts, pto_counts);
+
+    qtrace!([client], "second PTO");
+    now += AT_LEAST_PTO * 2;
+    let (c_tx_dgrams, next_now) = fill_cwnd(client, stream, now);
+    now = next_now;
+    assert_eq!(c_tx_dgrams.len(), 2); // Two PTO packets
+
+    pto_counts[0] = 0;
+    pto_counts[1] = 1;
+    assert_eq!(client.stats.borrow().pto_counts, pto_counts);
+
+    qtrace!([client], "third PTO");
+    now += AT_LEAST_PTO * 4;
+    let (c_tx_dgrams, next_now) = fill_cwnd(client, stream, now);
+    now = next_now;
+    assert_eq!(c_tx_dgrams.len(), 2); // Two PTO packets
+
+    pto_counts[1] = 0;
+    pto_counts[2] = 1;
+    assert_eq!(client.stats.borrow().pto_counts, pto_counts);
+
+    // An ACK for the third PTO causes persistent congestion.
+    let s_ack = ack_bytes(server, stream, c_tx_dgrams, now);
+    client.process_input(s_ack, now);
+    assert_eq!(cwnd(client), CWND_MIN);
+    now
 }
 
 /// This magic number is the size of the client's CWND after the handshake completes.
@@ -247,7 +465,8 @@ const POST_HANDSHAKE_CWND: usize = PATH_MTU_V6 * CWND_INITIAL_PKTS;
 
 /// Determine the number of packets required to fill the CWND.
 const fn cwnd_packets(data: usize) -> usize {
-    (data + ACK_ONLY_SIZE_LIMIT - 1) / PATH_MTU_V6
+    // Add one if the last chunk is >= ACK_ONLY_SIZE_LIMIT.
+    (data + PATH_MTU_V6 - ACK_ONLY_SIZE_LIMIT) / PATH_MTU_V6
 }
 
 /// Determine the size of the last packet.

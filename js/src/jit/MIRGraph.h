@@ -37,7 +37,14 @@ class LBlock;
 
 class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
  public:
-  enum Kind { NORMAL, PENDING_LOOP_HEADER, LOOP_HEADER, SPLIT_EDGE, DEAD };
+  enum Kind {
+    NORMAL,
+    PENDING_LOOP_HEADER,
+    LOOP_HEADER,
+    SPLIT_EDGE,
+    FAKE_LOOP_PRED,
+    DEAD
+  };
 
  private:
   MBasicBlock(MIRGraph& graph, const CompileInfo& info, BytecodeSite* site,
@@ -48,7 +55,10 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
                              MBasicBlock* maybePred, uint32_t popped);
 
   // This block cannot be reached by any means.
-  bool unreachable_;
+  bool unreachable_ = false;
+
+  // This block will unconditionally bail out.
+  bool alwaysBails_ = false;
 
   // Pushes a copy of a local variable or argument.
   void pushVariable(uint32_t slot) { push(slots_[slot]); }
@@ -117,6 +127,8 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
                                            BytecodeSite* site);
   static MBasicBlock* NewSplitEdge(MIRGraph& graph, MBasicBlock* pred,
                                    size_t predEdgeIdx, MBasicBlock* succ);
+  static MBasicBlock* NewFakeLoopPredecessor(MIRGraph& graph,
+                                             MBasicBlock* header);
 
   bool dominates(const MBasicBlock* other) const {
     return other->domIndex() - domIndex() < numDominated();
@@ -131,6 +143,10 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   }
   void setUnreachableUnchecked() { unreachable_ = true; }
   bool unreachable() const { return unreachable_; }
+
+  void setAlwaysBails() { alwaysBails_ = true; }
+  bool alwaysBails() const { return alwaysBails_; }
+
   // Move the definition to the top of the stack.
   void pick(int32_t depth);
 
@@ -176,10 +192,6 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   void setLocal(uint32_t local) { setVariable(info_.localSlot(local)); }
   void setArg(uint32_t arg) { setVariable(info_.argSlot(arg)); }
   void setSlot(uint32_t slot, MDefinition* ins) { slots_[slot] = ins; }
-
-  // Rewrites a slot directly, bypassing the stack transition. This should
-  // not be used under most circumstances.
-  void rewriteSlot(uint32_t slot, MDefinition* ins) { setSlot(slot, ins); }
 
   // Tracks an instruction as being pushed onto the operand stack.
   void push(MDefinition* ins) {
@@ -336,7 +348,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
 
   MIRGraph& graph() { return graph_; }
   const CompileInfo& info() const { return info_; }
-  jsbytecode* pc() const { return pc_; }
+  jsbytecode* pc() const { return trackedSite_->pc(); }
   uint32_t nslots() const { return slots_.length(); }
   uint32_t id() const { return id_; }
   uint32_t numPredecessors() const { return predecessors_.length(); }
@@ -398,11 +410,12 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
 
   bool hasUniqueBackedge() const {
     MOZ_ASSERT(isLoopHeader());
-    MOZ_ASSERT(numPredecessors() >= 2);
-    if (numPredecessors() == 2) {
+    MOZ_ASSERT(numPredecessors() >= 1);
+    if (numPredecessors() == 1 || numPredecessors() == 2) {
       return true;
     }
-    if (numPredecessors() == 3) {  // fixup block added by ValueNumbering phase.
+    if (numPredecessors() == 3) {
+      // fixup block added by NewFakeLoopPredecessor
       return getPredecessor(1)->numPredecessors() == 0;
     }
     return false;
@@ -430,9 +443,9 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   }
   bool isSplitEdge() const { return kind_ == SPLIT_EDGE; }
   bool isDead() const { return kind_ == DEAD; }
+  bool isFakeLoopPred() const { return kind_ == FAKE_LOOP_PRED; }
 
   uint32_t stackDepth() const { return stackPosition_; }
-  void setStackDepth(uint32_t depth) { stackPosition_ = depth; }
   bool isMarked() const { return mark_; }
   void mark() {
     MOZ_ASSERT(!mark_, "Marking already-marked block");
@@ -509,11 +522,6 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   void setCallerResumePoint(MResumePoint* caller) {
     callerResumePoint_ = caller;
   }
-  size_t numEntrySlots() const { return entryResumePoint()->stackDepth(); }
-  MDefinition* getEntrySlot(size_t i) const {
-    MOZ_ASSERT(i < numEntrySlots());
-    return entryResumePoint()->getOperand(i);
-  }
 
   LBlock* lir() const { return lir_; }
   void assignLir(LBlock* lir) {
@@ -557,39 +565,8 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   void dump(GenericPrinter& out);
   void dump();
 
-  // Hit count
-  enum class HitState {
-    // No hit information is attached to this basic block.
-    NotDefined,
-
-    // The hit information is a raw counter. Note that due to inlining this
-    // counter is not guaranteed to be consistent over the graph.
-    Count,
-  };
-  HitState getHitState() const { return hitState_; }
-  void setHitCount(uint64_t count) {
-    hitCount_ = count;
-    hitState_ = HitState::Count;
-  }
-  uint64_t getHitCount() const {
-    MOZ_ASSERT(hitState_ == HitState::Count);
-    return hitCount_;
-  }
-
-  // Track bailouts by storing the current pc in MIR instruction added at
-  // this cycle. This is also used for tracking calls and optimizations when
-  // profiling.
-  void updateTrackedSite(BytecodeSite* site) {
-    MOZ_ASSERT(site->tree() == trackedSite_->tree());
-    trackedSite_ = site;
-  }
   BytecodeSite* trackedSite() const { return trackedSite_; }
-  jsbytecode* trackedPc() const {
-    return trackedSite_ ? trackedSite_->pc() : nullptr;
-  }
-  InlineScriptTree* trackedTree() const {
-    return trackedSite_ ? trackedSite_->tree() : nullptr;
-  }
+  InlineScriptTree* trackedTree() const { return trackedSite_->tree(); }
 
  private:
   MIRGraph& graph_;
@@ -602,7 +579,6 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   uint32_t id_;
   uint32_t domIndex_;  // Index in the dominator tree.
   uint32_t numDominated_;
-  jsbytecode* pc_;
   LBlock* lir_;
 
   // Copy of a dominator block's outerResumePoint_ which holds the state of
@@ -635,12 +611,10 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock> {
   Vector<MBasicBlock*, 1, JitAllocPolicy> immediatelyDominated_;
   MBasicBlock* immediateDominator_;
 
+  // Track bailouts by storing the current pc in MIR instruction added at
+  // this cycle. This is also used for tracking calls and optimizations when
+  // profiling.
   BytecodeSite* trackedSite_;
-
-  // Record the number of times a block got visited. Note, due to inlined
-  // scripts these numbers might not be continuous.
-  uint64_t hitCount_;
-  HitState hitState_;
 
 #if defined(JS_ION_PERF) || defined(DEBUG)
   unsigned lineno_;
@@ -734,10 +708,6 @@ class MIRGraph {
     blocks_.remove(block);
     blocks_.insertAfter(at, block);
   }
-  void removeBlockFromList(MBasicBlock* block) {
-    blocks_.remove(block);
-    numBlocks_--;
-  }
   size_t numBlocks() const { return numBlocks_; }
   uint32_t numBlockIds() const { return blockIdGen_; }
   void allocDefinitionId(MDefinition* ins) { ins->setId(idGen_++); }
@@ -770,6 +740,17 @@ class MIRGraph {
     phiFreeListLength_--;
     return phiFreeList_.popBack();
   }
+
+  void removeFakeLoopPredecessors();
+
+#ifdef DEBUG
+  // Dominators can't be built after we remove fake loop predecessors.
+ private:
+  bool canBuildDominators_ = true;
+
+ public:
+  bool canBuildDominators() const { return canBuildDominators_; }
+#endif
 };
 
 class MDefinitionIterator {
@@ -899,10 +880,9 @@ class MNodeIterator {
 
 void MBasicBlock::add(MInstruction* ins) {
   MOZ_ASSERT(!hasLastIns());
-  ins->setBlock(this);
+  ins->setInstructionBlock(this, trackedSite_);
   graph().allocDefinitionId(ins);
   instructions_.pushBack(ins);
-  ins->setTrackedSite(trackedSite_);
 }
 
 }  // namespace jit

@@ -1126,6 +1126,69 @@ void TrackBuffersManager::InitializationSegmentReceived() {
       ->Track(mDemuxerInitRequest);
 }
 
+bool TrackBuffersManager::IsRepeatInitData(
+    const MediaInfo& aNewMediaInfo) const {
+  MOZ_ASSERT(OnTaskQueue());
+  if (!mInitData) {
+    // There is no previous init data, so this cannot be a repeat.
+    return false;
+  }
+
+  if (mChangeTypeReceived) {
+    // If we're received change type we want to reprocess init data.
+    return false;
+  }
+
+  MOZ_DIAGNOSTIC_ASSERT(mInitData, "Init data should be non-null");
+  if (*mInitData == *mParser->InitData()) {
+    // We have previous init data, and it's the same binary data as we've just
+    // parsed.
+    return true;
+  }
+
+  // At this point the binary data doesn't match, but it's possible to have the
+  // different binary representations for the same logical init data. These
+  // checks can be revised as we encounter such cases in the wild.
+
+  bool audioInfoIsRepeat = false;
+  if (aNewMediaInfo.HasAudio()) {
+    if (!mAudioTracks.mLastInfo) {
+      // There is no old audio info, so this can't be a repeat.
+      return false;
+    }
+    audioInfoIsRepeat =
+        *mAudioTracks.mLastInfo->GetAsAudioInfo() == aNewMediaInfo.mAudio;
+    if (!aNewMediaInfo.HasVideo()) {
+      // Only have audio.
+      return audioInfoIsRepeat;
+    }
+  }
+
+  bool videoInfoIsRepeat = false;
+  if (aNewMediaInfo.HasVideo()) {
+    if (!mVideoTracks.mLastInfo) {
+      // There is no old video info, so this can't be a repeat.
+      return false;
+    }
+    videoInfoIsRepeat =
+        *mVideoTracks.mLastInfo->GetAsVideoInfo() == aNewMediaInfo.mVideo;
+    if (!aNewMediaInfo.HasAudio()) {
+      // Only have video.
+      return videoInfoIsRepeat;
+    }
+  }
+
+  if (audioInfoIsRepeat && videoInfoIsRepeat) {
+    MOZ_DIAGNOSTIC_ASSERT(
+        aNewMediaInfo.HasVideo() && aNewMediaInfo.HasAudio(),
+        "This should only be reachable if audio and video are present");
+    // Video + audio are present and both have the same init data.
+    return true;
+  }
+
+  return false;
+}
+
 void TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult) {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_DIAGNOSTIC_ASSERT(mInputDemuxer, "mInputDemuxer has been destroyed");
@@ -1205,18 +1268,7 @@ void TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult) {
   // resend the same data. In these cases we don't need to change the stream
   // id as it's the same stream. Doing so would recreate decoders, possibly
   // leading to gaps in audio and/or video (see bug 1450952).
-  //
-  // It's possible to have the different binary representations for the same
-  // logical init data. If this case is encountered in the wild then these
-  // checks could be revised to compare MediaInfo rather than init segment
-  // bytes.
-  // For audio only source buffer we can check that only the AudioInfo has
-  // changed.
-  bool isRepeatInitData =
-      !mChangeTypeReceived && mInitData &&
-      ((*mInitData.get() == *mParser->InitData()) ||
-       (numVideos == 0 && numAudios > 0 && mAudioTracks.mLastInfo &&
-        *mAudioTracks.mLastInfo->GetAsAudioInfo() == info.mAudio));
+  bool isRepeatInitData = IsRepeatInitData(info);
 
   MOZ_ASSERT(mFirstInitializationSegmentReceived || !isRepeatInitData,
              "Should never detect repeat init data for first segment!");
@@ -1233,6 +1285,7 @@ void TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult) {
     // 5. If the first initialization segment received flag is false, then run
     // the following steps:
     if (!mFirstInitializationSegmentReceived) {
+      MSE_DEBUG("Get first init data");
       mAudioTracks.mNumTracks = numAudios;
       // TODO:
       // 1. If the initialization segment contains tracks with codecs the user
@@ -1368,6 +1421,7 @@ void TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult) {
       // 6. Set first initialization segment received flag to true.
       mFirstInitializationSegmentReceived = true;
     } else {
+      MSE_DEBUG("Get new init data");
       mAudioTracks.mLastInfo = new TrackInfoSharedPtr(info.mAudio, streamID);
       mVideoTracks.mLastInfo = new TrackInfoSharedPtr(info.mVideo, streamID);
     }
@@ -1423,6 +1477,7 @@ void TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult) {
 }
 
 void TrackBuffersManager::OnDemuxerInitFailed(const MediaResult& aError) {
+  MSE_DEBUG("");
   MOZ_ASSERT(aError != NS_ERROR_DOM_MEDIA_WAITING_FOR_DATA);
   mDemuxerInitRequest.Complete();
 

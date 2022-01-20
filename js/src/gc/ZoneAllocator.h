@@ -52,9 +52,9 @@ class ZoneAllocator : public JS::shadow::Zone,
     return reinterpret_cast<ZoneAllocator*>(zone);
   }
 
-  MOZ_MUST_USE void* onOutOfMemory(js::AllocFunction allocFunc,
-                                   arena_id_t arena, size_t nbytes,
-                                   void* reallocPtr = nullptr);
+  [[nodiscard]] void* onOutOfMemory(js::AllocFunction allocFunc,
+                                    arena_id_t arena, size_t nbytes,
+                                    void* reallocPtr = nullptr);
   void reportAllocationOverflow() const;
 
   void adoptMallocBytes(ZoneAllocator* other) {
@@ -66,8 +66,7 @@ class ZoneAllocator : public JS::shadow::Zone,
   }
 
   void updateMemoryCountersOnGCStart();
-  void updateGCStartThresholds(gc::GCRuntime& gc,
-                               JSGCInvocationKind invocationKind,
+  void updateGCStartThresholds(gc::GCRuntime& gc, JS::GCOptions options,
                                const js::AutoLockGC& lock);
   void setGCSliceThresholds(gc::GCRuntime& gc);
   void clearGCSliceThresholds();
@@ -266,7 +265,7 @@ class ZoneAllocPolicy : public MallocProvider<ZoneAllocPolicy> {
     }
   }
 
-  MOZ_MUST_USE bool checkSimulatedOOM() const {
+  [[nodiscard]] bool checkSimulatedOOM() const {
     return !js::oom::ShouldFailWithOOM();
   }
 
@@ -274,9 +273,9 @@ class ZoneAllocPolicy : public MallocProvider<ZoneAllocPolicy> {
 
   // Internal methods called by the MallocProvider implementation.
 
-  MOZ_MUST_USE void* onOutOfMemory(js::AllocFunction allocFunc,
-                                   arena_id_t arena, size_t nbytes,
-                                   void* reallocPtr = nullptr) {
+  [[nodiscard]] void* onOutOfMemory(js::AllocFunction allocFunc,
+                                    arena_id_t arena, size_t nbytes,
+                                    void* reallocPtr = nullptr) {
     return zone()->onOutOfMemory(allocFunc, arena, nbytes, reallocPtr);
   }
   void reportAllocationOverflow() const { zone()->reportAllocationOverflow(); }

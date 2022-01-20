@@ -14,7 +14,7 @@
 #include <utility>
 #include "ContentChild.h"
 #include "ErrorList.h"
-#include "GeckoProfiler.h"
+#include "mozilla/ProfilerLabels.h"
 #include "base/process_util.h"
 #include "chrome/common/ipc_channel.h"
 #include "js/CompilationAndEvaluation.h"
@@ -40,6 +40,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/CallbackObject.h"
 #include "mozilla/dom/ChildProcessMessageManager.h"
@@ -68,7 +69,7 @@
 #include "nsContentUtils.h"
 #include "nsCycleCollectionNoteChild.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsDebug.h"
 #include "nsError.h"
 #include "nsFrameMessageManager.h"
@@ -239,9 +240,7 @@ void nsFrameMessageManager::AddMessageListener(const nsAString& aMessageName,
                                                MessageListener& aListener,
                                                bool aListenWhenClosed,
                                                ErrorResult& aError) {
-  auto& listeners = mListeners.LookupForAdd(aMessageName).OrInsert([]() {
-    return new nsAutoTObserverArray<nsMessageListenerInfo, 1>();
-  });
+  auto* const listeners = mListeners.GetOrInsertNew(aMessageName);
   uint32_t len = listeners->Length();
   for (uint32_t i = 0; i < len; ++i) {
     MessageListener* strongListener = listeners->ElementAt(i).mStrongListener;
@@ -295,8 +294,8 @@ void nsFrameMessageManager::AddWeakMessageListener(
   // this to happen; it will break e.g. RemoveWeakMessageListener.  So let's
   // check that we're not getting ourselves into that situation.
   nsCOMPtr<nsISupports> canonical = do_QueryInterface(listener);
-  for (auto iter = mListeners.Iter(); !iter.Done(); iter.Next()) {
-    nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners = iter.UserData();
+  for (const auto& entry : mListeners) {
+    nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners = entry.GetWeak();
     uint32_t count = listeners->Length();
     for (uint32_t i = 0; i < count; i++) {
       nsWeakPtr weakListener = listeners->ElementAt(i).mWeakListener;
@@ -308,9 +307,7 @@ void nsFrameMessageManager::AddWeakMessageListener(
   }
 #endif
 
-  auto& listeners = mListeners.LookupForAdd(aMessageName).OrInsert([]() {
-    return new nsAutoTObserverArray<nsMessageListenerInfo, 1>();
-  });
+  auto* const listeners = mListeners.GetOrInsertNew(aMessageName);
   uint32_t len = listeners->Length();
   for (uint32_t i = 0; i < len; ++i) {
     if (listeners->ElementAt(i).mWeakListener == weak) {
@@ -975,7 +972,7 @@ struct MessageManagerReferentCount {
   size_t mWeakAlive;
   size_t mWeakDead;
   nsTArray<nsString> mSuspectMessages;
-  nsDataHashtable<nsStringHashKey, uint32_t> mMessageCounter;
+  nsTHashMap<nsStringHashKey, uint32_t> mMessageCounter;
 };
 
 }  // namespace
@@ -1001,18 +998,17 @@ NS_IMPL_ISUPPORTS(MessageManagerReporter, nsIMemoryReporter)
 void MessageManagerReporter::CountReferents(
     nsFrameMessageManager* aMessageManager,
     MessageManagerReferentCount* aReferentCount) {
-  for (auto it = aMessageManager->mListeners.Iter(); !it.Done(); it.Next()) {
-    nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners = it.UserData();
+  for (const auto& entry : aMessageManager->mListeners) {
+    nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners = entry.GetWeak();
     uint32_t listenerCount = listeners->Length();
     if (listenerCount == 0) {
       continue;
     }
 
-    nsString key(it.Key());
-    uint32_t oldCount = 0;
-    aReferentCount->mMessageCounter.Get(key, &oldCount);
-    uint32_t currentCount = oldCount + listenerCount;
-    aReferentCount->mMessageCounter.Put(key, currentCount);
+    nsString key(entry.GetKey());
+    const uint32_t currentCount =
+        (aReferentCount->mMessageCounter.LookupOrInsert(key, 0) +=
+         listenerCount);
 
     // Keep track of messages that have a suspiciously large
     // number of referents (symptom of leak).
@@ -1072,9 +1068,8 @@ static void ReportReferentCount(
                          aManagerType));
 
   for (uint32_t i = 0; i < aReferentCount.mSuspectMessages.Length(); i++) {
-    uint32_t totalReferentCount = 0;
-    aReferentCount.mMessageCounter.Get(aReferentCount.mSuspectMessages[i],
-                                       &totalReferentCount);
+    const uint32_t totalReferentCount =
+        aReferentCount.mMessageCounter.Get(aReferentCount.mSuspectMessages[i]);
     NS_ConvertUTF16toUTF8 suspect(aReferentCount.mSuspectMessages[i]);
     REPORT(nsPrintfCString("message-manager-suspect/%s/referent(message=%s)",
                            aManagerType, suspect.get()),
@@ -1135,7 +1130,7 @@ nsresult NS_NewGlobalMessageManager(nsISupports** aResult) {
   return NS_OK;
 }
 
-nsDataHashtable<nsStringHashKey, nsMessageManagerScriptHolder*>*
+nsTHashMap<nsStringHashKey, nsMessageManagerScriptHolder*>*
     nsMessageManagerScriptExecutor::sCachedScripts = nullptr;
 StaticRefPtr<nsScriptCacheCleaner>
     nsMessageManagerScriptExecutor::sScriptCacheCleaner;
@@ -1143,7 +1138,7 @@ StaticRefPtr<nsScriptCacheCleaner>
 void nsMessageManagerScriptExecutor::DidCreateScriptLoader() {
   if (!sCachedScripts) {
     sCachedScripts =
-        new nsDataHashtable<nsStringHashKey, nsMessageManagerScriptHolder*>;
+        new nsTHashMap<nsStringHashKey, nsMessageManagerScriptHolder*>;
     sScriptCacheCleaner = new nsScriptCacheCleaner();
   }
 }
@@ -1236,7 +1231,16 @@ void nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
   // message manager per process, treat this script as run-once. Run-once
   // scripts can be compiled directly for the target global, and will be dropped
   // from the preloader cache after they're executed and serialized.
+  //
+  // NOTE: This does not affect the JS::CompileOptions. We generate the same
+  // bytecode as though it were run multiple times. This is required for the
+  // batch decoding from ScriptPreloader to work.
   bool isRunOnce = !aShouldCache || IsProcessScoped();
+
+  // We don't cache data: scripts!
+  nsAutoCString scheme;
+  uri->GetScheme(scheme);
+  bool useScriptPreloader = aShouldCache && !scheme.EqualsLiteral("data");
 
   // If the script will be reused in this session, compile it in the compilation
   // scope instead of the current global to avoid keeping the current
@@ -1290,6 +1294,12 @@ void nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
       return;
     }
 
+    // If we are not encoding to the ScriptPreloader cache, we can now relax the
+    // compile options and use the JS syntax-parser for lower latency.
+    if (!useScriptPreloader || !ScriptPreloader::GetChildSingleton().Active()) {
+      options.setSourceIsLazy(false);
+    }
+
     JS::UniqueTwoByteChars srcChars(dataStringBuf);
 
     JS::SourceText<char16_t> srcBuf;
@@ -1306,10 +1316,7 @@ void nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
   MOZ_ASSERT(script);
   aScriptp.set(script);
 
-  nsAutoCString scheme;
-  uri->GetScheme(scheme);
-  // We don't cache data: scripts!
-  if (aShouldCache && !scheme.EqualsLiteral("data")) {
+  if (useScriptPreloader) {
     ScriptPreloader::GetChildSingleton().NoteScript(url, url, script,
                                                     isRunOnce);
 
@@ -1318,7 +1325,7 @@ void nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
     if (!isRunOnce) {
       // Root the object also for caching.
       auto* holder = new nsMessageManagerScriptHolder(cx, script);
-      sCachedScripts->Put(aURL, holder);
+      sCachedScripts->InsertOrUpdate(aURL, holder);
     }
   }
 }
@@ -1563,8 +1570,8 @@ nsresult NS_NewChildProcessMessageManager(nsISupports** aResult) {
 }
 
 void nsFrameMessageManager::MarkForCC() {
-  for (auto iter = mListeners.Iter(); !iter.Done(); iter.Next()) {
-    nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners = iter.UserData();
+  for (const auto& entry : mListeners) {
+    nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners = entry.GetWeak();
     uint32_t count = listeners->Length();
     for (uint32_t i = 0; i < count; i++) {
       MessageListener* strongListener = listeners->ElementAt(i).mStrongListener;

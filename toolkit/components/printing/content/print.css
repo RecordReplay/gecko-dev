@@ -12,7 +12,6 @@ body {
   flex-direction: column;
   justify-content: flex-start;
   overflow: hidden;
-  background: var(--in-content-box-background);
 }
 
 body[loading] #print {
@@ -40,22 +39,21 @@ body[loading] #print {
   margin-block: 2px;
 }
 
-.row > input,
-.row > select,
-.col > input {
-  margin-inline: 0 0;
-  max-width: 100%;
-  display: inline-block;
-}
-
 .row.cols-2 {
   flex-direction: row;
   align-items: center;
 }
 
-.cols-2 > .col:nth-child(1) {
-  flex: 0 0 2em;
-  text-align: center;
+#scale .row.cols-2,
+#more-settings-options > .row.cols-2 {
+  /* The margin-block of the checkboxes/radiobuttons
+     already provide the needed vertical spacing. */
+  margin-block: 0;
+}
+
+hr {
+  margin-inline: 8px;
+  margin-block: 0;
 }
 
 .header-container {
@@ -64,7 +62,6 @@ body[loading] #print {
   justify-content: space-between;
   align-items: center;
   flex: 0 1 auto;
-  border-bottom: 1px solid var(--in-content-border-color);
   padding: 8px 18px;
 }
 .header-container > h2 {
@@ -105,7 +102,7 @@ select:not([size], [multiple])[iconic] {
 
 #printer-picker {
   background-size: auto 12px, 16px;
-  background-image: url("chrome://global/skin/icons/arrow-dropdown-12.svg"), url("chrome://global/skin/icons/print.svg");
+  background-image: url("chrome://global/skin/icons/arrow-down-12.svg"), url("chrome://global/skin/icons/print.svg");
   background-position: right 3px center, left 8px center;
   width: 100%;
 }
@@ -115,59 +112,13 @@ select:not([size], [multiple])[iconic] {
 }
 
 #printer-picker[output="pdf"] {
-  background-image: url("chrome://global/skin/icons/arrow-dropdown-12.svg"), url("chrome://global/content/portrait.svg");
-}
-
-input[type="checkbox"] {
-  margin-inline-end: 8px;
-}
-
-input[type="radio"] {
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--in-content-box-border-color);
-  border-radius: 50%;
-  margin: 0;
-  margin-inline-end: 8px;
-  background-color: var(--in-content-box-background);
-}
-
-input[type="radio"]:checked {
-  appearance: none;
-  background-image: url("chrome://global/skin/in-content/radio.svg");
-  -moz-context-properties: fill;
-  fill: #3485ff;
-}
-
-input[type="radio"]:enabled:-moz-focusring,
-input[type="radio"]:enabled:hover {
-  border-color: var(--in-content-border-focus);
-}
-
-input[type="radio"]:enabled:-moz-focusring {
-  outline: 2px solid var(--in-content-border-active);
-  /* offset outline to align with 1px border-width set for buttons/menulists above. */
-  outline-offset: -1px;
-  /* Make outline-radius slightly bigger than the border-radius set above,
-   * to make the thicker outline corners look smooth */
-  -moz-outline-radius: 50%;
-  box-shadow: 0 0 0 4px var(--in-content-border-active-shadow);
-}
-
-input[type="radio"]:disabled {
-  opacity: 0.5;
+  background-image: url("chrome://global/skin/icons/arrow-down-12.svg"), url("chrome://global/skin/icons/page-portrait.svg");
 }
 
 input[type="number"],
 input[type="text"] {
   padding: 2px;
-  padding-inline-start: 4px;
-  outline: none !important;
-}
-
-.cols-2 > input {
-  flex: none;
+  padding-inline-start: 8px;
 }
 
 .toggle-group-label {
@@ -179,10 +130,6 @@ input[type="text"] {
   overflow: auto;
 }
 
-#more-settings {
-  border-top: 1px solid var(--in-content-border-color);
-}
-
 .twisty > summary {
   list-style: none;
   display: flex;
@@ -191,14 +138,13 @@ input[type="text"] {
 }
 
 #more-settings > summary > .twisty {
-  background-image: url("chrome://global/skin/icons/twisty-expanded.svg");
+  background-image: url("chrome://global/skin/icons/arrow-down-12.svg");
   background-repeat: no-repeat;
   background-position: center;
   -moz-context-properties: fill;
   fill: currentColor;
   width: 12px;
   height: 12px;
-  scale: 1 1;
 }
 
 #more-settings > summary > .label {
@@ -206,8 +152,7 @@ input[type="text"] {
 }
 
 #more-settings[open] > summary > .twisty {
-  /* flip arrow to point up for the open state */
-  scale: 1 -1;
+  background-image: url("chrome://global/skin/icons/arrow-up-12.svg");
 }
 
 #open-dialog-link {
@@ -218,7 +163,9 @@ input[type="text"] {
 
 #open-dialog-link::after {
   display: block;
-  content: url(chrome://global/skin/icons/open-in-new.svg);
+  content: "";
+  background: url(chrome://global/skin/icons/open-in-new.svg) no-repeat center;
+  background-size: 12px;
   -moz-context-properties: fill;
   fill: currentColor;
   width: 12px;
@@ -230,7 +177,6 @@ input[type="text"] {
 }
 
 .footer-container {
-  border-top: 1px solid var(--in-content-border-color);
   flex: 0 1 auto;
 }
 
@@ -265,6 +211,7 @@ input[type="text"] {
 
 #custom-range {
   margin-top: 4px;
+  margin-inline: 0;
 }
 
 .vertical-margins,
@@ -285,22 +232,15 @@ input[type="text"] {
 }
 
 .toggle-group #landscape + .toggle-group-label::before {
-  content: url("chrome://global/content/landscape.svg");
+  content: url("chrome://global/skin/icons/page-landscape.svg");
 }
 .toggle-group #portrait + .toggle-group-label::before {
-  content: url("chrome://global/content/portrait.svg");
-}
-
-select:invalid,
-input[type="text"]:invalid,
-input[type="number"]:invalid {
-  border: 1px solid #D70022;
-  box-shadow: 0 0 0 1px #D70022, 0 0 0 4px rgba(215, 0, 34, 0.3);
+  content: url("chrome://global/skin/icons/page-portrait.svg");
 }
 
 .error-message {
   font-size: 12px;
-  color: #D70022;
+  color: var(--in-content-error-text-color, color-mix(in srgb, currentColor 40%, #C50042));
   margin-top: 4px;
 }
 
@@ -308,9 +248,14 @@ input[type="number"]:invalid {
   margin-inline-start: 4px;
 }
 
+#percent-scale:disabled {
+  /* Let clicks on the disabled input select the radio button */
+  pointer-events: none;
+}
+
 input[type="number"].photon-number {
   padding: 0;
-  padding-inline-start: 4px;
+  padding-inline-start: 8px;
   margin: 0;
   height: 20px;
   width: 4em;
@@ -321,6 +266,8 @@ input[type="number"].photon-number::-moz-number-spin-box {
   max-height: 100%;
   border-inline-start: 1px solid var(--in-content-box-border-color);
   width: 1em;
+  border-start-end-radius: 4px;
+  border-end-end-radius: 4px;
 }
 
 input[type="number"].photon-number:hover::-moz-number-spin-box {
@@ -332,18 +279,26 @@ input[type="number"].photon-number::-moz-number-spin-down {
   border: 0;
   border-radius: 0;
   background-color: var(--in-content-button-background);
-  background-image: url("chrome://global/skin/icons/arrow-dropdown-16.svg");
+  background-image: url("chrome://global/skin/icons/arrow-down.svg");
   background-size: 8px;
   background-position: center;
   -moz-context-properties: fill;
   fill: currentColor;
+  appearance: none;
 }
 
 input[type="number"].photon-number::-moz-number-spin-up {
-  scale: 1 -1;
+  background-image: url("chrome://global/skin/icons/arrow-up.svg");
 }
 
 input[type="number"].photon-number::-moz-number-spin-up:hover,
 input[type="number"].photon-number::-moz-number-spin-down:hover {
   background-color: var(--in-content-button-background-hover);
+  color: var(--in-content-button-text-color-hover);
+}
+
+input[type="checkbox"]:disabled + label,
+input[type="radio"]:disabled + label,
+input[type="radio"]:disabled + span > label {
+  opacity: 0.5;
 }

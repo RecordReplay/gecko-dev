@@ -6,7 +6,7 @@
 
 var EXPORTED_SYMBOLS = ["TelemetryUtils"];
 
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { TelemetryControllerBase } = ChromeUtils.import(
   "resource://gre/modules/TelemetryControllerBase.jsm"
 );
@@ -81,11 +81,6 @@ var TelemetryUtils = {
     // Event Ping Preferences
     EventPingMinimumFrequency: "toolkit.telemetry.eventping.minimumFrequency",
     EventPingMaximumFrequency: "toolkit.telemetry.eventping.maximumFrequency",
-
-    // Ecosystem Telemetry Preferences
-    EcosystemTelemetryEnabled: "toolkit.telemetry.ecosystemtelemetry.enabled",
-    EcosystemTelemetryAllowForNonProductionFxA:
-      "toolkit.telemetry.ecosystemtelemetry.allowForNonProductionFxA",
 
     // Prio Ping Preferences
     PrioPingEnabled: "toolkit.telemetry.prioping.enabled",

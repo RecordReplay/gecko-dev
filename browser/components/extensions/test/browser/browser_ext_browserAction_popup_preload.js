@@ -36,13 +36,12 @@ add_task(async function testBrowserActionClickCanceled() {
   await extension.startup();
 
   const {
-    GlobalManager,
     Management: {
       global: { browserActionFor },
     },
   } = ChromeUtils.import("resource://gre/modules/Extension.jsm", null);
 
-  let ext = GlobalManager.extensionMap.get(extension.id);
+  let ext = WebExtensionPolicy.getByID(extension.id)?.extension;
   let browserAction = browserActionFor(ext);
 
   let widget = getBrowserActionWidget(extension).forWindow(window);
@@ -63,7 +62,7 @@ add_task(async function testBrowserActionClickCanceled() {
 
   is(browserAction.pendingPopupTimeout, null, "Have no pending popup timeout");
 
-  is(browserAction.tabToRevokeDuringClearPopup, tab, "Tab to revoke was saved");
+  is(browserAction.action.activeTabForPreload, tab, "Tab to revoke was saved");
   is(
     browserAction.tabManager.hasActiveTabPermission(tab),
     true,
@@ -80,7 +79,7 @@ add_task(async function testBrowserActionClickCanceled() {
   is(browserAction.pendingPopupTimeout, null, "Have no pending popup timeout");
 
   is(
-    browserAction.tabToRevokeDuringClearPopup,
+    browserAction.action.activeTabForPreload,
     null,
     "Tab to revoke was removed"
   );
@@ -182,13 +181,12 @@ add_task(async function testBrowserActionDisabled() {
   await promiseAnimationFrame();
 
   const {
-    GlobalManager,
     Management: {
       global: { browserActionFor },
     },
   } = ChromeUtils.import("resource://gre/modules/Extension.jsm", null);
 
-  let ext = GlobalManager.extensionMap.get(extension.id);
+  let ext = WebExtensionPolicy.getByID(extension.id)?.extension;
   let browserAction = browserActionFor(ext);
 
   let widget = getBrowserActionWidget(extension).forWindow(window);
@@ -349,13 +347,12 @@ add_task(async function testClosePopupDuringPreload() {
   await extension.startup();
 
   const {
-    GlobalManager,
     Management: {
       global: { browserActionFor },
     },
   } = ChromeUtils.import("resource://gre/modules/Extension.jsm", null);
 
-  let ext = GlobalManager.extensionMap.get(extension.id);
+  let ext = WebExtensionPolicy.getByID(extension.id)?.extension;
   let browserAction = browserActionFor(ext);
 
   let widget = getBrowserActionWidget(extension).forWindow(window);

@@ -34,21 +34,6 @@ registerCleanupFunction(() => {
 });
 
 /**
- * Get an element's inline style property value.
- * @param {TestActor} testActor
- * @param {String} selector
- *        The selector used to obtain the element.
- * @param {String} name
- *        name of the property.
- */
-function getStyle(testActor, selector, propName) {
-  return testActor.eval(`
-    document.querySelector("${selector}")
-            .style.getPropertyValue("${propName}");
-  `);
-}
-
-/**
  * When a tooltip is closed, this ends up "commiting" the value changed within
  * the tooltip (e.g. the color in case of a colorpicker) which, in turn, ends up
  * setting the value of the corresponding css property in the rule-view.
@@ -457,22 +442,6 @@ var togglePropStatus = async function(view, textProp) {
   textProp.editor.enable.click();
   await onRuleViewRefreshed;
 };
-
-/**
- * Reload the current page and wait for the inspector to be initialized after
- * the navigation
- *
- * @param {InspectorPanel} inspector
- *        The instance of InspectorPanel currently loaded in the toolbox
- * @param {TestActor} testActor
- *        The current instance of the TestActor
- */
-async function reloadPage(inspector, testActor) {
-  const onNewRoot = inspector.once("new-root");
-  await testActor.reload();
-  await onNewRoot;
-  await inspector.markup._waitForChildren();
-}
 
 /**
  * Create a new rule by clicking on the "add rule" button.

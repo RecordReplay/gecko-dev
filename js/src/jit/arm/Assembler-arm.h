@@ -99,6 +99,8 @@ static constexpr Register64 CmpXchgNew64 =
     Register64(CmpXchgNewHi, CmpXchgNewLo);
 static constexpr Register CmpXchgOutLo = IntArgReg0;
 static constexpr Register CmpXchgOutHi = IntArgReg1;
+static constexpr Register64 CmpXchgOut64 =
+    Register64(CmpXchgOutHi, CmpXchgOutLo);
 
 // Exchange: Any two non-equal odd/even pairs would do for `new` and `out`.
 
@@ -117,8 +119,12 @@ static constexpr Register64 FetchOpVal64 =
     Register64(FetchOpValHi, FetchOpValLo);
 static constexpr Register FetchOpTmpLo = IntArgReg2;
 static constexpr Register FetchOpTmpHi = IntArgReg3;
+static constexpr Register64 FetchOpTmp64 =
+    Register64(FetchOpTmpHi, FetchOpTmpLo);
 static constexpr Register FetchOpOutLo = IntArgReg0;
 static constexpr Register FetchOpOutHi = IntArgReg1;
+static constexpr Register64 FetchOpOut64 =
+    Register64(FetchOpOutHi, FetchOpOutLo);
 
 class ABIArgGenerator {
   unsigned intRegIndex_;
@@ -158,7 +164,7 @@ static constexpr Register ABINonArgReg2 = r6;
 static constexpr Register ABINonArgReg3 = r7;
 
 // This register may be volatile or nonvolatile. Avoid d15 which is the
-// ScratchDoubleReg.
+// ScratchDoubleReg_.
 static constexpr FloatRegister ABINonArgDoubleReg{FloatRegisters::d8,
                                                   VFPRegister::Double};
 
@@ -190,6 +196,10 @@ static constexpr Register WasmTableCallIndexReg = ABINonArgReg3;
 // must be a volatile register.
 static constexpr Register WasmJitEntryReturnScratch = r5;
 
+// Register used to store a reference to an exception thrown by Wasm to an
+// exception handling block. Should not overlap with WasmTlsReg.
+static constexpr Register WasmExceptionReg = ABINonArgReg2;
+
 static constexpr Register PreBarrierReg = r1;
 
 static constexpr Register InterpreterPCReg = r9;
@@ -217,23 +227,27 @@ static constexpr FloatRegister ReturnFloat32Reg = {FloatRegisters::d0,
 static constexpr FloatRegister ReturnDoubleReg = {FloatRegisters::d0,
                                                   VFPRegister::Double};
 static constexpr FloatRegister ReturnSimd128Reg = InvalidFloatReg;
-static constexpr FloatRegister ScratchFloat32Reg = {FloatRegisters::s30,
-                                                    VFPRegister::Single};
-static constexpr FloatRegister ScratchDoubleReg = {FloatRegisters::d15,
-                                                   VFPRegister::Double};
+static constexpr FloatRegister ScratchFloat32Reg_ = {FloatRegisters::s30,
+                                                     VFPRegister::Single};
+static constexpr FloatRegister ScratchDoubleReg_ = {FloatRegisters::d15,
+                                                    VFPRegister::Double};
 static constexpr FloatRegister ScratchSimd128Reg = InvalidFloatReg;
 static constexpr FloatRegister ScratchUIntReg = {FloatRegisters::d15,
                                                  VFPRegister::UInt};
 static constexpr FloatRegister ScratchIntReg = {FloatRegisters::d15,
                                                 VFPRegister::Int};
 
+// Do not reference ScratchFloat32Reg_ directly, use ScratchFloat32Scope
+// instead.
 struct ScratchFloat32Scope : public AutoFloatRegisterScope {
   explicit ScratchFloat32Scope(MacroAssembler& masm)
-      : AutoFloatRegisterScope(masm, ScratchFloat32Reg) {}
+      : AutoFloatRegisterScope(masm, ScratchFloat32Reg_) {}
 };
+
+// Do not reference ScratchDoubleReg_ directly, use ScratchDoubleScope instead.
 struct ScratchDoubleScope : public AutoFloatRegisterScope {
   explicit ScratchDoubleScope(MacroAssembler& masm)
-      : AutoFloatRegisterScope(masm, ScratchDoubleReg) {}
+      : AutoFloatRegisterScope(masm, ScratchDoubleReg_) {}
 };
 
 // Registerd used in RegExpMatcher instruction (do not use JSReturnOperand).
@@ -295,10 +309,10 @@ static_assert(JitStackAlignment % SimdMemoryAlignment == 0,
 static const uint32_t WasmStackAlignment = SimdMemoryAlignment;
 static const uint32_t WasmTrapInstructionLength = 4;
 
-// The offsets are dynamically asserted during
-// code generation in the prologue/epilogue.
+// See comments in wasm::GenerateFunctionPrologue.  The difference between these
+// is the size of the largest callable prologue on the platform.
 static constexpr uint32_t WasmCheckedCallEntryOffset = 0u;
-static constexpr uint32_t WasmCheckedTailEntryOffset = 16u;
+static constexpr uint32_t WasmCheckedTailEntryOffset = 12u;
 
 static const Scale ScalePointer = TimesFour;
 
@@ -1630,6 +1644,12 @@ class Assembler : public AssemblerShared {
 
   BufferOffset as_vdtm(LoadStore st, Register rn, VFPRegister vd, int length,
                        /* also has update conditions */ Condition c = Always);
+
+  // vldr/vstr variants that handle unaligned accesses.  These encode as NEON
+  // single-element instructions and can only be used if NEON is available.
+  // Here, vd must be tagged as a float or double register.
+  BufferOffset as_vldr_unaligned(VFPRegister vd, Register rn);
+  BufferOffset as_vstr_unaligned(VFPRegister vd, Register rn);
 
   BufferOffset as_vimm(VFPRegister vd, VFPImm imm, Condition c = Always);
 

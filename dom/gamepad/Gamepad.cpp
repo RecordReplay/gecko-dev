@@ -70,7 +70,7 @@ Gamepad::Gamepad(nsISupports* aParent, const nsAString& aID, int32_t aIndex,
   }
 
   // Mapping touchId(0) to touchIdHash(0) by default.
-  mTouchIdHash.Put(0, mTouchIdHashValue);
+  mTouchIdHash.InsertOrUpdate(0, mTouchIdHashValue);
   ++mTouchIdHashValue;
   UpdateTimestamp();
 }
@@ -117,13 +117,8 @@ void Gamepad::SetTouchEvent(uint32_t aTouchIndex,
 
   // Handling cross-origin tracking.
   GamepadTouchState touchState(aTouch);
-  if (auto hashValue = mTouchIdHash.GetValue(touchState.touchId)) {
-    touchState.touchId = *hashValue;
-  } else {
-    touchState.touchId = mTouchIdHashValue;
-    mTouchIdHash.Put(aTouch.touchId, mTouchIdHashValue);
-    ++mTouchIdHashValue;
-  }
+  touchState.touchId = mTouchIdHash.LookupOrInsertWith(
+      touchState.touchId, [&] { return mTouchIdHashValue++; });
   mTouchEvents[aTouchIndex]->SetTouchState(touchState);
   UpdateTimestamp();
 }

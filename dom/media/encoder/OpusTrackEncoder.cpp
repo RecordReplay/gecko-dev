@@ -4,8 +4,8 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "OpusTrackEncoder.h"
 #include "nsString.h"
-#include "GeckoProfiler.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/ProfilerLabels.h"
 #include "VideoUtils.h"
 
 #include <opus/opus.h>
@@ -17,27 +17,27 @@ namespace mozilla {
 // The Opus format supports up to 8 channels, and supports multitrack audio up
 // to 255 channels, but the current implementation supports only mono and
 // stereo, and downmixes any more than that.
-static const int MAX_SUPPORTED_AUDIO_CHANNELS = 8;
+constexpr int MAX_SUPPORTED_AUDIO_CHANNELS = 8;
 
 // http://www.opus-codec.org/docs/html_api-1.0.2/group__opus__encoder.html
 // In section "opus_encoder_init", channels must be 1 or 2 of input signal.
-static const int MAX_CHANNELS = 2;
+constexpr int MAX_CHANNELS = 2;
 
 // A maximum data bytes for Opus to encode.
-static const int MAX_DATA_BYTES = 4096;
+constexpr int MAX_DATA_BYTES = 4096;
 
 // http://tools.ietf.org/html/draft-ietf-codec-oggopus-00#section-4
 // Second paragraph, " The granule position of an audio data page is in units
 // of PCM audio samples at a fixed rate of 48 kHz."
-static const int kOpusSamplingRate = 48000;
+constexpr int kOpusSamplingRate = 48000;
 
 // The duration of an Opus frame, and it must be 2.5, 5, 10, 20, 40 or 60 ms.
-static const int kFrameDurationMs = 20;
+constexpr int kFrameDurationMs = 20;
 
 // The supported sampling rate of input signal (Hz),
 // must be one of the following. Will resampled to 48kHz otherwise.
-static const int kOpusSupportedInputSamplingRates[] = {8000, 12000, 16000,
-                                                       24000, 48000};
+constexpr int kOpusSupportedInputSamplingRates[] = {8000, 12000, 16000, 24000,
+                                                    48000};
 
 namespace {
 
@@ -62,7 +62,7 @@ static void SerializeOpusIdHeader(uint8_t aChannelCount, uint16_t aPreskip,
                                   uint32_t aInputSampleRate,
                                   nsTArray<uint8_t>* aOutput) {
   // The magic signature, null terminator has to be stripped off from strings.
-  static const uint8_t magic[] = "OpusHead";
+  constexpr uint8_t magic[] = "OpusHead";
   aOutput->AppendElements(magic, sizeof(magic) - 1);
 
   // The version must always be 1 (8 bits, unsigned).
@@ -91,7 +91,7 @@ static void SerializeOpusCommentHeader(const nsCString& aVendor,
                                        const nsTArray<nsCString>& aComments,
                                        nsTArray<uint8_t>* aOutput) {
   // The magic signature, null terminator has to be stripped off.
-  static const uint8_t magic[] = "OpusTags";
+  constexpr uint8_t magic[] = "OpusTags";
   aOutput->AppendElements(magic, sizeof(magic) - 1);
 
   // The vendor; Should append in the following order:
@@ -124,8 +124,9 @@ bool IsSampleRateSupported(TrackRate aSampleRate) {
 
 }  // Anonymous namespace.
 
-OpusTrackEncoder::OpusTrackEncoder(TrackRate aTrackRate)
-    : AudioTrackEncoder(aTrackRate),
+OpusTrackEncoder::OpusTrackEncoder(TrackRate aTrackRate,
+                                   MediaQueue<EncodedFrame>& aEncodedDataQueue)
+    : AudioTrackEncoder(aTrackRate, aEncodedDataQueue),
       mOutputSampleRate(IsSampleRateSupported(aTrackRate) ? aTrackRate
                                                           : kOpusSamplingRate),
       mEncoder(nullptr),
@@ -176,8 +177,9 @@ nsresult OpusTrackEncoder::Init(int aChannels) {
   }
 
   if (mAudioBitrate) {
-    error = opus_encoder_ctl(mEncoder,
-                             OPUS_SET_BITRATE(static_cast<int>(mAudioBitrate)));
+    int bps = static_cast<int>(
+        std::min<uint32_t>(mAudioBitrate, std::numeric_limits<int>::max()));
+    error = opus_encoder_ctl(mEncoder, OPUS_SET_BITRATE(bps));
     if (error != OPUS_OK) {
       return NS_ERROR_FAILURE;
     }
@@ -219,11 +221,7 @@ bool OpusTrackEncoder::NeedsResampler() const {
 already_AddRefed<TrackMetadataBase> OpusTrackEncoder::GetMetadata() {
   AUTO_PROFILER_LABEL("OpusTrackEncoder::GetMetadata", OTHER);
 
-  MOZ_ASSERT(mInitialized || mCanceled);
-
-  if (mCanceled || mEncodingComplete) {
-    return nullptr;
-  }
+  MOZ_ASSERT(mInitialized);
 
   if (!mInitialized) {
     return nullptr;
@@ -250,13 +248,13 @@ already_AddRefed<TrackMetadataBase> OpusTrackEncoder::GetMetadata() {
   return meta.forget();
 }
 
-nsresult OpusTrackEncoder::GetEncodedTrack(
-    nsTArray<RefPtr<EncodedFrame>>& aData) {
-  AUTO_PROFILER_LABEL("OpusTrackEncoder::GetEncodedTrack", OTHER);
+nsresult OpusTrackEncoder::Encode(AudioSegment* aSegment) {
+  AUTO_PROFILER_LABEL("OpusTrackEncoder::Encode", OTHER);
 
+  MOZ_ASSERT(aSegment);
   MOZ_ASSERT(mInitialized || mCanceled);
 
-  if (mCanceled || mEncodingComplete) {
+  if (mCanceled || IsEncodingComplete()) {
     return NS_ERROR_FAILURE;
   }
 
@@ -265,11 +263,9 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
     return NS_ERROR_FAILURE;
   }
 
-  TakeTrackData(mSourceSegment);
-
   int result = 0;
   // Loop until we run out of packets of input data
-  while (result >= 0 && !mEncodingComplete) {
+  while (result >= 0 && !IsEncodingComplete()) {
     // re-sampled frames left last time which didn't fit into an Opus packet
     // duration.
     const int framesLeft = mResampledLeftover.Length() / mChannels;
@@ -280,7 +276,7 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
                               (framesLeft * mTrackRate / kOpusSamplingRate) +
                               (NeedsResampler() ? 1 : 0);
 
-    if (!mEndOfStream && mSourceSegment.GetDuration() < framesToFetch) {
+    if (!mEndOfStream && aSegment->GetDuration() < framesToFetch) {
       // Not enough raw data
       return NS_OK;
     }
@@ -291,7 +287,7 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
 
     int frameCopied = 0;
 
-    for (AudioSegment::ChunkIterator iter(mSourceSegment);
+    for (AudioSegment::ChunkIterator iter(*aSegment);
          !iter.IsEnded() && frameCopied < framesToFetch; iter.Next()) {
       AudioChunk chunk = *iter;
 
@@ -378,11 +374,12 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
     // Remove the raw data which has been pulled to pcm buffer.
     // The value of frameCopied should be equal to (or smaller than, if eos)
     // NumOutputFramesPerPacket().
-    mSourceSegment.RemoveLeading(frameCopied);
+    aSegment->RemoveLeading(frameCopied);
 
     // Has reached the end of input stream and all queued data has pulled for
     // encoding.
-    if (mSourceSegment.GetDuration() == 0 && mEndOfStream &&
+    bool isFinalPacket = false;
+    if (aSegment->GetDuration() == 0 && mEndOfStream &&
         framesInPCM < NumOutputFramesPerPacket()) {
       // Pad |mLookahead| samples to the end of the track to prevent loss of
       // original data.
@@ -392,17 +389,15 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
       mLookaheadWritten += toWrite;
       framesInPCM += toWrite;
       if (mLookaheadWritten == mLookahead) {
-        mEncodingComplete = true;
-        LOG("[Opus] Done encoding.");
+        isFinalPacket = true;
       }
     }
 
-    MOZ_ASSERT_IF(!mEncodingComplete,
-                  framesInPCM == NumOutputFramesPerPacket());
+    MOZ_ASSERT_IF(!isFinalPacket, framesInPCM == NumOutputFramesPerPacket());
 
     // Append null data to pcm buffer if the leftover data is not enough for
     // opus encoder.
-    if (framesInPCM < NumOutputFramesPerPacket() && mEncodingComplete) {
+    if (framesInPCM < NumOutputFramesPerPacket() && isFinalPacket) {
       PodZero(pcm.Elements() + framesInPCM * mChannels,
               (NumOutputFramesPerPacket() - framesInPCM) * mChannels);
     }
@@ -425,7 +420,7 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
     if (result < 0) {
       LOG("[Opus] Fail to encode data! Result: %s.", opus_strerror(result));
     }
-    if (mEncodingComplete) {
+    if (isFinalPacket) {
       if (mResampler) {
         speex_resampler_destroy(mResampler);
         mResampler = nullptr;
@@ -434,7 +429,7 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
     }
 
     // timestamp should be the time of the first sample
-    aData.AppendElement(MakeRefPtr<EncodedFrame>(
+    mEncodedDataQueue.Push(MakeAndAddRef<EncodedFrame>(
         FramesToTimeUnit(mNumOutputFrames + mLookahead, mOutputSampleRate),
         static_cast<uint64_t>(framesInPCM) * kOpusSamplingRate /
             mOutputSampleRate,
@@ -444,6 +439,11 @@ nsresult OpusTrackEncoder::GetEncodedTrack(
     mNumOutputFrames += NumOutputFramesPerPacket();
     LOG("[Opus] mOutputTimeStamp %.3f.",
         FramesToTimeUnit(mNumOutputFrames, mOutputSampleRate).ToSeconds());
+
+    if (isFinalPacket) {
+      LOG("[Opus] Done encoding.");
+      mEncodedDataQueue.Finish();
+    }
   }
 
   return result >= 0 ? NS_OK : NS_ERROR_FAILURE;

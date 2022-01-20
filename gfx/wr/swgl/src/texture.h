@@ -24,7 +24,8 @@ SI PackedRGBA8 pack(WideRGBA8 p) {
 #if USE_SSE2
   return _mm_packus_epi16(lowHalf(p), highHalf(p));
 #elif USE_NEON
-  return vcombine_u8(vqmovn_u16(lowHalf(p)), vqmovn_u16(highHalf(p)));
+  return vcombine_u8(vqmovun_s16(bit_cast<V8<int16_t>>(lowHalf(p))),
+                     vqmovun_s16(bit_cast<V8<int16_t>>(highHalf(p))));
 #else
   return genericPackWide(p);
 #endif
@@ -41,7 +42,8 @@ SI PackedR8 pack(WideR8 p) {
   auto r = bit_cast<V16<uint8_t>>(_mm_packus_epi16(m, m));
   return SHUFFLE(r, r, 0, 1, 2, 3);
 #elif USE_NEON
-  return lowHalf(bit_cast<V8<uint8_t>>(vqmovn_u16(expand(p))));
+  return lowHalf(
+      bit_cast<V8<uint8_t>>(vqmovun_s16(bit_cast<V8<int16_t>>(expand(p)))));
 #else
   return genericPackWide(p);
 #endif
@@ -54,7 +56,7 @@ SI PackedRG8 pack(WideRG8 p) {
 #if USE_SSE2
   return lowHalf(bit_cast<V16<uint8_t>>(_mm_packus_epi16(p, p)));
 #elif USE_NEON
-  return bit_cast<V8<uint8_t>>(vqmovn_u16(p));
+  return bit_cast<V8<uint8_t>>(vqmovun_s16(bit_cast<V8<int16_t>>(p)));
 #else
   return genericPackWide(p);
 #endif
@@ -76,12 +78,6 @@ SI int clampCoord(int coord, int limit, int base = 0) {
 template <typename T, typename S>
 SI T clamp2D(T P, S sampler) {
   return T{clampCoord(P.x, sampler->width), clampCoord(P.y, sampler->height)};
-}
-
-template <typename T>
-SI T clamp2DArray(T P, sampler2DArray sampler) {
-  return T{clampCoord(P.x, sampler->width), clampCoord(P.y, sampler->height),
-           clampCoord(P.z, sampler->depth)};
 }
 
 SI float to_float(uint32_t x) { return x * (1.f / 255.f); }
@@ -121,12 +117,6 @@ vec4 texelFetchRGBA8(S sampler, ivec2 P) {
   return fetchOffsetsRGBA8(sampler, offset);
 }
 
-vec4 texelFetchRGBA8(sampler2DArray sampler, ivec3 P) {
-  assert(test_all(P.z == P.z.x));
-  I32 offset = P.x + P.y * sampler->stride + P.z.x * sampler->height_stride;
-  return fetchOffsetsRGBA8(sampler, offset);
-}
-
 template <typename S>
 SI Float fetchOffsetsR8(S sampler, I32 offset) {
   U32 i = {
@@ -138,12 +128,6 @@ SI Float fetchOffsetsR8(S sampler, I32 offset) {
 template <typename S>
 vec4 texelFetchR8(S sampler, ivec2 P) {
   I32 offset = P.x + P.y * sampler->stride;
-  return vec4(fetchOffsetsR8(sampler, offset), 0.0f, 0.0f, 1.0f);
-}
-
-vec4 texelFetchR8(sampler2DArray sampler, ivec3 P) {
-  assert(test_all(P.z == P.z.x));
-  I32 offset = P.x + P.y * sampler->stride + P.z.x * sampler->height_stride;
   return vec4(fetchOffsetsR8(sampler, offset), 0.0f, 0.0f, 1.0f);
 }
 
@@ -162,12 +146,6 @@ vec4 texelFetchRG8(S sampler, ivec2 P) {
   return fetchOffsetsRG8(sampler, offset);
 }
 
-vec4 texelFetchRG8(sampler2DArray sampler, ivec3 P) {
-  assert(test_all(P.z == P.z.x));
-  I32 offset = P.x + P.y * sampler->stride + P.z.x * sampler->height_stride;
-  return fetchOffsetsRG8(sampler, offset);
-}
-
 template <typename S>
 SI Float fetchOffsetsR16(S sampler, I32 offset) {
   U32 i = {
@@ -182,12 +160,6 @@ vec4 texelFetchR16(S sampler, ivec2 P) {
   return vec4(fetchOffsetsR16(sampler, offset), 0.0f, 0.0f, 1.0f);
 }
 
-vec4 texelFetchR16(sampler2DArray sampler, ivec3 P) {
-  assert(test_all(P.z == P.z.x));
-  I32 offset = P.x + P.y * sampler->stride + P.z.x * sampler->height_stride;
-  return vec4(fetchOffsetsR16(sampler, offset), 0.0f, 0.0f, 1.0f);
-}
-
 template <typename S>
 SI vec4 fetchOffsetsFloat(S sampler, I32 offset) {
   return pixel_float_to_vec4(
@@ -197,12 +169,6 @@ SI vec4 fetchOffsetsFloat(S sampler, I32 offset) {
 
 vec4 texelFetchFloat(sampler2D sampler, ivec2 P) {
   I32 offset = P.x * 4 + P.y * sampler->stride;
-  return fetchOffsetsFloat(sampler, offset);
-}
-
-SI vec4 texelFetchFloat(sampler2DArray sampler, ivec3 P) {
-  assert(test_all(P.z == P.z.x));
-  I32 offset = P.x * 4 + P.y * sampler->stride + P.z.x * sampler->height_stride;
   return fetchOffsetsFloat(sampler, offset);
 }
 
@@ -341,54 +307,6 @@ vec4 texelFetch(sampler2DRect sampler, ivec2 P) {
   }
 }
 
-SI vec4 texelFetch(sampler2DArray sampler, ivec3 P, int lod) {
-  assert(lod == 0);
-  P = clamp2DArray(P, sampler);
-  switch (sampler->format) {
-    case TextureFormat::RGBA32F:
-      return texelFetchFloat(sampler, P);
-    case TextureFormat::RGBA8:
-      return texelFetchRGBA8(sampler, P);
-    case TextureFormat::R8:
-      return texelFetchR8(sampler, P);
-    case TextureFormat::RG8:
-      return texelFetchRG8(sampler, P);
-    case TextureFormat::R16:
-      return texelFetchR16(sampler, P);
-    default:
-      assert(false);
-      return vec4();
-  }
-}
-
-vec4 texelFetch(sampler2DArrayRGBA32F sampler, ivec3 P, int lod) {
-  assert(lod == 0);
-  P = clamp2DArray(P, sampler);
-  assert(sampler->format == TextureFormat::RGBA32F);
-  return texelFetchFloat(sampler, P);
-}
-
-vec4 texelFetch(sampler2DArrayRGBA8 sampler, ivec3 P, int lod) {
-  assert(lod == 0);
-  P = clamp2DArray(P, sampler);
-  assert(sampler->format == TextureFormat::RGBA8);
-  return texelFetchRGBA8(sampler, P);
-}
-
-vec4 texelFetch(sampler2DArrayR8 sampler, ivec3 P, int lod) {
-  assert(lod == 0);
-  P = clamp2DArray(P, sampler);
-  assert(sampler->format == TextureFormat::R8);
-  return texelFetchR8(sampler, P);
-}
-
-vec4 texelFetch(sampler2DArrayRG8 sampler, ivec3 P, int lod) {
-  assert(lod == 0);
-  P = clamp2DArray(P, sampler);
-  assert(sampler->format == TextureFormat::RG8);
-  return texelFetchRG8(sampler, P);
-}
-
 template <typename S>
 SI ivec4 fetchOffsetsInt(S sampler, I32 offset) {
   return pixel_int_to_ivec4(
@@ -470,7 +388,7 @@ SI T samplerScale(S sampler, T P) {
 }
 
 template <typename T>
-SI T samplerScale(sampler2DRect sampler, T P) {
+SI T samplerScale(UNUSED sampler2DRect sampler, T P) {
   return P;
 }
 
@@ -481,17 +399,16 @@ SI T linearQuantize(T P, float scale, S sampler) {
 
 // Compute clamped offset of first row for linear interpolation
 template <typename S, typename I>
-SI auto computeRow(S sampler, I i, int32_t zoffset, size_t margin = 1)
-    -> decltype(i.x) {
+SI auto computeRow(S sampler, I i, size_t margin = 1) -> decltype(i.x) {
   return clampCoord(i.x, sampler->width - margin) +
-         clampCoord(i.y, sampler->height) * sampler->stride + zoffset;
+         clampCoord(i.y, sampler->height) * sampler->stride;
 }
 
 // Compute clamped offset of second row for linear interpolation from first row
-template <typename S>
-SI I32 computeNextRowOffset(S sampler, ivec2 i) {
-  return (i.y >= 0 && i.y < int32_t(sampler->height) - 1) &
-         I32(sampler->stride);
+template <typename S, typename I>
+SI auto computeNextRowOffset(S sampler, I i) -> decltype(i.x) {
+  return if_then_else(i.y >= 0 && i.y < int32_t(sampler->height) - 1,
+                      sampler->stride, 0);
 }
 
 // Convert X coordinate to a 2^7 scale fraction for interpolation
@@ -502,7 +419,8 @@ SI I16 computeFracX(S sampler, ivec2 i, ivec2 frac) {
 }
 
 // Convert Y coordinate to a 2^7 scale fraction for interpolation
-SI I16 computeFracY(ivec2 frac) { return CONVERT(frac.y & 0x7F, I16); }
+SI I16 computeFracNoClamp(I32 frac) { return CONVERT(frac & 0x7F, I16); }
+SI I16 computeFracY(ivec2 frac) { return computeFracNoClamp(frac.y); }
 
 struct WidePlanarRGBA8 {
   V8<uint16_t> rg;
@@ -510,14 +428,13 @@ struct WidePlanarRGBA8 {
 };
 
 template <typename S>
-SI WidePlanarRGBA8 textureLinearPlanarRGBA8(S sampler, ivec2 i,
-                                            int32_t zoffset = 0) {
+SI WidePlanarRGBA8 textureLinearPlanarRGBA8(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::RGBA8);
 
   ivec2 frac = i;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset);
+  I32 row0 = computeRow(sampler, i);
   I32 row1 = row0 + computeNextRowOffset(sampler, i);
   I16 fracx = computeFracX(sampler, i, frac);
   I16 fracy = computeFracY(frac);
@@ -560,9 +477,9 @@ SI WidePlanarRGBA8 textureLinearPlanarRGBA8(S sampler, ivec2 i,
 }
 
 template <typename S>
-vec4 textureLinearRGBA8(S sampler, vec2 P, int32_t zoffset = 0) {
+vec4 textureLinearRGBA8(S sampler, vec2 P) {
   ivec2 i(linearQuantize(P, 128, sampler));
-  auto planar = textureLinearPlanarRGBA8(sampler, i, zoffset);
+  auto planar = textureLinearPlanarRGBA8(sampler, i);
   auto rg = CONVERT(planar.rg, V8<float>);
   auto ba = CONVERT(planar.ba, V8<float>);
   auto r = lowHalf(rg);
@@ -573,13 +490,12 @@ vec4 textureLinearRGBA8(S sampler, vec2 P, int32_t zoffset = 0) {
 }
 
 template <typename S>
-static inline U16 textureLinearUnpackedR8(S sampler, ivec2 i,
-                                          int32_t zoffset = 0) {
+static inline U16 textureLinearUnpackedR8(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::R8);
   ivec2 frac = i;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset);
+  I32 row0 = computeRow(sampler, i);
   I32 row1 = row0 + computeNextRowOffset(sampler, i);
   I16 fracx = computeFracX(sampler, i, frac);
   I16 fracy = computeFracY(frac);
@@ -589,13 +505,13 @@ static inline U16 textureLinearUnpackedR8(S sampler, ivec2 i,
   auto b0 = unaligned_load<V2<uint8_t>>(&buf[row0.y]);
   auto c0 = unaligned_load<V2<uint8_t>>(&buf[row0.z]);
   auto d0 = unaligned_load<V2<uint8_t>>(&buf[row0.w]);
-  auto abcd0 = CONVERT(combine(combine(a0, b0), combine(c0, d0)), V8<int16_t>);
+  auto abcd0 = CONVERT(combine(a0, b0, c0, d0), V8<int16_t>);
 
   auto a1 = unaligned_load<V2<uint8_t>>(&buf[row1.x]);
   auto b1 = unaligned_load<V2<uint8_t>>(&buf[row1.y]);
   auto c1 = unaligned_load<V2<uint8_t>>(&buf[row1.z]);
   auto d1 = unaligned_load<V2<uint8_t>>(&buf[row1.w]);
-  auto abcd1 = CONVERT(combine(combine(a1, b1), combine(c1, d1)), V8<int16_t>);
+  auto abcd1 = CONVERT(combine(a1, b1, c1, d1), V8<int16_t>);
 
   abcd0 += ((abcd1 - abcd0) * fracy.xxyyzzww) >> 7;
 
@@ -608,11 +524,11 @@ static inline U16 textureLinearUnpackedR8(S sampler, ivec2 i,
 }
 
 template <typename S>
-vec4 textureLinearR8(S sampler, vec2 P, int32_t zoffset = 0) {
+vec4 textureLinearR8(S sampler, vec2 P) {
   assert(sampler->format == TextureFormat::R8);
 
   ivec2 i(linearQuantize(P, 128, sampler));
-  Float r = CONVERT(textureLinearUnpackedR8(sampler, i, zoffset), Float);
+  Float r = CONVERT(textureLinearUnpackedR8(sampler, i), Float);
   return vec4(r * (1.0f / 255.0f), 0.0f, 0.0f, 1.0f);
 }
 
@@ -621,14 +537,13 @@ struct WidePlanarRG8 {
 };
 
 template <typename S>
-SI WidePlanarRG8 textureLinearPlanarRG8(S sampler, ivec2 i,
-                                        int32_t zoffset = 0) {
+SI WidePlanarRG8 textureLinearPlanarRG8(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::RG8);
 
   ivec2 frac = i;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset);
+  I32 row0 = computeRow(sampler, i);
   I32 row1 = row0 + computeNextRowOffset(sampler, i);
   I16 fracx = computeFracX(sampler, i, frac);
   I16 fracy = computeFracY(frac);
@@ -673,9 +588,9 @@ SI WidePlanarRG8 textureLinearPlanarRG8(S sampler, ivec2 i,
 }
 
 template <typename S>
-vec4 textureLinearRG8(S sampler, vec2 P, int32_t zoffset = 0) {
+vec4 textureLinearRG8(S sampler, vec2 P) {
   ivec2 i(linearQuantize(P, 128, sampler));
-  auto planar = textureLinearPlanarRG8(sampler, i, zoffset);
+  auto planar = textureLinearPlanarRG8(sampler, i);
   auto rg = CONVERT(planar.rg, V8<float>) * (1.0f / 255.0f);
   auto r = lowHalf(rg);
   auto g = highHalf(rg);
@@ -686,14 +601,13 @@ vec4 textureLinearRG8(S sampler, vec2 P, int32_t zoffset = 0) {
 // signed I16. One bit of precision is shifted away from the bottom end to
 // accommodate the sign bit, so only 15 bits of precision is left.
 template <typename S>
-static inline I16 textureLinearUnpackedR16(S sampler, ivec2 i,
-                                           int32_t zoffset = 0) {
+static inline I16 textureLinearUnpackedR16(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::R16);
 
   ivec2 frac = i;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset);
+  I32 row0 = computeRow(sampler, i);
   I32 row1 = row0 + computeNextRowOffset(sampler, i);
 
   I16 fracx =
@@ -709,15 +623,13 @@ static inline I16 textureLinearUnpackedR16(S sampler, ivec2 i,
   auto b0 = unaligned_load<V2<uint16_t>>(&buf[row0.y]);
   auto c0 = unaligned_load<V2<uint16_t>>(&buf[row0.z]);
   auto d0 = unaligned_load<V2<uint16_t>>(&buf[row0.w]);
-  auto abcd0 =
-      CONVERT(combine(combine(a0, b0), combine(c0, d0)) >> 1, V8<int16_t>);
+  auto abcd0 = CONVERT(combine(a0, b0, c0, d0) >> 1, V8<int16_t>);
 
   auto a1 = unaligned_load<V2<uint16_t>>(&buf[row1.x]);
   auto b1 = unaligned_load<V2<uint16_t>>(&buf[row1.y]);
   auto c1 = unaligned_load<V2<uint16_t>>(&buf[row1.z]);
   auto d1 = unaligned_load<V2<uint16_t>>(&buf[row1.w]);
-  auto abcd1 =
-      CONVERT(combine(combine(a1, b1), combine(c1, d1)) >> 1, V8<int16_t>);
+  auto abcd1 = CONVERT(combine(a1, b1, c1, d1) >> 1, V8<int16_t>);
 
   // The samples occupy 15 bits and the fraction occupies 15 bits, so that when
   // they are multiplied together, the new scaled sample will fit in the high
@@ -759,16 +671,19 @@ static inline I16 textureLinearUnpackedR16(S sampler, ivec2 i,
 }
 
 template <typename S>
-vec4 textureLinearR16(S sampler, vec2 P, int32_t zoffset = 0) {
+vec4 textureLinearR16(S sampler, vec2 P) {
   assert(sampler->format == TextureFormat::R16);
 
   ivec2 i(linearQuantize(P, 128, sampler));
-  Float r = CONVERT(textureLinearUnpackedR16(sampler, i, zoffset), Float);
+  Float r = CONVERT(textureLinearUnpackedR16(sampler, i), Float);
   return vec4(r * (1.0f / 32767.0f), 0.0f, 0.0f, 1.0f);
 }
 
+using PackedRGBA32F = V16<float>;
+using WideRGBA32F = V16<float>;
+
 template <typename S>
-vec4 textureLinearRGBA32F(S sampler, vec2 P, int32_t zoffset = 0) {
+vec4 textureLinearRGBA32F(S sampler, vec2 P) {
   assert(sampler->format == TextureFormat::RGBA32F);
   P = samplerScale(sampler, P);
   P -= 0.5f;
@@ -779,7 +694,7 @@ vec4 textureLinearRGBA32F(S sampler, vec2 P, int32_t zoffset = 0) {
           clampCoord(i.y, sampler->height));
   r.x = if_then_else(i.x >= 0, if_then_else(i.x < sampler->width - 1, r.x, 1.0),
                      0.0f);
-  I32 offset0 = c.x * 4 + c.y * sampler->stride + zoffset;
+  I32 offset0 = c.x * 4 + c.y * sampler->stride;
   I32 offset1 = offset0 + computeNextRowOffset(sampler, i);
 
   Float c0 = mix(mix(*(Float*)&sampler->buf[offset0.x],
@@ -812,14 +727,13 @@ struct WidePlanarYUV8 {
 };
 
 template <typename S>
-SI WidePlanarYUV8 textureLinearPlanarYUV422(S sampler, ivec2 i,
-                                            int32_t zoffset = 0) {
+SI WidePlanarYUV8 textureLinearPlanarYUV422(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::YUV422);
 
   ivec2 frac = i;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset, 2);
+  I32 row0 = computeRow(sampler, i, 2);
   // Layout is 2 pixel chunks (occupying 4 bytes) organized as: G0, B, G1, R.
   // Get the selector for the pixel within the chunk.
   I32 selector = row0 & 1;
@@ -887,9 +801,9 @@ SI WidePlanarYUV8 textureLinearPlanarYUV422(S sampler, ivec2 i,
 }
 
 template <typename S>
-vec4 textureLinearYUV422(S sampler, vec2 P, int32_t zoffset = 0) {
+vec4 textureLinearYUV422(S sampler, vec2 P) {
   ivec2 i(linearQuantize(P, 128, sampler));
-  auto planar = textureLinearPlanarYUV422(sampler, i, zoffset);
+  auto planar = textureLinearPlanarYUV422(sampler, i);
   auto y = CONVERT(planar.y, Float) * (1.0f / 255.0f);
   auto u = CONVERT(planar.u, Float) * (1.0f / 255.0f);
   auto v = CONVERT(planar.v, Float) * (1.0f / 255.0f);
@@ -945,50 +859,9 @@ vec4 texture(sampler2DRect sampler, vec2 P) {
   }
 }
 
-SI vec4 texture(sampler2DArray sampler, vec3 P) {
-  if (sampler->filter == TextureFilter::LINEAR) {
-    // SSE2 can generate slow code for 32-bit multiply, and we never actually
-    // sample from different layers in one chunk, so do cheaper scalar
-    // multiplication instead.
-    assert(test_all(P.z == P.z.x));
-    int32_t zoffset = clampCoord(roundeven(P.z.x, 1.0f), sampler->depth) *
-                      sampler->height_stride;
-    switch (sampler->format) {
-      case TextureFormat::RGBA32F:
-        return textureLinearRGBA32F(sampler, vec2(P.x, P.y), zoffset);
-      case TextureFormat::RGBA8:
-        return textureLinearRGBA8(sampler, vec2(P.x, P.y), zoffset);
-      case TextureFormat::R8:
-        return textureLinearR8(sampler, vec2(P.x, P.y), zoffset);
-      case TextureFormat::RG8:
-        return textureLinearRG8(sampler, vec2(P.x, P.y), zoffset);
-      case TextureFormat::R16:
-        return textureLinearR16(sampler, vec2(P.x, P.y), zoffset);
-      default:
-        assert(false);
-        return vec4();
-    }
-  } else {
-    // just do nearest for now
-    ivec3 coord(roundzero(P.x, sampler->width), roundzero(P.y, sampler->height),
-                roundeven(P.z, 1.0f));
-    return texelFetch(sampler, coord, 0);
-  }
-}
-
-vec4 texture(sampler2DArray sampler, vec3 P, float bias) {
-  assert(bias == 0.0f);
-  return texture(sampler, P);
-}
-
-vec4 textureLod(sampler2DArray sampler, vec3 P, float lod) {
-  assert(lod == 0.0f);
-  return texture(sampler, P);
-}
-
-ivec3_scalar textureSize(sampler2DArray sampler, int) {
-  return ivec3_scalar{int32_t(sampler->width), int32_t(sampler->height),
-                      int32_t(sampler->depth)};
+template <typename S>
+vec4_scalar texture(S sampler, vec2_scalar P) {
+  return force_scalar(texture(sampler, vec2(P)));
 }
 
 ivec2_scalar textureSize(sampler2D sampler, int) {
@@ -1000,13 +873,12 @@ ivec2_scalar textureSize(sampler2DRect sampler) {
 }
 
 template <typename S>
-static WideRGBA8 textureLinearUnpackedRGBA8(S sampler, ivec2 i,
-                                            int zoffset = 0) {
+static WideRGBA8 textureLinearUnpackedRGBA8(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::RGBA8);
   ivec2 frac = i;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset);
+  I32 row0 = computeRow(sampler, i);
   I32 row1 = row0 + computeNextRowOffset(sampler, i);
   I16 fracx = computeFracX(sampler, i, frac);
   I16 fracy = computeFracY(frac);
@@ -1047,23 +919,32 @@ static WideRGBA8 textureLinearUnpackedRGBA8(S sampler, ivec2 i,
 }
 
 template <typename S>
-static PackedRGBA8 textureLinearPackedRGBA8(S sampler, ivec2 i,
-                                            int zoffset = 0) {
-  return pack(textureLinearUnpackedRGBA8(sampler, i, zoffset));
+static PackedRGBA8 textureLinearPackedRGBA8(S sampler, ivec2 i) {
+  return pack(textureLinearUnpackedRGBA8(sampler, i));
 }
 
 template <typename S>
-static PackedR8 textureLinearPackedR8(S sampler, ivec2 i, int zoffset = 0) {
-  return pack(textureLinearUnpackedR8(sampler, i, zoffset));
+static PackedRGBA8 textureNearestPackedRGBA8(S sampler, ivec2 i) {
+  assert(sampler->format == TextureFormat::RGBA8);
+  I32 row = computeRow(sampler, i, 0);
+  return combine(unaligned_load<V4<uint8_t>>(&sampler->buf[row.x]),
+                 unaligned_load<V4<uint8_t>>(&sampler->buf[row.y]),
+                 unaligned_load<V4<uint8_t>>(&sampler->buf[row.z]),
+                 unaligned_load<V4<uint8_t>>(&sampler->buf[row.w]));
 }
 
 template <typename S>
-static WideRG8 textureLinearUnpackedRG8(S sampler, ivec2 i, int zoffset = 0) {
+static PackedR8 textureLinearPackedR8(S sampler, ivec2 i) {
+  return pack(textureLinearUnpackedR8(sampler, i));
+}
+
+template <typename S>
+static WideRG8 textureLinearUnpackedRG8(S sampler, ivec2 i) {
   assert(sampler->format == TextureFormat::RG8);
   ivec2 frac = i & 0x7F;
   i >>= 7;
 
-  I32 row0 = computeRow(sampler, i, zoffset);
+  I32 row0 = computeRow(sampler, i);
   I32 row1 = row0 + computeNextRowOffset(sampler, i);
   I16 fracx = computeFracX(sampler, i, frac);
   I16 fracy = computeFracY(frac);
@@ -1107,8 +988,8 @@ static WideRG8 textureLinearUnpackedRG8(S sampler, ivec2 i, int zoffset = 0) {
 }
 
 template <typename S>
-static PackedRG8 textureLinearPackedRG8(S sampler, ivec2 i, int zoffset = 0) {
-  return pack(textureLinearUnpackedRG8(sampler, i, zoffset));
+static PackedRG8 textureLinearPackedRG8(S sampler, ivec2 i) {
+  return pack(textureLinearUnpackedRG8(sampler, i));
 }
 
 template <int N>
@@ -1121,7 +1002,7 @@ static ALWAYS_INLINE VectorType<uint16_t, N> addsat(VectorType<uint16_t, N> x,
 template <typename P, typename S>
 static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurHorizontal(
     S sampler, const ivec2_scalar& i, int minX, int maxX, int radius,
-    float coeff, float coeffStep, int zoffset = 0) {
+    float coeff, float coeffStep) {
   // Packed and unpacked vectors for a chunk of the given pixel type.
   typedef VectorType<uint8_t, 4 * sizeof(P)> packed_type;
   typedef VectorType<uint16_t, 4 * sizeof(P)> unpacked_type;
@@ -1132,7 +1013,7 @@ static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurHorizontal(
   coeff *= 1 << 8;
   float coeffStep2 = coeffStep * coeffStep;
 
-  int row = computeRow(sampler, i, zoffset);
+  int row = computeRow(sampler, i);
   P* buf = (P*)sampler->buf;
   auto pixelsRight = unaligned_load<V4<P>>(&buf[row]);
   auto pixelsLeft = pixelsRight;
@@ -1146,9 +1027,13 @@ static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurHorizontal(
   // texture bounds, we compute the valid radius that doesn't require clamping
   // and fall back to a slower clamping loop outside of that valid radius.
   int offset = 1;
+  // The left bound is how much we can offset the sample before the start of
+  // the row bounds.
   int leftBound = i.x - max(minX, 0);
-  int rightBound = min(maxX, sampler->width) - (i.x + 4);
-  int validRadius = min(radius, min(leftBound, rightBound));
+  // The right bound is how much we can offset the sample before the end of the
+  // row bounds.
+  int rightBound = min(maxX, sampler->width - 1) - i.x;
+  int validRadius = min(radius, min(leftBound, rightBound - (4 - 1)));
   for (; offset <= validRadius; offset++) {
     // Overwrite the pixel that needs to be shifted out with the new pixel, and
     // shift it into the correct location.
@@ -1191,7 +1076,7 @@ static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurHorizontal(
 template <typename P, typename S>
 static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurVertical(
     S sampler, const ivec2_scalar& i, int minY, int maxY, int radius,
-    float coeff, float coeffStep, int zoffset = 0) {
+    float coeff, float coeffStep) {
   // Packed and unpacked vectors for a chunk of the given pixel type.
   typedef VectorType<uint8_t, 4 * sizeof(P)> packed_type;
   typedef VectorType<uint16_t, 4 * sizeof(P)> unpacked_type;
@@ -1202,7 +1087,7 @@ static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurVertical(
   coeff *= 1 << 8;
   float coeffStep2 = coeffStep * coeffStep;
 
-  int rowAbove = computeRow(sampler, i, zoffset);
+  int rowAbove = computeRow(sampler, i);
   int rowBelow = rowAbove;
   P* buf = (P*)sampler->buf;
   auto pixels = unaligned_load<V4<P>>(&buf[rowAbove]);
@@ -1217,7 +1102,7 @@ static VectorType<uint16_t, 4 * sizeof(P)> gaussianBlurVertical(
   // a slower clamping loop outside of that valid radius.
   int offset = 1;
   int belowBound = i.y - max(minY, 0);
-  int aboveBound = min(maxY, sampler->height) - (i.y + 1);
+  int aboveBound = min(maxY, sampler->height - 1) - i.y;
   int validRadius = min(radius, min(belowBound, aboveBound));
   for (; offset <= validRadius; offset++) {
     rowAbove += sampler->stride;

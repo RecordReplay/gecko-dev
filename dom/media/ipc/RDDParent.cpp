@@ -36,9 +36,7 @@
 #  include "mozilla/Sandbox.h"
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
-#  include "ChildProfilerController.h"
-#endif
+#include "ChildProfilerController.h"
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX)
 #  include "RDDProcessHost.h"
@@ -46,9 +44,13 @@
 #  include "nsMacUtilsImpl.h"
 #endif
 
-#include "ProcessUtils.h"
+#include "mozilla/ipc/ProcessUtils.h"
 #include "nsDebugImpl.h"
 #include "nsThreadManager.h"
+
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+#  include "mozilla/SandboxTestingChild.h"
+#endif
 
 namespace mozilla {
 
@@ -68,7 +70,7 @@ RDDParent* RDDParent::GetSingleton() {
 }
 
 bool RDDParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
-                     MessageLoop* aIOLoop, UniquePtr<IPC::Channel> aChannel) {
+                     mozilla::ipc::ScopedPort aPort) {
   // Initialize the thread manager before starting IPC. Otherwise, messages
   // may be posted to the main thread and we won't be able to process them.
   if (NS_WARN_IF(NS_FAILED(nsThreadManager::get().Init()))) {
@@ -76,7 +78,7 @@ bool RDDParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
   }
 
   // Now it's safe to start IPC.
-  if (NS_WARN_IF(!Open(std::move(aChannel), aParentPid, aIOLoop))) {
+  if (NS_WARN_IF(!Open(std::move(aPort), aParentPid))) {
     return false;
   }
 
@@ -171,9 +173,7 @@ IPCResult RDDParent::RecvUpdateVar(const GfxVarUpdate& aUpdate) {
 
 mozilla::ipc::IPCResult RDDParent::RecvInitProfiler(
     Endpoint<PProfilerChild>&& aEndpoint) {
-#ifdef MOZ_GECKO_PROFILER
   mProfilerController = ChildProfilerController::Create(std::move(aEndpoint));
-#endif
   return IPC_OK();
 }
 
@@ -198,7 +198,6 @@ mozilla::ipc::IPCResult RDDParent::RecvInitVideoBridge(
           Feature::HW_COMPOSITING,
           Feature::D3D11_COMPOSITING,
           Feature::OPENGL_COMPOSITING,
-          Feature::ADVANCED_LAYERS,
           Feature::DIRECT2D,
           Feature::WEBGPU,
       },
@@ -254,6 +253,17 @@ mozilla::ipc::IPCResult RDDParent::RecvPreferenceUpdate(const Pref& aPref) {
   return IPC_OK();
 }
 
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+mozilla::ipc::IPCResult RDDParent::RecvInitSandboxTesting(
+    Endpoint<PSandboxTestingChild>&& aEndpoint) {
+  if (!SandboxTestingChild::Initialize(std::move(aEndpoint))) {
+    return IPC_FAIL(
+        this, "InitSandboxTesting failed to initialise the child process.");
+  }
+  return IPC_OK();
+}
+#endif
+
 void RDDParent::ActorDestroy(ActorDestroyReason aWhy) {
   if (AbnormalShutdown == aWhy) {
     NS_WARNING("Shutting down RDD process early due to a crash!");
@@ -271,7 +281,7 @@ void RDDParent::ActorDestroy(ActorDestroyReason aWhy) {
 
   // Wait until all RemoteDecoderManagerParent have closed.
   mShutdownBlockers.WaitUntilClear(10 * 1000 /* 10s timeout*/)
-      ->Then(GetCurrentSerialEventTarget(), __func__, [this]() {
+      ->Then(GetCurrentSerialEventTarget(), __func__, [&]() {
 
 #ifdef XP_WIN
         wmf::MFShutdown();
@@ -282,12 +292,10 @@ void RDDParent::ActorDestroy(ActorDestroyReason aWhy) {
         dllSvc->DisableFull();
 #endif  // defined(XP_WIN)
 
-#ifdef MOZ_GECKO_PROFILER
         if (mProfilerController) {
           mProfilerController->Shutdown();
           mProfilerController = nullptr;
         }
-#endif
 
         RemoteDecoderManagerParent::ShutdownVideoBridge();
 

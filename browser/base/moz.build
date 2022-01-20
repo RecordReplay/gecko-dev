@@ -28,10 +28,12 @@ BROWSER_CHROME_MANIFESTS += [
     "content/test/forms/browser.ini",
     "content/test/fullscreen/browser.ini",
     "content/test/general/browser.ini",
+    "content/test/gesture/browser.ini",
     "content/test/historySwipeAnimation/browser.ini",
     "content/test/keyboard/browser.ini",
     "content/test/menubar/browser.ini",
     "content/test/metaTags/browser.ini",
+    "content/test/notificationbox/browser.ini",
     "content/test/outOfProcess/browser.ini",
     "content/test/pageActions/browser.ini",
     "content/test/pageinfo/browser.ini",
@@ -61,6 +63,7 @@ BROWSER_CHROME_MANIFESTS += [
     "content/test/touch/browser.ini",
     "content/test/webextensions/browser.ini",
     "content/test/webrtc/browser.ini",
+    "content/test/webrtc/gracePeriod/browser.ini",
     "content/test/webrtc/legacyIndicator/browser.ini",
     "content/test/zoom/browser.ini",
 ]
@@ -81,7 +84,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("windows", "gtk"):
 JAR_MANIFESTS += ["jar.mn"]
 
 GeneratedFile(
-    "content/aboutNetErrorCodes.js",
-    script="gen_aboutneterror_codes.py",
+    "content/certerror/aboutNetErrorCodes.js",
+    script="content/certerror/gen_aboutneterror_codes.py",
     inputs=["/browser/locales/en-US/browser/nsserrors.ftl"],
 )

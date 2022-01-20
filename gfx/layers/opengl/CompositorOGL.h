@@ -48,6 +48,7 @@ class CompositingRenderTarget;
 class CompositingRenderTargetOGL;
 class DataTextureSource;
 class ShaderProgramOGL;
+class ShaderProgramOGLsHolder;
 class TextureSource;
 class TextureSourceOGL;
 class BufferTextureHost;
@@ -108,7 +109,7 @@ class CompositorOGL final : public Compositor {
 
   friend class CompositingRenderTargetOGL;
 
-  std::map<ShaderConfigOGL, ShaderProgramOGL*> mPrograms;
+  RefPtr<ShaderProgramOGLsHolder> mProgramsHolder;
 
  public:
   CompositorOGL(CompositorBridgeParent* aParent,
@@ -129,6 +130,10 @@ class CompositorOGL final : public Compositor {
 
   already_AddRefed<DataTextureSource> CreateDataTextureSourceAround(
       gfx::DataSourceSurface* aSurface) override;
+
+  bool Initialize(GLContext* aGLContext,
+                  RefPtr<ShaderProgramOGLsHolder> aProgramsHolder,
+                  nsCString* const out_failureReason);
 
   bool Initialize(nsCString* const out_failureReason) override;
 
@@ -285,6 +290,7 @@ class CompositorOGL final : public Compositor {
   /** Widget associated with this compositor */
   LayoutDeviceIntSize mWidgetSize;
   RefPtr<GLContext> mGLContext;
+  bool mOwnsGLContext = true;
   RefPtr<SurfacePoolHandle> mSurfacePoolHandle;
   UniquePtr<GLBlitTextureImageHelper> mBlitTextureImageHelper;
   gfx::Matrix4x4 mProjMatrix;
@@ -421,8 +427,6 @@ class CompositorOGL final : public Compositor {
   gfx::Point3D GetLineCoefficients(const gfx::Point& aPoint1,
                                    const gfx::Point& aPoint2);
 
-  void ActivateProgram(ShaderProgramOGL* aProg);
-
   void CleanupResources();
 
   void BindAndDrawQuads(ShaderProgramOGL* aProg, int aQuads,
@@ -519,8 +523,6 @@ class CompositorOGL final : public Compositor {
   gfx::IntSize mViewportSize;
 
   gfx::IntRegion mCurrentFrameInvalidRegion;
-
-  ShaderProgramOGL* mCurrentProgram;
 };
 
 }  // namespace layers

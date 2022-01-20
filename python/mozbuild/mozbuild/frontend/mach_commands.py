@@ -9,12 +9,7 @@ import json
 import os
 import sys
 
-from mach.decorators import (
-    CommandArgument,
-    CommandProvider,
-    Command,
-    SubCommand,
-)
+from mach.decorators import CommandArgument, CommandProvider, Command, SubCommand
 
 from mozbuild.base import MachCommandBase
 import mozpack.path as mozpath
@@ -46,7 +41,7 @@ class MozbuildFileCommands(MachCommandBase):
         action="store_true",
         help="Print symbol names only.",
     )
-    def reference(self, symbol, name_only=False):
+    def reference(self, command_context, symbol, name_only=False):
         # mozbuild.sphinx imports some Sphinx modules, so we need to be sure
         # the optional Sphinx package is installed.
         self.activate_virtualenv()
@@ -101,7 +96,7 @@ class MozbuildFileCommands(MachCommandBase):
     @Command(
         "file-info", category="build-dev", description="Query for metadata about files."
     )
-    def file_info(self):
+    def file_info(self, command_context):
         """Show files metadata derived from moz.build files.
 
         moz.build files contain "Files" sub-contexts for declaring metadata
@@ -124,7 +119,7 @@ class MozbuildFileCommands(MachCommandBase):
         dest="fmt",
     )
     @CommandArgument("paths", nargs="+", help="Paths whose data to query")
-    def file_info_bugzilla(self, paths, rev=None, fmt=None):
+    def file_info_bugzilla(self, command_context, paths, rev=None, fmt=None):
         """Show Bugzilla component for a set of files.
 
         Given a requested set of files (which can be specified using
@@ -135,7 +130,7 @@ class MozbuildFileCommands(MachCommandBase):
             for p, m in self._get_files_info(paths, rev=rev).items():
                 components[m.get("BUG_COMPONENT")].add(p)
         except InvalidPathException as e:
-            print(e.message)
+            print(e)
             return 1
 
         if fmt == "json":
@@ -180,7 +175,7 @@ class MozbuildFileCommands(MachCommandBase):
         help="Output format",
     )
     @CommandArgument("paths", nargs="+", help="Paths whose data to query")
-    def file_info_missing_bugzilla(self, paths, rev=None, fmt=None):
+    def file_info_missing_bugzilla(self, command_context, paths, rev=None, fmt=None):
         missing = set()
 
         try:
@@ -188,7 +183,7 @@ class MozbuildFileCommands(MachCommandBase):
                 if "BUG_COMPONENT" not in m:
                     missing.add(p)
         except InvalidPathException as e:
-            print(e.message)
+            print(e)
             return 1
 
         if fmt == "json":
@@ -207,7 +202,7 @@ class MozbuildFileCommands(MachCommandBase):
         "Perform Bugzilla metadata analysis as required for automation",
     )
     @CommandArgument("out_dir", help="Where to write files")
-    def bugzilla_automation(self, out_dir):
+    def bugzilla_automation(self, command_context, out_dir):
         """Analyze and validate Bugzilla metadata as required by automation.
 
         This will write out JSON and gzipped JSON files for Bugzilla metadata.
@@ -226,7 +221,11 @@ class MozbuildFileCommands(MachCommandBase):
         for p, m in sorted(self._get_files_info(["**"]).items()):
             if "BUG_COMPONENT" not in m:
                 missing_component.add(p)
-                print("Missing Bugzilla component: %s" % p)
+                print(
+                    "FileToBugzillaMappingError: Missing Bugzilla component: "
+                    "%s - Set the BUG_COMPONENT in the moz.build file to fix "
+                    "the issue." % p
+                )
                 continue
 
             c = m["BUG_COMPONENT"]
@@ -333,7 +332,7 @@ class MozbuildFileCommands(MachCommandBase):
         "file-info", "schedules", "Show the combined SCHEDULES for the files listed."
     )
     @CommandArgument("paths", nargs="+", help="Paths whose data to query")
-    def file_info_schedules(self, paths):
+    def file_info_schedules(self, command_context, paths):
         """Show what is scheduled by the given files.
 
         Given a requested set of files (which can be specified using

@@ -26,6 +26,8 @@
 
 #include "mozilla/ContentPrincipal.h"
 #include "mozilla/dom/ScriptLoader.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/ScriptPreloader.h"
 #include "mozilla/SystemPrincipal.h"
 #include "mozilla/scache/StartupCache.h"
@@ -34,7 +36,6 @@
 #include "mozilla/Utf8.h"  // mozilla::Utf8Unit
 #include "nsContentUtils.h"
 #include "nsString.h"
-#include "GeckoProfiler.h"
 
 using namespace mozilla::scache;
 using namespace JS;
@@ -119,25 +120,6 @@ static void ReportError(JSContext* cx, const char* origMsg, nsIURI* uri) {
   msg.AppendLiteral(": ");
   msg.Append(spec);
   ReportError(cx, msg);
-}
-
-static void FillCompileOptions(JS::CompileOptions& options, const char* uriStr,
-                               bool wantGlobalScript, bool wantReturnValue) {
-  options.setFileAndLine(uriStr, 1).setNoScriptRval(!wantReturnValue);
-
-  // This presumes that no one else might be compiling a script for this
-  // (URL, syntactic-or-not) key *not* using UTF-8.  Seeing as JS source can
-  // only be compiled as UTF-8 or UTF-16 now -- there isn't a JSAPI function to
-  // compile Latin-1 now -- this presumption seems relatively safe.
-  //
-  // This also presumes that lazy parsing is disabled, for the sake of the
-  // startup cache.  If lazy parsing is ever enabled for pertinent scripts that
-  // pass through here, we may need to disable lazy source for them.
-  options.setSourceIsLazy(true);
-
-  if (!wantGlobalScript) {
-    options.setNonSyntacticScope(true);
-  }
 }
 
 static JSScript* PrepareScript(nsIURI* uri, JSContext* cx,
@@ -418,7 +400,10 @@ nsresult mozJSSubScriptLoader::DoLoadSubScriptWithOptions(
   NS_LossyConvertUTF16toASCII asciiUrl(url);
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING_NONSENSITIVE(
       "mozJSSubScriptLoader::DoLoadSubScriptWithOptions", OTHER, asciiUrl);
-  AUTO_PROFILER_MARKER_TEXT("SubScript", JS, MarkerStack::Capture(), asciiUrl);
+  AUTO_PROFILER_MARKER_TEXT("SubScript", JS,
+                            MarkerOptions(MarkerStack::Capture(),
+                                          MarkerInnerWindowIdFromJSContext(cx)),
+                            asciiUrl);
 
   // Make sure to explicitly create the URI, since we'll need the
   // canonicalized spec.
@@ -446,16 +431,14 @@ nsresult mozJSSubScriptLoader::DoLoadSubScriptWithOptions(
   auto* principal = BasePrincipal::Cast(GetObjectPrincipal(targetObj));
   bool isSystem = principal->Is<SystemPrincipal>();
   if (!isSystem && principal->Is<ContentPrincipal>()) {
-    auto* content = principal->As<ContentPrincipal>();
-
     nsAutoCString scheme;
-    content->mURI->GetScheme(scheme);
+    principal->GetScheme(scheme);
 
     // We want to enable caching for scripts with Activity Stream's
     // codebase URLs.
     if (scheme.EqualsLiteral("about")) {
       nsAutoCString filePath;
-      content->mURI->GetFilePath(filePath);
+      principal->GetFilePath(filePath);
 
       useCompilationScope = filePath.EqualsLiteral("home") ||
                             filePath.EqualsLiteral("newtab") ||
@@ -472,12 +455,18 @@ nsresult mozJSSubScriptLoader::DoLoadSubScriptWithOptions(
   SubscriptCachePath(cx, uri, targetObj, cachePath);
 
   JS::CompileOptions compileOptions(cx);
-  FillCompileOptions(compileOptions, uriStr.get(), JS_IsGlobalObject(targetObj),
-                     options.wantReturnValue);
+  ScriptPreloader::FillCompileOptionsForCachedScript(compileOptions);
+  compileOptions.setFileAndLine(uriStr.get(), 1);
+  compileOptions.setNonSyntacticScope(!JS_IsGlobalObject(targetObj));
+
+  if (options.wantReturnValue) {
+    compileOptions.setNoScriptRval(false);
+  }
 
   RootedScript script(cx);
   if (!options.ignoreCache) {
     if (!options.wantReturnValue) {
+      // NOTE: If we need the return value, we cannot use ScriptPreloader.
       script = ScriptPreloader::GetSingleton().GetCachedScript(
           cx, compileOptions, cachePath);
     }

@@ -3,20 +3,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::{
-    backend,
+    backend, conv,
     device::{Device, DeviceDescriptor},
     hub::{GfxBackend, Global, GlobalIdentityHandlerFactory, Input, Token},
     id::{AdapterId, DeviceId, SurfaceId, Valid},
-    span, LabelHelpers, LifeGuard, PrivateFeatures, Stored, MAX_BIND_GROUPS,
+    LabelHelpers, LifeGuard, PrivateFeatures, Stored, DOWNLEVEL_WARNING_MESSAGE, MAX_BIND_GROUPS,
 };
 
 use wgt::{Backend, BackendBit, PowerPreference, BIND_BUFFER_ALIGNMENT};
 
 use hal::{
-    adapter::{AdapterInfo as HalAdapterInfo, DeviceType as HalDeviceType, PhysicalDevice as _},
-    queue::QueueFamily as _,
-    window::Surface as _,
-    Instance as _,
+    adapter::PhysicalDevice as _, queue::QueueFamily as _, window::Surface as _, Instance as _,
 };
 use thiserror::Error;
 
@@ -119,112 +116,318 @@ impl crate::hub::Resource for Surface {
     }
 }
 
+const FEATURE_MAP: &[(wgt::Features, hal::Features)] = &[
+    (wgt::Features::DEPTH_CLAMPING, hal::Features::DEPTH_CLAMP),
+    (
+        wgt::Features::TEXTURE_COMPRESSION_BC,
+        hal::Features::FORMAT_BC,
+    ),
+    (
+        wgt::Features::TEXTURE_COMPRESSION_ETC2,
+        hal::Features::FORMAT_ETC2,
+    ),
+    (
+        wgt::Features::TEXTURE_COMPRESSION_ASTC_LDR,
+        hal::Features::FORMAT_ASTC_LDR,
+    ),
+    (
+        wgt::Features::SAMPLED_TEXTURE_BINDING_ARRAY,
+        hal::Features::TEXTURE_DESCRIPTOR_ARRAY,
+    ),
+    (
+        wgt::Features::SAMPLED_TEXTURE_ARRAY_DYNAMIC_INDEXING,
+        hal::Features::SHADER_SAMPLED_IMAGE_ARRAY_DYNAMIC_INDEXING,
+    ),
+    (
+        wgt::Features::SAMPLED_TEXTURE_ARRAY_NON_UNIFORM_INDEXING,
+        hal::Features::SAMPLED_TEXTURE_DESCRIPTOR_INDEXING,
+    ),
+    (
+        wgt::Features::UNSIZED_BINDING_ARRAY,
+        hal::Features::UNSIZED_DESCRIPTOR_ARRAY,
+    ),
+    (
+        wgt::Features::MULTI_DRAW_INDIRECT,
+        hal::Features::MULTI_DRAW_INDIRECT,
+    ),
+    (
+        wgt::Features::MULTI_DRAW_INDIRECT_COUNT,
+        hal::Features::DRAW_INDIRECT_COUNT,
+    ),
+    (
+        wgt::Features::NON_FILL_POLYGON_MODE,
+        hal::Features::NON_FILL_POLYGON_MODE,
+    ),
+    (
+        wgt::Features::PIPELINE_STATISTICS_QUERY,
+        hal::Features::PIPELINE_STATISTICS_QUERY,
+    ),
+    (wgt::Features::SHADER_FLOAT64, hal::Features::SHADER_FLOAT64),
+    (
+        wgt::Features::CONSERVATIVE_RASTERIZATION,
+        hal::Features::CONSERVATIVE_RASTERIZATION,
+    ),
+    (
+        wgt::Features::BUFFER_BINDING_ARRAY,
+        hal::Features::BUFFER_DESCRIPTOR_ARRAY,
+    ),
+    (
+        wgt::Features::UNIFORM_BUFFER_ARRAY_DYNAMIC_INDEXING,
+        hal::Features::SHADER_UNIFORM_BUFFER_ARRAY_DYNAMIC_INDEXING,
+    ),
+    (
+        wgt::Features::UNIFORM_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+        hal::Features::UNIFORM_BUFFER_DESCRIPTOR_INDEXING,
+    ),
+    (
+        wgt::Features::STORAGE_BUFFER_ARRAY_DYNAMIC_INDEXING,
+        hal::Features::SHADER_STORAGE_BUFFER_ARRAY_DYNAMIC_INDEXING,
+    ),
+    (
+        wgt::Features::STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+        hal::Features::STORAGE_BUFFER_DESCRIPTOR_INDEXING,
+    ),
+    (
+        wgt::Features::VERTEX_WRITABLE_STORAGE,
+        hal::Features::VERTEX_STORES_AND_ATOMICS,
+    ),
+    (
+        wgt::Features::ADDRESS_MODE_CLAMP_TO_BORDER,
+        hal::Features::SAMPLER_BORDER_COLOR,
+    ),
+];
+
 #[derive(Debug)]
 pub struct Adapter<B: hal::Backend> {
     pub(crate) raw: hal::adapter::Adapter<B>,
     features: wgt::Features,
+    pub(crate) private_features: PrivateFeatures,
     limits: wgt::Limits,
+    downlevel: wgt::DownlevelProperties,
     life_guard: LifeGuard,
 }
 
 impl<B: GfxBackend> Adapter<B> {
     fn new(raw: hal::adapter::Adapter<B>) -> Self {
-        span!(_guard, INFO, "Adapter::new");
+        profiling::scope!("new", "Adapter");
 
         let adapter_features = raw.physical_device.features();
+        let properties = raw.physical_device.properties();
 
         let mut features = wgt::Features::default()
             | wgt::Features::MAPPABLE_PRIMARY_BUFFERS
-            | wgt::Features::PUSH_CONSTANTS;
+            | wgt::Features::PUSH_CONSTANTS
+            | wgt::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgt::Features::CLEAR_COMMANDS;
+        for &(hi, lo) in FEATURE_MAP.iter() {
+            features.set(hi, adapter_features.contains(lo));
+        }
         features.set(
-            wgt::Features::DEPTH_CLAMPING,
-            adapter_features.contains(hal::Features::DEPTH_CLAMP),
+            wgt::Features::TIMESTAMP_QUERY,
+            properties.limits.timestamp_compute_and_graphics,
         );
-        features.set(
-            wgt::Features::TEXTURE_COMPRESSION_BC,
-            adapter_features.contains(hal::Features::FORMAT_BC),
-        );
-        features.set(
-            wgt::Features::SAMPLED_TEXTURE_BINDING_ARRAY,
-            adapter_features.contains(hal::Features::TEXTURE_DESCRIPTOR_ARRAY),
-        );
-        features.set(
-            wgt::Features::SAMPLED_TEXTURE_ARRAY_DYNAMIC_INDEXING,
-            adapter_features.contains(hal::Features::SHADER_SAMPLED_IMAGE_ARRAY_DYNAMIC_INDEXING),
-        );
-        features.set(
-            wgt::Features::SAMPLED_TEXTURE_ARRAY_NON_UNIFORM_INDEXING,
-            adapter_features.contains(hal::Features::SAMPLED_TEXTURE_DESCRIPTOR_INDEXING),
-        );
-        features.set(
-            wgt::Features::UNSIZED_BINDING_ARRAY,
-            adapter_features.contains(hal::Features::UNSIZED_DESCRIPTOR_ARRAY),
-        );
-        features.set(
-            wgt::Features::MULTI_DRAW_INDIRECT,
-            adapter_features.contains(hal::Features::MULTI_DRAW_INDIRECT),
-        );
-        features.set(
-            wgt::Features::MULTI_DRAW_INDIRECT_COUNT,
-            adapter_features.contains(hal::Features::DRAW_INDIRECT_COUNT),
-        );
-        features.set(
-            wgt::Features::NON_FILL_POLYGON_MODE,
-            adapter_features.contains(hal::Features::NON_FILL_POLYGON_MODE),
-        );
-        #[cfg(not(target_os = "ios"))]
-        //TODO: https://github.com/gfx-rs/gfx/issues/3346
-        features.set(wgt::Features::ADDRESS_MODE_CLAMP_TO_BORDER, true);
 
-        let adapter_limits = raw.physical_device.limits();
+        let private_features = PrivateFeatures {
+            anisotropic_filtering: adapter_features.contains(hal::Features::SAMPLER_ANISOTROPY),
+            texture_d24: raw
+                .physical_device
+                .format_properties(Some(hal::format::Format::X8D24Unorm))
+                .optimal_tiling
+                .contains(hal::format::ImageFeature::DEPTH_STENCIL_ATTACHMENT),
+            texture_d24_s8: raw
+                .physical_device
+                .format_properties(Some(hal::format::Format::D24UnormS8Uint))
+                .optimal_tiling
+                .contains(hal::format::ImageFeature::DEPTH_STENCIL_ATTACHMENT),
+        };
 
         let default_limits = wgt::Limits::default();
 
         // All these casts to u32 are safe as the underlying vulkan types are u32s.
         // If another backend provides larger limits than u32, we need to clamp them to u32::MAX.
         // TODO: fix all gfx-hal backends to produce limits we care about, and remove .max
+        let desc_limits = &properties.limits.descriptor_limits;
         let limits = wgt::Limits {
-            max_bind_groups: (adapter_limits.max_bound_descriptor_sets as u32)
+            max_texture_dimension_1d: properties
+                .limits
+                .max_image_1d_size
+                .max(default_limits.max_texture_dimension_1d),
+            max_texture_dimension_2d: properties
+                .limits
+                .max_image_2d_size
+                .max(default_limits.max_texture_dimension_1d),
+            max_texture_dimension_3d: properties
+                .limits
+                .max_image_3d_size
+                .max(default_limits.max_texture_dimension_1d),
+            max_texture_array_layers: (properties.limits.max_image_array_layers as u32)
+                .max(default_limits.max_texture_array_layers),
+            max_bind_groups: (properties.limits.max_bound_descriptor_sets as u32)
                 .min(MAX_BIND_GROUPS as u32)
                 .max(default_limits.max_bind_groups),
-            max_dynamic_uniform_buffers_per_pipeline_layout: (adapter_limits
+            max_dynamic_uniform_buffers_per_pipeline_layout: desc_limits
                 .max_descriptor_set_uniform_buffers_dynamic
-                as u32)
                 .max(default_limits.max_dynamic_uniform_buffers_per_pipeline_layout),
-            max_dynamic_storage_buffers_per_pipeline_layout: (adapter_limits
+            max_dynamic_storage_buffers_per_pipeline_layout: desc_limits
                 .max_descriptor_set_storage_buffers_dynamic
-                as u32)
                 .max(default_limits.max_dynamic_storage_buffers_per_pipeline_layout),
-            max_sampled_textures_per_shader_stage: (adapter_limits
+            max_sampled_textures_per_shader_stage: desc_limits
                 .max_per_stage_descriptor_sampled_images
-                as u32)
                 .max(default_limits.max_sampled_textures_per_shader_stage),
-            max_samplers_per_shader_stage: (adapter_limits.max_per_stage_descriptor_samplers
-                as u32)
+            max_samplers_per_shader_stage: desc_limits
+                .max_per_stage_descriptor_samplers
                 .max(default_limits.max_samplers_per_shader_stage),
-            max_storage_buffers_per_shader_stage: (adapter_limits
+            max_storage_buffers_per_shader_stage: desc_limits
                 .max_per_stage_descriptor_storage_buffers
-                as u32)
                 .max(default_limits.max_storage_buffers_per_shader_stage),
-            max_storage_textures_per_shader_stage: (adapter_limits
+            max_storage_textures_per_shader_stage: desc_limits
                 .max_per_stage_descriptor_storage_images
-                as u32)
                 .max(default_limits.max_storage_textures_per_shader_stage),
-            max_uniform_buffers_per_shader_stage: (adapter_limits
+            max_uniform_buffers_per_shader_stage: desc_limits
                 .max_per_stage_descriptor_uniform_buffers
-                as u32)
                 .max(default_limits.max_uniform_buffers_per_shader_stage),
-            max_uniform_buffer_binding_size: (adapter_limits.max_uniform_buffer_range as u32)
+            max_uniform_buffer_binding_size: (properties.limits.max_uniform_buffer_range as u32)
                 .max(default_limits.max_uniform_buffer_binding_size),
-            max_push_constant_size: (adapter_limits.max_push_constants_size as u32)
+            max_storage_buffer_binding_size: (properties.limits.max_storage_buffer_range as u32)
+                .max(default_limits.max_storage_buffer_binding_size),
+            max_vertex_buffers: (properties.limits.max_vertex_input_bindings as u32)
+                .max(default_limits.max_vertex_buffers),
+            max_vertex_attributes: (properties.limits.max_vertex_input_attributes as u32)
+                .max(default_limits.max_vertex_attributes),
+            max_vertex_buffer_array_stride: (properties.limits.max_vertex_input_binding_stride
+                as u32)
+                .max(default_limits.max_vertex_buffer_array_stride),
+            max_push_constant_size: (properties.limits.max_push_constants_size as u32)
                 .max(MIN_PUSH_CONSTANT_SIZE), // As an extension, the default is always 0, so define a separate minimum.
+        };
+
+        let mut downlevel_flags = wgt::DownlevelFlags::empty();
+        downlevel_flags.set(
+            wgt::DownlevelFlags::COMPUTE_SHADERS,
+            properties.downlevel.compute_shaders,
+        );
+        downlevel_flags.set(
+            wgt::DownlevelFlags::STORAGE_IMAGES,
+            properties.downlevel.storage_images,
+        );
+        downlevel_flags.set(
+            wgt::DownlevelFlags::READ_ONLY_DEPTH_STENCIL,
+            properties.downlevel.read_only_depth_stencil,
+        );
+        downlevel_flags.set(
+            wgt::DownlevelFlags::DEVICE_LOCAL_IMAGE_COPIES,
+            properties.downlevel.device_local_image_copies,
+        );
+        downlevel_flags.set(
+            wgt::DownlevelFlags::NON_POWER_OF_TWO_MIPMAPPED_TEXTURES,
+            properties.downlevel.non_power_of_two_mipmapped_textures,
+        );
+        downlevel_flags.set(
+            wgt::DownlevelFlags::CUBE_ARRAY_TEXTURES,
+            adapter_features.contains(hal::Features::IMAGE_CUBE_ARRAY),
+        );
+        downlevel_flags.set(
+            wgt::DownlevelFlags::ANISOTROPIC_FILTERING,
+            private_features.anisotropic_filtering,
+        );
+
+        let downlevel = wgt::DownlevelProperties {
+            flags: downlevel_flags,
+            shader_model: match properties.downlevel.shader_model {
+                hal::DownlevelShaderModel::ShaderModel2 => wgt::ShaderModel::Sm2,
+                hal::DownlevelShaderModel::ShaderModel4 => wgt::ShaderModel::Sm4,
+                hal::DownlevelShaderModel::ShaderModel5 => wgt::ShaderModel::Sm5,
+            },
         };
 
         Self {
             raw,
             features,
+            private_features,
             limits,
+            downlevel,
             life_guard: LifeGuard::new("<Adapter>"),
+        }
+    }
+
+    pub fn get_swap_chain_preferred_format(
+        &self,
+        surface: &mut Surface,
+    ) -> Result<wgt::TextureFormat, GetSwapChainPreferredFormatError> {
+        let formats = {
+            let surface = B::get_surface_mut(surface);
+            let queue_family = &self.raw.queue_families[0];
+            if !surface.supports_queue_family(queue_family) {
+                return Err(GetSwapChainPreferredFormatError::UnsupportedQueueFamily);
+            }
+            surface.supported_formats(&self.raw.physical_device)
+        };
+        if let Some(formats) = formats {
+            // Check the four formats mentioned in the WebGPU spec:
+            // Bgra8UnormSrgb, Rgba8UnormSrgb, Bgra8Unorm, Rgba8Unorm
+            // Also, prefer sRGB over linear as it is better in
+            // representing perceived colors.
+            if formats.contains(&hal::format::Format::Bgra8Srgb) {
+                return Ok(wgt::TextureFormat::Bgra8UnormSrgb);
+            }
+            if formats.contains(&hal::format::Format::Rgba8Srgb) {
+                return Ok(wgt::TextureFormat::Rgba8UnormSrgb);
+            }
+            if formats.contains(&hal::format::Format::Bgra8Unorm) {
+                return Ok(wgt::TextureFormat::Bgra8Unorm);
+            }
+            if formats.contains(&hal::format::Format::Rgba8Unorm) {
+                return Ok(wgt::TextureFormat::Rgba8Unorm);
+            }
+            return Err(GetSwapChainPreferredFormatError::NotFound);
+        }
+
+        // If no formats were returned, use Bgra8UnormSrgb
+        Ok(wgt::TextureFormat::Bgra8UnormSrgb)
+    }
+
+    pub(crate) fn get_texture_format_features(
+        &self,
+        format: wgt::TextureFormat,
+    ) -> wgt::TextureFormatFeatures {
+        let texture_format_properties = self
+            .raw
+            .physical_device
+            .format_properties(Some(conv::map_texture_format(
+                format,
+                self.private_features,
+            )))
+            .optimal_tiling;
+
+        let mut allowed_usages = format.describe().guaranteed_format_features.allowed_usages;
+        if texture_format_properties.contains(hal::format::ImageFeature::SAMPLED) {
+            allowed_usages |= wgt::TextureUsage::SAMPLED;
+        }
+        if texture_format_properties.contains(hal::format::ImageFeature::STORAGE) {
+            allowed_usages |= wgt::TextureUsage::STORAGE;
+        }
+        if texture_format_properties.contains(hal::format::ImageFeature::COLOR_ATTACHMENT) {
+            allowed_usages |= wgt::TextureUsage::RENDER_ATTACHMENT;
+        }
+        if texture_format_properties.contains(hal::format::ImageFeature::DEPTH_STENCIL_ATTACHMENT) {
+            allowed_usages |= wgt::TextureUsage::RENDER_ATTACHMENT;
+        }
+
+        let mut flags = wgt::TextureFormatFeatureFlags::empty();
+        if texture_format_properties.contains(hal::format::ImageFeature::STORAGE_ATOMIC) {
+            flags |= wgt::TextureFormatFeatureFlags::STORAGE_ATOMICS;
+        }
+        if texture_format_properties.contains(hal::format::ImageFeature::STORAGE_READ_WRITE) {
+            flags |= wgt::TextureFormatFeatureFlags::STORAGE_READ_WRITE;
+        }
+
+        let filterable =
+            texture_format_properties.contains(hal::format::ImageFeature::SAMPLED_LINEAR);
+
+        wgt::TextureFormatFeatures {
+            allowed_usages,
+            flags,
+            filterable,
         }
     }
 
@@ -241,13 +444,17 @@ impl<B: GfxBackend> Adapter<B> {
             ));
         }
 
+        if !self.downlevel.is_webgpu_compliant() {
+            log::warn!("{}", DOWNLEVEL_WARNING_MESSAGE);
+        }
+
         // Verify feature preconditions
         if desc
             .features
             .contains(wgt::Features::MAPPABLE_PRIMARY_BUFFERS)
             && self.raw.info.device_type == hal::adapter::DeviceType::DiscreteGpu
         {
-            tracing::warn!("Feature MAPPABLE_PRIMARY_BUFFERS enabled on a discrete gpu. This is a massive performance footgun and likely not what you wanted");
+            log::warn!("Feature MAPPABLE_PRIMARY_BUFFERS enabled on a discrete gpu. This is a massive performance footgun and likely not what you wanted");
         }
 
         let phd = &self.raw.physical_device;
@@ -255,53 +462,24 @@ impl<B: GfxBackend> Adapter<B> {
 
         // Check features that are always needed
         let wishful_features = hal::Features::ROBUST_BUFFER_ACCESS
-            | hal::Features::VERTEX_STORES_AND_ATOMICS
             | hal::Features::FRAGMENT_STORES_AND_ATOMICS
             | hal::Features::NDC_Y_UP
             | hal::Features::INDEPENDENT_BLENDING
             | hal::Features::SAMPLER_ANISOTROPY
-            | hal::Features::IMAGE_CUBE_ARRAY;
+            | hal::Features::IMAGE_CUBE_ARRAY
+            | hal::Features::SAMPLE_RATE_SHADING;
         let mut enabled_features = available_features & wishful_features;
         if enabled_features != wishful_features {
-            tracing::warn!(
+            log::warn!(
                 "Missing internal features: {:?}",
                 wishful_features - enabled_features
             );
         }
 
-        // Features
-        enabled_features.set(
-            hal::Features::TEXTURE_DESCRIPTOR_ARRAY,
-            desc.features
-                .contains(wgt::Features::SAMPLED_TEXTURE_BINDING_ARRAY),
-        );
-        enabled_features.set(
-            hal::Features::SHADER_SAMPLED_IMAGE_ARRAY_DYNAMIC_INDEXING,
-            desc.features
-                .contains(wgt::Features::SAMPLED_TEXTURE_ARRAY_DYNAMIC_INDEXING),
-        );
-        enabled_features.set(
-            hal::Features::SAMPLED_TEXTURE_DESCRIPTOR_INDEXING,
-            desc.features
-                .contains(wgt::Features::SAMPLED_TEXTURE_ARRAY_NON_UNIFORM_INDEXING),
-        );
-        enabled_features.set(
-            hal::Features::UNSIZED_DESCRIPTOR_ARRAY,
-            desc.features.contains(wgt::Features::UNSIZED_BINDING_ARRAY),
-        );
-        enabled_features.set(
-            hal::Features::MULTI_DRAW_INDIRECT,
-            desc.features.contains(wgt::Features::MULTI_DRAW_INDIRECT),
-        );
-        enabled_features.set(
-            hal::Features::DRAW_INDIRECT_COUNT,
-            desc.features
-                .contains(wgt::Features::MULTI_DRAW_INDIRECT_COUNT),
-        );
-        enabled_features.set(
-            hal::Features::NON_FILL_POLYGON_MODE,
-            desc.features.contains(wgt::Features::NON_FILL_POLYGON_MODE),
-        );
+        // Enable low-level features
+        for &(hi, lo) in FEATURE_MAP.iter() {
+            enabled_features.set(lo, desc.features.contains(hi));
+        }
 
         let family = self
             .raw
@@ -309,6 +487,7 @@ impl<B: GfxBackend> Adapter<B> {
             .iter()
             .find(|family| family.queue_type().supports_graphics())
             .ok_or(RequestDeviceError::NoGraphicsQueue)?;
+
         let mut gpu =
             unsafe { phd.open(&[(family, &[1.0])], enabled_features) }.map_err(|err| {
                 use hal::device::CreationError::*;
@@ -324,7 +503,7 @@ impl<B: GfxBackend> Adapter<B> {
             //TODO
         }
 
-        let limits = phd.limits();
+        let limits = phd.properties().limits;
         assert_eq!(
             0,
             BIND_BUFFER_ALIGNMENT % limits.min_storage_buffer_offset_alignment,
@@ -340,21 +519,6 @@ impl<B: GfxBackend> Adapter<B> {
         }
 
         let mem_props = phd.memory_properties();
-        if !desc.shader_validation {
-            tracing::warn!("Shader validation is disabled");
-        }
-        let private_features = PrivateFeatures {
-            shader_validation: desc.shader_validation,
-            anisotropic_filtering: enabled_features.contains(hal::Features::SAMPLER_ANISOTROPY),
-            texture_d24: phd
-                .format_properties(Some(hal::format::Format::X8D24Unorm))
-                .optimal_tiling
-                .contains(hal::format::ImageFeature::DEPTH_STENCIL_ATTACHMENT),
-            texture_d24_s8: phd
-                .format_properties(Some(hal::format::Format::D24UnormS8Uint))
-                .optimal_tiling
-                .contains(hal::format::ImageFeature::DEPTH_STENCIL_ATTACHMENT),
-        };
 
         Device::new(
             gpu.device,
@@ -365,7 +529,8 @@ impl<B: GfxBackend> Adapter<B> {
             gpu.queue_groups.swap_remove(0),
             mem_props,
             limits,
-            private_features,
+            self.private_features,
+            self.downlevel,
             desc,
             trace_path,
         )
@@ -381,40 +546,16 @@ impl<B: hal::Backend> crate::hub::Resource for Adapter<B> {
     }
 }
 
-/// Metadata about a backend adapter.
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
-pub struct AdapterInfo {
-    /// Adapter name
-    pub name: String,
-    /// Vendor PCI id of the adapter
-    pub vendor: usize,
-    /// PCI id of the adapter
-    pub device: usize,
-    /// Type of device
-    pub device_type: DeviceType,
-    /// Backend used for device
-    pub backend: Backend,
-}
-
-impl AdapterInfo {
-    fn from_gfx(adapter_info: HalAdapterInfo, backend: Backend) -> Self {
-        let HalAdapterInfo {
-            name,
-            vendor,
-            device,
-            device_type,
-        } = adapter_info;
-
-        Self {
-            name,
-            vendor,
-            device,
-            device_type: device_type.into(),
-            backend,
-        }
-    }
+#[derive(Clone, Debug, Error)]
+pub enum GetSwapChainPreferredFormatError {
+    #[error("no suitable format found")]
+    NotFound,
+    #[error("invalid adapter")]
+    InvalidAdapter,
+    #[error("invalid surface")]
+    InvalidSurface,
+    #[error("surface does not support the adapter's queue family")]
+    UnsupportedQueueFamily,
 }
 
 #[derive(Clone, Debug, Error)]
@@ -434,36 +575,6 @@ pub enum RequestDeviceError {
     OutOfMemory,
     #[error("unsupported features were requested: {0:?}")]
     UnsupportedFeature(wgt::Features),
-}
-
-/// Supported physical device types.
-#[repr(u8)]
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
-pub enum DeviceType {
-    /// Other.
-    Other,
-    /// Integrated GPU with shared CPU/GPU memory.
-    IntegratedGpu,
-    /// Discrete GPU with separate CPU/GPU memory.
-    DiscreteGpu,
-    /// Virtual / Hosted.
-    VirtualGpu,
-    /// Cpu / Software Rendering.
-    Cpu,
-}
-
-impl From<HalDeviceType> for DeviceType {
-    fn from(device_type: HalDeviceType) -> Self {
-        match device_type {
-            HalDeviceType::Other => Self::Other,
-            HalDeviceType::IntegratedGpu => Self::IntegratedGpu,
-            HalDeviceType::DiscreteGpu => Self::DiscreteGpu,
-            HalDeviceType::VirtualGpu => Self::VirtualGpu,
-            HalDeviceType::Cpu => Self::Cpu,
-        }
-    }
 }
 
 pub enum AdapterInputs<'a, I> {
@@ -486,8 +597,8 @@ impl<I: Clone> AdapterInputs<'_, I> {
     }
 }
 
-#[error("adapter is invalid")]
 #[derive(Clone, Debug, Error)]
+#[error("adapter is invalid")]
 pub struct InvalidAdapter;
 
 #[derive(Clone, Debug, Error)]
@@ -505,7 +616,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         handle: &impl raw_window_handle::HasRawWindowHandle,
         id_in: Input<G, SurfaceId>,
     ) -> SurfaceId {
-        span!(_guard, INFO, "Instance::create_surface");
+        profiling::scope!("create_surface", "Instance");
 
         let surface = unsafe {
             backends_map! {
@@ -513,7 +624,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                     inst
                     .as_ref()
                     .and_then(|inst| inst.create_surface(handle).map_err(|e| {
-                        tracing::warn!("Error: {:?}", e);
+                        log::warn!("Error: {:?}", e);
                     }).ok())
                 };
 
@@ -533,19 +644,40 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         };
 
         let mut token = Token::root();
-        let id = self.surfaces.register_identity(id_in, surface, &mut token);
+        let id = self.surfaces.prepare(id_in).assign(surface, &mut token);
+        id.0
+    }
+
+    #[cfg(metal)]
+    pub fn instance_create_surface_metal(
+        &self,
+        layer: *mut std::ffi::c_void,
+        id_in: Input<G, SurfaceId>,
+    ) -> SurfaceId {
+        profiling::scope!("create_surface_metal", "Instance");
+
+        let surface = Surface {
+            metal: self.instance.metal.as_ref().map(|inst| {
+                // we don't want to link to metal-rs for this
+                #[allow(clippy::transmute_ptr_to_ref)]
+                inst.create_surface_from_layer(unsafe { std::mem::transmute(layer) })
+            }),
+        };
+
+        let mut token = Token::root();
+        let id = self.surfaces.prepare(id_in).assign(surface, &mut token);
         id.0
     }
 
     pub fn surface_drop(&self, id: SurfaceId) {
-        span!(_guard, INFO, "Surface::drop");
+        profiling::scope!("drop", "Surface");
         let mut token = Token::root();
         let (surface, _) = self.surfaces.unregister(id, &mut token);
         self.instance.destroy_surface(surface.unwrap());
     }
 
     pub fn enumerate_adapters(&self, inputs: AdapterInputs<Input<G, AdapterId>>) -> Vec<AdapterId> {
-        span!(_guard, INFO, "Instance::enumerate_adapters");
+        profiling::scope!("enumerate_adapters", "Instance");
 
         let instance = &self.instance;
         let mut token = Token::root();
@@ -553,17 +685,15 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
 
         backends_map! {
             let map = |(instance_field, backend, backend_info, backend_hub)| {
-                if let Some(inst) = instance_field {
+                if let Some(ref inst) = *instance_field {
                     let hub = backend_hub(self);
                     if let Some(id_backend) = inputs.find(backend) {
                         for raw in inst.enumerate_adapters() {
                             let adapter = Adapter::new(raw);
-                            tracing::info!("Adapter {} {:?}", backend_info, adapter.raw.info);
-                            let id = hub.adapters.register_identity(
-                                id_backend.clone(),
-                                adapter,
-                                &mut token,
-                            );
+                            log::info!("Adapter {} {:?}", backend_info, adapter.raw.info);
+                            let id = hub.adapters
+                                .prepare(id_backend.clone())
+                                .assign(adapter, &mut token);
                             adapters.push(id.0);
                         }
                     }
@@ -590,7 +720,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         desc: &RequestAdapterOptions,
         inputs: AdapterInputs<Input<G, AdapterId>>,
     ) -> Result<AdapterId, RequestAdapterError> {
-        span!(_guard, INFO, "Instance::pick_adapter");
+        profiling::scope!("pick_adapter", "Instance");
 
         let instance = &self.instance;
         let mut token = Token::root();
@@ -613,7 +743,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
 
         backends_map! {
             let map = |(instance_backend, id_backend, surface_backend)| {
-                match instance_backend {
+                match *instance_backend {
                     Some(ref inst) if id_backend.is_some() => {
                         let mut adapters = inst.enumerate_adapters();
                         if let Some(surface_backend) = compatible_surface.and_then(surface_backend) {
@@ -674,7 +804,8 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             return Err(RequestAdapterError::NotFound);
         }
 
-        let (mut integrated, mut discrete, mut virt, mut other) = (None, None, None, None);
+        let (mut integrated, mut discrete, mut virt, mut cpu, mut other) =
+            (None, None, None, None, None);
 
         for (i, ty) in device_types.into_iter().enumerate() {
             match ty {
@@ -687,15 +818,18 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 hal::adapter::DeviceType::VirtualGpu => {
                     virt = virt.or(Some(i));
                 }
-                _ => {
+                hal::adapter::DeviceType::Cpu => {
+                    cpu = cpu.or(Some(i));
+                }
+                hal::adapter::DeviceType::Other => {
                     other = other.or(Some(i));
                 }
             }
         }
 
         let preferred_gpu = match desc.power_preference {
-            PowerPreference::LowPower => integrated.or(other).or(discrete).or(virt),
-            PowerPreference::HighPerformance => discrete.or(other).or(integrated).or(virt),
+            PowerPreference::LowPower => integrated.or(other).or(discrete).or(virt).or(cpu),
+            PowerPreference::HighPerformance => discrete.or(other).or(integrated).or(virt).or(cpu),
         };
 
         let mut selected = preferred_gpu.unwrap_or(0);
@@ -704,12 +838,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             let map = |(info_adapter, id_backend, mut adapters_backend, backend_hub)| {
                 if selected < adapters_backend.len() {
                     let adapter = Adapter::new(adapters_backend.swap_remove(selected));
-                    tracing::info!("Adapter {} {:?}", info_adapter, adapter.raw.info);
-                    let id = backend_hub(self).adapters.register_identity(
-                        id_backend.take().unwrap(),
-                        adapter,
-                        &mut token,
-                    );
+                    log::info!("Adapter {} {:?}", info_adapter, adapter.raw.info);
+                    let id = backend_hub(self).adapters
+                        .prepare(id_backend.take().unwrap())
+                        .assign(adapter, &mut token);
                     return Ok(id.0);
                 }
                 selected -= adapters_backend.len();
@@ -724,7 +856,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             #[cfg(dx11)]
             map(("Dx11", &mut id_dx11, adapters_dx11, backend::Dx11::hub)),
             #[cfg(gl)]
-            map(("GL", &mut id_dx11, adapters_gl, backend::Gl::hub)),
+            map(("GL", &mut id_gl, adapters_gl, backend::Gl::hub)),
         }
 
         let _ = (
@@ -735,22 +867,34 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             id_dx11.take(),
             id_gl.take(),
         );
-        tracing::warn!("Some adapters are present, but enumerating them failed!");
+        log::warn!("Some adapters are present, but enumerating them failed!");
         Err(RequestAdapterError::NotFound)
     }
 
     pub fn adapter_get_info<B: GfxBackend>(
         &self,
         adapter_id: AdapterId,
-    ) -> Result<AdapterInfo, InvalidAdapter> {
-        span!(_guard, INFO, "Adapter::get_info");
-
+    ) -> Result<wgt::AdapterInfo, InvalidAdapter> {
         let hub = B::hub(self);
         let mut token = Token::root();
         let (adapter_guard, _) = hub.adapters.read(&mut token);
         adapter_guard
             .get(adapter_id)
-            .map(|adapter| AdapterInfo::from_gfx(adapter.raw.info.clone(), adapter_id.backend()))
+            .map(|adapter| conv::map_adapter_info(adapter.raw.info.clone(), adapter_id.backend()))
+            .map_err(|_| InvalidAdapter)
+    }
+
+    pub fn adapter_get_texture_format_features<B: GfxBackend>(
+        &self,
+        adapter_id: AdapterId,
+        format: wgt::TextureFormat,
+    ) -> Result<wgt::TextureFormatFeatures, InvalidAdapter> {
+        let hub = B::hub(self);
+        let mut token = Token::root();
+        let (adapter_guard, _) = hub.adapters.read(&mut token);
+        adapter_guard
+            .get(adapter_id)
+            .map(|adapter| adapter.get_texture_format_features(format))
             .map_err(|_| InvalidAdapter)
     }
 
@@ -758,8 +902,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         &self,
         adapter_id: AdapterId,
     ) -> Result<wgt::Features, InvalidAdapter> {
-        span!(_guard, INFO, "Adapter::features");
-
         let hub = B::hub(self);
         let mut token = Token::root();
         let (adapter_guard, _) = hub.adapters.read(&mut token);
@@ -773,8 +915,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         &self,
         adapter_id: AdapterId,
     ) -> Result<wgt::Limits, InvalidAdapter> {
-        span!(_guard, INFO, "Adapter::limits");
-
         let hub = B::hub(self);
         let mut token = Token::root();
         let (adapter_guard, _) = hub.adapters.read(&mut token);
@@ -784,23 +924,33 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             .map_err(|_| InvalidAdapter)
     }
 
+    pub fn adapter_downlevel_properties<B: GfxBackend>(
+        &self,
+        adapter_id: AdapterId,
+    ) -> Result<wgt::DownlevelProperties, InvalidAdapter> {
+        let hub = B::hub(self);
+        let mut token = Token::root();
+        let (adapter_guard, _) = hub.adapters.read(&mut token);
+        adapter_guard
+            .get(adapter_id)
+            .map(|adapter| adapter.downlevel)
+            .map_err(|_| InvalidAdapter)
+    }
+
     pub fn adapter_drop<B: GfxBackend>(&self, adapter_id: AdapterId) {
-        span!(_guard, INFO, "Adapter::drop");
+        profiling::scope!("drop", "Adapter");
 
         let hub = B::hub(self);
         let mut token = Token::root();
         let (mut adapter_guard, _) = hub.adapters.write(&mut token);
 
-        match adapter_guard.get_mut(adapter_id) {
-            Ok(adapter) => {
-                if adapter.life_guard.ref_count.take().unwrap().load() == 1 {
-                    hub.adapters
-                        .unregister_locked(adapter_id, &mut *adapter_guard);
-                }
-            }
-            Err(_) => {
-                hub.adapters.free_id(adapter_id);
-            }
+        let free = match adapter_guard.get_mut(adapter_id) {
+            Ok(adapter) => adapter.life_guard.ref_count.take().unwrap().load() == 1,
+            Err(_) => true,
+        };
+        if free {
+            hub.adapters
+                .unregister_locked(adapter_id, &mut *adapter_guard);
         }
     }
 }
@@ -813,10 +963,11 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         trace_path: Option<&std::path::Path>,
         id_in: Input<G, DeviceId>,
     ) -> (DeviceId, Option<RequestDeviceError>) {
-        span!(_guard, INFO, "Adapter::request_device");
+        profiling::scope!("request_device", "Adapter");
 
         let hub = B::hub(self);
         let mut token = Token::root();
+        let fid = hub.devices.prepare(id_in);
 
         let error = loop {
             let (adapter_guard, mut token) = hub.adapters.read(&mut token);
@@ -828,13 +979,11 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 Ok(device) => device,
                 Err(e) => break e,
             };
-            let id = hub.devices.register_identity(id_in, device, &mut token);
+            let id = fid.assign(device, &mut token);
             return (id.0, None);
         };
 
-        let id = hub
-            .devices
-            .register_error(id_in, desc.label.borrow_or_default(), &mut token);
+        let id = fid.assign_error(desc.label.borrow_or_default(), &mut token);
         (id, Some(error))
     }
 }

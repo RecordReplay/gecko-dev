@@ -10,23 +10,21 @@ var EXPORTED_SYMBOLS = ["WebSocketHandshake"];
 
 const CC = Components.Constructor;
 
-const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
-const { executeSoon } = ChromeUtils.import("chrome://remote/content/Sync.jsm");
-
-XPCOMUtils.defineLazyGetter(this, "WebSocket", () => {
-  return Services.appShell.hiddenDOMWindow.WebSocket;
+XPCOMUtils.defineLazyModuleGetters(this, {
+  executeSoon: "chrome://remote/content/shared/Sync.jsm",
 });
 
-const CryptoHash = CC(
-  "@mozilla.org/security/hash;1",
-  "nsICryptoHash",
-  "initWithString"
-);
-const threadManager = Cc["@mozilla.org/thread-manager;1"].getService();
+XPCOMUtils.defineLazyGetter(this, "CryptoHash", () => {
+  return CC("@mozilla.org/security/hash;1", "nsICryptoHash", "initWithString");
+});
+
+XPCOMUtils.defineLazyGetter(this, "threadManager", () => {
+  return Cc["@mozilla.org/thread-manager;1"].getService();
+});
 
 // TODO(ato): Merge this with httpd.js so that we can respond to both HTTP/1.1
 // as well as WebSocket requests on the same server.
@@ -93,8 +91,8 @@ function processRequest({ requestLine, headers }) {
     !connection ||
     !connection
       .split(",")
-      .map(t => t.trim())
-      .includes("Upgrade")
+      .map(t => t.trim().toLowerCase())
+      .includes("upgrade")
   ) {
     throw new Error("The handshake request has incorrect Connection header");
   }

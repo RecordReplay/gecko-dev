@@ -22,6 +22,7 @@
 #include "nsPoint.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "nsTHashSet.h"
 #include "nsTextFrameUtils.h"
 #include "DrawMode.h"
 #include "harfbuzz/hb.h"
@@ -914,7 +915,7 @@ MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(FallbackTypes)
 
 struct FontMatchingStats {
   // Set of names that have been looked up (whether successfully or not).
-  nsTHashtable<nsCStringHashKey> mFamilyNames;
+  nsTHashSet<nsCString> mFamilyNames;
   // Number of font-family names resolved at each level of visibility.
   uint32_t mBaseFonts = 0;
   uint32_t mLangPackFonts = 0;
@@ -931,7 +932,7 @@ class gfxFontGroup final : public gfxTextRunFactory {
   static void
   Shutdown();  // platform must call this to release the languageAtomService
 
-  gfxFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+  gfxFontGroup(const mozilla::StyleFontFamilyList& aFontFamilyList,
                const gfxFontStyle* aStyle, nsAtom* aLanguage,
                bool aExplicitLanguage, gfxTextPerfMetrics* aTextPerf,
                FontMatchingStats* aFontMatchingStats,
@@ -1048,7 +1049,9 @@ class gfxFontGroup final : public gfxTextRunFactory {
   uint64_t GetRebuildGeneration();
 
   // used when logging text performance
-  gfxTextPerfMetrics* GetTextPerfMetrics() { return mTextPerf; }
+  gfxTextPerfMetrics* GetTextPerfMetrics() const { return mTextPerf; }
+
+  FontMatchingStats* GetFontMatchingStats() const { return mFontMatchingStats; }
 
   // This will call UpdateUserFonts() if the user font set is changed.
   void SetUserFontSet(gfxUserFontSet* aUserFontSet);
@@ -1088,6 +1091,7 @@ class gfxFontGroup final : public gfxTextRunFactory {
       // Forget cached fonts that may no longer be valid.
       mLastPrefFamily = FontFamily();
       mLastPrefFont = nullptr;
+      mDefaultFont = nullptr;
       mFonts.Clear();
       BuildFontList();
     }
@@ -1370,7 +1374,7 @@ class gfxFontGroup final : public gfxTextRunFactory {
 
   // List of font families, either named or generic.
   // Generic names map to system pref fonts based on language.
-  mozilla::FontFamilyList mFamilyList;
+  mozilla::StyleFontFamilyList mFamilyList;
 
   // Fontlist containing a font entry for each family found. gfxFont objects
   // are created as needed and userfont loads are initiated when needed.
@@ -1411,6 +1415,11 @@ class gfxFontGroup final : public gfxTextRunFactory {
                       // timer to fire)
 
   bool mExplicitLanguage;  // Does mLanguage come from an explicit attribute?
+
+  // First CSS generic in the list, if any (used to select among font prefs
+  // during fallback)
+  mozilla::StyleGenericFontFamily mFirstGeneric =
+      mozilla::StyleGenericFontFamily::None;
 
   uint32_t mFontListGeneration = 0;  // platform font list generation for this
                                      // fontgroup

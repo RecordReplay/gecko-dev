@@ -16,12 +16,6 @@ struct _XDisplay;
 typedef struct _XDisplay Display;
 #endif  // MOZ_X11
 
-namespace mozilla {
-namespace dom {
-class SystemFontListEntry;
-};
-};  // namespace mozilla
-
 class gfxPlatformGtk final : public gfxPlatform {
  public:
   gfxPlatformGtk();
@@ -31,8 +25,7 @@ class gfxPlatformGtk final : public gfxPlatform {
     return (gfxPlatformGtk*)gfxPlatform::GetPlatform();
   }
 
-  void ReadSystemFontList(
-      nsTArray<mozilla::dom::SystemFontListEntry>* retValue) override;
+  void ReadSystemFontList(mozilla::dom::SystemFontList* retValue) override;
 
   already_AddRefed<gfxASurface> CreateOffscreenSurface(
       const IntSize& aSize, gfxImageFormat aFormat) override;
@@ -44,12 +37,7 @@ class gfxPlatformGtk final : public gfxPlatform {
                               eFontPresentation aPresentation,
                               nsTArray<const char*>& aFontList) override;
 
-  gfxPlatformFontList* CreatePlatformFontList() override;
-
-  /**
-   * Calls XFlush if xrender is enabled.
-   */
-  void FlushContentDrawing() override;
+  bool CreatePlatformFontList() override;
 
   static int32_t GetFontScaleDPI();
   static double GetFontScaleFactor();
@@ -82,7 +70,7 @@ class gfxPlatformGtk final : public gfxPlatform {
 #endif
 
 #ifdef MOZ_WAYLAND
-  bool UseDMABufWebGL() override { return mUseWebGLDmabufBackend; }
+  bool UseDMABufWebGL() override;
   void DisableDMABufWebGL() { mUseWebGLDmabufBackend = false; }
 #endif
 
@@ -92,8 +80,12 @@ class gfxPlatformGtk final : public gfxPlatform {
   }
 
  protected:
+  void InitX11EGLConfig();
+  void InitDmabufConfig();
   void InitPlatformGPUProcessPrefs() override;
+  void InitWebRenderConfig() override;
   bool CheckVariationFontSupport() override;
+  void BuildContentDeviceData(mozilla::gfx::ContentDeviceData* aOut) override;
 
   int8_t mMaxGenericSubstitutions;
 

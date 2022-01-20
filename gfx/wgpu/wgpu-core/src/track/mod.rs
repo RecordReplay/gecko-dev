@@ -130,7 +130,7 @@ impl PendingTransition<BufferState> {
         self,
         buf: &'a resource::Buffer<B>,
     ) -> hal::memory::Barrier<'a, B> {
-        tracing::trace!("\tbuffer -> {:?}", self);
+        log::trace!("\tbuffer -> {:?}", self);
         let &(ref target, _) = buf.raw.as_ref().expect("Buffer is destroyed");
         hal::memory::Barrier::Buffer {
             states: conv::map_buffer_state(self.usage.start)
@@ -142,13 +142,22 @@ impl PendingTransition<BufferState> {
     }
 }
 
+impl From<PendingTransition<BufferState>> for UsageConflict {
+    fn from(e: PendingTransition<BufferState>) -> Self {
+        Self::Buffer {
+            id: e.id.0,
+            combined_use: e.usage.end,
+        }
+    }
+}
+
 impl PendingTransition<TextureState> {
     /// Produce the gfx-hal barrier corresponding to the transition.
     pub fn into_hal<'a, B: hal::Backend>(
         self,
         tex: &'a resource::Texture<B>,
     ) -> hal::memory::Barrier<'a, B> {
-        tracing::trace!("\ttexture -> {:?}", self);
+        log::trace!("\ttexture -> {:?}", self);
         let &(ref target, _) = tex.raw.as_ref().expect("Texture is destroyed");
         let aspects = tex.aspects;
         hal::memory::Barrier::Image {
@@ -163,6 +172,17 @@ impl PendingTransition<TextureState> {
                 layer_count: Some(self.selector.layers.end - self.selector.layers.start),
             },
             families: None,
+        }
+    }
+}
+
+impl From<PendingTransition<TextureState>> for UsageConflict {
+    fn from(e: PendingTransition<TextureState>) -> Self {
+        Self::Texture {
+            id: e.id.0,
+            mip_levels: e.selector.levels.start as u32..e.selector.levels.end as u32,
+            array_layers: e.selector.layers.start as u32..e.selector.layers.end as u32,
+            combined_use: e.usage.end,
         }
     }
 }
@@ -195,6 +215,10 @@ impl<S: ResourceState + fmt::Debug> fmt::Debug for ResourceTracker<S> {
     }
 }
 
+#[allow(
+    // Explicit lifetimes are easier to reason about here.
+    clippy::needless_lifetimes,
+)]
 impl<S: ResourceState> ResourceTracker<S> {
     /// Create a new empty tracker.
     pub fn new(backend: wgt::Backend) -> Self {
@@ -315,6 +339,18 @@ impl<S: ResourceState> ResourceTracker<S> {
         }
     }
 
+    fn get<'a>(
+        self_backend: wgt::Backend,
+        map: &'a mut FastHashMap<Index, Resource<S>>,
+        id: Valid<S::Id>,
+    ) -> &'a mut Resource<S> {
+        let (index, epoch, backend) = id.0.unzip();
+        debug_assert_eq!(self_backend, backend);
+        let e = map.get_mut(&index).unwrap();
+        assert_eq!(e.epoch, epoch);
+        e
+    }
+
     /// Extend the usage of a specified resource.
     ///
     /// Returns conflicting transition as an error.
@@ -345,6 +381,21 @@ impl<S: ResourceState> ResourceTracker<S> {
         self.temp.drain(..)
     }
 
+    /// Replace the usage of a specified already tracked resource.
+    /// (panics if the resource is not yet tracked)
+    pub(crate) fn change_replace_tracked(
+        &mut self,
+        id: Valid<S::Id>,
+        selector: S::Selector,
+        usage: S::Usage,
+    ) -> Drain<PendingTransition<S>> {
+        let res = Self::get(self.backend, &mut self.map, id);
+        res.state
+            .change(id, selector, usage, Some(&mut self.temp))
+            .ok();
+        self.temp.drain(..)
+    }
+
     /// Turn the tracking from the "expand" mode into the "replace" one,
     /// installing the selected usage as the "first".
     /// This is a special operation only used by the render pass attachments.
@@ -370,7 +421,12 @@ impl<S: ResourceState> ResourceTracker<S> {
                     e.insert(new.clone());
                 }
                 Entry::Occupied(e) => {
-                    assert_eq!(e.get().epoch, new.epoch);
+                    assert_eq!(
+                        e.get().epoch,
+                        new.epoch,
+                        "ID {:?} wasn't properly removed",
+                        S::Id::zip(index, e.get().epoch, self.backend)
+                    );
                     let id = Valid(S::Id::zip(index, new.epoch, self.backend));
                     e.into_mut().state.merge(id, &new.state, None)?;
                 }
@@ -388,7 +444,12 @@ impl<S: ResourceState> ResourceTracker<S> {
                     e.insert(new.clone());
                 }
                 Entry::Occupied(e) => {
-                    assert_eq!(e.get().epoch, new.epoch);
+                    assert_eq!(
+                        e.get().epoch,
+                        new.epoch,
+                        "ID {:?} wasn't properly removed",
+                        S::Id::zip(index, e.get().epoch, self.backend)
+                    );
                     let id = Valid(S::Id::zip(index, new.epoch, self.backend));
                     e.into_mut()
                         .state
@@ -518,6 +579,7 @@ pub(crate) struct TrackerSet {
     pub compute_pipes: ResourceTracker<PhantomData<id::ComputePipelineId>>,
     pub render_pipes: ResourceTracker<PhantomData<id::RenderPipelineId>>,
     pub bundles: ResourceTracker<PhantomData<id::RenderBundleId>>,
+    pub query_sets: ResourceTracker<PhantomData<id::QuerySetId>>,
 }
 
 impl TrackerSet {
@@ -532,6 +594,7 @@ impl TrackerSet {
             compute_pipes: ResourceTracker::new(backend),
             render_pipes: ResourceTracker::new(backend),
             bundles: ResourceTracker::new(backend),
+            query_sets: ResourceTracker::new(backend),
         }
     }
 
@@ -545,6 +608,7 @@ impl TrackerSet {
         self.compute_pipes.clear();
         self.render_pipes.clear();
         self.bundles.clear();
+        self.query_sets.clear();
     }
 
     /// Try to optimize the tracking representation.
@@ -557,25 +621,21 @@ impl TrackerSet {
         self.compute_pipes.optimize();
         self.render_pipes.optimize();
         self.bundles.optimize();
+        self.query_sets.optimize();
     }
 
     /// Merge all the trackers of another instance by extending
+    /// the usage. Panics on a stateless conflict, returns a conflict otherwise.
+    pub fn merge_extend_all(&mut self, other: &Self) -> Result<(), UsageConflict> {
+        self.buffers.merge_extend(&other.buffers)?;
+        self.textures.merge_extend(&other.textures)?;
+        self.merge_extend_stateless(other);
+        Ok(())
+    }
+
+    /// Merge all the stateless trackers of another instance by extending
     /// the usage. Panics on a conflict.
-    pub fn merge_extend(&mut self, other: &Self) -> Result<(), UsageConflict> {
-        self.buffers
-            .merge_extend(&other.buffers)
-            .map_err(|e| UsageConflict::Buffer {
-                id: e.id.0,
-                combined_use: e.usage.end,
-            })?;
-        self.textures
-            .merge_extend(&other.textures)
-            .map_err(|e| UsageConflict::Texture {
-                id: e.id.0,
-                mip_levels: e.selector.levels.start as u32..e.selector.levels.end as u32,
-                array_layers: e.selector.layers.start as u32..e.selector.layers.end as u32,
-                combined_use: e.usage.end,
-            })?;
+    pub fn merge_extend_stateless(&mut self, other: &Self) {
         self.views.merge_extend(&other.views).unwrap();
         self.bind_groups.merge_extend(&other.bind_groups).unwrap();
         self.samplers.merge_extend(&other.samplers).unwrap();
@@ -584,10 +644,39 @@ impl TrackerSet {
             .unwrap();
         self.render_pipes.merge_extend(&other.render_pipes).unwrap();
         self.bundles.merge_extend(&other.bundles).unwrap();
-        Ok(())
+        self.query_sets.merge_extend(&other.query_sets).unwrap();
     }
 
     pub fn backend(&self) -> wgt::Backend {
         self.buffers.backend
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct StatefulTrackerSubset {
+    pub buffers: ResourceTracker<BufferState>,
+    pub textures: ResourceTracker<TextureState>,
+}
+
+impl StatefulTrackerSubset {
+    /// Create an empty set.
+    pub fn new(backend: wgt::Backend) -> Self {
+        Self {
+            buffers: ResourceTracker::new(backend),
+            textures: ResourceTracker::new(backend),
+        }
+    }
+
+    /// Clear all the trackers.
+    pub fn clear(&mut self) {
+        self.buffers.clear();
+        self.textures.clear();
+    }
+
+    /// Merge all the trackers of another tracker the usage.
+    pub fn merge_extend(&mut self, other: &TrackerSet) -> Result<(), UsageConflict> {
+        self.buffers.merge_extend(&other.buffers)?;
+        self.textures.merge_extend(&other.textures)?;
+        Ok(())
     }
 }

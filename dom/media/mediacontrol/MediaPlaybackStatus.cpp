@@ -73,41 +73,29 @@ void MediaPlaybackStatus::UpdateMediaAudibleState(uint64_t aContextId,
 
 bool MediaPlaybackStatus::IsPlaying() const {
   MOZ_ASSERT(NS_IsMainThread());
-  for (auto iter = mContextInfoMap.ConstIter(); !iter.Done(); iter.Next()) {
-    if (iter.Data()->IsPlaying()) {
-      return true;
-    }
-  }
-  return false;
+  return std::any_of(mContextInfoMap.Values().cbegin(),
+                     mContextInfoMap.Values().cend(),
+                     [](const auto& info) { return info->IsPlaying(); });
 }
 
 bool MediaPlaybackStatus::IsAudible() const {
   MOZ_ASSERT(NS_IsMainThread());
-  for (auto iter = mContextInfoMap.ConstIter(); !iter.Done(); iter.Next()) {
-    if (iter.Data()->IsAudible()) {
-      return true;
-    }
-  }
-  return false;
+  return std::any_of(mContextInfoMap.Values().cbegin(),
+                     mContextInfoMap.Values().cend(),
+                     [](const auto& info) { return info->IsAudible(); });
 }
 
 bool MediaPlaybackStatus::IsAnyMediaBeingControlled() const {
   MOZ_ASSERT(NS_IsMainThread());
-  for (auto iter = mContextInfoMap.ConstIter(); !iter.Done(); iter.Next()) {
-    if (iter.Data()->IsAnyMediaBeingControlled()) {
-      return true;
-    }
-  }
-  return false;
+  return std::any_of(
+      mContextInfoMap.Values().cbegin(), mContextInfoMap.Values().cend(),
+      [](const auto& info) { return info->IsAnyMediaBeingControlled(); });
 }
 
 MediaPlaybackStatus::ContextMediaInfo&
 MediaPlaybackStatus::GetNotNullContextInfo(uint64_t aContextId) {
   MOZ_ASSERT(NS_IsMainThread());
-  if (!mContextInfoMap.Contains(aContextId)) {
-    mContextInfoMap.Put(aContextId, MakeUnique<ContextMediaInfo>(aContextId));
-  }
-  return *(mContextInfoMap.GetValue(aContextId)->get());
+  return *mContextInfoMap.GetOrInsertNew(aContextId, aContextId);
 }
 
 Maybe<uint64_t> MediaPlaybackStatus::GetAudioFocusOwnerContextId() const {
@@ -115,9 +103,9 @@ Maybe<uint64_t> MediaPlaybackStatus::GetAudioFocusOwnerContextId() const {
 }
 
 void MediaPlaybackStatus::ChooseNewContextToOwnAudioFocus() {
-  for (auto iter = mContextInfoMap.ConstIter(); !iter.Done(); iter.Next()) {
-    if (iter.Data()->IsAudible()) {
-      SetOwningAudioFocusContextId(Some(iter.Data()->Id()));
+  for (const auto& info : mContextInfoMap.Values()) {
+    if (info->IsAudible()) {
+      SetOwningAudioFocusContextId(Some(info->Id()));
       return;
     }
   }

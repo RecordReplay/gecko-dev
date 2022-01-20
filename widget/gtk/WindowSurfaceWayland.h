@@ -8,100 +8,19 @@
 #define _MOZILLA_WIDGET_GTK_WINDOW_SURFACE_WAYLAND_H
 
 #include <prthread.h>
+
 #include "gfxImageSurface.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Types.h"
+#include "mozilla/Mutex.h"
 #include "nsWaylandDisplay.h"
 #include "nsWindow.h"
+#include "WaylandShmBuffer.h"
 #include "WindowSurface.h"
-#include "mozilla/Mutex.h"
 
 #define BACK_BUFFER_NUM 3
 
-namespace mozilla {
-namespace widget {
-
-class WindowSurfaceWayland;
-
-// Allocates and owns shared memory for Wayland drawing surface
-class WaylandShmPool {
- public:
-  bool Create(RefPtr<nsWaylandDisplay> aWaylandDisplay, int aSize);
-  void Release();
-  wl_shm_pool* GetShmPool() { return mShmPool; };
-  void* GetImageData() { return mImageData; };
-  void SetImageDataFromPool(class WaylandShmPool* aSourcePool,
-                            int aImageDataSize);
-  WaylandShmPool();
-  ~WaylandShmPool();
-
- private:
-  wl_shm_pool* mShmPool;
-  int mShmPoolFd;
-  int mAllocatedSize;
-  void* mImageData;
-};
-
-// Holds actual graphics data for wl_surface
-class WindowBackBuffer {
- public:
-  explicit WindowBackBuffer(WindowSurfaceWayland* aWindowSurfaceWayland);
-  ~WindowBackBuffer();
-
-  already_AddRefed<gfx::DrawTarget> Lock();
-  bool IsLocked() { return mIsLocked; };
-  void Unlock() { mIsLocked = false; };
-
-  void Attach(wl_surface* aSurface);
-  void Detach(wl_buffer* aBuffer);
-  bool IsAttached() { return mAttached; }
-
-  void Clear();
-  bool Create(int aWidth, int aHeight);
-  bool Resize(int aWidth, int aHeight);
-  bool SetImageDataFromBuffer(class WindowBackBuffer* aSourceBuffer);
-
-  int GetWidth() { return mWidth; };
-  int GetHeight() { return mHeight; };
-
-  wl_buffer* GetWlBuffer() { return mWLBuffer; };
-
-  bool IsMatchingSize(int aWidth, int aHeight) {
-    return aWidth == GetWidth() && aHeight == GetHeight();
-  }
-  bool IsMatchingSize(class WindowBackBuffer* aBuffer) {
-    return aBuffer->IsMatchingSize(GetWidth(), GetHeight());
-  }
-  static gfx::SurfaceFormat GetSurfaceFormat() { return mFormat; }
-
-#ifdef MOZ_LOGGING
-  void DumpToFile(const char* aHint);
-#endif
-
-  RefPtr<nsWaylandDisplay> GetWaylandDisplay();
-
- private:
-  void ReleaseWLBuffer();
-
-  static gfx::SurfaceFormat mFormat;
-  WindowSurfaceWayland* mWindowSurfaceWayland;
-
-  // WaylandShmPool provides actual shared memory we draw into
-  WaylandShmPool mShmPool;
-
-#ifdef MOZ_LOGGING
-  static int mDumpSerial;
-  static char* mDumpDir;
-#endif
-
-  // wl_buffer is a wayland object that encapsulates the shared memory
-  // and passes it to wayland compositor by wl_surface object.
-  wl_buffer* mWLBuffer;
-  int mWidth;
-  int mHeight;
-  bool mAttached;
-  bool mIsLocked;
-};
+namespace mozilla::widget {
 
 class WindowImageSurface {
  public:
@@ -123,7 +42,6 @@ class WindowImageSurface {
 class WindowSurfaceWayland : public WindowSurface {
  public:
   explicit WindowSurfaceWayland(nsWindow* aWindow);
-  ~WindowSurfaceWayland();
 
   // Lock() / Commit() are called by gecko when Firefox
   // wants to display something. Lock() returns a DrawTarget
@@ -139,40 +57,32 @@ class WindowSurfaceWayland : public WindowSurface {
       const LayoutDeviceIntRegion& aRegion) override;
   void Commit(const LayoutDeviceIntRegion& aInvalidRegion) final;
 
-  // It's called from wayland compositor when there's the right
-  // time to send wl_buffer to display. It's no-op if there's no
-  // queued commits.
-  void FrameCallbackHandler();
-
   // Try to commit all queued drawings to Wayland compositor. This is usually
   // called from other routines but can be used to explicitly flush
   // all drawings as we do when wl_buffer is released
-  // (see WindowBackBufferShm::Detach() for instance).
+  // (see WaylandShmBufferShm::Detach() for instance).
   void FlushPendingCommits();
 
   RefPtr<nsWaylandDisplay> GetWaylandDisplay() { return mWaylandDisplay; };
 
-  // Image cache mode can be set by widget.wayland_cache_mode
-  typedef enum {
-    // Cache and clip all drawings, default. It's slowest
-    // but also without any rendered artifacts.
-    CACHE_ALL = 0,
-    // Cache drawing only when back buffer is missing. May produce
-    // some rendering artifacts and flickering when partial screen update
-    // is rendered.
-    CACHE_MISSING = 1,
-    // Don't cache anything, draw only when back buffer is available.
-    CACHE_NONE = 2
-  } RenderingCacheMode;
+  // It's called from wayland compositor when there's the right
+  // time to send wl_buffer to display. It's no-op if there's no
+  // queued commits.
+  static void FrameCallbackHandler(void* aData, struct wl_callback* aCallback,
+                                   uint32_t aTime);
+
+  static void BufferReleaseCallbackHandler(void* aData, wl_buffer* aBuffer);
 
  private:
-  WindowBackBuffer* GetWaylandBuffer();
-  WindowBackBuffer* SetNewWaylandBuffer();
-  WindowBackBuffer* CreateWaylandBuffer(int aWidth, int aHeight);
-  WindowBackBuffer* WaylandBufferFindAvailable(int aWidth, int aHeight);
+  ~WindowSurfaceWayland();
+
+  WaylandShmBuffer* GetWaylandBuffer();
+  WaylandShmBuffer* SetNewWaylandBuffer();
+  WaylandShmBuffer* CreateWaylandBuffer(const LayoutDeviceIntSize& aSize);
+  WaylandShmBuffer* WaylandBufferFindAvailable(
+      const LayoutDeviceIntSize& aSize);
 
   already_AddRefed<gfx::DrawTarget> LockWaylandBuffer();
-  void UnlockWaylandBuffer();
 
   already_AddRefed<gfx::DrawTarget> LockImageSurface(
       const gfx::IntSize& aLockSize);
@@ -180,31 +90,35 @@ class WindowSurfaceWayland : public WindowSurface {
   void CacheImageSurface(const LayoutDeviceIntRegion& aRegion);
   bool CommitImageCacheToWaylandBuffer();
 
-  void DrawDelayedImageCommits(gfx::DrawTarget* aDrawTarget,
+  bool DrawDelayedImageCommits(gfx::DrawTarget* aDrawTarget,
                                LayoutDeviceIntRegion& aWaylandBufferDamage);
   // Return true if we need to sync Wayland events after this call.
   bool FlushPendingCommitsLocked();
 
-  // TODO: Do we need to hold a reference to nsWindow object?
+  void FrameCallbackHandler();
+  void BufferReleaseCallbackHandler(wl_buffer* aBuffer);
+
+  // We can not hold a reference to nsWindow because nsBaseWidget
+  // is not thread-safe
   nsWindow* mWindow;
+
   // Buffer screen rects helps us understand if we operate on
   // the same window size as we're called on WindowSurfaceWayland::Lock().
-  // mLockedScreenRect is window size when our wayland buffer was allocated.
-  LayoutDeviceIntRect mLockedScreenRect;
+  // mMozContainerSize is MozContainer size when our wayland buffer was
+  // allocated.
+  LayoutDeviceIntSize mMozContainerSize;
 
-  // mWLBufferRect is an intersection of mozcontainer widgetsize and
-  // mLockedScreenRect size. It can be different than mLockedScreenRect
-  // during resize when mBounds are updated immediately but actual
-  // GtkWidget size is updated asynchronously (see Bug 1489463).
-  LayoutDeviceIntRect mWLBufferRect;
+  // mWLBufferRect is size of allocated wl_buffer where we paint to.
+  // It needs to match MozContainer widget size.
+  LayoutDeviceIntSize mWLBufferSize;
   RefPtr<nsWaylandDisplay> mWaylandDisplay;
 
   // Actual buffer (backed by wl_buffer) where all drawings go into.
   // Drawn areas are stored at mWaylandBufferDamage and if there's
   // any uncommited drawings which needs to be send to wayland compositor
-  // the mBufferPendingCommit is set.
-  WindowBackBuffer* mWaylandBuffer;
-  WindowBackBuffer* mShmBackupBuffer[BACK_BUFFER_NUM];
+  // the mWLBufferIsDirty is set.
+  RefPtr<WaylandShmBuffer> mWaylandBuffer;
+  RefPtr<WaylandShmBuffer> mShmBackupBuffer[BACK_BUFFER_NUM];
 
   // When mWaylandFullscreenDamage we invalidate whole surface,
   // otherwise partial screen updates (mWaylandBufferDamage) are used.
@@ -215,7 +129,7 @@ class WindowSurfaceWayland : public WindowSurface {
   // Any next commit to wayland compositor will happen when frame callback
   // comes from wayland compositor back as it's the best time to do the commit.
   wl_callback* mFrameCallback;
-  wl_surface* mLastCommittedSurface;
+  int mLastCommittedSurfaceID;
 
   // Cached drawings. If we can't get WaylandBuffer (wl_buffer) at
   // WindowSurfaceWayland::Lock() we direct gecko rendering to
@@ -242,7 +156,7 @@ class WindowSurfaceWayland : public WindowSurface {
 
   // Set when actual WaylandBuffer contains drawings which are not send to
   // wayland compositor yet.
-  bool mBufferPendingCommit;
+  bool mWLBufferIsDirty;
 
   // We can't send WaylandBuffer (wl_buffer) to compositor when gecko
   // is rendering into it (i.e. between WindowSurfaceWayland::Lock() /
@@ -255,15 +169,23 @@ class WindowSurfaceWayland : public WindowSurface {
   // This typically apply to popup windows.
   bool mBufferNeedsClear;
 
+  typedef enum {
+    // Don't cache anything, always draw directly to wl_buffer
+    CACHE_NONE = 0,
+    // Cache only small paints (smaller than 1/2 of screen).
+    CACHE_SMALL = 1,
+    // Cache all painting except fullscreen updates.
+    CACHE_ALL = 2,
+  } RenderingCacheMode;
+
   // Cache all drawings except fullscreen updates.
   // Avoid any rendering artifacts for significant performance penality.
-  bool mSmoothRendering;
+  unsigned int mSmoothRendering;
 
-  gint mSurfaceReadyTimerID;
+  int mSurfaceReadyTimerID;
   mozilla::Mutex mSurfaceLock;
 };
 
-}  // namespace widget
-}  // namespace mozilla
+}  // namespace mozilla::widget
 
 #endif  // _MOZILLA_WIDGET_GTK_WINDOW_SURFACE_WAYLAND_H

@@ -7,7 +7,9 @@
 #ifndef mozilla_ipc_ProcessUtils_h
 #define mozilla_ipc_ProcessUtils_h
 
-#include "FileDescriptor.h"
+#include <vector>
+
+#include "mozilla/ipc/FileDescriptor.h"
 #include "base/shared_memory.h"
 #include "mozilla/Maybe.h"
 
@@ -73,6 +75,15 @@ class SharedPreferenceDeserializer final {
 void SetPrefsFd(int aFd);
 void SetPrefMapFd(int aFd);
 #endif
+
+// Generate command line argument to spawn a child process. If the shared memory
+// is not properly initialized, this would be a no-op.
+void ExportSharedJSInit(GeckoChildProcessHost& procHost,
+                        std::vector<std::string>& aExtraOpts);
+
+// Initialize the content used by the JS engine during the initialization of a
+// JS::Runtime.
+bool ImportSharedJSInit(char* aJsInitHandleStr, char* aJsInitLenStr);
 
 }  // namespace ipc
 }  // namespace mozilla

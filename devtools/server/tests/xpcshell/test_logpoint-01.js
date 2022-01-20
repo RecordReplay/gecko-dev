@@ -1,6 +1,5 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
-/* eslint-disable no-shadow, max-nested-callbacks */
 
 "use strict";
 
@@ -23,7 +22,7 @@ add_task(
     };
 
     // And then listen for resource RDP event.
-    // Bug 1646677: But we should probably migrate this test to ResourceWatcher so that
+    // Bug 1646677: But we should probably migrate this test to ResourceCommand so that
     // we don't have to hack the server side via Resource.watchResources call.
     targetActor.on("resource-available-form", resources => {
       if (resources[0].resourceType == Resources.TYPES.CONSOLE_MESSAGE) {

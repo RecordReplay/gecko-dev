@@ -107,8 +107,12 @@ impl PartialOrd for Leaf {
         }
 
         match (self, other) {
+            // NOTE: Percentages can't be compared reasonably here because the
+            // percentage basis might be negative, see bug 1709018.
+            // Conveniently, we only use this for <length-percentage> (for raw
+            // percentages, we go through resolve()).
+            (&Percentage(..), &Percentage(..)) => None,
             (&Length(ref one), &Length(ref other)) => one.partial_cmp(other),
-            (&Percentage(ref one), &Percentage(ref other)) => one.partial_cmp(other),
             (&Angle(ref one), &Angle(ref other)) => one.degrees().partial_cmp(&other.degrees()),
             (&Time(ref one), &Time(ref other)) => one.seconds().partial_cmp(&other.seconds()),
             (&Number(ref one), &Number(ref other)) => one.partial_cmp(other),
@@ -373,9 +377,9 @@ impl CalcNode {
                             rhs.negate();
                             sum.push(rhs);
                         },
-                        ref t => {
-                            let t = t.clone();
-                            return Err(input.new_unexpected_token_error(t));
+                        _ => {
+                            input.reset(&start);
+                            break;
                         },
                     }
                 },

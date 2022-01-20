@@ -3,13 +3,14 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use neqo_common::event::Provider;
-use neqo_common::{self as common, qlog::NeqoQlog, qwarn, Datagram, Role};
+use neqo_common::{self as common, qlog::NeqoQlog, qwarn, Datagram, Header, Role};
 use neqo_crypto::{init, PRErrorCode};
 use neqo_http3::Error as Http3Error;
 use neqo_http3::{Http3Client, Http3ClientEvent, Http3Parameters, Http3State};
 use neqo_qpack::QpackSettings;
 use neqo_transport::{
-    ConnectionParameters, Error as TransportError, FixedConnectionIdManager, Output, QuicVersion,
+    CongestionControlAlgorithm, ConnectionParameters, Error as TransportError, Output, QuicVersion,
+    RandomConnectionIdGenerator,
 };
 use nserror::*;
 use nsstring::*;
@@ -24,6 +25,7 @@ use std::rc::Rc;
 use std::slice;
 use std::str;
 use std::time::Instant;
+use std::borrow::Cow;
 use thin_vec::ThinVec;
 use xpcom::{interfaces::nsrefcnt, AtomicRefcnt, RefCounted, RefPtr};
 
@@ -31,9 +33,7 @@ use xpcom::{interfaces::nsrefcnt, AtomicRefcnt, RefCounted, RefPtr};
 pub struct NeqoHttp3Conn {
     conn: Http3Client,
     local_addr: SocketAddr,
-    remote_addr: SocketAddr,
     refcnt: AtomicRefcnt,
-    packets_to_send: Vec<Datagram>,
 }
 
 impl NeqoHttp3Conn {
@@ -79,20 +79,24 @@ impl NeqoHttp3Conn {
         };
 
         let quic_version = match alpn_conv {
+            "h3-32" => QuicVersion::Draft32,
+            "h3-31" => QuicVersion::Draft31,
             "h3-30" => QuicVersion::Draft30,
             "h3-29" => QuicVersion::Draft29,
-            "h3-28" => QuicVersion::Draft28,
-            "h3-27" => QuicVersion::Draft27,
+            "h3" => QuicVersion::Version1,
             _ => return Err(NS_ERROR_INVALID_ARG),
         };
 
         let mut conn = match Http3Client::new(
             origin_conv,
-            Rc::new(RefCell::new(FixedConnectionIdManager::new(3))),
+            Rc::new(RefCell::new(RandomConnectionIdGenerator::new(3))),
             local,
             remote,
-            &ConnectionParameters::default().quic_version(quic_version),
+            ConnectionParameters::default()
+                .quic_version(quic_version)
+                .cc_algorithm(CongestionControlAlgorithm::Cubic),
             &http3_settings,
+            Instant::now(),
         ) {
             Ok(c) => c,
             Err(_) => return Err(NS_ERROR_INVALID_ARG),
@@ -134,9 +138,7 @@ impl NeqoHttp3Conn {
         let conn = Box::into_raw(Box::new(NeqoHttp3Conn {
             conn,
             local_addr: local,
-            remote_addr: remote,
             refcnt: unsafe { AtomicRefcnt::new() },
-            packets_to_send: Vec::new(),
         }));
         unsafe { Ok(RefPtr::from_raw(conn).unwrap()) }
     }
@@ -203,59 +205,57 @@ pub extern "C" fn neqo_http3conn_new(
 #[no_mangle]
 pub extern "C" fn neqo_http3conn_process_input(
     conn: &mut NeqoHttp3Conn,
-    packet: *const u8,
-    len: u32,
-) {
-    let array = unsafe { slice::from_raw_parts(packet, len as usize) };
+    remote_addr: &nsACString,
+    packet: *const ThinVec<u8>,
+) -> nsresult {
+    let remote = match str::from_utf8(remote_addr) {
+        Ok(s) => match s.parse() {
+            Ok(addr) => addr,
+            Err(_) => return NS_ERROR_INVALID_ARG,
+        },
+        Err(_) => return NS_ERROR_INVALID_ARG,
+    };
     conn.conn.process_input(
-        Datagram::new(conn.remote_addr, conn.local_addr, array.to_vec()),
+        Datagram::new(remote, conn.local_addr, unsafe { (*packet).to_vec() }),
         Instant::now(),
     );
+    return NS_OK;
 }
 
-/* Process output and store data to be sent into conn.packets_to_send.
- * neqo_http3conn_get_data_to_send will be called to pick up this data.
+/* Process output:
+ * this may return a packet that needs to be sent or a timeout.
+ * if it returns a packet the function returns true, otherwise it returns false.
  */
 #[no_mangle]
-pub extern "C" fn neqo_http3conn_process_output(conn: &mut NeqoHttp3Conn) -> u64 {
-    loop {
-        let out = conn.conn.process_output(Instant::now());
-        match out {
-            Output::Datagram(dg) => {
-                conn.packets_to_send.push(dg);
-            }
-            Output::Callback(to) => {
-                let timeout = to.as_millis() as u64;
-                // Necko resolution is in milliseconds whereas neqo resolution
-                // is in nanoseconds. If we called process_output too soon due
-                // to this difference, we might do few unnecessary loops until
-                // we waste the remaining time. To avoid it, we return 1ms when
-                // the timeout is less than 1ms.
-                if timeout == 0 {
-                    break 1;
-                }
-                break timeout;
-            }
-            Output::None => break std::u64::MAX,
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn neqo_http3conn_has_data_to_send(conn: &mut NeqoHttp3Conn) -> bool {
-    !conn.packets_to_send.is_empty()
-}
-
-#[no_mangle]
-pub extern "C" fn neqo_http3conn_get_data_to_send(
+pub extern "C" fn neqo_http3conn_process_output(
     conn: &mut NeqoHttp3Conn,
+    remote_addr: &mut nsACString,
+    remote_port: &mut u16,
     packet: &mut ThinVec<u8>,
-) -> nsresult {
-    match conn.packets_to_send.pop() {
-        None => NS_BASE_STREAM_WOULD_BLOCK,
-        Some(d) => {
-            packet.extend_from_slice(&d);
-            NS_OK
+    timeout: &mut u64,
+) -> bool {
+    match conn.conn.process_output(Instant::now()) {
+        Output::Datagram(dg) => {
+            packet.extend_from_slice(&dg);
+            remote_addr.append(&dg.destination().ip().to_string());
+            *remote_port = dg.destination().port();
+            true
+        }
+        Output::Callback(to) => {
+            *timeout = to.as_millis() as u64;
+            // Necko resolution is in milliseconds whereas neqo resolution
+            // is in nanoseconds. If we called process_output too soon due
+            // to this difference, we might do few unnecessary loops until
+            // we waste the remaining time. To avoid it, we return 1ms when
+            // the timeout is less than 1ms.
+            if *timeout == 0 {
+                *timeout = 1;
+            }
+            false
+        }
+        Output::None => {
+            *timeout = std::u64::MAX;
+            false
         }
     }
 }
@@ -321,7 +321,7 @@ pub extern "C" fn neqo_http3conn_fetch(
                     String::new()
                 };
 
-                hdrs.push((name, value));
+                hdrs.push(Header::new(name, value));
             }
         }
     }
@@ -389,20 +389,106 @@ pub extern "C" fn neqo_htttp3conn_send_request_body(
     }
 }
 
+fn crypto_error_code(err: neqo_crypto::Error) -> u64 {
+    match err {
+        neqo_crypto::Error::AeadInitFailure => 0,
+        neqo_crypto::Error::AeadError => 1,
+        neqo_crypto::Error::CertificateLoading => 2,
+        neqo_crypto::Error::CreateSslSocket => 3,
+        neqo_crypto::Error::HkdfError => 4,
+        neqo_crypto::Error::InternalError => 5,
+        neqo_crypto::Error::IntegerOverflow => 6,
+        neqo_crypto::Error::InvalidEpoch => 7,
+        neqo_crypto::Error::MixedHandshakeMethod => 8,
+        neqo_crypto::Error::NoDataAvailable => 9,
+        neqo_crypto::Error::NssError { .. } => 10,
+        neqo_crypto::Error::OverrunError => 11,
+        neqo_crypto::Error::SelfEncryptFailure => 12,
+        neqo_crypto::Error::TimeTravelError => 13,
+        neqo_crypto::Error::UnsupportedCipher => 14,
+        neqo_crypto::Error::UnsupportedVersion => 15,
+        neqo_crypto::Error::StringError => 16,
+        neqo_crypto::Error::EchRetry(_) => 17,
+    }
+}
+
 // This is only used for telemetry. Therefore we only return error code
 // numbers and do not label them. Recording telemetry is easier with a
 // number.
 #[repr(C)]
 pub enum CloseError {
-    QuicTransportError(u64),
-    Http3AppError(u64),
+    TransportInternalError(u16),
+    TransportInternalErrorOther(u16),
+    TransportError(u64),
+    CryptoError(u64),
+    CryptoAlert(u8),
+    PeerAppError(u64),
+    PeerError(u64),
+    AppError(u64),
+    EchRetry,
 }
 
-impl From<neqo_transport::CloseError> for CloseError {
-    fn from(error: neqo_transport::CloseError) -> CloseError {
+impl From<TransportError> for CloseError {
+    fn from(error: TransportError) -> CloseError {
         match error {
-            neqo_transport::CloseError::Transport(c) => CloseError::QuicTransportError(c),
-            neqo_transport::CloseError::Application(c) => CloseError::Http3AppError(c),
+            TransportError::InternalError(c) => CloseError::TransportInternalError(c),
+            TransportError::CryptoError(neqo_crypto::Error::EchRetry(_)) => CloseError::EchRetry,
+            TransportError::CryptoError(c) => CloseError::CryptoError(crypto_error_code(c)),
+            TransportError::CryptoAlert(c) => CloseError::CryptoAlert(c),
+            TransportError::PeerApplicationError(c) => CloseError::PeerAppError(c),
+            TransportError::PeerError(c) => CloseError::PeerError(c),
+            TransportError::NoError
+            | TransportError::IdleTimeout
+            | TransportError::ConnectionRefused
+            | TransportError::FlowControlError
+            | TransportError::StreamLimitError
+            | TransportError::StreamStateError
+            | TransportError::FinalSizeError
+            | TransportError::FrameEncodingError
+            | TransportError::TransportParameterError
+            | TransportError::ProtocolViolation
+            | TransportError::InvalidToken
+            | TransportError::KeysExhausted
+            | TransportError::ApplicationError
+            | TransportError::NoAvailablePath => CloseError::TransportError(error.code()),
+            TransportError::EchRetry(_) => CloseError::EchRetry,
+            TransportError::AckedUnsentPacket => CloseError::TransportInternalErrorOther(0),
+            TransportError::ConnectionIdLimitExceeded => CloseError::TransportInternalErrorOther(1),
+            TransportError::ConnectionIdsExhausted => CloseError::TransportInternalErrorOther(2),
+            TransportError::ConnectionState => CloseError::TransportInternalErrorOther(3),
+            TransportError::DecodingFrame => CloseError::TransportInternalErrorOther(4),
+            TransportError::DecryptError => CloseError::TransportInternalErrorOther(5),
+            TransportError::HandshakeFailed => CloseError::TransportInternalErrorOther(6),
+            TransportError::IntegerOverflow => CloseError::TransportInternalErrorOther(7),
+            TransportError::InvalidInput => CloseError::TransportInternalErrorOther(8),
+            TransportError::InvalidMigration => CloseError::TransportInternalErrorOther(9),
+            TransportError::InvalidPacket => CloseError::TransportInternalErrorOther(10),
+            TransportError::InvalidResumptionToken => CloseError::TransportInternalErrorOther(11),
+            TransportError::InvalidRetry => CloseError::TransportInternalErrorOther(12),
+            TransportError::InvalidStreamId => CloseError::TransportInternalErrorOther(13),
+            TransportError::KeysDiscarded => CloseError::TransportInternalErrorOther(14),
+            TransportError::KeysPending(_) => CloseError::TransportInternalErrorOther(15),
+            TransportError::KeyUpdateBlocked => CloseError::TransportInternalErrorOther(16),
+            TransportError::NoMoreData => CloseError::TransportInternalErrorOther(17),
+            TransportError::NotConnected => CloseError::TransportInternalErrorOther(18),
+            TransportError::PacketNumberOverlap => CloseError::TransportInternalErrorOther(19),
+            TransportError::StatelessReset => CloseError::TransportInternalErrorOther(20),
+            TransportError::TooMuchData => CloseError::TransportInternalErrorOther(21),
+            TransportError::UnexpectedMessage => CloseError::TransportInternalErrorOther(22),
+            TransportError::UnknownConnectionId => CloseError::TransportInternalErrorOther(23),
+            TransportError::UnknownFrameType => CloseError::TransportInternalErrorOther(24),
+            TransportError::VersionNegotiation => CloseError::TransportInternalErrorOther(25),
+            TransportError::WrongRole => CloseError::TransportInternalErrorOther(26),
+            TransportError::QlogError => CloseError::TransportInternalErrorOther(27),
+        }
+    }
+}
+
+impl From<neqo_transport::ConnectionError> for CloseError {
+    fn from(error: neqo_transport::ConnectionError) -> CloseError {
+        match error {
+            neqo_transport::ConnectionError::Transport(c) => c.into(),
+            neqo_transport::ConnectionError::Application(c) => CloseError::AppError(c),
         }
     }
 }
@@ -434,7 +520,7 @@ pub extern "C" fn neqo_http3conn_close_stream(
 
 #[repr(C)]
 pub enum Http3Event {
-    /// A request stream has space for more data to be send.
+    /// A request stream has space for more data to be sent.
     DataWritable {
         stream_id: u64,
     },
@@ -493,30 +579,38 @@ pub enum Http3Event {
     ResumptionToken {
         expire_in: u64, // microseconds
     },
+    EchFallbackAuthenticationNeeded,
     NoEvent,
 }
 
-fn convert_h3_to_h1_headers(
-    headers: Vec<(String, String)>,
-    ret_headers: &mut ThinVec<u8>,
-) -> nsresult {
-    if headers.iter().filter(|(k, _)| k == ":status").count() != 1 {
+fn sanitize_header(mut y: Cow<[u8]>) -> Cow<[u8]> {
+    for i in 0..y.len() {
+        if matches!(y[i], b'\n' | b'\r'| b'\0') {
+            y.to_mut()[i] = b' ';
+        }
+    }
+    y
+}
+
+fn convert_h3_to_h1_headers(headers: Vec<Header>, ret_headers: &mut ThinVec<u8>) -> nsresult {
+    if headers.iter().filter(|&h| h.name() == ":status").count() != 1 {
         return NS_ERROR_ILLEGAL_VALUE;
     }
 
-    let (_, status_val) = headers
+    let status_val = headers
         .iter()
-        .find(|(k, _)| k == ":status")
-        .expect("must be one");
+        .find(|&h| h.name() == ":status")
+        .expect("must be one")
+        .value();
 
     ret_headers.extend_from_slice(b"HTTP/3 ");
     ret_headers.extend_from_slice(status_val.as_bytes());
     ret_headers.extend_from_slice(b"\r\n");
 
-    for (key, value) in headers.iter().filter(|(k, _)| k != ":status") {
-        ret_headers.extend_from_slice(key.as_bytes());
+    for hdr in headers.iter().filter(|&h| h.name() != ":status") {
+        ret_headers.extend_from_slice(&sanitize_header(Cow::from(hdr.name().as_bytes())));
         ret_headers.extend_from_slice(b": ");
-        ret_headers.extend_from_slice(value.as_bytes());
+        ret_headers.extend_from_slice(&sanitize_header(Cow::from(hdr.value().as_bytes())));
         ret_headers.extend_from_slice(b"\r\n");
     }
     ret_headers.extend_from_slice(b"\r\n");
@@ -621,14 +715,44 @@ pub extern "C" fn neqo_http3conn_event(
             Http3ClientEvent::GoawayReceived => Http3Event::GoawayReceived,
             Http3ClientEvent::StateChange(state) => match state {
                 Http3State::Connected => Http3Event::ConnectionConnected,
-                Http3State::Closing(error_code) => Http3Event::ConnectionClosing {
-                    error: error_code.into(),
-                },
-                Http3State::Closed(error_code) => Http3Event::ConnectionClosed {
-                    error: error_code.into(),
-                },
+                Http3State::Closing(error_code) => {
+                    match error_code {
+                        neqo_transport::ConnectionError::Transport(
+                            TransportError::CryptoError(neqo_crypto::Error::EchRetry(ref c)),
+                        )
+                        | neqo_transport::ConnectionError::Transport(TransportError::EchRetry(
+                            ref c,
+                        )) => {
+                            data.extend_from_slice(c.as_ref());
+                        }
+                        _ => {}
+                    }
+                    Http3Event::ConnectionClosing {
+                        error: error_code.into(),
+                    }
+                }
+                Http3State::Closed(error_code) => {
+                    match error_code {
+                        neqo_transport::ConnectionError::Transport(
+                            TransportError::CryptoError(neqo_crypto::Error::EchRetry(ref c)),
+                        )
+                        | neqo_transport::ConnectionError::Transport(TransportError::EchRetry(
+                            ref c,
+                        )) => {
+                            data.extend_from_slice(c.as_ref());
+                        }
+                        _ => {}
+                    }
+                    Http3Event::ConnectionClosed {
+                        error: error_code.into(),
+                    }
+                }
                 _ => Http3Event::NoEvent,
             },
+            Http3ClientEvent::EchFallbackAuthenticationNeeded { public_name } => {
+                data.extend_from_slice(public_name.as_ref());
+                Http3Event::EchFallbackAuthenticationNeeded
+            }
         };
 
         if !matches!(fe, Http3Event::NoEvent) {

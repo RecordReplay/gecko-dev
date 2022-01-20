@@ -88,11 +88,13 @@ add_task(async function resetToDefaultConfig() {
       ContentTaskUtils.is_visible(prefResetButton),
       "prefResetButton should be visible"
     );
-    is(
-      prefResetButton.getAttribute("autofocus"),
-      "true",
-      "prefResetButton has autofocus"
-    );
+
+    if (!Services.focus.focusedElement == prefResetButton) {
+      await ContentTaskUtils.waitForEvent(prefResetButton, "focus");
+    }
+
+    Assert.ok(true, "prefResetButton has focus");
+
     prefResetButton.click();
   });
 
@@ -143,6 +145,21 @@ add_task(async function checkLearnMoreLink() {
       "Learn More link is visible"
     );
     is(learnMoreLink.getAttribute("href"), _baseURL + "connection-not-secure");
+
+    const titleEl = doc.querySelector(".title-text");
+    const actualDataL10nID = titleEl.getAttribute("data-l10n-id");
+    is(
+      actualDataL10nID,
+      "nssFailure2-title",
+      "Correct error page title is set"
+    );
+
+    const errorCodeEl = doc.querySelector("#errorShortDescText2");
+    const actualDataL10Args = errorCodeEl.getAttribute("data-l10n-args");
+    ok(
+      actualDataL10Args.includes("SSL_ERROR_PROTOCOL_VERSION_ALERT"),
+      "Correct error code is set"
+    );
   });
 
   resetPrefs();

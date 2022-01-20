@@ -8,8 +8,6 @@
   <script type="application/javascript" src="apz_test_native_event_utils.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
   <script type="application/javascript">
-var isWindows = (getPlatform() == "windows");
-
 var apz_touch_action_prefs = [
   // Obviously we need touch-action support enabled for testing touch-action.
   ["layout.css.touch_action.enabled", true],
@@ -26,22 +24,21 @@ var apz_touch_action_prefs = [
   // The subtests in this test do touch-drags to pan the page, but we don't
   // want those pans to turn into fling animations, so we increase the
   // fling-stop threshold velocity to absurdly high.
-  ["apz.fling_stopped_threshold", "10000"],
+  ["apz.fling_stopped_threshold", Number.MAX_VALUE],
   // The helper_div_pan's div gets a displayport on scroll, but if the
   // test takes too long the displayport can expire before the new scroll
   // position is synced back to the main thread. So we disable displayport
   // expiry for these tests.
   ["apz.displayport_expiry_ms", 0],
-  ["apz.test.fails_with_native_injection", isWindows],
 ];
 
 function apzScriptInjector(name) {
-  return function(childWin) {
+  return async function(childWin) {
     childWin._ACTIVE_TEST_NAME = name;
-    injectScript('/tests/SimpleTest/paint_listener.js', childWin)()
-    .then(injectScript('../apz_test_utils.js', childWin))
-    .then(injectScript('../apz_test_native_event_utils.js', childWin))
-    .then(injectScript('../touch_action_helpers.js', childWin));
+    await injectScript('/tests/SimpleTest/paint_listener.js', childWin);
+    await injectScript('../apz_test_utils.js', childWin);
+    await injectScript('../apz_test_native_event_utils.js', childWin);
+    await injectScript('../touch_action_helpers.js', childWin);
   };
 }
 

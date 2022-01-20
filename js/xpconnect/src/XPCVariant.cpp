@@ -12,7 +12,7 @@
 
 #include "jsfriendapi.h"
 #include "js/Array.h"  // JS::GetArrayLength, JS::IsArrayObject, JS::NewArrayObject
-#include "js/friend/StackLimits.h"  // js::CheckRecursionLimit
+#include "js/friend/StackLimits.h"  // js::AutoCheckRecursionLimit
 #include "js/friend/WindowProxy.h"  // js::ToWindowIfWindowProxy
 #include "js/Wrapper.h"
 
@@ -77,7 +77,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(XPCVariant)
   JS::Value val = tmp->GetJSValPreserveColor();
   if (val.isObject()) {
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mJSVal");
-    cb.NoteJSChild(JS::GCCellPtr(val));
+    cb.NoteJSChild(val.toGCCellPtr());
   }
 
   tmp->mData.Traverse(cb);
@@ -261,7 +261,8 @@ bool XPCArrayHomogenizer::GetTypeForArray(JSContext* cx, HandleObject array,
 }
 
 bool XPCVariant::InitializeData(JSContext* cx) {
-  if (!js::CheckRecursionLimit(cx)) {
+  js::AutoCheckRecursionLimit recursion(cx);
+  if (!recursion.check(cx)) {
     return false;
   }
 

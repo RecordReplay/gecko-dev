@@ -18,6 +18,7 @@
 #include "mozilla/AutoRestore.h"
 #include "mozilla/DisplayPortUtils.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ProfilerLabels.h"
 
 /**
  * Code for doing display list building for a modified subset of the window,
@@ -344,49 +345,22 @@ static Maybe<const ActiveScrolledRoot*> SelectContainerASR(
 
 static void UpdateASR(nsDisplayItem* aItem,
                       Maybe<const ActiveScrolledRoot*>& aContainerASR) {
-  Maybe<const ActiveScrolledRoot*> asr;
-
-  if (aItem->HasHitTestInfo()) {
-    const HitTestInfo& info =
-        static_cast<nsDisplayHitTestInfoBase*>(aItem)->GetHitTestInfo();
-    asr = SelectContainerASR(info.mClipChain, info.mASR, aContainerASR);
-  } else {
-    asr = aContainerASR;
-  }
-
-  if (!asr) {
+  if (!aContainerASR) {
     return;
   }
 
   nsDisplayWrapList* wrapList = aItem->AsDisplayWrapList();
   if (!wrapList) {
-    aItem->SetActiveScrolledRoot(*asr);
+    aItem->SetActiveScrolledRoot(*aContainerASR);
     return;
   }
 
   wrapList->SetActiveScrolledRoot(ActiveScrolledRoot::PickAncestor(
-      wrapList->GetFrameActiveScrolledRoot(), *asr));
-
-  wrapList->UpdateHitTestInfoActiveScrolledRoot(*asr);
+      wrapList->GetFrameActiveScrolledRoot(), *aContainerASR));
 }
 
 static void CopyASR(nsDisplayItem* aOld, nsDisplayItem* aNew) {
-  const ActiveScrolledRoot* hitTest = nullptr;
-  if (aOld->HasHitTestInfo()) {
-    MOZ_ASSERT(aNew->HasHitTestInfo());
-    const HitTestInfo& info =
-        static_cast<nsDisplayHitTestInfoBase*>(aOld)->GetHitTestInfo();
-    hitTest = info.mASR;
-  }
-
   aNew->SetActiveScrolledRoot(aOld->GetActiveScrolledRoot());
-
-  // SetActiveScrolledRoot for most items will also set the hit-test info item's
-  // asr, so we need to manually set that again to what we saved earlier.
-  if (aOld->HasHitTestInfo()) {
-    static_cast<nsDisplayHitTestInfoBase*>(aNew)
-        ->UpdateHitTestInfoActiveScrolledRoot(hitTest);
-  }
 }
 
 OldItemInfo::OldItemInfo(nsDisplayItem* aItem)
@@ -620,13 +594,12 @@ class MergeState {
   }
 
   bool HasMatchingItemInOldList(nsDisplayItem* aItem, OldListIndex* aOutIndex) {
-    nsIFrame::DisplayItemArray* items =
-        aItem->Frame()->GetProperty(nsIFrame::DisplayItems());
     // Look for an item that matches aItem's frame and per-frame-key, but isn't
     // the same item.
     uint32_t outerKey = mOuterItem ? mOuterItem->GetPerFrameKey() : 0;
-    for (nsDisplayItemBase* i : *items) {
-      if (i != aItem && i->Frame() == aItem->Frame() &&
+    nsIFrame* frame = aItem->Frame();
+    for (nsDisplayItemBase* i : frame->DisplayItems()) {
+      if (i != aItem && i->Frame() == frame &&
           i->GetPerFrameKey() == aItem->GetPerFrameKey()) {
         if (i->GetOldListIndex(mOldList, outerKey, aOutIndex)) {
           return true;
@@ -656,9 +629,7 @@ class MergeState {
     aItem->NotifyUsed(mBuilder->Builder());
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    nsIFrame::DisplayItemArray* items =
-        aItem->Frame()->GetProperty(nsIFrame::DisplayItems());
-    for (nsDisplayItemBase* i : *items) {
+    for (nsDisplayItemBase* i : aItem->Frame()->DisplayItems()) {
       if (i->Frame() == aItem->Frame() &&
           i->GetPerFrameKey() == aItem->GetPerFrameKey()) {
         MOZ_DIAGNOSTIC_ASSERT(!i->IsMergedItem());
@@ -894,7 +865,7 @@ static void TakeAndAddModifiedAndFramesWithPropsFromRootFrame(
   MOZ_ASSERT(aRootFrame);
 
   if (RetainedDisplayListData* data = GetRetainedDisplayListData(aRootFrame)) {
-    for (auto it = data->Iterator(); !it.Done(); it.Next()) {
+    for (auto it = data->ConstIterator(); !it.Done(); it.Next()) {
       nsIFrame* frame = it.Key();
       const RetainedDisplayListData::FrameFlags& flags = it.Data();
 
@@ -944,13 +915,7 @@ static void GetModifiedAndFramesWithProps(
 #endif
 
 static nsDisplayItem* GetFirstDisplayItemWithChildren(nsIFrame* aFrame) {
-  nsIFrame::DisplayItemArray* items =
-      aFrame->GetProperty(nsIFrame::DisplayItems());
-  if (!items) {
-    return nullptr;
-  }
-
-  for (nsDisplayItemBase* i : *items) {
+  for (nsDisplayItemBase* i : aFrame->DisplayItems()) {
     if (i->HasChildren()) {
       return static_cast<nsDisplayItem*>(i);
     }
@@ -961,6 +926,19 @@ static nsDisplayItem* GetFirstDisplayItemWithChildren(nsIFrame* aFrame) {
 static bool IsInPreserve3DContext(const nsIFrame* aFrame) {
   return aFrame->Extend3DContext() ||
          aFrame->Combines3DTransformWithAncestors();
+}
+
+// Returns true if |aFrame| can store a display list building rect.
+// These limitations are necessary to guarantee that
+// 1) Just enough items are rebuilt to properly update display list
+// 2) Modified frames will be visited during a partial display list build.
+static bool CanStoreDisplayListBuildingRect(nsDisplayListBuilder* aBuilder,
+                                            nsIFrame* aFrame) {
+  return aFrame != aBuilder->RootReferenceFrame() &&
+         aFrame->IsStackingContext() && aFrame->IsFixedPosContainingBlock() &&
+         // Split frames might have placeholders for modified frames in their
+         // unmodified continuation frame.
+         !aFrame->GetPrevContinuation() && !aFrame->GetNextContinuation();
 }
 
 static bool ProcessFrameInternal(nsIFrame* aFrame,
@@ -1072,9 +1050,7 @@ static bool ProcessFrameInternal(nsIFrame* aFrame,
       break;
     }
 
-    if (currentFrame != aBuilder->RootReferenceFrame() &&
-        currentFrame->IsStackingContext() &&
-        currentFrame->IsFixedPosContainingBlock()) {
+    if (CanStoreDisplayListBuildingRect(aBuilder, currentFrame)) {
       CRR_LOG("Frame belongs to stacking context frame %p\n", currentFrame);
       // If we found an intermediate stacking context with an existing display
       // item then we can store the dirty rect there and stop. If we couldn't
@@ -1344,6 +1320,16 @@ bool RetainedDisplayListBuilder::ShouldBuildPartial(
     if (type == LayoutFrameType::Viewport ||
         type == LayoutFrameType::PageContent ||
         type == LayoutFrameType::Canvas || type == LayoutFrameType::Scrollbar) {
+      Metrics()->mPartialUpdateFailReason = PartialUpdateFailReason::FrameType;
+      return false;
+    }
+
+    // Detect root scroll frame and do a full rebuild for them too for the same
+    // reasons as above, but also because top layer items should to be marked
+    // modified if the root scroll frame is modified. Putting this check here
+    // means we don't need to check everytime a frame is marked modified though.
+    if (type == LayoutFrameType::Scroll && f->GetParent() &&
+        !f->GetParent()->GetParent()) {
       Metrics()->mPartialUpdateFailReason = PartialUpdateFailReason::FrameType;
       return false;
     }

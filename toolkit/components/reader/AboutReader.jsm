@@ -26,11 +26,6 @@ ChromeUtils.defineModuleGetter(
 );
 ChromeUtils.defineModuleGetter(
   this,
-  "UITelemetry",
-  "resource://gre/modules/UITelemetry.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
   "PluralForm",
   "resource://gre/modules/PluralForm.jsm"
 );
@@ -38,6 +33,8 @@ ChromeUtils.defineModuleGetter(
 var gStrings = Services.strings.createBundle(
   "chrome://global/locale/aboutReader.properties"
 );
+
+Services.telemetry.setEventRecordingEnabled("readermode", true);
 
 const zoomOnCtrl =
   Services.prefs.getIntPref("mousewheel.with_control.action", 3) == 3;
@@ -312,6 +309,7 @@ AboutReader.prototype = {
         ) {
           let btn = this._doc.createElement("button");
           btn.dataset.buttonid = message.data.id;
+          btn.dataset.telemetryId = `reader-${message.data.telemetryId}`;
           btn.className = "button " + message.data.id;
           let tip = this._doc.createElement("span");
           tip.className = "hover-label";
@@ -377,6 +375,21 @@ AboutReader.prototype = {
         }
         break;
       case "click":
+        const buttonLabel = target.attributes.getNamedItem(`data-telemetry-id`)
+          ?.value;
+
+        if (buttonLabel) {
+          Services.telemetry.recordEvent(
+            "readermode",
+            "button",
+            "click",
+            null,
+            {
+              label: buttonLabel,
+            }
+          );
+        }
+
         if (target.classList.contains("dropdown-toggle")) {
           this._toggleDropdownClicked(aEvent);
         }
@@ -1017,10 +1030,6 @@ AboutReader.prototype = {
           if (!aEvent.isTrusted) {
             return;
           }
-
-          // Just pass the ID of the button as an extra and hope the ID doesn't change
-          // unless the context changes
-          UITelemetry.addEvent("action.1", "button", null, id);
 
           let labels = segmentedButton.children;
           for (let label of labels) {

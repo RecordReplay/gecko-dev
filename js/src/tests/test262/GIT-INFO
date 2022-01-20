@@ -1,12 +1,5 @@
-commit df1961f16a7cdae0bcd9d6a0004b9fda1895a9ef
-Author: Yusuke Suzuki <ysuzuki@apple.com>
-Date:   Wed Jan 6 20:36:24 2021 -0800
+commit 6d353a4436747e2de8820efac27ae5ef7e601b60
+Author: jugglinmike <mike@mikepennisi.com>
+Date:   Fri May 14 13:33:06 2021 -0400
 
-    Fix formatRangeToParts/date-same-returns-single-date.js and add tests using practically-equal two dates
-    
-    intl402/DateTimeFormat/prototype/formatRangeToParts/date-same-returns-single-date.js is using `formatRange` and `format`.
-    Fix this test to use `formatRangeToParts` and `formatToParts` since it is the intention of this test.
-    
-    This patch adds additional tests to intl402/DateTimeFormat/prototype/formatRangeToParts/date-same-returns-single-date.js and
-    intl402/DateTimeFormat/prototype/formatRange/date-same-returns-single-date.js. The new test uses two dates that are practially-equal,
-    and ensures the implementation uses `format` or `formatToParts` by detecting they are practically-equal.
+    Remove invalid test (#2990)

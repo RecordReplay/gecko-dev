@@ -381,14 +381,15 @@ nsresult WebExecutorSupport::CreateStreamLoader(
     channel->SetLoadFlags(nsIRequest::LOAD_ANONYMOUS);
   }
 
+  nsCOMPtr<nsICookieJarSettings> cookieJarSettings;
   if (aFlags & java::GeckoWebExecutor::FETCH_FLAGS_PRIVATE) {
     nsCOMPtr<nsIPrivateBrowsingChannel> pbChannel = do_QueryInterface(channel);
     NS_ENSURE_TRUE(pbChannel, NS_ERROR_FAILURE);
     pbChannel->SetPrivate(true);
+    cookieJarSettings = CookieJarSettings::Create(CookieJarSettings::ePrivate);
+  } else {
+    cookieJarSettings = CookieJarSettings::Create(CookieJarSettings::eRegular);
   }
-
-  nsCOMPtr<nsICookieJarSettings> cookieJarSettings =
-      CookieJarSettings::Create();
   MOZ_ASSERT(cookieJarSettings);
 
   nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
@@ -414,9 +415,7 @@ nsresult WebExecutorSupport::CreateStreamLoader(
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Finally, open the channel
-  rv = channel->AsyncOpen(listener);
-
-  return NS_OK;
+  return channel->AsyncOpen(listener);
 }
 
 void WebExecutorSupport::Fetch(jni::Object::Param aRequest, int32_t aFlags,

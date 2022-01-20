@@ -132,7 +132,6 @@ class TTest(object):
             setup.env["MOZ_INSTRUMENT_EVENT_LOOP_INTERVAL"] = "10"
             global_counters["responsiveness"] = []
 
-        setup.env["JSGC_DISABLE_POISONING"] = "1"
         setup.env["MOZ_DISABLE_NONLOCAL_CONNECTIONS"] = "1"
 
         # instantiate an object to hold test results
@@ -165,7 +164,7 @@ class TTest(object):
                     shutil.copy(origin, dest)
 
             # Run the test
-            timeout = test_config.get("timeout", 7200)  # 2 hours default
+            timeout = test_config.get("timeout", 600)  # 10 minutes default
             if setup.gecko_profile:
                 # When profiling, give the browser some extra time
                 # to dump the profile.
@@ -236,8 +235,8 @@ class TTest(object):
                             command, env=os.environ.copy(), stdout=subprocess.PIPE
                         )
                         output, stderr = mtio.communicate()
-                        for line in output.split("\n"):
-                            if line.strip() == "":
+                        for line in output.split(b"\n"):
+                            if line.strip() == b"":
                                 continue
 
                             print(line)

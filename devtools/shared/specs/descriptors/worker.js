@@ -15,24 +15,17 @@ const workerDescriptorSpec = generateActorSpec({
     },
     detach: {
       request: {},
-      response: RetVal("json"),
+      response: {},
     },
     getTarget: {
-      request: {},
-      response: RetVal("json"),
-    },
-    push: {
       request: {},
       response: RetVal("json"),
     },
   },
 
   events: {
-    // WorkerDescriptorActor still uses old sendActorEvent function,
-    // but it should use emit instead.
-    // Do not emit a `close` event as Target class emit this event on destroy
-    "worker-close": {
-      type: "close",
+    "descriptor-destroyed": {
+      type: "descriptor-destroyed",
     },
   },
 });

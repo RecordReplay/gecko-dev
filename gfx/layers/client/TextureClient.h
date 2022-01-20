@@ -661,6 +661,8 @@ class TextureClient : public AtomicRefCountedWithFinalize<TextureClient> {
   bool TryReadLock();
   void ReadUnlock();
 
+  void SetUpdated() { mUpdated = true; }
+
   bool OnForwardedToHost();
 
   // Mark that the TextureClient will be used by the paint thread, and should
@@ -750,9 +752,6 @@ class TextureClient : public AtomicRefCountedWithFinalize<TextureClient> {
 
   // Used when TextureClient is recycled with TextureFlags::RECYCLE flag.
   bool mAddedToCompositableClient;
-
-  bool mWorkaroundAnnoyingSharedSurfaceLifetimeIssues;
-  bool mWorkaroundAnnoyingSharedSurfaceOwnershipIssues;
 
   RefPtr<TextureReadbackSink> mReadbackSink;
 

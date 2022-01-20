@@ -34,6 +34,10 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 let gSearchBannerShownThisSession;
 
 class AboutPrivateBrowsingParent extends JSWindowActorParent {
+  constructor() {
+    super();
+    Services.telemetry.setEventRecordingEnabled("aboutprivatebrowsing", true);
+  }
   // Used by tests
   static setShownThisSession(shown) {
     gSearchBannerShownThisSession = shown;
@@ -57,23 +61,14 @@ class AboutPrivateBrowsingParent extends JSWindowActorParent {
         break;
       }
       case "SearchHandoff": {
-        let searchAlias = "";
-        let searchEngine = Services.search.defaultPrivateEngine;
-        let searchAliases = searchEngine.aliases;
-        if (searchAliases && searchAliases.length) {
-          searchAlias = `${searchAliases[0]} `;
-        }
         let urlBar = win.gURLBar;
         let isFirstChange = true;
 
         if (!aMessage.data || !aMessage.data.text) {
           urlBar.setHiddenFocus();
         } else {
-          // Pass the provided text to the awesomebar. Prepend the @engine shortcut.
-          urlBar.search(`${searchAlias}${aMessage.data.text}`, {
-            searchEngine,
-            searchModeEntry: "handoff",
-          });
+          // Pass the provided text to the awesomebar
+          urlBar.search(aMessage.data.text);
           isFirstChange = false;
         }
 
@@ -83,12 +78,9 @@ class AboutPrivateBrowsingParent extends JSWindowActorParent {
           // in-content search.
           if (isFirstChange) {
             isFirstChange = false;
-            urlBar.removeHiddenFocus();
-            urlBar.search(searchAlias, {
-              searchEngine,
-              searchModeEntry: "handoff",
-            });
-            this.sendAsyncMessage("HideSearch");
+            urlBar.removeHiddenFocus(true);
+            urlBar.search("");
+            this.sendAsyncMessage("DisableSearch");
             urlBar.removeEventListener("compositionstart", checkFirstChange);
             urlBar.removeEventListener("paste", checkFirstChange);
           }
@@ -105,10 +97,12 @@ class AboutPrivateBrowsingParent extends JSWindowActorParent {
           }
         };
 
-        let onDone = () => {
+        let onDone = ev => {
           // We are done. Show in-content search again and cleanup.
           this.sendAsyncMessage("ShowSearch");
-          urlBar.removeHiddenFocus();
+
+          const forceSuppressFocusBorder = ev?.type === "mousedown";
+          urlBar.removeHiddenFocus(forceSuppressFocusBorder);
 
           urlBar.removeEventListener("keydown", onKeydown);
           urlBar.removeEventListener("mousedown", onDone);
@@ -123,6 +117,13 @@ class AboutPrivateBrowsingParent extends JSWindowActorParent {
         urlBar.addEventListener("compositionstart", checkFirstChange);
         urlBar.addEventListener("paste", checkFirstChange);
         break;
+      }
+      case "ShouldShowSearch": {
+        let engineName = Services.prefs.getStringPref(
+          "browser.urlbar.placeholderName.private",
+          ""
+        );
+        return engineName;
       }
       case "ShouldShowSearchBanner": {
         // If this is a pre-loaded private browsing new tab, then we don't want
@@ -159,7 +160,8 @@ class AboutPrivateBrowsingParent extends JSWindowActorParent {
         const currentRegion = Region.current || "";
         return (
           homeRegion.toLowerCase() !== "cn" &&
-          currentRegion.toLowerCase() !== "cn"
+          currentRegion.toLowerCase() !== "cn" &&
+          Services.policies.status !== Services.policies.ACTIVE
         );
       }
     }

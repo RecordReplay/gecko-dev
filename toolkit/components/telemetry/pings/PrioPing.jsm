@@ -9,9 +9,11 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["TelemetryPrioPing"];
+var EXPORTED_SYMBOLS = ["TelemetryPrioPing", "Policy"];
 
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+const { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
+);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   TelemetryController: "resource://gre/modules/TelemetryController.jsm",

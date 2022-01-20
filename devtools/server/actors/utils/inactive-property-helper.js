@@ -83,6 +83,20 @@ class InactivePropertyHelper {
    *
    * The main export is `isPropertyUsed()`, which can be used to check if a
    * property is used or not, and why.
+   *
+   * NOTE: We should generally *not* add rules here for any CSS properties that
+   * inherit by default, because it's hard for us to know whether such
+   * properties are truly "inactive". Web developers might legitimately set
+   * such a property on any arbitrary element, in order to concisely establish
+   * the default property-value throughout that element's subtree. For example,
+   * consider the "list-style-*" properties, which inherit by default and which
+   * only have a rendering effect on elements with "display:list-item"
+   * (e.g. <li>). It might superficially seem like we could add a rule here to
+   * warn about usages of these properties on non-"list-item" elements, but we
+   * shouldn't actually warn about that. A web developer may legitimately
+   * prefer to set these properties on an arbitrary container element (e.g. an
+   * <ol> element, or even the <html> element) in order to concisely adjust the
+   * rendering of a whole list (or all the lists in a document).
    */
   get VALIDATORS() {
     return [
@@ -109,6 +123,9 @@ class InactivePropertyHelper {
           "grid-auto-flow",
           "grid-auto-rows",
           "grid-template",
+          "grid-template-areas",
+          "grid-template-columns",
+          "grid-template-rows",
           "justify-items",
         ],
         when: () => !this.gridContainer,
@@ -288,23 +305,9 @@ class InactivePropertyHelper {
       // https://bugzilla.mozilla.org/show_bug.cgi?id=1551578
       {
         invalidProperties: ["text-overflow"],
-        when: () => !this.checkComputedStyle("overflow", ["hidden"]),
+        when: () => !this.hasInlineOverflow,
         fixId: "inactive-text-overflow-when-no-overflow-fix",
         msgId: "inactive-text-overflow-when-no-overflow",
-        numFixProps: 1,
-      },
-      // -moz-outline-radius doesn't apply when outline-style is auto or none.
-      {
-        invalidProperties: [
-          "-moz-outline-radius",
-          "-moz-outline-radius-topleft",
-          "-moz-outline-radius-topright",
-          "-moz-outline-radius-bottomleft",
-          "-moz-outline-radius-bottomright",
-        ],
-        when: () => this.checkComputedStyle("outline-style", ["auto", "none"]),
-        fixId: "inactive-outline-radius-when-outline-style-auto-or-none-fix",
-        msgId: "inactive-outline-radius-when-outline-style-auto-or-none",
         numFixProps: 1,
       },
       // margin properties used on table internal elements.
@@ -349,6 +352,35 @@ class InactivePropertyHelper {
           "inactive-css-not-for-internal-table-elements-except-table-cells-fix",
         msgId:
           "inactive-css-not-for-internal-table-elements-except-table-cells",
+        numFixProps: 1,
+      },
+      // table-layout used on non-table elements.
+      {
+        invalidProperties: ["table-layout"],
+        when: () =>
+          !this.checkComputedStyle("display", ["table", "inline-table"]),
+        fixId: "inactive-css-not-table-fix",
+        msgId: "inactive-css-not-table",
+        numFixProps: 1,
+      },
+      // scroll-padding-* properties used on non-scrollable elements.
+      {
+        invalidProperties: [
+          "scroll-padding",
+          "scroll-padding-top",
+          "scroll-padding-right",
+          "scroll-padding-bottom",
+          "scroll-padding-left",
+          "scroll-padding-block",
+          "scroll-padding-block-end",
+          "scroll-padding-block-start",
+          "scroll-padding-inline",
+          "scroll-padding-inline-end",
+          "scroll-padding-inline-start",
+        ],
+        when: () => !this.isScrollContainer,
+        fixId: "inactive-scroll-padding-when-not-scroll-container-fix",
+        msgId: "inactive-scroll-padding-when-not-scroll-container",
         numFixProps: 1,
       },
     ];
@@ -640,10 +672,11 @@ class InactivePropertyHelper {
       return false;
     }
 
-    const wm = this.getTableTrackParentWritingMode();
-    const isVertical = wm.includes("vertical") || wm.includes("sideways");
+    const tableTrackParent = this.getTableTrackParent();
 
-    return isVertical ? this.tableColumn : this.tableRow;
+    return this.hasVerticalWritingMode(tableTrackParent)
+      ? this.tableColumn
+      : this.tableRow;
   }
 
   /**
@@ -656,10 +689,11 @@ class InactivePropertyHelper {
       return false;
     }
 
-    const wm = this.getTableTrackParentWritingMode();
-    const isVertical = wm.includes("vertical") || wm.includes("sideways");
+    const tableTrackParent = this.getTableTrackParent();
 
-    return isVertical ? this.tableRow : this.tableColumn;
+    return this.hasVerticalWritingMode(tableTrackParent)
+      ? this.tableRow
+      : this.tableColumn;
   }
 
   /**
@@ -686,8 +720,8 @@ class InactivePropertyHelper {
       return false;
     }
 
-    const wm = this.getTableTrackParentWritingMode(true);
-    const isVertical = wm.includes("vertical") || wm.includes("sideways");
+    const tableTrackParent = this.getTableTrackParent(true);
+    const isVertical = this.hasVerticalWritingMode(tableTrackParent);
 
     const isHorizontalRowGroup = this.rowGroup && !isVertical;
     const isHorizontalColumnGroup = this.columnGroup && isVertical;
@@ -705,8 +739,8 @@ class InactivePropertyHelper {
       return false;
     }
 
-    const wm = this.getTableTrackParentWritingMode(true);
-    const isVertical = wm.includes("vertical") || wm.includes("sideways");
+    const tableTrackParent = this.getTableTrackParent(true);
+    const isVertical = this.hasVerticalWritingMode(tableTrackParent);
 
     const isVerticalRowGroup = this.rowGroup && isVertical;
     const isVerticalColumnGroup = this.columnGroup && !isVertical;
@@ -766,6 +800,35 @@ class InactivePropertyHelper {
    */
   get isFloated() {
     return this.style && this.style.cssFloat !== "none";
+  }
+
+  /**
+   * Check if the current node is scrollable
+   */
+  get isScrollContainer() {
+    // If `overflow` doesn't contain the values `visible` or `clip`, it is a scroll container.
+    // While `hidden` doesn't allow scrolling via a user interaction, the element can
+    // still be scrolled programmatically.
+    // See https://www.w3.org/TR/css-overflow-3/#overflow-properties.
+    const overflow = computedStyle(this.node).overflow;
+    // `overflow` is a shorthand for `overflow-x` and `overflow-y`
+    // (and with that also for `overflow-inline` and `overflow-block`),
+    // so may hold two values.
+    const overflowValues = overflow.split(" ");
+    return !(
+      overflowValues.includes("visible") || overflowValues.includes("clip")
+    );
+  }
+
+  /**
+   * Check if the current node has inline overflow
+   */
+  get hasInlineOverflow() {
+    const property = this.hasVerticalWritingMode(this.node)
+      ? "overflow-y"
+      : "overflow-x";
+
+    return !this.checkComputedStyle(property, ["visible"]);
   }
 
   /**
@@ -1004,17 +1067,25 @@ class InactivePropertyHelper {
   }
 
   /**
+   * Check if the given node's writing mode is vertical
+   */
+  hasVerticalWritingMode(node) {
+    const writingMode = computedStyle(node).writingMode;
+    return writingMode.includes("vertical") || writingMode.includes("sideways");
+  }
+
+  /**
    * Assuming the current element is a table track (row or column) or table track group,
-   * get the parent table writing mode.
+   * get the parent table.
    * This is either going to be the table element if there is one, or the parent element.
-   * If the current element is not a table track, this returns its own writing mode.
+   * If the current element is not a table track, this returns the current element.
    *
    * @param  {Boolean} isGroup
    *         Whether the element is a table track group, instead of a table track.
-   * @return {String}
-   *         The writing-mode value
+   * @return {DOMNode}
+   *         The parent table, the parent element, or the element itself.
    */
-  getTableTrackParentWritingMode(isGroup) {
+  getTableTrackParent(isGroup) {
     let current = this.node.parentNode;
 
     // Skip over unrendered elements.
@@ -1032,7 +1103,7 @@ class InactivePropertyHelper {
       current = current.parentNode;
     }
 
-    return computedStyle(current).writingMode;
+    return current;
   }
 }
 

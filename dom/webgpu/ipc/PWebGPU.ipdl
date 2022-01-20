@@ -8,14 +8,10 @@
 using layers::RGBDescriptor from "mozilla/layers/LayersSurfaces.h";
 using wr::ExternalImageId from "mozilla/webrender/WebRenderAPI.h";
 using RawId from "mozilla/webgpu/WebGPUTypes.h";
-using BufferAddress from "mozilla/webgpu/WebGPUTypes.h";
 using dom::GPURequestAdapterOptions from "mozilla/dom/WebGPUBinding.h";
-using dom::GPUDeviceDescriptor from "mozilla/dom/WebGPUBinding.h";
 using dom::GPUCommandBufferDescriptor from "mozilla/dom/WebGPUBinding.h";
-using webgpu::ffi::WGPUTextureDataLayout from "mozilla/webgpu/ffi/wgpu.h";
-using webgpu::ffi::WGPUTextureCopyView from "mozilla/webgpu/ffi/wgpu.h";
-using webgpu::ffi::WGPUExtent3d from "mozilla/webgpu/ffi/wgpu.h";
 using webgpu::ffi::WGPUHostMap from "mozilla/webgpu/ffi/wgpu.h";
+using MaybeScopedError from "mozilla/webgpu/WebGPUTypes.h";
 
 include "mozilla/ipc/ByteBufUtils.h";
 include "mozilla/webgpu/WebGPUSerialize.h";
@@ -40,12 +36,12 @@ parent:
   async CommandEncoderAction(RawId selfId, RawId aDeviceId, ByteBuf buf);
   async BumpImplicitBindGroupLayout(RawId pipelineId, bool isCompute, uint32_t index, RawId assignId);
 
-  async InstanceRequestAdapter(GPURequestAdapterOptions options, RawId[] ids) returns (RawId adapterId);
-  async AdapterRequestDevice(RawId selfId, GPUDeviceDescriptor desc, RawId newId);
+  async InstanceRequestAdapter(GPURequestAdapterOptions options, RawId[] ids) returns (ByteBuf byteBuf);
+  async AdapterRequestDevice(RawId selfId, ByteBuf buf, RawId newId);
   async AdapterDestroy(RawId selfId);
   async BufferReturnShmem(RawId selfId, Shmem shmem);
   async BufferMap(RawId selfId, WGPUHostMap hostMap, uint64_t offset, uint64_t size) returns (Shmem sm);
-  async BufferUnmap(RawId selfId, Shmem shmem, bool flush);
+  async BufferUnmap(RawId selfId, Shmem shmem, bool flush, bool keepShmem);
   async BufferDestroy(RawId selfId);
   async TextureDestroy(RawId selfId);
   async TextureViewDestroy(RawId selfId);
@@ -55,9 +51,9 @@ parent:
   async CommandEncoderFinish(RawId selfId, RawId deviceId, GPUCommandBufferDescriptor desc);
   async CommandEncoderDestroy(RawId selfId);
   async CommandBufferDestroy(RawId selfId);
-  async QueueSubmit(RawId selfId, RawId[] commandBuffers);
-  async QueueWriteBuffer(RawId selfId, RawId bufferId, BufferAddress bufferOffset, Shmem shmem);
-  async QueueWriteTexture(RawId selfId, WGPUTextureCopyView destination, Shmem shmem, WGPUTextureDataLayout layout, WGPUExtent3d extent);
+  async RenderBundleDestroy(RawId selfId);
+  async QueueSubmit(RawId selfId, RawId aDeviceId, RawId[] commandBuffers);
+  async QueueWriteAction(RawId selfId, RawId aDeviceId, ByteBuf buf, Shmem shmem);
 
   async BindGroupLayoutDestroy(RawId selfId);
   async PipelineLayoutDestroy(RawId selfId);
@@ -65,28 +61,19 @@ parent:
   async ShaderModuleDestroy(RawId selfId);
   async ComputePipelineDestroy(RawId selfId);
   async RenderPipelineDestroy(RawId selfId);
+  async ImplicitLayoutDestroy(RawId implicitPlId, RawId[] implicitBglIds);
   async DeviceCreateSwapChain(RawId selfId, RawId queueId, RGBDescriptor desc, RawId[] bufferIds, ExternalImageId externalId);
   async SwapChainPresent(ExternalImageId externalId, RawId textureId, RawId commandEncoderId);
   async SwapChainDestroy(ExternalImageId externalId);
 
+  async DevicePushErrorScope(RawId selfId);
+  async DevicePopErrorScope(RawId selfId) returns (MaybeScopedError maybeError);
+
   async Shutdown();
 
 child:
-  async Error(RawId aDeviceId, nsCString message);
+  async DeviceUncapturedError(RawId aDeviceId, nsCString message);
   async DropAction(ByteBuf buf);
-  async FreeAdapter(RawId id);
-  async FreeDevice(RawId id);
-  async FreePipelineLayout(RawId id);
-  async FreeShaderModule(RawId id);
-  async FreeBindGroupLayout(RawId id);
-  async FreeBindGroup(RawId id);
-  async FreeCommandBuffer(RawId id);
-  async FreeRenderPipeline(RawId id);
-  async FreeComputePipeline(RawId id);
-  async FreeBuffer(RawId id);
-  async FreeTexture(RawId id);
-  async FreeTextureView(RawId id);
-  async FreeSampler(RawId id);
   async __delete__();
 };
 

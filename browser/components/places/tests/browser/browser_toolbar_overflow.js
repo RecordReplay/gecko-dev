@@ -144,7 +144,7 @@ add_task(async function test_newWindow_noOverflow() {
     let toolbar = win.document.getElementById("PersonalToolbar");
     Assert.ok(!toolbar.collapsed, "The toolbar is not collapsed");
     let content = win.document.getElementById("PlacesToolbarItems");
-    await BrowserTestUtils.waitForCondition(() => {
+    await TestUtils.waitForCondition(() => {
       return (
         content.children.length == 1 &&
         content.children[0].hasAttribute("image")
@@ -370,7 +370,7 @@ add_task(async function test_separator_first() {
 /**
  * If the passed-in condition is fulfilled, awaits for the toolbar nodes
  * visibility to have been updated.
- * @param [condition] Awaits for visibility only if this condition is true.
+ * @param {boolean} [condition] Awaits for visibility only if this condition is true.
  * @returns {Promise} resolved when the condition is not fulfilled or the
  *          visilibily update happened.
  */

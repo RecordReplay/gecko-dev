@@ -12,9 +12,14 @@ enum PlacesEventType {
   "bookmark-added",
   /**
    * data: PlacesBookmarkRemoved. Fired whenever a bookmark
-   * (or a bookmark folder/separator) is created.
+   * (or a bookmark folder/separator) is removed.
    */
   "bookmark-removed",
+  /**
+   * data: PlacesBookmarkMoved. Fired whenever a bookmark
+   * (or a bookmark folder/separator) is moved.
+   */
+  "bookmark-moved",
   /**
    * data: PlacesFavicon. Fired whenever a favicon changes.
    */
@@ -31,6 +36,20 @@ enum PlacesEventType {
    * data: PlacesRanking. Fired whenever pages ranking is changed.
    */
   "pages-rank-changed",
+  /**
+   * data: PlacesVisitRemoved. Fired whenever a page or its visits are removed.
+   * This may be invoked when a page is removed from the store because it has no more
+   * visits, nor bookmarks. It may also be invoked when all or some of the page visits are
+   * removed, but the page itself is not removed from the store, because it may be
+   * bookmarked.
+   */
+  "page-removed",
+  /**
+   * data: PlacesPurgeCaches. Fired whenever changes happened that could not be observed
+   * through other notifications, for example a database fixup. When received, observers,
+   * especially data views, should drop any caches and reload from scratch.
+   */
+  "purge-caches",
 };
 
 [ChromeOnly, Exposed=Window]
@@ -203,6 +222,42 @@ interface PlacesBookmarkRemoved : PlacesBookmark {
   readonly attribute boolean isDescendantRemoval;
 };
 
+dictionary PlacesBookmarkMovedInit {
+  required long long id;
+  required unsigned short itemType;
+  DOMString? url = null;
+  required ByteString guid;
+  required ByteString parentGuid;
+  required long index;
+  required ByteString oldParentGuid;
+  required long oldIndex;
+  required unsigned short source;
+  required boolean isTagging;
+};
+
+[ChromeOnly, Exposed=Window]
+/**
+ * NOTE: Though PlacesBookmarkMoved extends PlacesBookmark,
+ *       parentId will not be set. Use parentGuid instead.
+ */
+interface PlacesBookmarkMoved : PlacesBookmark {
+  constructor(PlacesBookmarkMovedInit initDict);
+  /**
+   * The item's index in the folder.
+   */
+  readonly attribute long index;
+
+  /**
+   * The unique ID associated with the item's old parent.
+   */
+  readonly attribute ByteString oldParentGuid;
+
+  /**
+   * The item's old index in the folder.
+   */
+  readonly attribute long oldIndex;
+};
+
 dictionary PlacesFaviconInit {
   required DOMString url;
   required ByteString pageGuid;
@@ -262,5 +317,67 @@ interface PlacesHistoryCleared : PlacesEvent {
 
 [ChromeOnly, Exposed=Window]
 interface PlacesRanking : PlacesEvent {
+  constructor();
+};
+
+dictionary PlacesVisitRemovedInit {
+  required DOMString url;
+  required ByteString pageGuid;
+  required unsigned short reason;
+  unsigned long transitionType = 0;
+  boolean isRemovedFromStore = false;
+  boolean isPartialVisistsRemoval = false;
+};
+
+[ChromeOnly, Exposed=Window]
+interface PlacesVisitRemoved : PlacesEvent {
+  /**
+   * Removed by the user.
+   */
+  const unsigned short REASON_DELETED = 0;
+
+  /**
+   * Removed by periodic expiration.
+   */
+  const unsigned short REASON_EXPIRED = 1;
+
+  constructor(PlacesVisitRemovedInit initDict);
+
+  /**
+   * The URI of the page.
+   */
+  readonly attribute DOMString url;
+
+  /**
+   * The unique id associated with the page.
+   */
+  readonly attribute ByteString pageGuid;
+
+  /**
+   * The reason of removal.
+   */
+  readonly attribute unsigned short reason;
+
+  /**
+   * One of nsINavHistoryService.TRANSITION_*
+   * NOTE: Please refer this attribute only when isRemovedFromStore is false.
+   *       Otherwise this will be 0.
+   */
+  readonly attribute unsigned long transitionType;
+
+  /**
+   * This will be true if the page is removed from store.
+   * If false, only visits were removed, but not the page.
+   */
+  readonly attribute boolean isRemovedFromStore;
+
+  /**
+   * This will be true if remains at least one visit to the page.
+   */
+  readonly attribute boolean isPartialVisistsRemoval;
+};
+
+[ChromeOnly, Exposed=Window]
+interface PlacesPurgeCaches : PlacesEvent {
   constructor();
 };

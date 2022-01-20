@@ -58,6 +58,7 @@ class gfxVarReceiver;
   _(WebRenderDebugFlags, int32_t, 0)                               \
   _(WebRenderBatchingLookback, int32_t, 10)                        \
   _(UseSoftwareWebRender, bool, false)                             \
+  _(AllowSoftwareWebRenderD3D11, bool, false)                      \
   _(ScreenDepth, int32_t, 0)                                       \
   _(GREDirectory, nsString, nsString())                            \
   _(ProfDirectory, nsString, nsString())                           \
@@ -74,7 +75,9 @@ class gfxVarReceiver;
   _(UseAHardwareBufferContent, bool, false)                        \
   _(UseAHardwareBufferSharedSurface, bool, false)                  \
   _(UseEGL, bool, false)                                           \
-  _(DrmRenderDevice, nsCString, nsCString())
+  _(DrmRenderDevice, nsCString, nsCString())                       \
+  _(UseDMABuf, bool, false)                                        \
+  _(WebRenderRequiresHardwareDriver, bool, false)
 
 /* Add new entries above this line. */
 

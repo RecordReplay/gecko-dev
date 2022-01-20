@@ -13,13 +13,13 @@
 #include "mozilla/dom/Promise-inl.h"
 #include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/FileUtils.h"
+#include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ResultExtensions.h"
 
-#include "FileDescriptor.h"
 #include "FileDescriptorFile.h"
 #include "LoadInfo.h"
 #include "nsContentUtils.h"
@@ -346,16 +346,7 @@ ExtensionProtocolHandler::GetSingleton() {
 }
 
 ExtensionProtocolHandler::ExtensionProtocolHandler()
-    : SubstitutingProtocolHandler(EXTENSION_SCHEME)
-#if !defined(XP_WIN)
-#  if defined(XP_MACOSX)
-      ,
-      mAlreadyCheckedDevRepo(false)
-#  endif /* XP_MACOSX */
-      ,
-      mAlreadyCheckedAppDir(false)
-#endif /* ! XP_WIN */
-{
+    : SubstitutingProtocolHandler(EXTENSION_SCHEME) {
   // Note, extensions.webextensions.protocol.remote=false is for
   // debugging purposes only. With process-level sandboxing, child
   // processes (specifically content and extension processes), will
@@ -379,9 +370,13 @@ nsresult ExtensionProtocolHandler::GetFlagsForURI(nsIURI* aURI,
   if (auto* policy = EPS().GetByURL(url)) {
     // In general a moz-extension URI is only loadable by chrome, but a
     // whitelisted subset are web-accessible (and cross-origin fetchable). Check
-    // that whitelist.
-    if (policy->IsPathWebAccessible(url.FilePath())) {
-      flags |= URI_LOADABLE_BY_ANYONE | URI_FETCHABLE_BY_ANYONE;
+    // that whitelist.  For Manifest V3 extensions, an additional whitelist
+    // for the source loading the url must be checked so we add the flag
+    // WEBEXT_URI_WEB_ACCESSIBLE, which is then checked in
+    // nsScriptSecurityManager.
+    if (policy->IsWebAccessiblePath(url.FilePath())) {
+      flags |= URI_LOADABLE_BY_ANYONE | URI_FETCHABLE_BY_ANYONE |
+               WEBEXT_URI_WEB_ACCESSIBLE;
     } else {
       flags |= URI_DANGEROUS_TO_LOAD;
     }

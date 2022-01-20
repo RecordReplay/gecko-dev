@@ -25,7 +25,7 @@
 #include "nsEscape.h"
 #include "nsIURL.h"
 #include "nsNetUtil.h"
-#include "mozilla/Services.h"
+#include "mozilla/Components.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/Unused.h"
 #include "nsIOutputStream.h"
@@ -1145,7 +1145,7 @@ static bool CreateFilenameFromTextW(nsString& aText, const wchar_t* aExtension,
 
 static bool GetLocalizedString(const char* aName, nsAString& aString) {
   nsCOMPtr<nsIStringBundleService> stringService =
-      mozilla::services::GetStringBundleService();
+      mozilla::components::StringBundle::Service();
   if (!stringService) return false;
 
   nsCOMPtr<nsIStringBundle> stringBundle;
@@ -1490,7 +1490,7 @@ HRESULT nsDataObj::GetText(const nsACString& aDataFlavor, FORMATETC& aFE,
       NS_WARNING("Oh no, couldn't convert unicode to plain text");
       return S_OK;
     }
-  } else if (aFE.cfFormat == nsClipboard::CF_HTML) {
+  } else if (aFE.cfFormat == nsClipboard::GetHtmlClipboardFormat()) {
     // Someone is asking for win32's HTML flavor. Convert our html fragment
     // from unicode to UTF-8 then put it into a format specified by msft.
     NS_ConvertUTF16toUTF8 converter(reinterpret_cast<char16_t*>(data));
@@ -1507,7 +1507,7 @@ HRESULT nsDataObj::GetText(const nsACString& aDataFlavor, FORMATETC& aFE,
       NS_WARNING("Oh no, couldn't convert to HTML");
       return S_OK;
     }
-  } else if (aFE.cfFormat != nsClipboard::CF_CUSTOMTYPES) {
+  } else if (aFE.cfFormat != nsClipboard::GetCustomClipboardFormat()) {
     // we assume that any data that isn't caught above is unicode. This may
     // be an erroneous assumption, but is true so far.
     allocLen += sizeof(char16_t);

@@ -886,6 +886,33 @@ class MochitestArguments(ArgumentContainer):
                 "MOZ_UPLOAD_DIR environment variable.",
             },
         ],
+        [
+            ["--run-failures"],
+            {
+                "action": "store",
+                "dest": "runFailures",
+                "default": "",
+                "help": "Run fail-if/skip-if tests that match a keyword given.",
+            },
+        ],
+        [
+            ["--timeout-as-pass"],
+            {
+                "action": "store_true",
+                "dest": "timeoutAsPass",
+                "default": False,
+                "help": "treat harness level timeouts as passing (used for quarantine jobs).",
+            },
+        ],
+        [
+            ["--crash-as-pass"],
+            {
+                "action": "store_true",
+                "dest": "crashAsPass",
+                "default": False,
+                "help": "treat harness level crashes as passing (used for quarantine jobs).",
+            },
+        ],
     ]
 
     defaults = {
@@ -1139,7 +1166,6 @@ class MochitestArguments(ArgumentContainer):
 
         if options.enable_fission:
             options.extraPrefs.append("fission.autostart=true")
-            options.extraPrefs.append("dom.serviceWorkers.parent_intercept=true")
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
@@ -1147,7 +1173,6 @@ class MochitestArguments(ArgumentContainer):
             "forkserver": options.defaultLeakThreshold,
             # GMP rarely gets a log, but when it does, it leaks a little.
             "gmplugin": 20000,
-            "rdd": 400,
         }
 
         # See the dependencies of bug 1401764.
@@ -1277,10 +1302,7 @@ class AndroidArguments(ArgumentContainer):
                 ]
 
         if options.remoteWebServer is None:
-            if os.name != "nt":
-                options.remoteWebServer = moznetwork.get_ip()
-            else:
-                parser.error("you must specify a --remote-webserver=<ip address>")
+            options.remoteWebServer = moznetwork.get_ip()
 
         options.webServer = options.remoteWebServer
 

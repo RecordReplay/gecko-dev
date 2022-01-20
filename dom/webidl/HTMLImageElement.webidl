@@ -16,7 +16,7 @@ interface imgIRequest;
 interface URI;
 interface nsIStreamListener;
 
-[NamedConstructor=Image(optional unsigned long width, optional unsigned long height),
+[LegacyFactoryFunction=Image(optional unsigned long width, optional unsigned long height),
  Exposed=Window]
 interface HTMLImageElement : HTMLElement {
   [HTMLConstructor] constructor();
@@ -63,7 +63,7 @@ partial interface HTMLImageElement {
            [CEReactions, SetterThrows]
            attribute DOMString longDesc;
 
-  [CEReactions, SetterThrows] attribute [TreatNullAs=EmptyString] DOMString border;
+  [CEReactions, SetterThrows] attribute [LegacyNullToEmptyString] DOMString border;
 };
 
 // [Update me: not in whatwg spec yet]
@@ -127,8 +127,6 @@ interface mixin MozImageLoadingContent {
    */
   [ChromeOnly,Throws]
   void forceReload(optional boolean aNotify = true);
-  [ChromeOnly]
-  void forceImageState(boolean aForce, unsigned long long aState);
 };
 
 HTMLImageElement includes MozImageLoadingContent;

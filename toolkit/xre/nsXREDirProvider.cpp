@@ -33,19 +33,28 @@
 #include "nsEnumeratorUtils.h"
 #include "nsReadableUtils.h"
 
-#include "GeckoProfiler.h"
 #include "SpecialSystemDirectory.h"
 
 #include "mozilla/dom/ScriptSettings.h"
 
+#include "mozilla/AppShutdown.h"
 #include "mozilla/AutoRestore.h"
+#ifdef MOZ_BACKGROUNDTASKS
+#  include "mozilla/BackgroundTasks.h"
+#endif
 #include "mozilla/Components.h"
 #include "mozilla/Services.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/XREAppData.h"
 #include "nsPrintfCString.h"
+
+#ifdef MOZ_THUNDERBIRD
+#  include "nsIPK11TokenDB.h"
+#  include "nsIPK11Token.h"
+#endif
 
 #include <stdlib.h>
 
@@ -508,14 +517,6 @@ nsXREDirProvider::GetFile(const char* aProperty, bool* aPersistent,
     rv = mContentTempDir->Clone(getter_AddRefs(file));
   }
 #endif  // defined(MOZ_SANDBOX)
-#if defined(MOZ_SANDBOX)
-  else if (0 == strcmp(aProperty, NS_APP_PLUGIN_PROCESS_TEMP_DIR)) {
-    if (!mPluginTempDir && NS_FAILED((rv = LoadPluginProcessTempDir()))) {
-      return rv;
-    }
-    rv = mPluginTempDir->Clone(getter_AddRefs(file));
-  }
-#endif  // defined(MOZ_SANDBOX)
   else if (NS_SUCCEEDED(GetProfileStartupDir(getter_AddRefs(file)))) {
     // We need to allow component, xpt, and chrome registration to
     // occur prior to the profile-after-change notification.
@@ -668,43 +669,6 @@ nsresult nsXREDirProvider::LoadContentProcessTempDir() {
   return NS_OK;
 }
 
-//
-// Sets mPluginTempDir so that it refers to the appropriate temp dir.
-// If NS_APP_PLUGIN_PROCESS_TEMP_DIR fails for any reason, NS_OS_TEMP_DIR
-// is used.
-//
-nsresult nsXREDirProvider::LoadPluginProcessTempDir() {
-  // The parent is responsible for creating the sandbox temp dir.
-  if (XRE_IsParentProcess()) {
-    mPluginProcessSandboxTempDir =
-        CreateProcessSandboxTempDir(GeckoProcessType_Plugin);
-    mPluginTempDir = mPluginProcessSandboxTempDir;
-  } else {
-    MOZ_ASSERT(XRE_IsPluginProcess());
-    mPluginTempDir = GetProcessSandboxTempDir(GeckoProcessType_Plugin);
-  }
-
-  if (!mPluginTempDir) {
-    nsresult rv =
-        NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(mPluginTempDir));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-  }
-
-#  if defined(XP_WIN)
-  // The temp dir is used in sandbox rules, so we need to make sure
-  // it doesn't contain any junction points or symlinks or the sandbox will
-  // reject those rules.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(
-          mPluginTempDir)) {
-    NS_WARNING("Failed to resolve plugin temp dir.");
-  }
-#  endif
-
-  return NS_OK;
-}
-
 static bool IsContentSandboxDisabled() {
   return !mozilla::BrowserTabsRemoteAutostart() ||
          (!mozilla::IsContentSandboxEnabled());
@@ -724,13 +688,9 @@ static already_AddRefed<nsIFile> GetProcessSandboxTempDir(
     return nullptr;
   }
 
-  MOZ_ASSERT((type == GeckoProcessType_Content) ||
-             (type == GeckoProcessType_Plugin));
+  MOZ_ASSERT(type == GeckoProcessType_Content);
 
-  const char* prefKey = (type == GeckoProcessType_Content)
-                            ? "security.sandbox.content.tempDirSuffix"
-                            : "security.sandbox.plugin.tempDirSuffix";
-
+  const char* prefKey = "security.sandbox.content.tempDirSuffix";
   nsAutoString tempDirSuffix;
   rv = mozilla::Preferences::GetString(prefKey, tempDirSuffix);
   if (NS_WARN_IF(NS_FAILED(rv)) || tempDirSuffix.IsEmpty()) {
@@ -748,7 +708,7 @@ static already_AddRefed<nsIFile> GetProcessSandboxTempDir(
 //
 // Create a temporary directory for use from sandboxed processes.
 // Only called in the parent. The path is derived from a UUID stored in a
-// pref which is available to content and plugin processes. Returns null
+// pref which is available to content processes. Returns null
 // if the content sandbox is disabled or if an error occurs.
 //
 static already_AddRefed<nsIFile> CreateProcessSandboxTempDir(
@@ -757,13 +717,10 @@ static already_AddRefed<nsIFile> CreateProcessSandboxTempDir(
     return nullptr;
   }
 
-  MOZ_ASSERT((procType == GeckoProcessType_Content) ||
-             (procType == GeckoProcessType_Plugin));
+  MOZ_ASSERT(procType == GeckoProcessType_Content);
 
   // Get (and create if blank) temp directory suffix pref.
-  const char* pref = (procType == GeckoProcessType_Content)
-                         ? "security.sandbox.content.tempDirSuffix"
-                         : "security.sandbox.plugin.tempDirSuffix";
+  const char* pref = "security.sandbox.content.tempDirSuffix";
 
   nsresult rv;
   nsAutoString tempDirSuffix;
@@ -850,6 +807,10 @@ static nsresult DeleteDirIfExists(nsIFile* dir) {
 
 static const char* const kAppendPrefDir[] = {"defaults", "preferences",
                                              nullptr};
+#ifdef MOZ_BACKGROUNDTASKS
+static const char* const kAppendBackgroundTasksPrefDir[] = {
+    "defaults", "backgroundtasks", nullptr};
+#endif
 
 nsresult nsXREDirProvider::GetFilesInternal(const char* aProperty,
                                             nsISimpleEnumerator** aResult) {
@@ -860,6 +821,12 @@ nsresult nsXREDirProvider::GetFilesInternal(const char* aProperty,
     nsCOMArray<nsIFile> directories;
 
     LoadDirIntoArray(mXULAppDir, kAppendPrefDir, directories);
+#ifdef MOZ_BACKGROUNDTASKS
+    if (mozilla::BackgroundTasks::IsBackgroundTaskMode()) {
+      LoadDirIntoArray(mGREDir, kAppendBackgroundTasksPrefDir, directories);
+      LoadDirIntoArray(mXULAppDir, kAppendBackgroundTasksPrefDir, directories);
+    }
+#endif
 
     rv = NS_NewArrayEnumerator(aResult, directories, NS_GET_IID(nsIFile));
   } else if (!strcmp(aProperty, NS_APP_CHROME_DIR_LIST)) {
@@ -966,13 +933,46 @@ nsXREDirProvider::DoStartup() {
     mozilla::SandboxBroker::GeckoDependentInitialize();
 #endif
 
-    // Init the Extension Manager
-    nsCOMPtr<nsIObserver> em =
-        do_GetService("@mozilla.org/addons/integration;1");
-    if (em) {
-      em->Observe(nullptr, "addons-startup", nullptr);
-    } else {
-      NS_WARNING("Failed to create Addons Manager.");
+#ifdef MOZ_THUNDERBIRD
+    bool bgtaskMode = false;
+#  ifdef MOZ_BACKGROUNDTASKS
+    bgtaskMode = mozilla::BackgroundTasks::IsBackgroundTaskMode();
+#  endif
+    if (!bgtaskMode &&
+        mozilla::Preferences::GetBool(
+            "security.prompt_for_master_password_on_startup", false)) {
+      // Prompt for the master password prior to opening application windows,
+      // to avoid the race that triggers multiple prompts (see bug 177175).
+      // We use this code until we have a better solution, possibly as
+      // described in bug 177175 comment 384.
+      nsCOMPtr<nsIPK11TokenDB> db =
+          do_GetService("@mozilla.org/security/pk11tokendb;1");
+      if (db) {
+        nsCOMPtr<nsIPK11Token> token;
+        if (NS_SUCCEEDED(db->GetInternalKeyToken(getter_AddRefs(token)))) {
+          mozilla::Unused << token->Login(false);
+        }
+      } else {
+        NS_WARNING("Failed to get nsIPK11TokenDB service.");
+      }
+    }
+#endif
+
+    bool initExtensionManager =
+#ifdef MOZ_BACKGROUNDTASKS
+        !mozilla::BackgroundTasks::IsBackgroundTaskMode();
+#else
+        true;
+#endif
+    if (initExtensionManager) {
+      // Init the Extension Manager
+      nsCOMPtr<nsIObserver> em =
+          do_GetService("@mozilla.org/addons/integration;1");
+      if (em) {
+        em->Observe(nullptr, "addons-startup", nullptr);
+      } else {
+        NS_WARNING("Failed to create Addons Manager.");
+      }
     }
 
     obsSvc->NotifyObservers(nullptr, "profile-after-change", kStartup);
@@ -998,20 +998,6 @@ nsXREDirProvider::DoStartup() {
     }
     mozilla::Telemetry::Accumulate(mozilla::Telemetry::SAFE_MODE_USAGE, mode);
 
-    // Telemetry about number of profiles.
-    nsCOMPtr<nsIToolkitProfileService> profileService =
-        do_GetService("@mozilla.org/toolkit/profile-service;1");
-    if (profileService) {
-      uint32_t count = 0;
-      rv = profileService->GetProfileCount(&count);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
-
-      mozilla::Telemetry::Accumulate(mozilla::Telemetry::NUMBER_OF_PROFILES,
-                                     count);
-    }
-
     obsSvc->NotifyObservers(nullptr, "profile-initial-state", nullptr);
 
 #if defined(MOZ_SANDBOX)
@@ -1022,11 +1008,6 @@ nsXREDirProvider::DoStartup() {
       mozilla::Unused << NS_WARN_IF(NS_FAILED(LoadContentProcessTempDir()));
     }
 #endif
-#if defined(MOZ_SANDBOX)
-    if (!mPluginTempDir) {
-      mozilla::Unused << NS_WARN_IF(NS_FAILED(LoadPluginProcessTempDir()));
-    }
-#endif
   }
   return NS_OK;
 }
@@ -1035,30 +1016,24 @@ void nsXREDirProvider::DoShutdown() {
   AUTO_PROFILER_LABEL("nsXREDirProvider::DoShutdown", OTHER);
 
   if (mProfileNotified) {
-    nsCOMPtr<nsIObserverService> obsSvc =
-        mozilla::services::GetObserverService();
-    NS_ASSERTION(obsSvc, "No observer service?");
-    if (obsSvc) {
-      static const char16_t kShutdownPersist[] = u"shutdown-persist";
-      obsSvc->NotifyObservers(nullptr, "profile-change-net-teardown",
-                              kShutdownPersist);
-      obsSvc->NotifyObservers(nullptr, "profile-change-teardown",
-                              kShutdownPersist);
+    mozilla::AppShutdown::AdvanceShutdownPhase(
+        mozilla::ShutdownPhase::AppShutdownNetTeardown, nullptr);
+    mozilla::AppShutdown::AdvanceShutdownPhase(
+        mozilla::ShutdownPhase::AppShutdownTeardown, nullptr);
 
 #ifdef DEBUG
-      // Not having this causes large intermittent leaks. See bug 1340425.
-      if (JSContext* cx = mozilla::dom::danger::GetJSContext()) {
-        JS_GC(cx);
-      }
+    // Not having this causes large intermittent leaks. See bug 1340425.
+    if (JSContext* cx = mozilla::dom::danger::GetJSContext()) {
+      JS_GC(cx);
+    }
 #endif
 
-      obsSvc->NotifyObservers(nullptr, "profile-before-change",
-                              kShutdownPersist);
-      obsSvc->NotifyObservers(nullptr, "profile-before-change-qm",
-                              kShutdownPersist);
-      obsSvc->NotifyObservers(nullptr, "profile-before-change-telemetry",
-                              kShutdownPersist);
-    }
+    mozilla::AppShutdown::AdvanceShutdownPhase(
+        mozilla::ShutdownPhase::AppShutdown, nullptr);
+    mozilla::AppShutdown::AdvanceShutdownPhase(
+        mozilla::ShutdownPhase::AppShutdownQM, nullptr);
+    mozilla::AppShutdown::AdvanceShutdownPhase(
+        mozilla::ShutdownPhase::AppShutdownTelemetry, nullptr);
     mProfileNotified = false;
   }
 
@@ -1068,7 +1043,6 @@ void nsXREDirProvider::DoShutdown() {
   if (XRE_IsParentProcess()) {
 #if defined(MOZ_SANDBOX)
     mozilla::Unused << DeleteDirIfExists(mContentProcessSandboxTempDir);
-    mozilla::Unused << DeleteDirIfExists(mPluginProcessSandboxTempDir);
 #endif
   }
 }

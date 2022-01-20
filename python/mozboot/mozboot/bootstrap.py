@@ -14,24 +14,8 @@ import subprocess
 import time
 from distutils.version import LooseVersion
 from mozfile import which
-
-# NOTE: This script is intended to be run with a vanilla Python install.  We
-# have to rely on the standard library instead of Python 2+3 helpers like
-# the six module.
-if sys.version_info < (3,):
-    from ConfigParser import (
-        Error as ConfigParserError,
-        RawConfigParser,
-    )
-
-    input = raw_input  # noqa
-else:
-    from configparser import (
-        Error as ConfigParserError,
-        RawConfigParser,
-    )
-
 from mach.util import UserError
+from mach.telemetry import initialize_telemetry_setting
 
 from mozboot.base import MODERN_RUST_VERSION
 from mozboot.centosfedora import CentOSFedoraBootstrapper
@@ -39,7 +23,7 @@ from mozboot.opensuse import OpenSUSEBootstrapper
 from mozboot.debian import DebianBootstrapper
 from mozboot.freebsd import FreeBSDBootstrapper
 from mozboot.gentoo import GentooBootstrapper
-from mozboot.osx import OSXBootstrapper
+from mozboot.osx import OSXBootstrapper, OSXBootstrapperLight
 from mozboot.openbsd import OpenBSDBootstrapper
 from mozboot.archlinux import ArchlinuxBootstrapper
 from mozboot.solus import SolusBootstrapper
@@ -52,7 +36,7 @@ from mozboot.util import get_state_dir
 # Use distro package to retrieve linux platform information
 import distro
 
-APPLICATION_CHOICE = """
+ARTIFACT_MODE_NOTE = """
 Note on Artifact Mode:
 
 Artifact builds download prebuilt C++ components rather than building
@@ -62,10 +46,13 @@ Artifact builds are recommended for people working on Firefox or
 Firefox for Android frontends, or the GeckoView Java API. They are unsuitable
 for those working on C++ code. For more information see:
 https://firefox-source-docs.mozilla.org/contributing/build/artifact_builds.html.
+""".lstrip()
 
+APPLICATION_CHOICE = """
 Please choose the version of Firefox you want to build:
 %s
-Your choice: """
+Your choice:
+""".strip()
 
 APPLICATIONS = OrderedDict(
     [
@@ -73,6 +60,7 @@ APPLICATIONS = OrderedDict(
         ("Firefox for Desktop", "browser"),
         ("GeckoView/Firefox for Android Artifact Mode", "mobile_android_artifact_mode"),
         ("GeckoView/Firefox for Android", "mobile_android"),
+        ("SpiderMonkey JavaScript engine", "js"),
     ]
 )
 
@@ -116,14 +104,7 @@ mozilla-unified).
 Would you like to run a few configuration steps to ensure Git is
 optimally configured?"""
 
-DEBIAN_DISTROS = (
-    "debian",
-    "ubuntu",
-    "linuxmint",
-    "elementary",
-    "neon",
-    "pop",
-)
+DEBIAN_DISTROS = ("debian", "ubuntu", "linuxmint", "elementary", "neon", "pop")
 
 ADD_GIT_CINNABAR_PATH = """
 To add git-cinnabar to the PATH, edit your shell initialization script, which
@@ -134,23 +115,6 @@ lines:
 
 Then restart your shell.
 """
-
-TELEMETRY_OPT_IN_PROMPT = """
-Build system telemetry
-
-Mozilla collects data about local builds in order to make builds faster and
-improve developer tooling. To learn more about the data we intend to collect
-read here:
-
-  https://firefox-source-docs.mozilla.org/build/buildsystem/telemetry.html
-
-If you have questions, please ask in #build on Matrix:
-
-  https://chat.mozilla.org/#/room/#build:mozilla.org
-
-If you would like to opt out of data collection, select (N) at the prompt.
-
-Would you like to enable build system telemetry?"""
 
 
 OLD_REVISION_WARNING = """
@@ -169,32 +133,6 @@ You are running an older version of git ("{old_version}").
 We recommend upgrading to at least version "{minimum_recommended_version}" to improve
 performance.
 """.strip()
-
-
-def update_or_create_build_telemetry_config(path):
-    """Write a mach config file enabling build telemetry to `path`. If the file does not exist,
-    create it. If it exists, add the new setting to the existing data.
-
-    This is standalone from mach's `ConfigSettings` so we can use it during bootstrap
-    without a source checkout.
-    """
-    config = RawConfigParser()
-    if os.path.exists(path):
-        try:
-            config.read([path])
-        except ConfigParserError as e:
-            print(
-                "Your mach configuration file at `{path}` is not parseable:\n{error}".format(
-                    path=path, error=e
-                )
-            )
-            return False
-    if not config.has_section("build"):
-        config.add_section("build")
-    config.set("build", "telemetry", "true")
-    with open(path, "w") as f:
-        config.write(f)
-    return True
 
 
 class Bootstrapper(object):
@@ -226,7 +164,7 @@ class Bootstrapper(object):
                 full_distribution_name=False
             )
 
-            if dist_id in ("centos", "fedora"):
+            if dist_id in ("centos", "fedora", "rocky"):
                 cls = CentOSFedoraBootstrapper
                 args["distro"] = dist_id
             elif dist_id in DEBIAN_DISTROS:
@@ -241,7 +179,12 @@ class Bootstrapper(object):
                 cls = ArchlinuxBootstrapper
             elif dist_id in ("void"):
                 cls = VoidBootstrapper
-            elif os.path.exists("/etc/SUSE-brand"):
+            elif dist_id in (
+                "opensuse",
+                "opensuse-leap",
+                "opensuse-tumbleweed",
+                "suse",
+            ):
                 cls = OpenSUSEBootstrapper
             else:
                 raise NotImplementedError(
@@ -255,8 +198,10 @@ class Bootstrapper(object):
         elif sys.platform.startswith("darwin"):
             # TODO Support Darwin platforms that aren't OS X.
             osx_version = platform.mac_ver()[0]
-
-            cls = OSXBootstrapper
+            if platform.machine() == "arm64":
+                cls = OSXBootstrapperLight
+            else:
+                cls = OSXBootstrapper
             args["version"] = osx_version
 
         elif sys.platform.startswith("openbsd"):
@@ -322,28 +267,13 @@ class Bootstrapper(object):
             self.instance.ensure_wasi_sysroot_packages(state_dir, checkout_root)
             self.instance.ensure_dump_syms_packages(state_dir, checkout_root)
 
-    def check_telemetry_opt_in(self, state_dir):
-        # Don't prompt if the user already has a setting for this value.
-        if (
-            self.mach_context is not None
-            and "telemetry" in self.mach_context.settings.build
-        ):
-            return self.mach_context.settings.build.telemetry
-        # We can't prompt the user.
-        if self.instance.no_interactive:
-            return False
-        choice = self.instance.prompt_yesno(prompt=TELEMETRY_OPT_IN_PROMPT)
-        if choice:
-            cfg_file = os.path.join(state_dir, "machrc")
-            if update_or_create_build_telemetry_config(cfg_file):
-                print(
-                    "\nThanks for enabling build telemetry! You can change this setting at "
-                    + "any time by editing the config file `{}`\n".format(cfg_file)
-                )
-        return choice
-
     def check_code_submission(self, checkout_root):
         if self.instance.no_interactive or which("moz-phab"):
+            return
+
+        # Skip moz-phab install until bug 1696357 is fixed and makes it to a moz-phab
+        # release.
+        if sys.platform.startswith("darwin") and platform.machine() == "arm64":
             return
 
         if not self.instance.prompt_yesno("Will you be submitting commits to Mozilla?"):
@@ -352,26 +282,33 @@ class Bootstrapper(object):
         mach_binary = os.path.join(checkout_root, "mach")
         subprocess.check_call((sys.executable, mach_binary, "install-moz-phab"))
 
-    def bootstrap(self):
-        if sys.version_info[0] < 3:
-            print(
-                "This script must be run with Python 3. \n"
-                'Try "python3 bootstrap.py".'
-            )
-            sys.exit(1)
-
+    def bootstrap(self, settings):
         if self.choice is None:
+            applications = APPLICATIONS
+            if isinstance(self.instance, OSXBootstrapperLight):
+                applications = {
+                    key: value
+                    for key, value in applications.items()
+                    if "artifact_mode" not in value and "mobile_android" not in value
+                }
+                print(
+                    'Note: M1 Macs don\'t support "Artifact Mode", so '
+                    "it has been removed from the list of options below"
+                )
+            else:
+                print(ARTIFACT_MODE_NOTE)
+
             # Like ['1. Firefox for Desktop', '2. Firefox for Android Artifact Mode', ...].
             labels = [
-                "%s. %s" % (i, name) for i, name in enumerate(APPLICATIONS.keys(), 1)
+                "%s. %s" % (i, name) for i, name in enumerate(applications.keys(), 1)
             ]
-            prompt = APPLICATION_CHOICE % "\n".join(
-                "  {}".format(label) for label in labels
-            )
+            choices = ["  {} [default]".format(labels[0])]
+            choices += ["  {}".format(label) for label in labels[1:]]
+            prompt = APPLICATION_CHOICE % "\n".join(choices)
             prompt_choice = self.instance.prompt_int(
-                prompt=prompt, low=1, high=len(APPLICATIONS)
+                prompt=prompt, low=1, high=len(applications)
             )
-            name, application = list(APPLICATIONS.items())[prompt_choice - 1]
+            name, application = list(applications.items())[prompt_choice - 1]
         elif self.choice in APPLICATIONS.keys():
             name, application = self.choice, APPLICATIONS[self.choice]
         elif self.choice in APPLICATIONS.values():
@@ -407,7 +344,6 @@ class Bootstrapper(object):
 
         if self.instance.no_system_changes:
             self.instance.ensure_mach_environment(checkout_root)
-            self.check_telemetry_opt_in(state_dir)
             self.maybe_install_private_packages_or_exit(state_dir, checkout_root)
             self._output_mozconfig(application, mozconfig_builder)
             sys.exit(0)
@@ -428,7 +364,6 @@ class Bootstrapper(object):
         # Possibly configure Mercurial, but not if the current checkout or repo
         # type is Git.
         if hg_installed and checkout_type == "hg":
-            configure_hg = False
             if not self.instance.no_interactive:
                 configure_hg = self.instance.prompt_yesno(prompt=CONFIGURE_MERCURIAL)
             else:
@@ -451,9 +386,12 @@ class Bootstrapper(object):
                     which("git"), which("git-cinnabar"), state_dir, checkout_root
                 )
 
-        self.check_telemetry_opt_in(state_dir)
         self.maybe_install_private_packages_or_exit(state_dir, checkout_root)
         self.check_code_submission(checkout_root)
+        # Wait until after moz-phab setup to check telemetry so that employees
+        # will be automatically opted-in.
+        if not self.instance.no_interactive and not settings.mach_telemetry.is_set_up:
+            initialize_telemetry_setting(settings, checkout_root, state_dir)
 
         print(FINISHED % name)
         if not (
@@ -492,7 +430,7 @@ class Bootstrapper(object):
                     mozconfig_path,
                     raw_mozconfig,
                 )
-                print(suggestion)
+                print(suggestion, end="")
 
     def _validate_python_environment(self):
         valid = True
@@ -606,7 +544,7 @@ def current_firefox_checkout(env, hg=None):
     HG_ROOT_REVISIONS = set(
         [
             # From mozilla-unified.
-            "8ba995b74e18334ab3707f27e9eb8f4e37ba3d29",
+            "8ba995b74e18334ab3707f27e9eb8f4e37ba3d29"
         ]
     )
 
@@ -650,7 +588,7 @@ def current_firefox_checkout(env, hg=None):
     )
 
 
-def update_git_tools(git, root_state_dir, top_src_dir):
+def update_git_tools(git, root_state_dir):
     """Update git tools, hooks and extensions"""
     # Ensure git-cinnabar is up to date.
     cinnabar_dir = os.path.join(root_state_dir, "git-cinnabar")
@@ -716,7 +654,7 @@ def configure_git(git, cinnabar, root_state_dir, top_src_dir):
             [git, "config", "core.untrackedCache", "true"], cwd=top_src_dir
         )
 
-    cinnabar_dir = update_git_tools(git, root_state_dir, top_src_dir)
+    cinnabar_dir = update_git_tools(git, root_state_dir)
 
     if not cinnabar:
         print(ADD_GIT_CINNABAR_PATH.format(cinnabar_dir))

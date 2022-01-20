@@ -12,6 +12,7 @@
 #  include <unistd.h>
 #endif
 #include "js/experimental/CodeCoverage.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/dom/ScriptSettings.h"  // for AutoJSAPI
 #include "mozilla/CodeCoverageHandler.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -31,24 +32,19 @@ using namespace mozilla;
 // __gcov_flush is protected by a mutex in GCC, but not in LLVM, so we are using
 // a CrossProcessMutex to protect it.
 
-// We rename __gcov_flush to __custom_llvm_gcov_flush in our build of LLVM for
-// Linux, to avoid naming clashes in builds which mix GCC and LLVM. So, when we
-// are building with LLVM exclusively, we need to use __custom_llvm_gcov_flush
-// instead.
-#if !defined(XP_WIN) && defined(__clang__)
-#  define __gcov_flush __custom_llvm_gcov_flush
-// In clang 12, __gcov_flush was split into __gcov_dump and __gcov_reset.
-#  define __gcov_dump __custom_llvm_gcov_dump
-#  define __gcov_reset __custom_llvm_gcov_reset
-#endif
-
 extern "C" void __gcov_flush();
 extern "C" void __gcov_dump();
 extern "C" void __gcov_reset();
 
 StaticAutoPtr<CodeCoverageHandler> CodeCoverageHandler::instance;
 
-void CodeCoverageHandler::FlushCounters() {
+void CodeCoverageHandler::FlushCounters(const bool initialized) {
+  static Atomic<bool> hasBeenInitialized(false);
+  if (!hasBeenInitialized) {
+    hasBeenInitialized = initialized;
+    return;
+  }
+
   printf_stderr("[CodeCoverage] Requested flush for %d.\n", getpid());
 
   CrossProcessMutexAutoLock lock(*CodeCoverageHandler::Get()->GetMutex());
@@ -135,6 +131,9 @@ void CodeCoverageHandler::Init() {
   MOZ_ASSERT(XRE_IsParentProcess());
   instance = new CodeCoverageHandler();
   ClearOnShutdown(&instance);
+
+  // Don't really flush but just make FlushCounters usable.
+  FlushCounters(true);
 }
 
 void CodeCoverageHandler::Init(const CrossProcessMutexHandle& aHandle) {
@@ -142,6 +141,9 @@ void CodeCoverageHandler::Init(const CrossProcessMutexHandle& aHandle) {
   MOZ_ASSERT(!XRE_IsParentProcess());
   instance = new CodeCoverageHandler(aHandle);
   ClearOnShutdown(&instance);
+
+  // Don't really flush but just make FlushCounters usable.
+  FlushCounters(true);
 }
 
 CodeCoverageHandler* CodeCoverageHandler::Get() {

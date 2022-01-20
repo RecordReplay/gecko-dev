@@ -103,7 +103,10 @@ function initializeDynamicResult() {
 class ProviderTabToSearch extends UrlbarProvider {
   constructor() {
     super();
-    this.onboardingEnginesShown = new Set();
+    this.enginesShown = {
+      onboarding: new Set(),
+      regular: new Set(),
+    };
   }
 
   /**
@@ -175,7 +178,7 @@ class ProviderTabToSearch extends UrlbarProvider {
       },
       action: {
         l10n: {
-          id: UrlbarUtils.WEB_ENGINE_NAMES.has(result.payload.engine)
+          id: result.payload.isGeneralPurposeEngine
             ? "urlbar-result-action-tabtosearch-web"
             : "urlbar-result-action-tabtosearch-other-engine",
           args: {
@@ -245,29 +248,76 @@ class ProviderTabToSearch extends UrlbarProvider {
   }
 
   /**
-   * Called when the user starts and ends an engagement with the urlbar. We
-   * clear onboardingEnginesShown on engagement because we want to record in
-   * urlbar.tips once per engagement per engine. This has the unfortunate side
-   * effect of recording again when the user re-opens a view with a retained
-   * tab-to-search result. This is an acceptable tradeoff for not recording
-   * multiple times if the user backspaces autofill but then retypes the engine
-   * hostname, yielding the same tab-to-search result.
+   * Called when the user starts and ends an engagement with the urlbar.  For
+   * details on parameters, see UrlbarProvider.onEngagement().
    *
-   * @param {boolean} isPrivate True if the engagement is in a private context.
-   * @param {string} state The state of the engagement, one of: start,
-   *        engagement, abandonment, discard.
+   * @param {boolean} isPrivate
+   *   True if the engagement is in a private context.
+   * @param {string} state
+   *   The state of the engagement, one of: start, engagement, abandonment,
+   *   discard
+   * @param {UrlbarQueryContext} queryContext
+   *   The engagement's query context.  This is *not* guaranteed to be defined
+   *   when `state` is "start".  It will always be defined for "engagement" and
+   *   "abandonment".
+   * @param {object} details
+   *   This is defined only when `state` is "engagement" or "abandonment", and
+   *   it describes the search string and picked result.
    */
-  onEngagement(isPrivate, state) {
-    if (!this.onboardingEnginesShown.size) {
+  onEngagement(isPrivate, state, queryContext, details) {
+    if (!this.enginesShown.regular.size && !this.enginesShown.onboarding.size) {
       return;
     }
 
-    Services.telemetry.keyedScalarAdd(
-      "urlbar.tips",
-      "tabtosearch_onboard-shown",
-      this.onboardingEnginesShown.size
-    );
-    this.onboardingEnginesShown.clear();
+    try {
+      // urlbar.tabtosearch.* is prerelease-only/opt-in for now. See bug 1686330.
+      for (let engine of this.enginesShown.regular) {
+        let scalarKey = UrlbarSearchUtils.getSearchModeScalarKey({
+          engineName: engine,
+        });
+        Services.telemetry.keyedScalarAdd(
+          "urlbar.tabtosearch.impressions",
+          scalarKey,
+          1
+        );
+      }
+      for (let engine of this.enginesShown.onboarding) {
+        let scalarKey = UrlbarSearchUtils.getSearchModeScalarKey({
+          engineName: engine,
+        });
+        Services.telemetry.keyedScalarAdd(
+          "urlbar.tabtosearch.impressions_onboarding",
+          scalarKey,
+          1
+        );
+      }
+
+      // We also record in urlbar.tips because only it has been approved for use
+      // in release channels.
+      Services.telemetry.keyedScalarAdd(
+        "urlbar.tips",
+        "tabtosearch-shown",
+        this.enginesShown.regular.size
+      );
+      Services.telemetry.keyedScalarAdd(
+        "urlbar.tips",
+        "tabtosearch_onboard-shown",
+        this.enginesShown.onboarding.size
+      );
+    } catch (ex) {
+      // If your test throws this error or causes another test to throw it, it
+      // is likely because your test showed a tab-to-search result but did not
+      // start and end the engagement in which it was shown. Be sure to fire an
+      // input event to start an engagement and blur the Urlbar to end it.
+      Cu.reportError(`Exception while recording TabToSearch telemetry: ${ex})`);
+    } finally {
+      // Even if there's an exception, we want to clear these Sets. Otherwise,
+      // we might get into a state where we repeatedly run the same engines
+      // through the code above and never record telemetry, because there's an
+      // error every time.
+      this.enginesShown.regular.clear();
+      this.enginesShown.onboarding.clear();
+    }
   }
 
   /**
@@ -400,7 +450,7 @@ function makeOnboardingResult(engine, satisfiesAutofillThreshold = false) {
       engine: engine.name,
       url,
       providesSearchMode: true,
-      icon: UrlbarUtils.ICON.SEARCH_GLASS_INVERTED,
+      icon: UrlbarUtils.ICON.SEARCH_GLASS,
       dynamicType: DYNAMIC_RESULT_TYPE,
       satisfiesAutofillThreshold,
     }
@@ -420,9 +470,10 @@ function makeResult(context, engine, satisfiesAutofillThreshold = false) {
     UrlbarUtils.RESULT_SOURCE.SEARCH,
     ...UrlbarResult.payloadAndSimpleHighlights(context.tokens, {
       engine: engine.name,
+      isGeneralPurposeEngine: engine.isGeneralPurposeEngine,
       url,
       providesSearchMode: true,
-      icon: UrlbarUtils.ICON.SEARCH_GLASS_INVERTED,
+      icon: UrlbarUtils.ICON.SEARCH_GLASS,
       query: "",
       satisfiesAutofillThreshold,
     })

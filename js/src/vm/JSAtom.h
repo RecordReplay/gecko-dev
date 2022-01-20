@@ -28,16 +28,6 @@ class PropertyName;
 
 } /* namespace js */
 
-/* Well-known predefined C strings. */
-#define DECLARE_PROTO_STR(name, clasp) extern const char js_##name##_str[];
-JS_FOR_EACH_PROTOTYPE(DECLARE_PROTO_STR)
-#undef DECLARE_PROTO_STR
-
-#define DECLARE_CONST_CHAR_STR(idpart, id, text) \
-  extern const char js_##idpart##_str[];
-FOR_EACH_COMMON_PROPERTYNAME(DECLARE_CONST_CHAR_STR)
-#undef DECLARE_CONST_CHAR_STR
-
 namespace js {
 
 class AutoAccessAtomsZone;
@@ -57,6 +47,9 @@ extern JSAtom* Atomize(
     js::PinningBehavior pin = js::DoNotPinAtom,
     const mozilla::Maybe<uint32_t>& indexValue = mozilla::Nothing());
 
+extern JSAtom* Atomize(JSContext* cx, HashNumber hash, const char* bytes,
+                       size_t length, PinningBehavior pin);
+
 template <typename CharT>
 extern JSAtom* AtomizeChars(JSContext* cx, const CharT* chars, size_t length,
                             js::PinningBehavior pin = js::DoNotPinAtom);
@@ -74,15 +67,6 @@ extern JSAtom* AtomizeChars(JSContext* cx, mozilla::HashNumber hash,
  */
 extern JSAtom* AtomizeUTF8Chars(JSContext* cx, const char* utf8Chars,
                                 size_t utf8ByteLength);
-
-/**
- * Create an atom whose contents are those of the |wtf8ByteLength| code units
- * starting at |wtf8Chars|, interpreted as WTF-8.
- *
- * Throws if the code units do not contain valid WTF-8.
- */
-extern JSAtom* AtomizeWTF8Chars(JSContext* cx, const char* wtf8Chars,
-                                size_t wtf8ByteLength);
 
 extern JSAtom* AtomizeString(JSContext* cx, JSString* str,
                              js::PinningBehavior pin = js::DoNotPinAtom);

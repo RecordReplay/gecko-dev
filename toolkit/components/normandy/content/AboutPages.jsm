@@ -31,7 +31,12 @@ ChromeUtils.defineModuleGetter(
 ChromeUtils.defineModuleGetter(
   this,
   "ExperimentManager",
-  "resource://messaging-system/experiments/ExperimentManager.jsm"
+  "resource://nimbus/lib/ExperimentManager.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
+  "RemoteSettingsExperimentLoader",
+  "resource://nimbus/lib/RemoteSettingsExperimentLoader.jsm"
 );
 
 var EXPORTED_SYMBOLS = ["AboutPages"];
@@ -120,6 +125,21 @@ XPCOMUtils.defineLazyGetter(AboutPages, "aboutStudies", () => {
       return ExperimentManager.store.getAll();
     },
 
+    async optInToExperiment(data) {
+      try {
+        await RemoteSettingsExperimentLoader.optInToExperiment(data);
+        return {
+          error: false,
+          message: "Opt-in was successful.",
+        };
+      } catch (error) {
+        return {
+          error: true,
+          message: error.message,
+        };
+      }
+    },
+
     /** Add a browsing context to the weak set;
      * this weak set keeps track of all contexts
      * that are housing an about:studies page.
@@ -156,7 +176,8 @@ XPCOMUtils.defineLazyGetter(AboutPages, "aboutStudies", () => {
      * since RecipeRunner is stateful, and can't be interacted with from
      * content processes safely.
      */
-    getStudiesEnabled() {
+    async getStudiesEnabled() {
+      await RecipeRunner.initializedPromise.promise;
       return RecipeRunner.enabled && gOptOutStudiesEnabled;
     },
 
@@ -191,7 +212,10 @@ XPCOMUtils.defineLazyGetter(AboutPages, "aboutStudies", () => {
      */
     async removePreferenceStudy(experimentName, reason) {
       try {
-        await PreferenceExperiments.stop(experimentName, { reason });
+        await PreferenceExperiments.stop(experimentName, {
+          reason,
+          caller: "AboutPages.removePreferenceStudy",
+        });
       } catch (err) {
         // If the exception was that the study was already removed, that's ok.
         // If not, rethrow the error.

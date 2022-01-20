@@ -14,6 +14,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/webrender/WebRenderAPI.h"
+#include "nsBlockFrame.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsCSSRendering.h"
@@ -21,7 +22,6 @@
 #include "nsGkAtoms.h"
 #include "nsIFrameInlines.h"
 #include "nsLayoutUtils.h"
-#include "nsLegendFrame.h"
 #include "nsStyleConsts.h"
 
 using namespace mozilla;
@@ -196,10 +196,11 @@ bool nsDisplayFieldSetBorder::CreateWebRenderCommands(
           LayoutDeviceRect::FromAppUnits(legendRect, appUnitsPerDevPixel));
       region.mode = wr::ClipMode::ClipOut;
       region.radii = wr::EmptyBorderRadius();
-      nsTArray<mozilla::wr::ComplexClipRegion> array{region};
 
-      auto clip = aBuilder.DefineClip(Nothing(), layoutRect, &array);
-      auto clipChain = aBuilder.DefineClipChain({clip}, true);
+      auto rect_clip = aBuilder.DefineRectClip(Nothing(), layoutRect);
+      auto complex_clip = aBuilder.DefineRoundedRectClip(Nothing(), region);
+      auto clipChain =
+          aBuilder.DefineClipChain({rect_clip, complex_clip}, true);
       clipOut.emplace(aBuilder, clipChain);
     }
   } else {
@@ -432,10 +433,9 @@ void nsFieldSetFrame::Reflow(nsPresContext* aPresContext,
   // @note |this| frame applies borders but not any padding.  Our anonymous
   // inner frame applies the padding (but not borders).
   const auto wm = GetWritingMode();
-  LogicalMargin border = aReflowInput.ComputedLogicalBorderPadding(wm) -
-                         aReflowInput.ComputedLogicalPadding(wm);
   auto skipSides = PreReflowBlockLevelLogicalSkipSides();
-  border.ApplySkipSides(skipSides);
+  LogicalMargin border =
+      aReflowInput.ComputedLogicalBorder(wm).ApplySkipSides(skipSides);
   LogicalSize availSize(wm, aReflowInput.ComputedSize().ISize(wm),
                         aReflowInput.AvailableBSize());
 
@@ -445,8 +445,15 @@ void nsFieldSetFrame::Reflow(nsPresContext* aPresContext,
   if (legend) {
     const auto legendWM = legend->GetWritingMode();
     LogicalSize legendAvailSize = availSize.ConvertTo(legendWM, wm);
+    ComputeSizeFlags sizeFlags;
+    if (legend->StylePosition()->ISize(wm).IsAuto()) {
+      sizeFlags = ComputeSizeFlag::ShrinkWrap;
+    }
+    ReflowInput::InitFlags initFlags;  // intentionally empty
+    StyleSizeOverrides sizeOverrides;  // intentionally empty
     legendReflowInput.emplace(aPresContext, aReflowInput, legend,
-                              legendAvailSize);
+                              legendAvailSize, Nothing(), initFlags,
+                              sizeOverrides, sizeFlags);
   }
   const bool avoidBreakInside = ShouldAvoidBreakInside(aReflowInput);
   if (reflowLegend) {
@@ -459,8 +466,10 @@ void nsFieldSetFrame::Reflow(nsPresContext* aPresContext,
                 LogicalPoint(wm), dummyContainerSize,
                 ReflowChildFlags::NoMoveFrame, aStatus);
 
-    if (!prevInFlow && !aReflowInput.mFlags.mIsTopOfPage &&
-        aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE) {
+    if (aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE &&
+        !(HasAnyStateBits(NS_FRAME_OUT_OF_FLOW) &&
+          aReflowInput.mStyleDisplay->IsAbsolutelyPositionedStyle()) &&
+        !prevInFlow && !aReflowInput.mFlags.mIsTopOfPage) {
       // Propagate break-before from the legend to the fieldset.
       if (legend->StyleDisplay()->BreakBefore() ||
           aStatus.IsInlineBreakBefore()) {
@@ -675,11 +684,10 @@ void nsFieldSetFrame::Reflow(nsPresContext* aPresContext,
     if (innerContentRect.ISize(wm) > mLegendRect.ISize(wm)) {
       // NOTE legend @align values are: left/right/center
       // GetLogicalAlign converts left/right to start/end for the given WM.
-      // @see HTMLLegendElement::ParseAttribute, nsLegendFrame::GetLogicalAlign
-      LegendAlignValue align =
-          static_cast<nsLegendFrame*>(legend->GetContentInsertionFrame())
-              ->GetLogicalAlign(wm);
-      switch (align) {
+      // @see HTMLLegendElement::ParseAttribute/LogicalAlign
+      auto* legendElement =
+          dom::HTMLLegendElement::FromNode(legend->GetContent());
+      switch (legendElement->LogicalAlign(wm)) {
         case LegendAlignValue::InlineEnd:
           mLegendRect.IStart(wm) =
               innerContentRect.IEnd(wm) - mLegendRect.ISize(wm);
@@ -789,24 +797,46 @@ void nsFieldSetFrame::Reflow(nsPresContext* aPresContext,
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
 }
 
-#ifdef DEBUG
 void nsFieldSetFrame::SetInitialChildList(ChildListID aListID,
                                           nsFrameList& aChildList) {
   nsContainerFrame::SetInitialChildList(aListID, aChildList);
-  MOZ_ASSERT(aListID != kPrincipalList || GetInner(),
-             "Setting principal child list should populate our inner frame");
+  if (nsBlockFrame* legend = do_QueryFrame(GetLegend())) {
+    // A rendered legend always establish a new formatting context.
+    // https://html.spec.whatwg.org/multipage/rendering.html#rendered-legend
+    legend->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
+  }
+  MOZ_ASSERT(aListID != kPrincipalList || GetInner() || GetLegend(),
+             "Setting principal child list should populate our inner frame "
+             "or our rendered legend");
 }
+
 void nsFieldSetFrame::AppendFrames(ChildListID aListID,
                                    nsFrameList& aFrameList) {
-  MOZ_CRASH("nsFieldSetFrame::AppendFrames not supported");
+  MOZ_ASSERT(aListID == kNoReflowPrincipalList &&
+                 HasAnyStateBits(NS_FRAME_FIRST_REFLOW),
+             "AppendFrames should only be used from "
+             "nsCSSFrameConstructor::ConstructFieldSetFrame");
+  nsContainerFrame::AppendFrames(aListID, aFrameList);
+  MOZ_ASSERT(GetInner(), "at this point we should have an inner frame");
 }
 
 void nsFieldSetFrame::InsertFrames(ChildListID aListID, nsIFrame* aPrevFrame,
                                    const nsLineList::iterator* aPrevFrameLine,
                                    nsFrameList& aFrameList) {
-  MOZ_CRASH("nsFieldSetFrame::InsertFrames not supported");
+  MOZ_ASSERT(aListID == kPrincipalList && !aPrevFrame && !GetLegend(),
+             "InsertFrames should only be used to prepend a rendered legend "
+             "from nsCSSFrameConstructor::ConstructFramesFromItemList");
+  nsContainerFrame::InsertFrames(aListID, aPrevFrame, aPrevFrameLine,
+                                 aFrameList);
+  MOZ_ASSERT(GetLegend());
+  if (nsBlockFrame* legend = do_QueryFrame(GetLegend())) {
+    // A rendered legend always establish a new formatting context.
+    // https://html.spec.whatwg.org/multipage/rendering.html#rendered-legend
+    legend->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
+  }
 }
 
+#ifdef DEBUG
 void nsFieldSetFrame::RemoveFrame(ChildListID aListID, nsIFrame* aOldFrame) {
   MOZ_CRASH("nsFieldSetFrame::RemoveFrame not supported");
 }

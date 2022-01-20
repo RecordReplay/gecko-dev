@@ -12,6 +12,7 @@
 
 #include "mozilla/Preferences.h"
 #include "mozilla/SchedulerGroup.h"
+#include "mozilla/StaticPrefs_dom.h"
 
 namespace mozilla {
 namespace dom {
@@ -72,7 +73,8 @@ bool ServiceWorkerRegistrationInfo::IsCorrupt() const { return mCorrupt; }
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     const nsACString& aScope, nsIPrincipal* aPrincipal,
-    ServiceWorkerUpdateViaCache aUpdateViaCache)
+    ServiceWorkerUpdateViaCache aUpdateViaCache,
+    IPCNavigationPreloadState&& aNavigationPreloadState)
     : mPrincipal(aPrincipal),
       mDescriptor(GetNextId(), GetNextVersion(), aPrincipal, aScope,
                   aUpdateViaCache),
@@ -83,9 +85,9 @@ ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
       mCreationTimeStamp(TimeStamp::Now()),
       mLastUpdateTime(0),
       mUnregistered(false),
-      mCorrupt(false) {
-  MOZ_ASSERT_IF(ServiceWorkerParentInterceptEnabled(),
-                XRE_GetProcessType() == GeckoProcessType_Default);
+      mCorrupt(false),
+      mNavigationPreloadState(std::move(aNavigationPreloadState)) {
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
 }
 
 ServiceWorkerRegistrationInfo::~ServiceWorkerRegistrationInfo() {
@@ -151,6 +153,7 @@ void ServiceWorkerRegistrationInfo::SetUnregistered() {
 #endif
 
   mUnregistered = true;
+  NotifyChromeRegistrationListeners();
 }
 
 NS_IMPL_ISUPPORTS(ServiceWorkerRegistrationInfo,
@@ -160,6 +163,14 @@ NS_IMETHODIMP
 ServiceWorkerRegistrationInfo::GetPrincipal(nsIPrincipal** aPrincipal) {
   MOZ_ASSERT(NS_IsMainThread());
   NS_ADDREF(*aPrincipal = mPrincipal);
+  return NS_OK;
+}
+
+NS_IMETHODIMP ServiceWorkerRegistrationInfo::GetUnregistered(
+    bool* aUnregistered) {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aUnregistered);
+  *aUnregistered = mUnregistered;
   return NS_OK;
 }
 
@@ -226,6 +237,23 @@ ServiceWorkerRegistrationInfo::GetActiveWorker(nsIServiceWorkerInfo** aResult) {
   MOZ_ASSERT(NS_IsMainThread());
   RefPtr<ServiceWorkerInfo> info = mActiveWorker;
   info.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetQuotaUsageCheckCount(
+    int32_t* aQuotaUsageCheckCount) {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aQuotaUsageCheckCount);
+
+  // This value is actually stored on SWM's internal-only
+  // RegistrationDataPerPrincipal structure, but we expose it here for
+  // simplicity for our consumers, so we have to ask SWM to look it up for us.
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  MOZ_ASSERT(swm);
+
+  *aQuotaUsageCheckCount = swm->GetPrincipalQuotaUsageCheckCount(mPrincipal);
+
   return NS_OK;
 }
 
@@ -477,6 +505,21 @@ void ServiceWorkerRegistrationInfo::MaybeScheduleUpdate() {
   if (!swm) {
     // shutting down, do nothing
     return;
+  }
+
+  // When reach the navigation fault threshold, calling unregister instead of
+  // scheduling update.
+  if (mActiveWorker) {
+    uint32_t navigationFaultCount;
+    mActiveWorker->GetNavigationFaultCount(&navigationFaultCount);
+    const auto navigationFaultThreshold = StaticPrefs::
+        dom_serviceWorkers_mitigations_navigation_fault_threshold();
+    // Disable unregister mitigation when navigation fault threshold is 0.
+    if (navigationFaultThreshold <= navigationFaultCount &&
+        navigationFaultThreshold != 0) {
+      swm->Unregister(mPrincipal, nullptr, NS_ConvertUTF8toUTF16(Scope()));
+      return;
+    }
   }
 
   mUpdateState = NeedUpdate;
@@ -799,6 +842,24 @@ void ServiceWorkerRegistrationInfo::ClearWhenIdle() {
 
 const nsID& ServiceWorkerRegistrationInfo::AgentClusterId() const {
   return mAgentClusterId;
+}
+
+void ServiceWorkerRegistrationInfo::SetNavigationPreloadEnabled(
+    const bool& aEnabled) {
+  MOZ_ASSERT(NS_IsMainThread());
+  mNavigationPreloadState.enabled() = aEnabled;
+}
+
+void ServiceWorkerRegistrationInfo::SetNavigationPreloadHeader(
+    const nsCString& aHeader) {
+  MOZ_ASSERT(NS_IsMainThread());
+  mNavigationPreloadState.headerValue() = aHeader;
+}
+
+IPCNavigationPreloadState
+ServiceWorkerRegistrationInfo::GetNavigationPreloadState() const {
+  MOZ_ASSERT(NS_IsMainThread());
+  return mNavigationPreloadState;
 }
 
 // static

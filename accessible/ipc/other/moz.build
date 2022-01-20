@@ -6,16 +6,18 @@
 
 
 if CONFIG["ACCESSIBILITY"]:
-    IPDL_SOURCES += ["PDocAccessible.ipdl"]
+    IPDL_SOURCES += [
+        "PDocAccessible.ipdl",
+    ]
 
     EXPORTS.mozilla.a11y += [
         "DocAccessibleChild.h",
-        "ProxyAccessible.h",
+        "RemoteAccessible.h",
     ]
 
     SOURCES += [
         "DocAccessibleChild.cpp",
-        "ProxyAccessible.cpp",
+        "RemoteAccessible.cpp",
     ]
 
     LOCAL_INCLUDES += [

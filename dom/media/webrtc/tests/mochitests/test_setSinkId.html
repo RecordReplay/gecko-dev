@@ -12,6 +12,8 @@
     bug: "934425",
   });
 
+  const memoryReportPath = 'explicit/media/media-manager-aggregates';
+
   /**
    * Run a test to verify set sink id in audio element.
    */
@@ -23,10 +25,13 @@
       return;
     }
 
+    // Expose an audio output device.
+    SpecialPowers.wrap(document).notifyUserGestureActivation();
+    await navigator.mediaDevices.selectAudioOutput();
+
     const allDevices = await navigator.mediaDevices.enumerateDevices();
     const audioDevices = allDevices.filter(({kind}) => kind == 'audiooutput');
-    info(`Found  ${audioDevices.length} output devices`);
-    ok(audioDevices.length > 0, "More than one output device found");
+    is(audioDevices.length, 1, "Number of output devices found");
 
     const audio = createMediaElement("audio", "audio");
     document.body.appendChild(audio);
@@ -48,6 +53,28 @@
       ok(true, `Set sink id expected to fail: ${error}`);
       is(error.name, "NotFoundError", "Verify correct error");
     }
+
+    const {usage: usage1} =
+          await collectMemoryUsage(memoryReportPath); // Provided by head.js
+
+    ok(usage1 > 0, "MediaManager memory usage should be non-zero to store \
+device ids after enumerateDevices");
+
+    const p2 = audio.setSinkId("");
+    is(audio.sinkId, audioDevices[0].deviceId,
+       'sinkId after setSinkId("") return');
+    is(await p2, undefined,
+       "promise resolution value when sinkId parameter is empty");
+    is(audio.sinkId, "", 'sinkId after setSinkId("") resolution');
+
+    await audio.setSinkId(audioDevices[0].deviceId);
+
+    const {usage: usage2, reportCount} =
+          await collectMemoryUsage(memoryReportPath);
+    is(reportCount, 1,
+       'Expect only one MediaManager to report in content processes.');
+    is(usage2, usage1, "MediaManager memory usage should return to previous \
+value after promise resolution");
   });
 
 </script>

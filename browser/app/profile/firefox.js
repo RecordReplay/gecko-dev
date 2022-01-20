@@ -44,10 +44,6 @@ pref("extensions.getAddons.link.url", "https://addons.mozilla.org/%LOCALE%/firef
 pref("extensions.getAddons.langpacks.url", "https://services.addons.mozilla.org/api/v4/addons/language-tools/?app=firefox&type=language&appversion=%VERSION%");
 pref("extensions.getAddons.discovery.api_url", "https://services.addons.mozilla.org/api/v4/discovery/?lang=%LOCALE%&edition=%DISTRIBUTION%");
 
-// Use bloomfilters for the addons blocklist, instead of JSON only.
-pref("extensions.blocklist.useMLBF", true);
-pref("extensions.blocklist.useMLBF.stashes", true);
-
 // The URL for the privacy policy related to recommended extensions.
 pref("extensions.recommendations.privacyPolicyUrl", "https://www.mozilla.org/privacy/firefox/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_content=privacy-policy-link#addons");
 // The URL for Firefox Color, recommended on the theme page in about:addons.
@@ -169,6 +165,40 @@ pref("app.update.staging.enabled", true);
 
 pref("app.update.langpack.enabled", true);
 
+#if defined(MOZ_UPDATE_AGENT)
+  pref("app.update.background.loglevel", "error");
+  pref("app.update.background.timeoutSec", 600);
+  // If set to true, on Windows, the browser will attempt to schedule OS-level
+  // background tasks to update itself even when it is not running.  This pref
+  // is special: any profile that believes itself the default profile will
+  // mirror this pref's default value to the per-installation pref
+  // `app.update.background.enabled`.  This pref will be used to stage the roll
+  // out of the background update feature via Normandy.  (The per-installation
+  // pref allows profiles beyond the default profile to enable and disable the
+  // background update feature manually.)
+  //
+  // This preprocessor if statement is a bit ugly because the preprocessor does
+  // not currently support using parentheses for grouping. If it did, this could
+  // be more cleanly expressed as
+  // (defined(EARLY_BETA_OR_EARLIER) || defined(MOZ_DEV_EDITION)) && defined(XP_WIN)
+  // Since it does not, however, we must rely on the order of operations that it
+  // implements, which evaluates && operations before || operations
+#if defined(EARLY_BETA_OR_EARLIER) && defined(XP_WIN) || defined(MOZ_DEV_EDITION) && defined(XP_WIN)
+  pref("app.update.background.scheduling.enabled", true);
+  pref("app.update.background.experimental", true);
+#else
+  pref("app.update.background.scheduling.enabled", false);
+#endif
+  // By default, check for updates when the browser is not running every 7 hours.
+  pref("app.update.background.interval", 25200);
+#endif
+
+#if defined(MOZ_BACKGROUNDTASKS)
+  // The amount of time, in seconds, before background tasks time out and exit.
+  // Tasks can override this default (10 minutes).
+  pref("toolkit.backgroundtasks.defaultTimeoutSec", 600);
+#endif
+
 // Symmetric (can be overridden by individual extensions) update preferences.
 // e.g.
 //  extensions.{GUID}.update.enabled
@@ -230,6 +260,8 @@ pref("browser.uidensity", 0);
 // Whether Firefox will automatically override the uidensity to "touch"
 // while the user is in a touch environment (such as Windows tablet mode).
 pref("browser.touchmode.auto", true);
+// Whether Firefox will show the Compact Mode UIDensity option.
+pref("browser.compactmode.show", false);
 
 // At startup, check if we're the default browser and prompt user if not.
 pref("browser.shell.checkDefaultBrowser", true);
@@ -238,13 +270,12 @@ pref("browser.shell.mostRecentDateSetAsDefault", "");
 pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", true);
 pref("browser.shell.didSkipDefaultBrowserCheckOnFirstRun", false);
 pref("browser.shell.defaultBrowserCheckCount", 0);
-#ifdef EARLY_BETA_OR_EARLIER
-pref("browser.defaultbrowser.notificationbar", true);
-#else
-pref("browser.defaultbrowser.notificationbar", false);
+#if defined(XP_WIN)
+// Attempt to set the default browser on Windows 10 using the UserChoice registry keys,
+// before falling back to launching the modern Settings dialog.
+pref("browser.shell.setDefaultBrowserUserChoice", true);
 #endif
-pref("browser.defaultbrowser.notificationbar.checkcount", 0);
-pref("browser.defaultbrowser.notificationbar.checklimit", 10000);
+
 
 // 0 = blank, 1 = home (browser.startup.homepage), 2 = last visited page, 3 = resume previous browser session
 // The behavior of option 3 is detailed at: http://wiki.mozilla.org/Session_Restore
@@ -273,25 +304,27 @@ pref("browser.startup.firstrunSkipsHomepage", false);
 // Show a skeleton UI window prior to loading libxul. Only visible for windows
 // users as it is not implemented anywhere else.
 #if defined(XP_WIN)
-#ifdef NIGHTLY_BUILD
 pref("browser.startup.preXulSkeletonUI", true);
-#else
-pref("browser.startup.preXulSkeletonUI", false);
 #endif
-#endif
+
+// Show an upgrade dialog on major upgrades.
+pref("browser.startup.upgradeDialog.enabled", true);
 
 // Don't create the hidden window during startup on
 // platforms that don't always need it (Win/Linux).
 pref("toolkit.lazyHiddenWindow", true);
 
-pref("browser.slowStartup.notificationDisabled", false);
-pref("browser.slowStartup.timeThreshold", 20000);
-pref("browser.slowStartup.maxSamples", 5);
-
 pref("browser.chrome.site_icons", true);
 // browser.warnOnQuit == false will override all other possible prompts when quitting or restarting
 pref("browser.warnOnQuit", true);
-pref("browser.fullscreen.autohide", true);
+
+// TODO bug 1702563: Renable fullscreen autohide by default on macOS.
+#ifdef XP_MACOSX
+  pref("browser.fullscreen.autohide", false);
+#else
+  pref("browser.fullscreen.autohide", true);
+#endif
+
 pref("browser.overlink-delay", 80);
 
 // Whether using `ctrl` when hitting return/enter in the URL bar
@@ -332,6 +365,33 @@ pref("browser.urlbar.suggest.openpage",             true);
 pref("browser.urlbar.suggest.searches",             true);
 pref("browser.urlbar.suggest.topsites",             true);
 pref("browser.urlbar.suggest.engines",              true);
+pref("browser.urlbar.suggest.quicksuggest",         true);
+pref("browser.urlbar.suggest.calculator",           false);
+
+// Whether the QuickSuggest experiment is enabled.
+pref("browser.urlbar.quicksuggest.enabled", false);
+
+// Whether to show the QuickSuggest onboarding dialog.
+pref("browser.urlbar.quicksuggest.shouldShowOnboardingDialog", true);
+
+// Show QuickSuggest onboarding dialog on the nth browser restarts.
+pref("browser.urlbar.quicksuggest.showOnboardingDialogAfterNRestarts", 2);
+
+// The indexes of the sponsored and non-sponsored quick suggest results within
+// the general results group.
+pref("browser.urlbar.quicksuggest.sponsoredIndex", -1);
+pref("browser.urlbar.quicksuggest.nonSponsoredIndex", -1);
+
+// Whether unit conversion is enabled.
+#ifdef NIGHTLY_BUILD
+pref("browser.urlbar.unitConversion.enabled", true);
+#else
+pref("browser.urlbar.unitConversion.enabled", false);
+#endif
+
+// Whether to show search suggestions before general results like history and
+// bookmarks.
+pref("browser.urlbar.showSearchSuggestionsFirst", true);
 
 // As a user privacy measure, don't fetch search suggestions if a pasted string
 // is longer than this.
@@ -353,6 +413,9 @@ pref("browser.urlbar.openintab", false);
 
 // If true, we show tail suggestions when available.
 pref("browser.urlbar.richSuggestions.tail", true);
+
+// If true, top sites may include sponsored ones.
+pref("browser.urlbar.sponsoredTopSites", false);
 
 // Controls the empty search behavior in Search Mode:
 //  0 - Show nothing
@@ -378,12 +441,15 @@ pref("browser.urlbar.extension.timeout", 400);
 // 0 - never resolve; 1 - use heuristics (default); 2 - always resolve
 pref("browser.urlbar.dnsResolveSingleWordsAfterSearch", 1);
 
-// Whether IME composition should close the results panel.
-// The default value is true because some IME open a picker panel, and we end
+// Whether the results panel should be kept open during IME composition.
+// The default value is false because some IME open a picker panel, and we end
 // up with two panels on top of each other. Since for now we can't detect that
 // we leave this choice to the user, hopefully in the future this can be flipped
 // for everyone.
-pref("browser.urlbar.imeCompositionClosesPanel", true);
+pref("browser.urlbar.keepPanelOpenDuringImeComposition", false);
+
+// Whether Firefox Suggest labels are shown in the urlbar view.
+pref("browser.urlbar.experimental.firefoxSuggestLabels.enabled", false);
 
 pref("browser.altClickSave", false);
 
@@ -417,7 +483,7 @@ pref("browser.download.alwaysOpenInSystemViewerContextMenuItem", true);
 // Open downloaded file types internally for the given types.
 // This is a comma-separated list, the empty string ("") means no types are
 // viewable internally.
-pref("browser.download.viewableInternally.enabledTypes", "xml,svg,webp,avif");
+pref("browser.download.viewableInternally.enabledTypes", "xml,svg,webp,avif,jxl");
 
 
 // This controls whether the button is automatically shown/hidden depending
@@ -459,6 +525,19 @@ pref("browser.search.separatePrivateDefault.ui.banner.max", 0);
 
 // Enables the display of the Mozilla VPN banner in private browsing windows
 pref("browser.privatebrowsing.vpnpromourl", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-%CHANNEL%-browser&utm_campaign=private-browsing-vpn-link");
+
+pref("browser.privatebrowsing.infoEnabled", true);
+pref("browser.privatebrowsing.infoIcon", "");
+pref("browser.privatebrowsing.infoTitle", "");
+pref("browser.privatebrowsing.infoBody","");
+pref("browser.privatebrowsing.infoLinkText", "");
+pref("browser.privatebrowsing.infoLinkUrl", "");
+pref("browser.privatebrowsing.promoEnabled", true);
+pref("browser.privatebrowsing.promoTitle", "");
+pref("browser.privatebrowsing.promoLinkText", "");
+pref("browser.privatebrowsing.promoLinkUrl", "");
+pref("browser.privatebrowsing.infoTitleEnabled", true);
+pref("browser.privatebrowsing.promoTitleEnabled", true);
 
 pref("browser.sessionhistory.max_entries", 50);
 
@@ -528,6 +607,10 @@ pref("browser.tabs.loadBookmarksInBackground", false);
 pref("browser.tabs.loadBookmarksInTabs", false);
 pref("browser.tabs.tabClipWidth", 140);
 pref("browser.tabs.tabMinWidth", 76);
+// Users running in any of the following language codes will have the
+// secondary text on tabs hidden due to size constraints and readability
+// of the text at small font sizes.
+pref("browser.tabs.secondaryTextUnsupportedLocales", "ar,bn,bo,ckb,fa,gu,he,hi,ja,km,kn,ko,lo,mr,my,ne,pa,si,ta,te,th,ur,zh");
 // Initial titlebar state is managed by -moz-gtk-csd-hide-titlebar-by-default
 // on Linux.
 #ifndef UNIX_BUT_NOT_MAC
@@ -536,10 +619,6 @@ pref("browser.tabs.tabMinWidth", 76);
 
 //Control the visibility of Tab Manager Menu.
 pref("browser.tabs.tabmanager.enabled", false);
-
-// Offer additional drag space to the user. The drag space
-// will only be shown if browser.tabs.drawInTitlebar is true.
-pref("browser.tabs.extraDragSpace", false);
 
 // When tabs opened by links in other tabs via a combination of
 // browser.link.open_newwindow being set to 3 and target="_blank" etc are
@@ -579,14 +658,12 @@ pref("browser.tabs.tooltipsShowPidAndActiveness", false);
 pref("security.allow_eval_with_system_principal", false);
 pref("security.allow_eval_in_parent_process", false);
 
-#if defined(NIGHTLY_BUILD)
-  pref("security.allow_parent_unrestricted_js_loads", false);
-#endif
+pref("security.allow_parent_unrestricted_js_loads", false);
 
 // Unload tabs when available memory is running low
 pref("browser.tabs.unloadOnLowMemory", false);
 
-pref("browser.ctrlTab.recentlyUsedOrder", true);
+pref("browser.ctrlTab.sortByRecentlyUsed", false);
 
 // By default, do not export HTML at shutdown.
 // If true, at shutdown the bookmarks in your menu and toolbar will
@@ -616,7 +693,6 @@ pref("browser.bookmarks.defaultLocation", "toolbar");
 
 // Scripts & Windows prefs
 pref("dom.disable_open_during_load",              true);
-pref("javascript.options.showInConsole",          true);
 
 // allow JS to move and resize existing windows
 pref("dom.disable_window_move_resize",            false);
@@ -697,7 +773,11 @@ pref("browser.gesture.twist.threshold", 0);
 pref("browser.gesture.twist.right", "cmd_gestureRotateRight");
 pref("browser.gesture.twist.left", "cmd_gestureRotateLeft");
 pref("browser.gesture.twist.end", "cmd_gestureRotateEnd");
-pref("browser.gesture.tap", "cmd_fullZoomReset");
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+  pref("browser.gesture.tap", "cmd_fullZoomReset");
+#else
+  pref("browser.gesture.tap", "");
+#endif
 
 pref("browser.history_swipe_animation.disabled", false);
 
@@ -821,19 +901,13 @@ pref("browser.preferences.experimental", false);
 pref("browser.preferences.experimental.hidden", false);
 pref("browser.preferences.defaultPerformanceSettings.enabled", true);
 
-pref("browser.preferences.exposeHTTPSOnly", true);
-
-pref("browser.proton.enabled", false);
+pref("browser.proton.toolbar.version", 0);
 
 // Backspace and Shift+Backspace behavior
 // 0 goes Back/Forward
 // 1 act like PgUp/PgDown
 // 2 and other values, nothing
-#ifdef UNIX_BUT_NOT_MAC
-  pref("browser.backspace_action", 2);
-#else
-  pref("browser.backspace_action", 0);
-#endif
+pref("browser.backspace_action", 2);
 
 pref("intl.regional_prefs.use_os_locales", false);
 
@@ -904,9 +978,6 @@ pref("browser.sessionstore.resume_from_crash", true);
 pref("browser.sessionstore.resume_session_once", false);
 pref("browser.sessionstore.resuming_after_os_restart", false);
 
-// Minimal interval between two save operations in milliseconds (while the user is active).
-pref("browser.sessionstore.interval", 15000); // 15 seconds
-
 // Minimal interval between two save operations in milliseconds (while the user is idle).
 pref("browser.sessionstore.interval.idle", 3600000); // 1h
 
@@ -947,10 +1018,6 @@ pref("browser.sessionstore.upgradeBackup.latestBuildID", "");
 pref("browser.sessionstore.upgradeBackup.maxUpgradeBackups", 3);
 // End-users should not run sessionstore in debug mode
 pref("browser.sessionstore.debug", false);
-// Causes SessionStore to ignore non-final update messages from
-// browser tabs that were not caused by a flush from the parent.
-// This is a testing flag and should not be used by end-users.
-pref("browser.sessionstore.debug.no_auto_updates", false);
 // Forget closed windows/tabs after two weeks
 pref("browser.sessionstore.cleanup.forget_closed_after", 1209600000);
 // Amount of failed SessionFile writes until we restart the worker.
@@ -958,6 +1025,9 @@ pref("browser.sessionstore.max_write_failures", 5);
 
 // Whether to warn the user when quitting, even though their tabs will be restored.
 pref("browser.sessionstore.warnOnQuit", false);
+
+// Don't quit the browser when Ctrl + Q is pressed.
+pref("browser.quitShortcut.disabled", false);
 
 // allow META refresh by default
 pref("accessibility.blockautorefresh", false);
@@ -1009,6 +1079,10 @@ pref("places.frecency.defaultVisitBonus", 0);
 pref("places.frecency.unvisitedBookmarkBonus", 140);
 pref("places.frecency.unvisitedTypedBonus", 200);
 
+// Clear data by base domain (including partitioned storage) when the user
+// selects "Forget About This Site".
+pref("places.forgetThisSite.clearByBaseDomain", true);
+
 // Controls behavior of the "Add Exception" dialog launched from SSL error pages
 // 0 - don't pre-populate anything
 // 1 - pre-populate site URL, but don't fetch certificate
@@ -1039,11 +1113,7 @@ pref("toolkit.crashreporter.infoURL",
 pref("app.support.baseURL", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/");
 
 // base url for web-based feedback pages
-#ifdef MOZ_DEV_EDITION
-  pref("app.feedback.baseURL", "https://input.mozilla.org/%LOCALE%/feedback/firefoxdev/%VERSION%/");
-#else
-  pref("app.feedback.baseURL", "https://input.mozilla.org/%LOCALE%/feedback/%APP%/%VERSION%/");
-#endif
+pref("app.feedback.baseURL", "https://ideas.mozilla.org/");
 
 // Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
 pref("security.alternate_certificate_error_page", "certerror");
@@ -1226,11 +1296,12 @@ pref("services.sync.prefs.sync.app.shield.optoutstudies.enabled", true);
 pref("services.sync.prefs.sync.browser.contentblocking.category", true);
 pref("services.sync.prefs.sync.browser.contentblocking.features.strict", true);
 pref("services.sync.prefs.sync.browser.crashReports.unsubmittedCheck.autoSubmit2", true);
-pref("services.sync.prefs.sync.browser.ctrlTab.recentlyUsedOrder", true);
+pref("services.sync.prefs.sync.browser.ctrlTab.sortByRecentlyUsed", true);
 pref("services.sync.prefs.sync.browser.discovery.enabled", true);
 pref("services.sync.prefs.sync.browser.download.useDownloadDir", true);
 pref("services.sync.prefs.sync.browser.formfill.enable", true);
 pref("services.sync.prefs.sync.browser.link.open_newwindow", true);
+pref("services.sync.prefs.sync.browser.menu.showViewImageInfo", true);
 pref("services.sync.prefs.sync.browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", true);
 pref("services.sync.prefs.sync.browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", true);
 pref("services.sync.prefs.sync.browser.newtabpage.activity-stream.showSearch", true);
@@ -1263,8 +1334,8 @@ pref("services.sync.prefs.sync.browser.tabs.loadInBackground", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnClose", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnOpen", true);
 pref("services.sync.prefs.sync.browser.taskbar.previews.enable", true);
-pref("services.sync.prefs.sync.browser.urlbar.matchBuckets", true);
 pref("services.sync.prefs.sync.browser.urlbar.maxRichResults", true);
+pref("services.sync.prefs.sync.browser.urlbar.showSearchSuggestionsFirst", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.bookmark", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.history", true);
 pref("services.sync.prefs.sync.browser.urlbar.suggest.openpage", true);
@@ -1346,7 +1417,10 @@ pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.prop
 // This is a fallback value for when prompt callers do not specify a modalType.
 pref("prompts.defaultModalType", 3);
 
-pref("browser.topsites.useRemoteSetting", false);
+pref("browser.topsites.useRemoteSetting", true);
+// Fetch sponsored Top Sites from Mozilla Tiles Service (Contile)
+pref("browser.topsites.contile.enabled", false);
+pref("browser.topsites.contile.endpoint", "https://contile.services.mozilla.com/v1/tiles");
 
 // The base URL for the Quick Suggest anonymizing proxy. To make a request to
 // the proxy, include a campaign ID in the path.
@@ -1360,17 +1434,17 @@ pref("prompts.tabChromePromptSubDialog", true);
 
 // Whether to show the dialogs opened at the content level, such as
 // alert() or prompt(), using a SubDialogManager in the TabDialogBox.
-#ifdef EARLY_BETA_OR_EARLIER
-  pref("prompts.contentPromptSubDialog", true);
-#else
-  pref("prompts.contentPromptSubDialog", false);
-#endif
+pref("prompts.contentPromptSubDialog", true);
+
+// Whether to show window-modal dialogs opened for browser windows
+// in a SubDialog inside their parent, instead of an OS level window.
+pref("prompts.windowPromptSubDialog", true);
 
 // Activates preloading of the new tab url.
 pref("browser.newtab.preload", true);
 
 // Preference to enable the entire new newtab experience at once.
-pref("browser.newtabpage.activity-stream.newNewtabExperience.enabled", false);
+pref("browser.newtabpage.activity-stream.newNewtabExperience.enabled", true);
 
 // A preference which allows us to enable the fly out customization overlay
 // on the newtab page.
@@ -1381,8 +1455,6 @@ pref("browser.newtabpage.activity-stream.newNewtabExperience.colors", "#0090ED,#
 #ifndef RELEASE_OR_BETA
   pref("browser.newtabpage.activity-stream.debug", false);
 #endif
-
-pref("browser.library.activity-stream.enabled", true);
 
 // The remote FxA root content URL for the Activity Stream firstrun page.
 pref("browser.newtabpage.activity-stream.fxaccounts.endpoint", "https://accounts.firefox.com/");
@@ -1397,8 +1469,8 @@ pref("browser.newtabpage.activity-stream.asrouter.providers.message-groups", "{\
 // This url, if changed, MUST continue to point to an https url. Pulling arbitrary content to inject into
 // this page over http opens us up to a man-in-the-middle attack that we'd rather not face. If you are a downstream
 // repackager of this code using an alternate snippet url, please keep your users safe
-pref("browser.newtabpage.activity-stream.asrouter.providers.snippets", "{\"id\":\"snippets\",\"enabled\":true,\"type\":\"remote\",\"url\":\"https://snippets.cdn.mozilla.net/%STARTPAGE_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/\",\"updateCycleInMs\":14400000}");
-pref("browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments", "{\"id\":\"messaging-experiments\",\"enabled\":true,\"type\":\"remote-experiments\",\"messageGroups\":[\"cfr\",\"whats-new-panel\",\"moments-page\",\"snippets\",\"cfr-fxa\",\"aboutwelcome\",\"infobar\"],\"updateCycleInMs\":3600000}");
+pref("browser.newtabpage.activity-stream.asrouter.providers.snippets", "{\"id\":\"snippets\",\"enabled\":false,\"type\":\"remote\",\"url\":\"https://snippets.cdn.mozilla.net/%STARTPAGE_VERSION%/%NAME%/%VERSION%/%APPBUILDID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/\",\"updateCycleInMs\":14400000}");
+pref("browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments", "{\"id\":\"messaging-experiments\",\"enabled\":true,\"type\":\"remote-experiments\",\"messageGroups\":[\"cfr\",\"whats-new-panel\",\"moments-page\",\"cfr-fxa\",\"aboutwelcome\",\"infobar\"],\"updateCycleInMs\":3600000}");
 
 // ASRouter user prefs
 pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", true);
@@ -1444,32 +1516,28 @@ pref("browser.newtabpage.activity-stream.discoverystream.spocs.personalized", tr
 pref("browser.newtabpage.activity-stream.feeds.section.topstories", true);
 
 // The pref controls if search hand-off is enabled for Activity Stream.
-#ifdef NIGHTLY_BUILD
-  pref("browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar", true);
-#else
-  pref("browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar", false);
-#endif
+pref("browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar", true);
 
-pref("browser.newtabpage.activity-stream.logowordmark.alwaysVisible", false);
+pref("browser.newtabpage.activity-stream.logowordmark.alwaysVisible", true);
 
 // Used to display triplet cards on newtab
 pref("trailhead.firstrun.newtab.triplets", "");
 // Separate about welcome
 pref("browser.aboutwelcome.enabled", true);
+pref("browser.aboutwelcome.protonDesign", true);
 // Used to set multistage welcome UX
-pref("browser.aboutwelcome.overrideContent", "");
+pref("browser.aboutwelcome.screens", "");
+pref("browser.aboutwelcome.skipFocus", true);
 
 // The pref that controls if the What's New panel is enabled.
 pref("browser.messaging-system.whatsNewPanel.enabled", true);
-// Used for CFR messages with scores. See Bug 1594422.
-pref("browser.messaging-system.personalized-cfr.scores", "{}");
-pref("browser.messaging-system.personalized-cfr.score-threshold", 5000);
 
 // Experiment Manager
 // See Console.jsm LOG_LEVELS for all possible values
 pref("messaging-system.log", "warn");
 pref("messaging-system.rsexperimentloader.enabled", true);
 pref("messaging-system.rsexperimentloader.collection_id", "nimbus-desktop-experiments");
+pref("nimbus.debug", false);
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1564,12 +1632,6 @@ pref("identity.fxaccounts.remote.pairing.uri", "wss://channelserver.services.moz
 // Token server used by the FxA Sync identity.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
 
-// Fetch Sync tokens using the OAuth token function
-pref("identity.sync.useOAuthForSyncToken", true);
-
-// Using session tokens to fetch OAuth tokens
-pref("identity.fxaccounts.useSessionTokensForOAuth", true);
-
 // Auto-config URL for FxA self-hosters, makes an HTTP request to
 // [identity.fxaccounts.autoconfig.uri]/.well-known/fxa-client-configuration
 // This is now the prefered way of pointing to a custom FxA server, instead
@@ -1662,8 +1724,6 @@ pref("toolkit.telemetry.newProfilePing.enabled", true);
 pref("toolkit.telemetry.updatePing.enabled", true);
 // Enables sending 'bhr' pings when the browser hangs.
 pref("toolkit.telemetry.bhrPing.enabled", true);
-// Whether to enable Ecosystem Telemetry, requires a restart.
-pref("toolkit.telemetry.ecosystemtelemetry.enabled", false);
 
 // Ping Centre Telemetry settings.
 pref("browser.ping-centre.telemetry", true);
@@ -1680,6 +1740,9 @@ pref("network.cookie.cookieBehavior", 5 /* BEHAVIOR_REJECT_TRACKER_AND_PARTITION
 pref("network.cookie.cookieBehavior", 4 /* BEHAVIOR_REJECT_TRACKER */);
 #endif
 
+// Enable Dynamic First-Party Isolation in the private browsing mode.
+pref("network.cookie.cookieBehavior.pbmode", 5 /* BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN */);
+
 // Enable fingerprinting blocking by default for all channels, only on desktop.
 pref("privacy.trackingprotection.fingerprinting.enabled", true);
 
@@ -1692,10 +1755,8 @@ pref("dom.storage_access.enabled", true);
 
 pref("browser.contentblocking.cryptomining.preferences.ui.enabled", true);
 pref("browser.contentblocking.fingerprinting.preferences.ui.enabled", true);
-#ifdef NIGHTLY_BUILD
-  // Enable cookieBehavior = BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN as an option in the custom category ui
-  pref("browser.contentblocking.reject-and-isolate-cookies.preferences.ui.enabled", true);
-#endif
+// Enable cookieBehavior = BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN as an option in the custom category ui
+pref("browser.contentblocking.reject-and-isolate-cookies.preferences.ui.enabled", true);
 // State Partitioning MVP UI.
 pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", true);
 
@@ -1715,6 +1776,9 @@ pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", true);
 //   Social Tracking Protection:
 //     "stp": social tracking protection enabled
 //     "-stp": social tracking protection disabled
+//   Level 2 Tracking list:
+//     "lvl2": Level 2 tracking list enabled
+//     "-lvl2": Level 2 tracking list disabled
 //   Cookie behavior:
 //     "cookieBehavior0": cookie behaviour BEHAVIOR_ACCEPT
 //     "cookieBehavior1": cookie behaviour BEHAVIOR_REJECT_FOREIGN
@@ -1722,8 +1786,15 @@ pref("browser.contentblocking.state-partitioning.mvp.ui.enabled", true);
 //     "cookieBehavior3": cookie behaviour BEHAVIOR_LIMIT_FOREIGN
 //     "cookieBehavior4": cookie behaviour BEHAVIOR_REJECT_TRACKER
 //     "cookieBehavior5": cookie behaviour BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN
+//   Cookie behavior for private windows:
+//     "cookieBehaviorPBM0": cookie behaviour BEHAVIOR_ACCEPT
+//     "cookieBehaviorPBM1": cookie behaviour BEHAVIOR_REJECT_FOREIGN
+//     "cookieBehaviorPBM2": cookie behaviour BEHAVIOR_REJECT
+//     "cookieBehaviorPBM3": cookie behaviour BEHAVIOR_LIMIT_FOREIGN
+//     "cookieBehaviorPBM4": cookie behaviour BEHAVIOR_REJECT_TRACKER
+//     "cookieBehaviorPBM5": cookie behaviour BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN
 // One value from each section must be included in the browser.contentblocking.features.strict pref.
-pref("browser.contentblocking.features.strict", "tp,tpPrivate,cookieBehavior5,cm,fp,stp,lvl2");
+pref("browser.contentblocking.features.strict", "tp,tpPrivate,cookieBehavior5,cookieBehaviorPBM5,cm,fp,stp,lvl2");
 
 // Hide the "Change Block List" link for trackers/tracking content in the custom
 // Content Blocking/ETP panel. By default, it will not be visible. There is also
@@ -1748,9 +1819,9 @@ pref("browser.contentblocking.report.show_mobile_app", true);
 // Enable the vpn card by default.
 pref("browser.contentblocking.report.vpn.enabled", true);
 // Only show vpn card to certain regions. Comma separated string of two letter ISO 3166-1 country codes.
-pref("browser.contentblocking.report.vpn_regions", "us,ca,nz,sg,my,gb");
+pref("browser.contentblocking.report.vpn_regions", "us,ca,nz,sg,my,gb,de,fr");
 // Comma separated string of mozilla vpn supported platforms.
-pref("browser.contentblocking.report.vpn_platforms", "win");
+pref("browser.contentblocking.report.vpn_platforms", "win,mac,linux");
 pref("browser.contentblocking.report.hide_vpn_banner", false);
 pref("browser.contentblocking.report.vpn_sub_id", "sub_HrfCZF7VPHzZkA");
 
@@ -1824,6 +1895,13 @@ pref("privacy.webrtc.globalMuteToggles", false);
 // to switch tabs in a window that's being shared over WebRTC.
 pref("privacy.webrtc.sharedTabWarning", false);
 
+// Defines a grace period after camera or microphone use ends, where permission
+// is granted (even past navigation) to this tab + origin + device. This avoids
+// re-prompting without the user having to persist permission to the site, in a
+// common case of a web conference asking them for the camera in a lobby page,
+// before navigating to the actual meeting room page. Doesn't survive tab close.
+pref("privacy.webrtc.deviceGracePeriodTimeoutMs", 3600000);
+
 // Start the browser in e10s mode
 pref("browser.tabs.remote.autostart", true);
 pref("browser.tabs.remote.desktopbehavior", true);
@@ -1849,9 +1927,6 @@ pref("browser.tabs.remote.warmup.unloadDelayMs", 2000);
 // For the about:tabcrashed page
 pref("browser.tabs.crashReporting.sendReport", true);
 pref("browser.tabs.crashReporting.includeURL", false);
-pref("browser.tabs.crashReporting.requestEmail", false);
-pref("browser.tabs.crashReporting.emailMe", false);
-pref("browser.tabs.crashReporting.email", "");
 
 // If true, unprivileged extensions may use experimental APIs on
 // nightly and developer edition.
@@ -1903,15 +1978,18 @@ pref("extensions.pocket.site", "getpocket.com");
 pref("extensions.pocket.onSaveRecs", true);
 pref("extensions.pocket.onSaveRecs.locales", "en-US,en-GB,en-CA");
 
+// Enable Pocket button home panel for non link pages.
+pref("extensions.pocket.showHome", true);
+
 // Control what version of the logged out doorhanger is displayed
 // Possibilities are: `control`, `control-one-button`, `variant_a`, `variant_b`, `variant_c`
 pref("extensions.pocket.loggedOutVariant", "control");
 
+pref("signon.management.page.fileImport.enabled", false);
+
 #ifdef NIGHTLY_BUILD
-pref("signon.management.page.fileImport.enabled", true);
 pref("signon.management.page.os-auth.enabled", true);
 #else
-pref("signon.management.page.fileImport.enabled", false);
 pref("signon.management.page.os-auth.enabled", false);
 #endif
 pref("signon.management.page.breach-alerts.enabled", true);
@@ -1922,8 +2000,8 @@ pref("signon.management.page.sort", "name");
 // the utm_creative param be last.
 pref("signon.management.page.breachAlertUrl",
      "https://monitor.firefox.com/breach-details/");
-pref("signon.management.page.showPasswordSyncNotification", true);
 pref("signon.passwordEditCapture.enabled", true);
+pref("signon.relatedRealms.enabled", false);
 pref("signon.showAutoCompleteFooter", true);
 pref("signon.showAutoCompleteImport", "import");
 pref("signon.suggestImportCount", 3);
@@ -1952,39 +2030,11 @@ pref("webchannel.allowObject.urlWhitelist", "https://content.cdn.mozilla.net htt
 pref("browser.crashReports.unsubmittedCheck.chancesUntilSuppress", 4);
 pref("browser.crashReports.unsubmittedCheck.autoSubmit2", true);
 
-// Preferences for the form autofill system extension
-// The truthy values of "extensions.formautofill.available" are "on" and "detect",
-// any other value means autofill isn't available.
-// "detect" means it's enabled if conditions defined in the extension are met.
-pref("extensions.formautofill.available", "detect");
-pref("extensions.formautofill.addresses.enabled", true);
-pref("extensions.formautofill.addresses.capture.enabled", false);
-pref("extensions.formautofill.creditCards.available", true);
-pref("extensions.formautofill.creditCards.enabled", true);
+// Preferences for the form autofill toolkit component.
 // Checkbox in sync options for credit card data sync service
 pref("services.sync.engine.creditcards.available", true);
-// Temporary preference to control displaying the UI elements for
-// credit card autofill used for the duration of the A/B test.
-pref("extensions.formautofill.creditCards.hideui", false);
-// Pref for shield/heartbeat to recognize users who have used Credit Card
-// Autofill. The valid values can be:
-// 0: none
-// 1: submitted a manually-filled credit card form (but didn't see the doorhanger
-//    because of a duplicate profile in the storage)
-// 2: saw the doorhanger
-// 3: submitted an autofill'ed credit card form
-pref("extensions.formautofill.creditCards.used", 0);
-pref("extensions.formautofill.firstTimeUse", true);
-pref("extensions.formautofill.heuristics.enabled", true);
 // Whether the user enabled the OS re-auth dialog.
 pref("extensions.formautofill.reauth.enabled", false);
-pref("extensions.formautofill.section.enabled", true);
-pref("extensions.formautofill.loglevel", "Warn");
-
-pref("toolkit.osKeyStore.loglevel", "Warn");
-
-pref("extensions.formautofill.supportedCountries", "US,CA");
-pref("extensions.formautofill.supportRTL", false);
 
 // Whether or not to restore a session with lazy-browser tabs.
 pref("browser.sessionstore.restore_tabs_lazily", true);
@@ -1993,20 +2043,9 @@ pref("browser.suppress_first_window_animation", true);
 
 // Preference that allows individual users to disable Screenshots.
 pref("extensions.screenshots.disabled", false);
-// Preference that allows individual users to leave Screenshots enabled, but
-// disable uploading to the server.
-pref("extensions.screenshots.upload-disabled", false);
 
-// DoH Rollout: whether to enable automatic performance-based TRR-selection.
-// This pref is controlled by a Normandy rollout so we don't overload providers.
-pref("doh-rollout.trr-selection.enabled", false);
-
-// DoH Rollout: whether to enable automatic steering to provider endpoints.
-// This pref is also controlled by a Normandy rollout.
-pref("doh-rollout.provider-steering.enabled", false);
-
-// DoH Rollout: provider details for automatic steering.
-pref("doh-rollout.provider-steering.provider-list", "[{ \"name\": \"comcast\", \"canonicalName\": \"doh-discovery.xfinity.com\", \"uri\": \"https://doh.xfinity.com/dns-query\" }]");
+// Preference that determines whether Screenshots is opened as a dedicated browser component
+pref("screenshots.browser.component.enabled", false);
 
 // DoH Rollout: whether to clear the mode value at shutdown.
 pref("doh-rollout.clearModeOnShutdown", false);
@@ -2121,13 +2160,8 @@ pref("devtools.browsertoolbox.fission", true);
 pref("devtools.browsertoolbox.fission", false);
 #endif
 
-// This pref is also related to fission, but not only. It allows the toolbox
-// to stay open even if the debugged tab switches to another process.
-// It can happen between two documents, one running in the parent process like
-// about:sessionrestore and another one running in the content process like
-// any web page. Or between two distinct domain when running with fission turned
-// on. See bug 1565263.
-pref("devtools.target-switching.enabled", true);
+// This preference will enable watching top-level targets from the server side.
+pref("devtools.target-switching.server.enabled", false);
 
 // Toolbox Button preferences
 pref("devtools.command-button-pick.enabled", true);
@@ -2163,8 +2197,6 @@ pref("devtools.inspector.imagePreviewTooltipSize", 300);
 pref("devtools.inspector.showUserAgentStyles", false);
 // Show native anonymous content and user agent shadow roots
 pref("devtools.inspector.showAllAnonymousContent", false);
-// Enable the new Rules View
-pref("devtools.inspector.new-rulesview.enabled", false);
 // Enable the inline CSS compatiblity warning in inspector rule view
 pref("devtools.inspector.ruleview.inline-compatibility-warning.enabled", false);
 // Enable the compatibility tool in the inspector.
@@ -2174,7 +2206,7 @@ pref("devtools.inspector.compatibility.enabled", true);
 pref("devtools.inspector.compatibility.enabled", false);
 #endif
 // Enable color scheme simulation in the inspector.
-pref("devtools.inspector.color-scheme-simulation.enabled", false);
+pref("devtools.inspector.color-scheme-simulation.enabled", true);
 // Enable overflow debugging in the inspector.
 pref("devtools.overflow.debugging.enabled", true);
 
@@ -2413,8 +2445,12 @@ pref("devtools.browserconsole.input.editorWidth", 0);
 // Display an onboarding UI for the Editor mode.
 pref("devtools.webconsole.input.editorOnboarding", true);
 
-// Disable the new performance recording panel by default
-pref("devtools.performance.new-panel-enabled", false);
+// Enable the new performance recording panel in Nightly and Beta/DevEdition builds.
+#if defined(NIGHTLY_BUILD) || defined(MOZ_DEV_EDITION)
+  pref("devtools.performance.new-panel-enabled", true);
+#else
+  pref("devtools.performance.new-panel-enabled", false);
+#endif
 
 // Enable message grouping in the console, true by default
 pref("devtools.webconsole.groupWarningMessages", true);
@@ -2528,4 +2564,23 @@ pref("first-startup.timeout", 30000);
   pref("app.normandy.test-prefs.bool", false);
   pref("app.normandy.test-prefs.integer", 0);
   pref("app.normandy.test-prefs.string", "");
+#endif
+
+// Shows 'View Image Info' item in the image context menu
+#ifdef MOZ_DEV_EDITION
+  pref("browser.menu.showViewImageInfo", true);
+#else
+  pref("browser.menu.showViewImageInfo", false);
+#endif
+
+// Mozilla-controlled domains that are allowed to use non-standard
+// context properties for SVG images for use in the browser UI. Please
+// keep this list short. This preference (and SVG `context-` keyword support)
+// are expected to go away once a standardized alternative becomes
+// available.
+pref("svg.context-properties.content.allowed-domains", "profile.accounts.firefox.com,profile.stage.mozaws.net");
+
+// Preference that allows individual users to disable Firefox Translations.
+#ifdef NIGHTLY_BUILD
+  pref("extensions.translations.disabled", true);
 #endif

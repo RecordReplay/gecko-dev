@@ -11,12 +11,12 @@
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/GPUChild.h"
 #include "mozilla/ipc/Endpoint.h"
+#include "mozilla/ipc/ProcessUtils.h"
 #include "mozilla/ipc/ProtocolTypes.h"
 #include "mozilla/ipc/ProtocolUtils.h"  // for IToplevelProtocol
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/TimeStamp.h"  // for TimeStamp
 #include "mozilla/Unused.h"
-#include "ProcessUtils.h"
 #include "VRChild.h"
 #include "VRThread.h"
 
@@ -157,8 +157,8 @@ bool VRProcessParent::InitAfterConnect(bool aSucceeded) {
 
     mVRChild = MakeUnique<VRChild>(this);
 
-    DebugOnly<bool> rv =
-        mVRChild->Open(TakeChannel(), base::GetProcId(GetChildProcessHandle()));
+    DebugOnly<bool> rv = mVRChild->Open(
+        TakeInitialPort(), base::GetProcId(GetChildProcessHandle()));
     MOZ_ASSERT(rv);
 
     mVRChild->Init();

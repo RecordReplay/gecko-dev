@@ -384,9 +384,6 @@ class EngineURL {
     switch (templateURI.scheme) {
       case "http":
       case "https":
-        // Disable these for now, see bug 295018
-        // case "file":
-        // case "resource":
         this.template = template;
         break;
       default:
@@ -769,9 +766,7 @@ class SearchEngine {
       case "http":
       case "https":
       case "ftp":
-        var chan = SearchUtils.makeChannel(uri);
-
-        let iconLoadCallback = function(byteArray) {
+        let iconLoadCallback = function(byteArray, contentType) {
           // This callback may run after we've already set a preferred icon,
           // so check again.
           if (this._hasPreferredIcon && !isPreferred) {
@@ -783,7 +778,6 @@ class SearchEngine {
             return;
           }
 
-          let contentType = chan.contentType;
           if (byteArray.length > SearchUtils.MAX_ICON_SIZE) {
             try {
               logConsole.debug("iconLoadCallback: rescaling icon");
@@ -794,9 +788,6 @@ class SearchEngine {
             }
           }
 
-          if (!contentType.startsWith("image/")) {
-            contentType = "image/x-icon";
-          }
           let dataURL =
             "data:" +
             contentType +
@@ -815,8 +806,10 @@ class SearchEngine {
           this._hasPreferredIcon = isPreferred;
         };
 
-        var listener = new SearchUtils.LoadListener(
+        let chan = SearchUtils.makeChannel(uri);
+        let listener = new SearchUtils.LoadListener(
           chan,
+          /^image\//,
           // If we're currently acting as an "update engine", then the callback
           // should set the icon on the engine we're updating and not us, since
           // |this| might be gone by the time the callback runs.
@@ -1129,10 +1122,18 @@ class SearchEngine {
    */
   removeExtensionOverride() {
     if (this.getAttr("overriddenBy")) {
-      this._urls = this._overriddenData.urls;
-      this._queryCharset = this._overriddenData.queryCharset;
-      this.__searchForm = this._overriddenData.searchForm;
-      delete this._overriddenData;
+      // If the attribute is set, but there is no data, skip it. Worst case,
+      // the urls will be reset on a restart.
+      if (this._overriddenData) {
+        this._urls = this._overriddenData.urls;
+        this._queryCharset = this._overriddenData.queryCharset;
+        this.__searchForm = this._overriddenData.searchForm;
+        delete this._overriddenData;
+      } else {
+        logConsole.error(
+          `${this._name} had overriddenBy set, but no _overriddenData`
+        );
+      }
       this.clearAttr("overriddenBy");
       SearchUtils.notifyAction(this, SearchUtils.MODIFIED_TYPE.CHANGED);
     }
@@ -1253,7 +1254,7 @@ class SearchEngine {
    * @returns {string}
    */
   get alias() {
-    return this.getAttr("alias");
+    return this.getAttr("alias") || "";
   }
 
   /**
@@ -1262,9 +1263,11 @@ class SearchEngine {
    * @param {string} val
    */
   set alias(val) {
-    var value = val ? val.trim() : null;
-    this.setAttr("alias", value);
-    SearchUtils.notifyAction(this, SearchUtils.MODIFIED_TYPE.CHANGED);
+    var value = val ? val.trim() : "";
+    if (value != this.alias) {
+      this.setAttr("alias", value);
+      SearchUtils.notifyAction(this, SearchUtils.MODIFIED_TYPE.CHANGED);
+    }
   }
 
   /**
@@ -1352,6 +1355,13 @@ class SearchEngine {
 
   get isAppProvided() {
     return !!(this._extensionID && this._isAppProvided);
+  }
+
+  get isGeneralPurposeEngine() {
+    return !!(
+      this._extensionID &&
+      SearchUtils.GENERAL_SEARCH_ENGINE_IDS.has(this._extensionID)
+    );
   }
 
   get _hasUpdates() {

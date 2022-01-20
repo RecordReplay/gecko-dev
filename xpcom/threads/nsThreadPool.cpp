@@ -12,6 +12,7 @@
 #include "nsMemory.h"
 #include "prinrval.h"
 #include "mozilla/Logging.h"
+#include "mozilla/ProfilerLabels.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/SpinEventLoopUntil.h"
@@ -247,6 +248,9 @@ nsThreadPool::Run() {
 
       event = mEvents.GetEvent(lock, &delay);
       if (!event) {
+        // Diagnostic for https://github.com/RecordReplay/backend/issues/4226
+        recordreplay::RecordReplayAssert("nsThreadPool::Run #5");
+
         TimeStamp now = TimeStamp::Now();
         uint32_t idleTimeoutDivider =
             (mIdleCount && mRegressiveMaxIdleTime) ? mIdleCount : 1;
@@ -289,6 +293,9 @@ nsThreadPool::Run() {
 
           AUTO_PROFILER_LABEL("nsThreadPool::Run::Wait", IDLE);
 
+          // Diagnostic for https://github.com/RecordReplay/backend/issues/4226
+          recordreplay::RecordReplayAssert("nsThreadPool::Run #6");
+
           TimeDuration delta = timeout - (now - idleSince);
           LOG(("THRD-P(%p) %s waiting [%f]\n", this, mName.BeginReading(),
                delta.ToMilliseconds()));
@@ -308,11 +315,15 @@ nsThreadPool::Run() {
       // to run.
       DelayForChaosMode(ChaosFeature::TaskRunning, 1000);
 
+      // Diagnostic for https://github.com/RecordReplay/backend/issues/4226
+      recordreplay::RecordReplayAssert("nsThreadPool::Run #7");
+
       // We'll handle the case of unstarted threads available
       // when we sample.
       current->SetRunningEventDelay(delay, TimeStamp::Now());
 
       LogRunnable::Run log(event);
+      AUTO_PROFILE_FOLLOWING_RUNNABLE(event);
       event->Run();
       // To cover the event's destructor code in the LogRunnable span
       event = nullptr;

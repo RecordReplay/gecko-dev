@@ -67,7 +67,7 @@ included_inclnames_to_ignore = set(
         "gc/StatsPhasesGenerated.inc",  # generated in $OBJDIR
         "jit/CacheIROpsGenerated.h",  # generated in $OBJDIR
         "jit/LOpcodesGenerated.h",  # generated in $OBJDIR
-        "jit/MOpcodesGenerated.h",  # generated in $OBJDIR
+        "jit/MIROpsGenerated.h",  # generated in $OBJDIR
         "js/ProfilingCategoryList.h",  # comes from mozglue/baseprofiler
         "jscustomallocator.h",  # provided by embedders;  allowed to be missing
         "js-config.h",  # generated in $OBJDIR
@@ -127,6 +127,10 @@ included_inclnames_to_ignore = set(
     ]
 )
 
+deprecated_inclnames = {
+    "mozilla/Unused.h": "Use [[nodiscard]] and (void)expr casts instead.",
+}
+
 # These files have additional constraints on where they are #included, so we
 # ignore #includes of them when checking #include ordering.
 oddly_ordered_inclnames = set(
@@ -166,6 +170,9 @@ js/src/tests/style/BadIncludes.h:8: error:
 js/src/tests/style/BadIncludes.h:10: error:
     "stdio.h" is included using the wrong path;
     did you forget a prefix, or is the file not yet committed?
+
+js/src/tests/style/BadIncludes.h:12: error:
+    "mozilla/Unused.h" is deprecated: Use [[nodiscard]] and (void)expr casts instead.
 
 js/src/tests/style/BadIncludes2.h:1: error:
     vanilla header includes an inline-header file "tests/style/BadIncludes2-inl.h"
@@ -273,7 +280,12 @@ def check_style(enable_fixup):
     # - "js/public/Vector.h"        -> "js/Vector.h"
     # - "js/src/vm/String.h"        -> "vm/String.h"
 
-    non_js_dirnames = ("mfbt/", "memory/mozalloc/", "mozglue/")  # type: tuple(str)
+    non_js_dirnames = (
+        "mfbt/",
+        "memory/mozalloc/",
+        "mozglue/",
+        "intl/components/",
+    )  # type: tuple(str)
     non_js_inclnames = set()  # type: set(inclname)
     js_names = dict()  # type: dict(filename, inclname)
 
@@ -304,6 +316,8 @@ def check_style(enable_fixup):
             for filename in filenames:
                 if filename.endswith(".h"):
                     inclname = "mozilla/" + filename
+                    if non_js_dir == "intl/components/":
+                        inclname = "mozilla/intl/" + filename
                     non_js_inclnames.add(inclname)
 
     # Look for header files in js/public.
@@ -689,6 +703,14 @@ def check_file(
                 )
 
         else:
+            msg = deprecated_inclnames.get(include.inclname)
+            if msg:
+                error(
+                    filename,
+                    include.linenum,
+                    include.quote() + " is deprecated: " + msg,
+                )
+
             if include.inclname not in included_inclnames_to_ignore:
                 included_kind = FileKind.get(include.inclname)
 

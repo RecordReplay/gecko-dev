@@ -22,6 +22,7 @@
 #include "nsPIDOMWindow.h"
 #include "nsIGIOService.h"
 #include "WidgetUtils.h"
+#include "WidgetUtilsGtk.h"
 #include "nsIObserverService.h"
 
 // for gdk_x11_window_get_xid
@@ -30,7 +31,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <gio/gunixfdlist.h>
-#include "gfxPlatformGtk.h"
 
 // for dlsym
 #include <dlfcn.h>
@@ -331,8 +331,7 @@ const char* nsPrintDialogWidgetGTK::OptionWidgetToString(GtkWidget* dropdown) {
 
   if (index == CUSTOM_VALUE_INDEX)
     return (const char*)g_object_get_data(G_OBJECT(dropdown), "custom-text");
-  else
-    return header_footer_tags[index];
+  return header_footer_tags[index];
 }
 
 gint nsPrintDialogWidgetGTK::Run() {
@@ -526,7 +525,7 @@ static void wayland_window_handle_exported(GdkWindow* window,
 static gboolean window_export_handle(GtkWindow* window,
                                      GtkWindowHandleExported callback,
                                      gpointer user_data) {
-  if (gfxPlatformGtk::GetPlatform()->IsX11Display()) {
+  if (GdkIsX11Display()) {
     GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
     char* handle_str;
     guint32 xid = (guint32)gdk_x11_window_get_xid(gdk_window);
@@ -537,7 +536,7 @@ static gboolean window_export_handle(GtkWindow* window,
     return true;
   }
 #ifdef MOZ_WAYLAND
-  else {
+  else if (GdkIsWaylandDisplay()) {
     GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
     WaylandWindowHandleExportedData* data;
 
@@ -555,9 +554,8 @@ static gboolean window_export_handle(GtkWindow* window,
             gdk_window, wayland_window_handle_exported, data, g_free)) {
       g_free(data);
       return false;
-    } else {
-      return true;
     }
+    return true;
   }
 #endif
 
@@ -681,7 +679,7 @@ void nsFlatpakPrintPortal::PreparePrint(GtkWindow* aWindow,
 
   // We need to remember GtkWindow to unexport window handle after it is
   // no longer needed by the portal dialog (apply only on non-X11 sessions).
-  if (gfxPlatformGtk::GetPlatform()->IsWaylandDisplay()) {
+  if (GdkIsWaylandDisplay()) {
     mParentWindow = aWindow;
   }
 

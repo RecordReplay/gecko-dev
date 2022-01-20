@@ -49,6 +49,7 @@ body {
 
 .main-content {
   flex: 1;
+  scroll-padding: 25px;
 }
 
 .tab {
@@ -65,6 +66,7 @@ tbody tr {
 
 tbody tr:hover {
   background-color: var(--in-content-item-hover);
+  color: var(--in-content-item-hover-text);
 }
 
 th, td, table {

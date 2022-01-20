@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/JSONWriter.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/dom/EndpointForReportChild.h"
 #include "mozilla/dom/Fetch.h"
@@ -220,8 +221,9 @@ void SendReports(nsTArray<ReportDeliver::ReportData>& aReports,
   RequestOrUSVString fetchInput;
   fetchInput.SetAsRequest() = request;
 
-  RefPtr<Promise> promise = FetchRequest(
-      globalObject, fetchInput, RequestInit(), CallerType::NonSystem, error);
+  RootedDictionary<RequestInit> requestInit(RootingCx());
+  RefPtr<Promise> promise = FetchRequest(globalObject, fetchInput, requestInit,
+                                         CallerType::NonSystem, error);
   if (error.Failed()) {
     for (auto& report : aReports) {
       ++report.mFailures;

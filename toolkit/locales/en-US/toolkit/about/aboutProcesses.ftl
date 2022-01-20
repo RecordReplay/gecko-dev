@@ -25,50 +25,75 @@ about-processes-column-cpu-total = CPU
 ## Process names
 ## Variables:
 ##    $pid (String) The process id of this process, assigned by the OS.
-##    $origin (String) The domain name for this process.
-##    $type (String) The raw type for this process. Used for unknown processes.
 
-about-processes-browser-process-name = { -brand-short-name } (process { $pid })
-about-processes-web-process-name = Web (process { $pid }, shared)
-about-processes-web-isolated-process-name = Web (process { $pid }) for { $origin }
-about-processes-web-large-allocation = Web (process { $pid }, large) for { $origin }
-about-processes-with-coop-coep-process-name = Web (process { $pid }, cross-origin isolated) for { $origin }
-about-processes-file-process-name = Files (process { $pid })
-about-processes-extension-process-name = Extensions (process { $pid })
-about-processes-privilegedabout-process-name = About (process { $pid })
-about-processes-plugin-process-name = Plugins (process { $pid })
-about-processes-privilegedmozilla-process-name = Web (process { $pid }) for { -vendor-short-name } sites
-about-processes-gmp-plugin-process-name = Gecko Media Plugins (process { $pid })
-about-processes-gpu-process-name = GPU (process { $pid })
-about-processes-vr-process-name = VR (process { $pid })
-about-processes-rdd-process-name = Data Decoder (process { $pid })
-about-processes-socket-process-name = Network (process { $pid })
-about-processes-remote-sandbox-broker-process-name = Remote Sandbox Broker (process { $pid })
-about-processes-fork-server-process-name = Fork Server (process { $pid })
-about-processes-preallocated-process-name = Preallocated (process { $pid })
-about-processes-unknown-process-name = Other ({ $type }, process { $pid })
+about-processes-browser-process = { -brand-short-name } ({ $pid })
+about-processes-web-process = Shared Web Process ({ $pid })
+about-processes-file-process = Files ({ $pid })
+about-processes-extension-process = Extensions ({ $pid })
+about-processes-privilegedabout-process = About pages ({ $pid })
+about-processes-plugin-process = Plugins ({ $pid })
+about-processes-privilegedmozilla-process = { -vendor-short-name } sites ({ $pid })
+about-processes-gmp-plugin-process = Gecko Media Plugins ({ $pid })
+about-processes-gpu-process = GPU ({ $pid })
+about-processes-vr-process = VR ({ $pid })
+about-processes-rdd-process = Data Decoder ({ $pid })
+about-processes-socket-process = Network ({ $pid })
+about-processes-remote-sandbox-broker-process = Remote Sandbox Broker ({ $pid })
+about-processes-fork-server-process = Fork Server ({ $pid })
+about-processes-preallocated-process = Preallocated ({ $pid })
 
-
-# Process
+# Unknown process names
 # Variables:
-#   $name (String) The name assigned to the process.
-#   $pid (String) The process id of this process, assigned by the OS.
-about-processes-process-name = Process { $pid }: { $name }
+#    $pid (String) The process id of this process, assigned by the OS.
+#    $type (String) The raw type for this process.
+about-processes-unknown-process = Other: { $type } ({ $pid })
+
+## Isolated process names
+## Variables:
+##    $pid (String) The process id of this process, assigned by the OS.
+##    $origin (String) The domain name for this process.
+
+about-processes-web-isolated-process = { $origin } ({ $pid })
+about-processes-web-large-allocation-process = { $origin } ({ $pid }, large)
+about-processes-with-coop-coep-process = { $origin } ({ $pid }, cross-origin isolated)
+about-processes-web-isolated-process-private = { $origin } — Private ({ $pid })
+about-processes-web-large-allocation-process-private = { $origin } — Private ({ $pid }, large)
+about-processes-with-coop-coep-process-private = { $origin } — Private ({ $pid }, cross-origin isolated)
 
 ## Details within processes
 
-# Single-line summary of threads
+# Single-line summary of threads (non-idle process)
 # Variables:
 #    $number (Number) The number of threads in the process. Typically larger
 #                     than 30. We don't expect to ever have processes with less
 #                     than 5 threads.
-about-processes-thread-summary = Threads ({ $number })
+#    $active (Number) The number of active threads in the process.
+#                     The value will be greater than 0 and will never be
+#                     greater than $number.
+#    $list (String) Comma separated list of active threads.
+#                   Can be an empty string if the process is idle.
+about-processes-active-threads = { $active ->
+  [one] { $active } active thread out of { $number }: { $list }
+  *[other] { $active } active threads out of { $number }: { $list }
+}
+
+# Single-line summary of threads (idle process)
+# Variables:
+#    $number (Number) The number of threads in the process. Typically larger
+#                     than 30. We don't expect to ever have processes with less
+#                     than 5 threads.
+#                     The process is idle so all threads are inactive.
+about-processes-inactive-threads = { $number ->
+   [one] { $number } inactive thread
+  *[other] { $number } inactive threads
+}
 
 # Thread details
 # Variables:
 #   $name (String) The name assigned to the thread.
 #   $tid (String) The thread id of this thread, assigned by the OS.
-about-processes-thread-name = Thread { $tid }: { $name }
+about-processes-thread-name-and-id = { $name }
+    .title = Thread id: { $tid }
 
 # Tab
 # Variables:
@@ -97,13 +122,15 @@ about-processes-frame-name-many = Subframes ({ $number }): { $shortUrl }
 ##                   of `duration-unit-*`.
 
 # Common case.
-about-processes-cpu-user-and-kernel = { NUMBER($percent, maximumSignificantDigits: 2, style: "percent") } ({ NUMBER($total, maximumFractionDigits: 0) }{ $unit })
+about-processes-cpu = { NUMBER($percent, maximumSignificantDigits: 2, style: "percent") }
+    .title = Total CPU time: { NUMBER($total, maximumFractionDigits: 0) }{ $unit }
 
 # Special case: data is not available yet.
 about-processes-cpu-user-and-kernel-not-ready = (measuring)
 
 # Special case: process or thread is currently idle.
-about-processes-cpu-user-and-kernel-idle = idle ({ NUMBER($total, maximumFractionDigits: 2) }{ $unit })
+about-processes-cpu-idle = idle
+    .title = Total CPU time: { NUMBER($total, maximumFractionDigits: 2) }{ $unit }
 
 ## Displaying Memory (total and delta)
 ## Variables:
@@ -117,7 +144,8 @@ about-processes-cpu-user-and-kernel-idle = idle ({ NUMBER($total, maximumFractio
 ##                        of `memory-unit-*`.
 
 # Common case.
-about-processes-total-memory-size = { NUMBER($total, maximumFractionDigits:0) }{ $totalUnit } ({ $deltaSign }{ NUMBER($delta, maximumFractionDigits:0) }{ $deltaUnit })
+about-processes-total-memory-size-changed = { NUMBER($total, maximumFractionDigits:0) }{ $totalUnit }
+   .title = Evolution: { $deltaSign }{ NUMBER($delta, maximumFractionDigits:0) }{ $deltaUnit }
 
 # Special case: no change.
 about-processes-total-memory-size-no-change = { NUMBER($total, maximumFractionDigits:0) }{ $totalUnit }

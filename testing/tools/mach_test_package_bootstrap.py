@@ -6,7 +6,6 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import json
 import os
-import platform
 import sys
 import types
 
@@ -85,12 +84,6 @@ CATEGORIES = {
 
 
 IS_WIN = sys.platform in ("win32", "cygwin")
-PY3 = sys.version_info[0] == 3
-
-if PY3:
-    text_type = str
-else:
-    text_type = unicode  # noqa pylint: disable=W1612
 
 
 def ancestors(path, depth=0):
@@ -121,7 +114,7 @@ def activate_mozharness_venv(context):
 
     exec(open(activate_path).read(), dict(__file__=activate_path))
 
-    if isinstance(os.environ["PATH"], text_type):
+    if isinstance(os.environ["PATH"], str):
         os.environ["PATH"] = os.environ["PATH"].encode("utf-8")
 
     # sys.executable is used by mochitest-media to start the websocketprocessbridge,
@@ -181,14 +174,6 @@ def normalize_test_path(test_root, path):
 
 def bootstrap(test_package_root):
     test_package_root = os.path.abspath(test_package_root)
-
-    # Ensure we are running Python 2.7+. We put this check here so we generate a
-    # user-friendly error message rather than a cryptic stack trace on module
-    # import.
-    if sys.version_info[0] != 2 or sys.version_info[1] < 7:
-        print("Python 2.7 or above (but not Python 3) is required to run mach.")
-        print("You are running Python", platform.python_version())
-        sys.exit(1)
 
     sys.path[0:0] = [os.path.join(test_package_root, path) for path in SEARCH_PATHS]
     import mach.main

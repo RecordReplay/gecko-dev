@@ -88,10 +88,9 @@ nsresult nsFirstLetterFrame::GetChildFrameContainingOffset(
   if (kid) {
     return kid->GetChildFrameContainingOffset(
         inContentOffset, inHint, outFrameContentOffset, outChildFrame);
-  } else {
-    return nsIFrame::GetChildFrameContainingOffset(
-        inContentOffset, inHint, outFrameContentOffset, outChildFrame);
   }
+  return nsIFrame::GetChildFrameContainingOffset(
+      inContentOffset, inHint, outFrameContentOffset, outChildFrame);
 }
 
 // Needed for non-floating first-letter frames and for the continuations
@@ -99,8 +98,7 @@ nsresult nsFirstLetterFrame::GetChildFrameContainingOffset(
 /* virtual */
 void nsFirstLetterFrame::AddInlineMinISize(
     gfxContext* aRenderingContext, nsIFrame::InlineMinISizeData* aData) {
-  DoInlineIntrinsicISize(aRenderingContext, aData,
-                         IntrinsicISizeType::MinISize);
+  DoInlineMinISize(aRenderingContext, aData);
 }
 
 // Needed for non-floating first-letter frames and for the continuations
@@ -108,9 +106,7 @@ void nsFirstLetterFrame::AddInlineMinISize(
 /* virtual */
 void nsFirstLetterFrame::AddInlinePrefISize(
     gfxContext* aRenderingContext, nsIFrame::InlinePrefISizeData* aData) {
-  DoInlineIntrinsicISize(aRenderingContext, aData,
-                         IntrinsicISizeType::PrefISize);
-  aData->mLineIsEmpty = false;
+  DoInlinePrefISize(aRenderingContext, aData);
 }
 
 // Needed for floating first-letter frames.
@@ -129,7 +125,8 @@ nscoord nsFirstLetterFrame::GetPrefISize(gfxContext* aRenderingContext) {
 nsIFrame::SizeComputationResult nsFirstLetterFrame::ComputeSize(
     gfxContext* aRenderingContext, WritingMode aWM, const LogicalSize& aCBSize,
     nscoord aAvailableISize, const LogicalSize& aMargin,
-    const LogicalSize& aBorderPadding, ComputeSizeFlags aFlags) {
+    const LogicalSize& aBorderPadding, const StyleSizeOverrides& aSizeOverrides,
+    ComputeSizeFlags aFlags) {
   if (GetPrevInFlow()) {
     // We're wrapping the text *after* the first letter, so behave like an
     // inline frame.
@@ -138,7 +135,7 @@ nsIFrame::SizeComputationResult nsFirstLetterFrame::ComputeSize(
   }
   return nsContainerFrame::ComputeSize(aRenderingContext, aWM, aCBSize,
                                        aAvailableISize, aMargin, aBorderPadding,
-                                       aFlags);
+                                       aSizeOverrides, aFlags);
 }
 
 void nsFirstLetterFrame::Reflow(nsPresContext* aPresContext,

@@ -22,7 +22,6 @@
 #include "nsIURIFixup.h"
 #include "nsIWebNavigation.h"
 #include "nsDocShellCID.h"
-#include "nsIExternalURLHandlerService.h"
 #include "nsIMIMEInfo.h"
 #include "nsIWidget.h"
 #include "nsWindowWatcher.h"
@@ -69,27 +68,6 @@ class nsSiteWindow : public nsIEmbeddingSiteWindow {
   nsContentTreeOwner* mAggregator;
 };
 
-already_AddRefed<nsIWebBrowserChrome3>
-nsContentTreeOwner::GetWebBrowserChrome() {
-  if (!mAppWindow) {
-    return nullptr;
-  }
-
-  nsCOMPtr<nsIDocShell> docShell;
-  mAppWindow->GetDocShell(getter_AddRefs(docShell));
-
-  if (!docShell) {
-    return nullptr;
-  }
-
-  if (nsCOMPtr<nsIWebBrowserChrome3> chrome =
-          do_QueryActor("WebBrowserChrome", docShell->GetDocument())) {
-    return chrome.forget();
-  }
-
-  return nullptr;
-}
-
 //*****************************************************************************
 //***    nsContentTreeOwner: Object Management
 //*****************************************************************************
@@ -114,7 +92,6 @@ NS_INTERFACE_MAP_BEGIN(nsContentTreeOwner)
   NS_INTERFACE_MAP_ENTRY(nsIDocShellTreeOwner)
   NS_INTERFACE_MAP_ENTRY(nsIBaseWindow)
   NS_INTERFACE_MAP_ENTRY(nsIWebBrowserChrome)
-  NS_INTERFACE_MAP_ENTRY(nsIWebBrowserChrome3)
   NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
   NS_INTERFACE_MAP_ENTRY(nsIWindowProvider)
   // NOTE: This is using aggregation because there are some properties and
@@ -168,13 +145,6 @@ NS_IMETHODIMP nsContentTreeOwner::GetInterface(const nsIID& aIID,
   if (aIID.Equals(NS_GET_IID(nsIAppWindow))) {
     NS_ENSURE_STATE(mAppWindow);
     return mAppWindow->QueryInterface(aIID, aSink);
-  }
-
-  if (aIID.Equals(NS_GET_IID(nsIWebBrowserChrome3))) {
-    if (nsCOMPtr<nsIWebBrowserChrome3> chrome = GetWebBrowserChrome()) {
-      chrome.forget(aSink);
-      return NS_OK;
-    }
   }
 
   return QueryInterface(aIID, aSink);
@@ -363,41 +333,6 @@ nsContentTreeOwner::GetHasPrimaryContent(bool* aResult) {
 }
 
 //*****************************************************************************
-// nsContentTreeOwner::nsIWebBrowserChrome3
-//*****************************************************************************
-
-NS_IMETHODIMP nsContentTreeOwner::OnBeforeLinkTraversal(
-    const nsAString& originalTarget, nsIURI* linkURI, nsINode* linkNode,
-    bool isAppTab, nsAString& _retval) {
-  NS_ENSURE_STATE(mAppWindow);
-
-  nsCOMPtr<nsIXULBrowserWindow> xulBrowserWindow;
-  mAppWindow->GetXULBrowserWindow(getter_AddRefs(xulBrowserWindow));
-
-  if (xulBrowserWindow)
-    return xulBrowserWindow->OnBeforeLinkTraversal(originalTarget, linkURI,
-                                                   linkNode, isAppTab, _retval);
-
-  _retval = originalTarget;
-  return NS_OK;
-}
-
-NS_IMETHODIMP nsContentTreeOwner::ShouldLoadURI(
-    nsIDocShell* aDocShell, nsIURI* aURI, nsIReferrerInfo* aReferrerInfo,
-    bool aHasPostData, nsIPrincipal* aTriggeringPrincipal,
-    nsIContentSecurityPolicy* aCsp, bool* _retval) {
-  *_retval = true;
-  return NS_OK;
-}
-
-NS_IMETHODIMP nsContentTreeOwner::ShouldLoadURIInThisProcess(nsIURI* aURI,
-                                                             bool* aRetVal) {
-  MOZ_ASSERT_UNREACHABLE("Should only be called in child process.");
-  *aRetVal = true;
-  return NS_OK;
-}
-
-//*****************************************************************************
 // nsContentTreeOwner::nsIWebBrowserChrome
 //*****************************************************************************
 
@@ -570,11 +505,6 @@ NS_IMETHODIMP nsContentTreeOwner::GetMainWidget(nsIWidget** aMainWidget) {
   return NS_OK;
 }
 
-NS_IMETHODIMP nsContentTreeOwner::SetFocus() {
-  NS_ENSURE_STATE(mAppWindow);
-  return mAppWindow->SetFocus();
-}
-
 NS_IMETHODIMP nsContentTreeOwner::GetTitle(nsAString& aTitle) {
   NS_ENSURE_STATE(mAppWindow);
 
@@ -708,29 +638,6 @@ nsSiteWindow::GetDimensions(uint32_t aFlags, int32_t* aX, int32_t* aY,
                             int32_t* aCX, int32_t* aCY) {
   // XXX we're ignoring aFlags
   return mAggregator->GetPositionAndSize(aX, aY, aCX, aCY);
-}
-
-NS_IMETHODIMP
-nsSiteWindow::SetFocus(void) {
-#if 0
-  /* This implementation focuses the main document and could make sense.
-     However this method is actually being used from within
-     nsGlobalWindow::Focus (providing a hook for MDI embedding apps)
-     and it's better for our purposes to not pick a document and
-     focus it, but allow nsGlobalWindow to carry on unhindered.
-  */
-  AppWindow *window = mAggregator->AppWindow();
-  if (window) {
-    nsCOMPtr<nsIDocShell> docshell;
-    window->GetDocShell(getter_AddRefs(docshell));
-    if (docShell) {
-      nsCOMPtr<nsPIDOMWindowOuter> domWindow(docShell->GetWindow());
-      if (domWindow)
-        domWindow->Focus();
-    }
-  }
-#endif
-  return NS_OK;
 }
 
 /* this implementation focuses another window. if there isn't another

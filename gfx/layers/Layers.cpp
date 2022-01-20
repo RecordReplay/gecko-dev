@@ -939,14 +939,14 @@ static nsTArray<LayerPolygon> SortLayersWithBSPTree(nsTArray<Layer*>& aArray) {
   }
 
   // Build a BSP tree from the list of polygons.
-  BSPTree tree(inputLayers);
+  BSPTree<Layer> tree(inputLayers);
 
   nsTArray<LayerPolygon> orderedLayers(tree.GetDrawOrder());
 
   // Transform the polygons back to layer space.
   for (LayerPolygon& layerPolygon : orderedLayers) {
     gfx::Matrix4x4 inverse =
-        layerPolygon.layer->GetEffectiveTransform().Inverse();
+        layerPolygon.data->GetEffectiveTransform().Inverse();
 
     MOZ_ASSERT(layerPolygon.geometry);
     layerPolygon.geometry->TransformToLayerSpace(inverse);
@@ -961,11 +961,11 @@ static nsTArray<LayerPolygon> StripLayerGeometry(
   std::set<Layer*> uniqueLayers;
 
   for (const LayerPolygon& layerPolygon : aLayers) {
-    auto result = uniqueLayers.insert(layerPolygon.layer);
+    auto result = uniqueLayers.insert(layerPolygon.data);
 
     if (result.second) {
       // Layer was added to the set.
-      layers.AppendElement(LayerPolygon(layerPolygon.layer));
+      layers.AppendElement(LayerPolygon(layerPolygon.data));
     }
   }
 
@@ -1441,7 +1441,7 @@ void Layer::Dump(std::stringstream& aStream, const char* aPrefix,
     }
 
     for (LayerPolygon& child : children) {
-      child.layer->Dump(aStream, pfx.get(), aDumpHtml, aSorted, child.geometry);
+      child.data->Dump(aStream, pfx.get(), aDumpHtml, aSorted, child.geometry);
     }
 
     if (aDumpHtml) {
@@ -1609,7 +1609,7 @@ void Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix) {
   if (Is3DContextLeaf()) {
     aStream << " [is3DContextLeaf]";
   }
-  if (Maybe<FrameMetrics::ViewID> viewId = IsAsyncZoomContainer()) {
+  if (Maybe<FrameMetrics::ViewID> viewId = GetAsyncZoomContainerId()) {
     aStream << nsPrintfCString(" [asyncZoomContainer scrollId=%" PRIu64 "]",
                                *viewId)
                    .get();
@@ -2136,7 +2136,7 @@ bool LayerManager::AddPendingScrollUpdateForNextTransaction(
     return false;
   }
 
-  mPendingScrollUpdates.GetOrInsert(aScrollId).AppendElement(aUpdateInfo);
+  mPendingScrollUpdates.LookupOrInsert(aScrollId).AppendElement(aUpdateInfo);
   return true;
 }
 
@@ -2156,10 +2156,9 @@ Maybe<nsTArray<ScrollPositionUpdate>> LayerManager::GetPendingScrollInfoUpdate(
 
 std::unordered_set<ScrollableLayerGuid::ViewID>
 LayerManager::ClearPendingScrollInfoUpdate() {
-  std::unordered_set<ScrollableLayerGuid::ViewID> scrollIds;
-  for (auto it = mPendingScrollUpdates.Iter(); !it.Done(); it.Next()) {
-    scrollIds.insert(it.Key());
-  }
+  std::unordered_set<ScrollableLayerGuid::ViewID> scrollIds(
+      mPendingScrollUpdates.Keys().cbegin(),
+      mPendingScrollUpdates.Keys().cend());
   mPendingScrollUpdates.Clear();
   return scrollIds;
 }
@@ -2215,7 +2214,6 @@ void RecordCompositionPayloadsPresented(
   if (aPayloads.Length()) {
     TimeStamp presented = aCompositionEndTime;
     for (const CompositionPayload& payload : aPayloads) {
-#if MOZ_GECKO_PROFILER
       if (profiler_can_accept_markers()) {
         MOZ_RELEASE_ASSERT(payload.mType <= kHighestCompositionPayloadType);
         nsAutoCString name(
@@ -2231,7 +2229,6 @@ void RecordCompositionPayloadsPresented(
             name, GRAPHICS,
             MarkerTiming::Interval(payload.mTimeStamp, presented), text);
       }
-#endif
 
       if (payload.mType == CompositionPayloadType::eKeyPress) {
         Telemetry::AccumulateTimeDelta(
@@ -2241,6 +2238,11 @@ void RecordCompositionPayloadsPresented(
         Telemetry::AccumulateTimeDelta(
             mozilla::Telemetry::SCROLL_PRESENT_LATENCY, payload.mTimeStamp,
             presented);
+      } else if (payload.mType ==
+                 CompositionPayloadType::eMouseUpFollowedByClick) {
+        Telemetry::AccumulateTimeDelta(
+            mozilla::Telemetry::MOUSEUP_FOLLOWED_BY_CLICK_PRESENT_LATENCY,
+            payload.mTimeStamp, presented);
       }
     }
   }

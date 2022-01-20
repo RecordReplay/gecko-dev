@@ -51,7 +51,7 @@ def get_is_windefender_disabled():
             )
             # is_antivirus_disabled is either 0 (False) or 1 (True)
             return bool(is_antivirus_disabled)
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
         return True
 
 
@@ -68,7 +68,7 @@ def get_windefender_exclusion_paths():
             for i in range(0, values_count):
                 path, _, __ = winreg.EnumValue(exclusions_key, i)
                 paths.append(path)
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
         pass
 
     return paths
@@ -83,7 +83,18 @@ def is_windefender_affecting_srcdir(srcdir):
     # To avoid surprises here, we normcase(...) so we don't get unexpected breakage if we change
     # the path order.
     srcdir = os.path.normcase(os.path.abspath(srcdir))
-    for exclusion_path in get_windefender_exclusion_paths():
+
+    try:
+        exclusion_paths = get_windefender_exclusion_paths()
+    except OSError as e:
+        if e.winerror == 5:
+            # A version of Windows 10 released in 2021 raises an "Access is denied"
+            # error (ERROR_ACCESS_DENIED == 5) to un-elevated processes when they
+            # query Windows Defender's exclusions. Skip the exclusion path checking.
+            return
+        raise
+
+    for exclusion_path in exclusion_paths:
         exclusion_path = os.path.normcase(os.path.abspath(exclusion_path))
         try:
             if os.path.commonpath([exclusion_path, srcdir]) == exclusion_path:

@@ -18,6 +18,11 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.jsm",
+  UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
+});
+
 const SEARCH_ENGINE_TOPIC = "browser-search-engine-modified";
 
 /**
@@ -134,12 +139,24 @@ class SearchUtils {
    *
    * @param {string} alias
    *   A search engine alias.  The alias string comparison is case insensitive.
+   * @param {string} [searchString]
+   *   Optional. If provided, we also enforce that there must be a space after
+   *   the alias in the search string.
    * @returns {nsISearchEngine}
    *   The matching engine or null if there isn't one.
    */
-  async engineForAlias(alias) {
+  async engineForAlias(alias, searchString = null) {
     await Promise.all([this.init(), this._refreshEnginesByAliasPromise]);
-    return this._enginesByAlias.get(alias.toLocaleLowerCase()) || null;
+    let engine = this._enginesByAlias.get(alias.toLocaleLowerCase());
+    if (engine && searchString) {
+      let query = UrlbarUtils.substringAfter(searchString, alias);
+      // Match an alias only when it has a space after it.  If there's no trailing
+      // space, then continue to treat it as part of the search string.
+      if (!UrlbarTokenizer.REGEXP_SPACES_START.test(query)) {
+        return null;
+      }
+    }
+    return engine || null;
   }
 
   /**
@@ -194,6 +211,41 @@ class SearchUtils {
       isPrivate
       ? Services.search.defaultPrivateEngine
       : Services.search.defaultEngine;
+  }
+
+  /**
+   * To make analysis easier, we sanitize some engine names when
+   * recording telemetry about search mode. This function returns the sanitized
+   * key name to record in telemetry.
+   *
+   * @param {object} searchMode
+   *   A search mode object. See UrlbarInput.setSearchMode.
+   * @returns {string}
+   *   A sanitized scalar key, used to access Telemetry data.
+   */
+  getSearchModeScalarKey(searchMode) {
+    let scalarKey;
+    if (searchMode.engineName) {
+      let engine = Services.search.getEngineByName(searchMode.engineName);
+      let resultDomain = engine.getResultDomain();
+      // For built-in engines, sanitize the data in a few special cases to make
+      // analysis easier.
+      if (!engine.isAppProvided) {
+        scalarKey = "other";
+      } else if (resultDomain.includes("amazon.")) {
+        // Group all the localized Amazon sites together.
+        scalarKey = "Amazon";
+      } else if (resultDomain.endsWith("wikipedia.org")) {
+        // Group all the localized Wikipedia sites together.
+        scalarKey = "Wikipedia";
+      } else {
+        scalarKey = searchMode.engineName;
+      }
+    } else if (searchMode.source) {
+      scalarKey = UrlbarUtils.getResultSourceName(searchMode.source) || "other";
+    }
+
+    return scalarKey;
   }
 
   async _initInternal() {

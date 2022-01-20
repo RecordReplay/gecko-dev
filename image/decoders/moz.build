@@ -36,6 +36,11 @@ if CONFIG["MOZ_AV1"]:
         "nsAVIFDecoder.cpp",
     ]
 
+if CONFIG["MOZ_JXL"]:
+    UNIFIED_SOURCES += [
+        "nsJXLDecoder.cpp",
+    ]
+
 include("/ipc/chromium/chromium-config.mozbuild")
 
 LOCAL_INCLUDES += [
@@ -43,6 +48,8 @@ LOCAL_INCLUDES += [
     "/gfx/2d",
     # Decoders need ImageLib headers.
     "/image",
+    # for libyuv::ARGBAttenuate and ::ARGBUnattenuate
+    "/media/libyuv/libyuv/include",
 ]
 
 LOCAL_INCLUDES += CONFIG["SKIA_INCLUDES"]
@@ -51,6 +58,8 @@ FINAL_LIBRARY = "xul"
 
 if CONFIG["CC_TYPE"] in ("clang", "gcc"):
     CXXFLAGS += ["-Wno-error=shadow"]
+
+CXXFLAGS += ["-Werror=switch"]
 
 # Add libFuzzer configuration directives
 include("/tools/fuzzing/libfuzzer-config.mozbuild")

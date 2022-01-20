@@ -15,7 +15,7 @@ button.input-color {
   height: 23px;
 }
 
-@supports -moz-bool-pref("widget.disable-native-theme-for-content") {
+@supports -moz-bool-pref("widget.non-native-theme.enabled") {
   /* The non-native theme has different widget-supplied padding values
    * for <input type="color"> and <button> -- `4px 4px 4px 4px` for the
    * former, and `1px 4px 1px 4px` for the latter.  So we size the
@@ -27,8 +27,8 @@ button.input-color {
   }
 
   div.input-color-swatch {
-    height: 22px; /* for a real ::-moz-color-swatch, its 100% height computes to
-                     the widget-supplied min-height (32px) minus
-                     padding+border (10px) */
+    height: 20px; /* for a real ::-moz-color-swatch, its 100% height computes to
+                     the widget-supplied min-height (32px) minus padding
+                     (4px each side) minus border (2px each side) */
   }
 }

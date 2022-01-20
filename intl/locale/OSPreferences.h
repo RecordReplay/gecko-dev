@@ -7,7 +7,7 @@
 #define mozilla_intl_IntlOSPreferences_h__
 
 #include "mozilla/StaticPtr.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsString.h"
 #include "nsTArray.h"
 
@@ -42,7 +42,7 @@ namespace intl {
  */
 class OSPreferences : public mozIOSPreferences {
  public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_MOZIOSPREFERENCES
 
   enum class DateTimeFormatStyle {
@@ -103,7 +103,7 @@ class OSPreferences : public mozIOSPreferences {
   nsTArray<nsCString> mRegionalPrefsLocales;
 
   const size_t kMaxCachedPatterns = 15;
-  nsDataHashtable<nsCStringHashKey, nsCString> mPatternCache;
+  nsTHashMap<nsCStringHashKey, nsCString> mPatternCache;
 
  private:
   virtual ~OSPreferences();

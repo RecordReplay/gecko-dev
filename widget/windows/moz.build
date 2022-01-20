@@ -53,14 +53,13 @@ EXPORTS.mozilla.widget += [
     "WindowsSMTCProvider.h",
     "WinMessages.h",
     "WinModifierKeyState.h",
-    "WinNativeEventData.h",
+    "WinTaskbar.h",
 ]
 
 UNIFIED_SOURCES += [
     "AudioSession.cpp",
     "CompositorWidgetChild.cpp",
     "GfxInfo.cpp",
-    "IconLoaderHelperWin.cpp",
     "IEnumFE.cpp",
     "IMMHandler.cpp",
     "InkCollector.cpp",
@@ -87,6 +86,8 @@ UNIFIED_SOURCES += [
     "nsWindowDbg.cpp",
     "nsWindowGfx.cpp",
     "nsWinGesture.cpp",
+    "OSKTabTipManager.cpp",
+    "OSKVRManager.cpp",
     "RemoteBackbuffer.cpp",
     "ScreenHelperWin.cpp",
     "ScrollbarUtil.cpp",

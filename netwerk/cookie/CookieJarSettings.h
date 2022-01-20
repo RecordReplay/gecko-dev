@@ -8,7 +8,6 @@
 #define mozilla_net_CookieJarSettings_h
 
 #include "nsICookieJarSettings.h"
-#include "nsDataHashtable.h"
 #include "nsTArray.h"
 
 #define COOKIEJARSETTINGS_CONTRACTID "@mozilla.org/cookieJarSettings;1"
@@ -124,7 +123,16 @@ class CookieJarSettings final : public nsICookieJarSettings {
 
   static already_AddRefed<nsICookieJarSettings> GetBlockingAll();
 
-  static already_AddRefed<nsICookieJarSettings> Create();
+  enum CreateMode { eRegular, ePrivate };
+
+  static already_AddRefed<nsICookieJarSettings> Create(CreateMode aMode);
+
+  static already_AddRefed<nsICookieJarSettings> Create(
+      nsIPrincipal* aPrincipal);
+
+  // This function should be only called for XPCOM. You should never use this
+  // for other purposes.
+  static already_AddRefed<nsICookieJarSettings> CreateForXPCOM();
 
   static already_AddRefed<nsICookieJarSettings> Create(
       uint32_t aCookieBehavior, const nsAString& aPartitionKey,

@@ -12,7 +12,7 @@
 #include "nsRefPtrHashtable.h"
 #include "nsHashKeys.h"
 #include "nsTArray.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 #include "nsWrapperCache.h"
 #include "nsXULAppAPI.h"
 
@@ -57,11 +57,11 @@ class BrowsingContextGroup final : public nsWrapperCache {
   // Synchronize the current BrowsingContextGroup state down to the given
   // content process, and continue updating it.
   //
-  // You rarely need to call this directy, as it's automatically called by
+  // You rarely need to call this directly, as it's automatically called by
   // |EnsureHostProcess| as needed.
   void Subscribe(ContentParent* aProcess);
 
-  // Stop synchromizing the current BrowsingContextGroup state down to a given
+  // Stop synchronizing the current BrowsingContextGroup state down to a given
   // content process. The content process must no longer be a host process.
   void Unsubscribe(ContentParent* aProcess);
 
@@ -72,10 +72,23 @@ class BrowsingContextGroup final : public nsWrapperCache {
 
   // When a BrowsingContext is being discarded, we may want to keep the
   // corresponding BrowsingContextGroup alive until the other process
-  // acknowledges the BrowsingContext has been discarded. A `KeepAlive` will be
-  // added to the `BrowsingContextGroup`, delaying destruction.
+  // acknowledges that the BrowsingContext has been discarded. A `KeepAlive`
+  // will be added to the `BrowsingContextGroup`, delaying destruction.
   void AddKeepAlive();
   void RemoveKeepAlive();
+
+  // A `KeepAlivePtr` will hold both a strong reference to the
+  // `BrowsingContextGroup` and holds a `KeepAlive`. When the pointer is
+  // dropped, it will release both the strong reference and the keepalive.
+  struct KeepAliveDeleter {
+    void operator()(BrowsingContextGroup* aPtr) {
+      if (RefPtr<BrowsingContextGroup> ptr = already_AddRefed(aPtr)) {
+        ptr->RemoveKeepAlive();
+      }
+    }
+  };
+  using KeepAlivePtr = UniquePtr<BrowsingContextGroup, KeepAliveDeleter>;
+  KeepAlivePtr MakeKeepAlivePtr();
 
   // Call when we want to check if we should suspend or resume all top level
   // contexts.
@@ -96,6 +109,7 @@ class BrowsingContextGroup final : public nsWrapperCache {
 
   // Get or create a BrowsingContextGroup with the given ID.
   static already_AddRefed<BrowsingContextGroup> GetOrCreate(uint64_t aId);
+  static already_AddRefed<BrowsingContextGroup> GetExisting(uint64_t aId);
   static already_AddRefed<BrowsingContextGroup> Create();
   static already_AddRefed<BrowsingContextGroup> Select(
       WindowContext* aParent, BrowsingContext* aOpener);
@@ -105,9 +119,9 @@ class BrowsingContextGroup final : public nsWrapperCache {
   template <typename Func>
   void EachOtherParent(ContentParent* aExcludedParent, Func&& aCallback) {
     MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess());
-    for (auto iter = mSubscribers.Iter(); !iter.Done(); iter.Next()) {
-      if (iter.Get()->GetKey() != aExcludedParent) {
-        aCallback(iter.Get()->GetKey());
+    for (const auto& key : mSubscribers) {
+      if (key != aExcludedParent) {
+        aCallback(key);
       }
     }
   }
@@ -117,8 +131,8 @@ class BrowsingContextGroup final : public nsWrapperCache {
   template <typename Func>
   void EachParent(Func&& aCallback) {
     MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess());
-    for (auto iter = mSubscribers.Iter(); !iter.Done(); iter.Next()) {
-      aCallback(iter.Get()->GetKey());
+    for (const auto& key : mSubscribers) {
+      aCallback(key);
     }
   }
 
@@ -137,10 +151,10 @@ class BrowsingContextGroup final : public nsWrapperCache {
   already_AddRefed<DocGroup> AddDocument(const nsACString& aKey,
                                          Document* aDocument);
 
-  // Called by Document when a Document needs to be removed to a DocGroup.
-  void RemoveDocument(const nsACString& aKey, Document* aDocument);
-
-  auto DocGroups() const { return mDocGroups.ConstIter(); }
+  // Called by Document when a Document needs to be removed from a DocGroup.
+  // aDocGroup should be from aDocument. This is done to avoid the assert
+  // in GetDocGroup() which can crash when called during unlinking.
+  void RemoveDocument(Document* aDocument, DocGroup* aDocGroup);
 
   mozilla::ThrottledEventQueue* GetTimerEventQueue() const {
     return mTimerEventQueue;
@@ -154,6 +168,8 @@ class BrowsingContextGroup final : public nsWrapperCache {
 
   void IncInputEventSuspensionLevel();
   void DecInputEventSuspensionLevel();
+
+  void ChildDestroy();
 
  private:
   friend class CanonicalBrowsingContext;
@@ -174,7 +190,7 @@ class BrowsingContextGroup final : public nsWrapperCache {
 
   uint32_t mKeepAliveCount = 0;
 
-#ifdef DEBUG
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   bool mDestroyed = false;
 #endif
 
@@ -186,7 +202,7 @@ class BrowsingContextGroup final : public nsWrapperCache {
   // non-discarded contexts within discarded contexts alive. It should be
   // removed in the future.
   // FIXME: Consider introducing a better common base than `nsISupports`?
-  nsTHashtable<nsRefPtrHashKey<nsISupports>> mContexts;
+  nsTHashSet<nsRefPtrHashKey<nsISupports>> mContexts;
 
   // The set of toplevel browsing contexts in the current BrowsingContextGroup.
   nsTArray<RefPtr<BrowsingContext>> mToplevels;
@@ -208,7 +224,7 @@ class BrowsingContextGroup final : public nsWrapperCache {
   // process.
   nsRefPtrHashtable<nsCStringHashKey, ContentParent> mHosts;
 
-  nsTHashtable<nsRefPtrHashKey<ContentParent>> mSubscribers;
+  nsTHashSet<nsRefPtrHashKey<ContentParent>> mSubscribers;
 
   // A queue to store postMessage events during page load, the queue will be
   // flushed once the page is loaded
@@ -228,5 +244,17 @@ class BrowsingContextGroup final : public nsWrapperCache {
 };
 }  // namespace dom
 }  // namespace mozilla
+
+inline void ImplCycleCollectionUnlink(
+    mozilla::dom::BrowsingContextGroup::KeepAlivePtr& aField) {
+  aField = nullptr;
+}
+
+inline void ImplCycleCollectionTraverse(
+    nsCycleCollectionTraversalCallback& aCallback,
+    mozilla::dom::BrowsingContextGroup::KeepAlivePtr& aField, const char* aName,
+    uint32_t aFlags = 0) {
+  CycleCollectionNoteChild(aCallback, aField.get(), aName, aFlags);
+}
 
 #endif  // !defined(mozilla_dom_BrowsingContextGroup_h)

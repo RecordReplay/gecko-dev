@@ -9,6 +9,7 @@ var EXPORTED_SYMBOLS = [
   "GeckoViewConnection",
   "GeckoViewWebExtension",
   "mobileWindowTracker",
+  "DownloadTracker",
 ];
 
 const { XPCOMUtils } = ChromeUtils.import(
@@ -46,6 +47,71 @@ XPCOMUtils.defineLazyServiceGetter(
 );
 
 const { debug, warn } = GeckoViewUtils.initLogging("Console");
+
+// Allows to |await| for AddonManager to startup
+// mostly useful in tests that run super-early when AddonManager is not
+// available yet.
+XPCOMUtils.defineLazyGetter(this, "gAddonManagerStartup", function() {
+  if (AddonManager.isReady) {
+    // Already started up, nothing to do
+    return true;
+  }
+
+  // Wait until AddonManager is ready to accept calls
+  return new Promise(resolve => {
+    AddonManager.addManagerListener({
+      onStartup() {
+        resolve(true);
+      },
+    });
+  });
+});
+
+const DOWNLOAD_CHANGED_MESSAGE = "GeckoView:WebExtension:DownloadChanged";
+
+var DownloadTracker = new (class extends EventEmitter {
+  constructor() {
+    super();
+
+    // maps numeric IDs to DownloadItem objects
+    this._downloads = new Map();
+  }
+
+  onEvent(event, data, callback) {
+    switch (event) {
+      case "GeckoView:WebExtension:DownloadChanged": {
+        const downloadItem = this.getDownloadItemById(data.downloadItemId);
+
+        if (!downloadItem) {
+          callback.onError("Error: Trying to update unknown download");
+          return;
+        }
+
+        const delta = downloadItem.update(data);
+        if (delta) {
+          this.emit("download-changed", {
+            delta,
+            downloadItem,
+          });
+        }
+      }
+    }
+  }
+
+  addDownloadItem(item) {
+    this._downloads.set(item.id, item);
+  }
+
+  /**
+   * Finds and returns a DownloadItem with a certain numeric ID
+   *
+   * @param {number} id
+   * @returns {DownloadItem} download item
+   */
+  getDownloadItemById(id) {
+    return this._downloads.get(id);
+  }
+})();
 
 /** Provides common logic between page and browser actions */
 class ExtensionActionHelper {
@@ -588,6 +654,7 @@ var GeckoViewWebExtension = {
   },
 
   async ensureBuiltIn(aUri, aId) {
+    await gAddonManagerStartup;
     const extensionData = new ExtensionData(aUri);
     const [manifest, extension] = await Promise.all([
       extensionData.loadManifest(),
@@ -607,6 +674,7 @@ var GeckoViewWebExtension = {
   },
 
   async installBuiltIn(aUri) {
+    await gAddonManagerStartup;
     const addon = await AddonManager.installBuiltinAddon(aUri.spec);
     const exported = await exportExtension(addon, addon.userPermissions, aUri);
     return { extension: exported };
@@ -665,29 +733,29 @@ var GeckoViewWebExtension = {
   async browserActionClick(aId) {
     const policy = WebExtensionPolicy.getByID(aId);
     if (!policy) {
-      return;
+      return undefined;
     }
 
     const browserAction = this.browserActions.get(policy.extension);
     if (!browserAction) {
-      return;
+      return undefined;
     }
 
-    browserAction.click();
+    return browserAction.triggerClickOrPopup();
   },
 
   async pageActionClick(aId) {
     const policy = WebExtensionPolicy.getByID(aId);
     if (!policy) {
-      return;
+      return undefined;
     }
 
     const pageAction = this.pageActions.get(policy.extension);
     if (!pageAction) {
-      return;
+      return undefined;
     }
 
-    pageAction.click();
+    return pageAction.triggerClickOrPopup();
   },
 
   async actionDelegateAttached(aId) {
@@ -802,11 +870,13 @@ var GeckoViewWebExtension = {
 
     switch (aEvent) {
       case "GeckoView:BrowserAction:Click": {
-        this.browserActionClick(aData.extensionId);
+        const popupUrl = await this.browserActionClick(aData.extensionId);
+        aCallback.onSuccess(popupUrl);
         break;
       }
       case "GeckoView:PageAction:Click": {
-        this.pageActionClick(aData.extensionId);
+        const popupUrl = await this.pageActionClick(aData.extensionId);
+        aCallback.onSuccess(popupUrl);
         break;
       }
       case "GeckoView:WebExtension:MenuClick": {
@@ -979,6 +1049,7 @@ var GeckoViewWebExtension = {
 
       case "GeckoView:WebExtension:List": {
         try {
+          await gAddonManagerStartup;
           const addons = await AddonManager.getAddonsByTypes(["extension"]);
           const extensions = await Promise.all(
             addons.map(addon =>
@@ -1017,6 +1088,3 @@ var GeckoViewWebExtension = {
 GeckoViewWebExtension.browserActions = new WeakMap();
 // WeakMap[Extension -> PageAction]
 GeckoViewWebExtension.pageActions = new WeakMap();
-Services.obs.addObserver(GeckoViewWebExtension, "devtools-installed-addon");
-Services.obs.addObserver(GeckoViewWebExtension, "testing-installed-addon");
-Services.obs.addObserver(GeckoViewWebExtension, "testing-uninstalled-addon");

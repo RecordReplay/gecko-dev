@@ -43,21 +43,22 @@
 #include "nsTextFrame.h"
 #include "nsCCUncollectableMarker.h"
 #include "nsTextFragment.h"
-#include "nsMediaFeatures.h"
 #include "nsCORSListenerProxy.h"
-#include "nsHTMLDNSPrefetch.h"
 #include "nsHtml5Module.h"
 #include "nsHTMLTags.h"
 #include "nsFocusManager.h"
 #include "nsListControlFrame.h"
+#include "mozilla/dom/HTMLDNSPrefetch.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/SVGElementFactory.h"
+#include "nsLanguageAtomService.h"
 #include "nsMathMLAtoms.h"
 #include "nsMathMLOperators.h"
 #include "Navigator.h"
 #include "StorageObserver.h"
 #include "CacheObserver.h"
 #include "DisplayItemClip.h"
+#include "HitTestInfo.h"
 #include "ActiveLayerTracker.h"
 #include "FrameLayerBuilder.h"
 #include "AnimationCommon.h"
@@ -91,7 +92,6 @@
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/ProcessPriorityManager.h"
 #include "mozilla/PermissionManager.h"
-#include "nsApplicationCacheService.h"
 #include "mozilla/dom/CustomElementRegistry.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/IMEStateManager.h"
@@ -126,6 +126,7 @@
 #include "nsThreadManager.h"
 #include "mozilla/css/ImageLoader.h"
 #include "gfxUserFontSet.h"
+#include "RestoreTabContentObserver.h"
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -176,12 +177,11 @@ nsresult nsLayoutStatics::Initialize() {
 
   nsCellMap::Init();
 
-  mozilla::SharedFontList::Initialize();
   StaticPresData::Init();
   nsCSSRendering::Init();
   css::ImageLoader::Init();
 
-  rv = nsHTMLDNSPrefetch::Initialize();
+  rv = HTMLDNSPrefetch::Initialize();
   if (NS_FAILED(rv)) {
     NS_ERROR("Could not initialize HTML DNS prefetch");
     return rv;
@@ -276,8 +276,6 @@ nsresult nsLayoutStatics::Initialize() {
     mozilla::dom::RemoteWorkerService::Initialize();
   }
 
-  nsThreadManager::InitializeShutdownObserver();
-
   mozilla::Fuzzyfox::Start();
 
   ClearSiteData::Initialize();
@@ -291,6 +289,8 @@ nsresult nsLayoutStatics::Initialize() {
   }
 
   ThirdPartyUtil::Startup();
+
+  RestoreTabContentObserver::Initialize();
 
   return NS_OK;
 }
@@ -318,10 +318,10 @@ void nsLayoutStatics::Shutdown() {
   IMEStateManager::Shutdown();
   EditorController::Shutdown();
   HTMLEditorController::Shutdown();
-  nsMediaFeatures::Shutdown();
-  nsHTMLDNSPrefetch::Shutdown();
+  HTMLDNSPrefetch::Shutdown();
   nsCSSRendering::Shutdown();
   StaticPresData::Shutdown();
+  nsLanguageAtomService::Shutdown();
 #ifdef DEBUG
   nsIFrame::DisplayReflowShutdown();
 #endif
@@ -379,7 +379,6 @@ void nsLayoutStatics::Shutdown() {
   HTMLInputElement::DestroyUploadLastDir();
 
   nsLayoutUtils::Shutdown();
-  mozilla::SharedFontList::Shutdown();
 
   nsHyphenationManager::Shutdown();
   nsDOMMutationObserver::Shutdown();
@@ -389,6 +388,7 @@ void nsLayoutStatics::Shutdown() {
   ContentParent::ShutDown();
 
   DisplayItemClip::Shutdown();
+  HitTestInfo::Shutdown();
 
   CacheObserver::Shutdown();
 
@@ -399,4 +399,6 @@ void nsLayoutStatics::Shutdown() {
   css::ImageLoader::Shutdown();
 
   mozilla::net::UrlClassifierFeatureFactory::Shutdown();
+
+  RestoreTabContentObserver::Shutdown();
 }

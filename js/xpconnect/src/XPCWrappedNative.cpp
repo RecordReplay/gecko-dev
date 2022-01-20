@@ -29,6 +29,7 @@
 #include "mozilla/Unused.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/ProfilerLabels.h"
 #include <algorithm>
 
 using namespace xpc;
@@ -206,7 +207,7 @@ nsresult XPCWrappedNative::WrapNewGlobal(JSContext* cx,
   // Set up the prototype on the global.
   MOZ_ASSERT(proto->GetJSProtoObject());
   RootedObject protoObj(cx, proto->GetJSProtoObject());
-  bool success = JS_SplicePrototype(cx, global, protoObj);
+  bool success = JS_SetPrototype(cx, global, protoObj);
   if (!success) {
     return NS_ERROR_FAILURE;
   }
@@ -1151,7 +1152,13 @@ bool CallMethodHelper::Call() {
 
   mCallContext.GetContext()->SetPendingException(nullptr);
 
+  using Flags = js::ProfilingStackFrame::Flags;
   if (mVTableIndex == 0) {
+    AUTO_PROFILER_LABEL_DYNAMIC_FAST(mIFaceInfo->Name(), "QueryInterface", DOM,
+                                     mCallContext.GetJSContext(),
+                                     uint32_t(Flags::STRING_TEMPLATE_METHOD) |
+                                         uint32_t(Flags::RELEVANT_FOR_JS));
+
     return QueryInterfaceFastPath();
   }
 
@@ -1159,6 +1166,20 @@ bool CallMethodHelper::Call() {
     Throw(NS_ERROR_XPC_CANT_GET_METHOD_INFO, mCallContext);
     return false;
   }
+
+  // Add profiler labels matching the WebIDL profiler labels,
+  // which also use the DOM category.
+  Flags templateFlag = Flags::STRING_TEMPLATE_METHOD;
+  if (mMethodInfo->IsGetter()) {
+    templateFlag = Flags::STRING_TEMPLATE_GETTER;
+  }
+  if (mMethodInfo->IsSetter()) {
+    templateFlag = Flags::STRING_TEMPLATE_SETTER;
+  }
+  AUTO_PROFILER_LABEL_DYNAMIC_FAST(
+      mIFaceInfo->Name(), mMethodInfo->NameOrDescription(), DOM,
+      mCallContext.GetJSContext(),
+      uint32_t(templateFlag) | uint32_t(Flags::RELEVANT_FOR_JS));
 
   if (!InitializeDispatchParams()) {
     return false;
@@ -1231,8 +1252,11 @@ bool CallMethodHelper::GetArraySizeFromParam(const nsXPTType& type,
     if (JS::IsArrayObject(mCallContext, maybeArray, &isArray) && isArray) {
       ok = JS::GetArrayLength(mCallContext, arrayOrNull, lengthp);
     } else if (JS_IsTypedArrayObject(&maybeArray.toObject())) {
-      *lengthp = JS_GetTypedArrayLength(&maybeArray.toObject());
-      ok = true;
+      size_t len = JS_GetTypedArrayLength(&maybeArray.toObject());
+      if (len <= UINT32_MAX) {
+        *lengthp = len;
+        ok = true;
+      }
     }
 
     if (!ok) {

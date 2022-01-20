@@ -11,6 +11,9 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
+const { AppConstants } = ChromeUtils.import(
+  "resource://gre/modules/AppConstants.jsm"
+);
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyServiceGetters(this, {
@@ -57,6 +60,14 @@ var _TaskSchedulerWinImpl = {
     WinTaskSvc.deleteTask(this._taskFolderName(), this._formatTaskName(id));
   },
 
+  /**
+   * Delete all tasks created by this installation.
+   *
+   * The Windows Default Browser Agent task is special: it's
+   * registered by the installer and might run as a different user and
+   * require permissions to delete.  We ignore it and leave it for the
+   * uninstaller to remove.
+   */
   deleteAllTasks() {
     const taskFolderName = this._taskFolderName();
 
@@ -73,14 +84,56 @@ var _TaskSchedulerWinImpl = {
 
     const tasksToDelete = allTasks.filter(name => this._matchAppTaskName(name));
 
+    let numberDeleted = 0;
+    let lastFailedTaskName;
+    // We need `MOZ_APP_DISPLAYNAME` since that's what the WDBA (written in C++) uses.
+    const defaultBrowserAgentTaskName =
+      AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE +
+      " Default Browser Agent " +
+      XreDirProvider.getInstallHash();
     for (const taskName of tasksToDelete) {
-      WinTaskSvc.deleteTask(taskFolderName, taskName);
+      if (taskName == defaultBrowserAgentTaskName) {
+        // Skip the Windows Default Browser Agent task.
+        continue;
+      }
+
+      try {
+        WinTaskSvc.deleteTask(taskFolderName, taskName);
+        numberDeleted += 1;
+      } catch (e) {
+        lastFailedTaskName = taskName;
+      }
     }
 
-    if (allTasks.length == tasksToDelete.length) {
+    if (lastFailedTaskName) {
+      // There's no standard way to chain exceptions, so instead try again,
+      // which should fail and throw again.  It's possible this isn't idempotent
+      // but we're expecting failures to be due to permission errors, which are
+      // likely to be static.
+      WinTaskSvc.deleteTask(taskFolderName, lastFailedTaskName);
+    }
+
+    if (allTasks.length == numberDeleted) {
       // Deleted every task, remove the folder.
       this._deleteFolderIfEmpty();
     }
+  },
+
+  taskExists(id) {
+    const taskFolderName = this._taskFolderName();
+
+    let allTasks;
+    try {
+      allTasks = WinTaskSvc.getFolderTasks(taskFolderName);
+    } catch (ex) {
+      if (ex.result == Cr.NS_ERROR_FILE_NOT_FOUND) {
+        // Folder doesn't exist, so neither do tasks within it.
+        return false;
+      }
+      throw ex;
+    }
+
+    return allTasks.includes(this._formatTaskName(id));
   },
 
   _formatTaskDefinitionXML(command, intervalSeconds, options) {
@@ -112,6 +165,8 @@ var _TaskSchedulerWinImpl = {
 
     const execAction = doc.querySelector("Actions Exec");
 
+    const settings = doc.querySelector("Settings");
+
     const commandNode = doc.createElementNS(xmlns, "Command");
     commandNode.textContent = command;
     execAction.appendChild(commandNode);
@@ -131,13 +186,18 @@ var _TaskSchedulerWinImpl = {
     if (options?.disabled) {
       const enabled = doc.createElementNS(xmlns, "Enabled");
       enabled.textContent = "false";
-      doc.querySelector("Settings").appendChild(enabled);
+      settings.appendChild(enabled);
+    }
+
+    if (options?.executionTimeoutSec && options.executionTimeoutSec > 0) {
+      const timeout = doc.createElementNS(xmlns, "ExecutionTimeLimit");
+      timeout.textContent = `PT${options.executionTimeoutSec}S`;
+      settings.appendChild(timeout);
     }
 
     // Other settings to consider for the future:
     // Idle
     // Battery
-    // Max run time
 
     doc.querySelector("RegistrationInfo Author").textContent =
       Services.appinfo.vendor;

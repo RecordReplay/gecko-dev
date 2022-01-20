@@ -5,10 +5,7 @@
 job-defaults:
     e10s: false
     test-manifest-loader: null  # don't load tests in the taskgraph
-    virtualization:
-        by-test-platform:
-            windows10-64.*: hardware
-            default: virtual
+    virtualization: virtual
     mozharness:
         script:
             by-test-platform:
@@ -31,6 +28,7 @@ job-defaults:
                 windows.*:
                     - unittests/win_unittest.py
     python-3: true
+    supports-artifact-builds: false
 
 cppunit:
     description: "CPP Unit Tests"
@@ -50,9 +48,12 @@ gtest:
     instance-size: xlarge
     run-on-projects:
         by-test-platform:
-            windows.*-shippable/.*: []  # permafails on shippable
-            windows.*-nightly/.*: []  # permafails on nightly too
-            .*-devedition/.*: []  # don't run on devedition
+            windows.*-shippable-qr/.*: []  # permafails on shippable
+            windows.*-nightly-qr/.*: []  # permafails on nightly too
+            .*-devedition.*/.*: []  # don't run on devedition
+            linux1804-32-qr/debug: ['mozilla-central']  # try and m-c
+            linux1804-32-qr/opt: []  # try only, shippable on m-c
+            linux1804-32-shippable-qr/opt: ['mozilla-central']  # try and m-c
             default: built-projects
     target:
         by-test-platform:
@@ -61,9 +62,8 @@ gtest:
     tier:
         by-test-platform:
             windows7-32-shippable.*: 3
-            windows10-64-shippable.*: 3
-            windows10-64-asan.*: 3
-            linux.*64-ccov.*/opt: 3
+            windows10-64-2004-shippable.*: 3
+            windows10-64-2004-asan.*: 3
             default: default
 
 jittest:
@@ -73,7 +73,7 @@ jittest:
     run-on-projects:
         by-test-platform:
             android-hw-.*-aarch64/debug: ['mozilla-central', 'release']
-            android-hw-.*-api-16(?:-shippable)?/.*: ['mozilla-central', 'release']
+            android-hw-.*-arm7/debug: ['mozilla-central', 'release']
             default: built-projects
     chunks:
         by-test-platform:
@@ -95,6 +95,33 @@ jittest:
                 windows.*: false
                 macosx.*: false
                 default: true
+    target:
+        by-test-platform:
+            android-.*: geckoview-androidTest.apk
+            default: null
+    tier:
+        by-test-platform:
+            android-hw.*: 2
+            macosx1100.*: 2
+            default: default
+
+jittest-all:
+    description: "JIT Test run with all flags for android arm7 opt"
+    suite: jittest
+    treeherder-symbol: Jit
+    run-on-projects:
+        by-test-platform:
+            android-hw-.*-arm7(?:-shippable)?/.*: ['mozilla-central', 'release']
+            default: []
+    chunks: 10
+    max-run-time: 3600
+    mozharness:
+        chunked: true
+        extra-options:
+            by-test-platform:
+                android.*:
+                    - --jittest-flags=all
+                default: None
     target:
         by-test-platform:
             android-.*: geckoview-androidTest.apk

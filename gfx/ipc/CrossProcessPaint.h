@@ -15,10 +15,10 @@
 #include "mozilla/MozPromise.h"
 #include "mozilla/ipc/ByteBuf.h"
 #include "nsColor.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsHashKeys.h"
 #include "nsRefPtrHashtable.h"
-#include "nsTHashtable.h"
+#include "nsTHashSet.h"
 
 class nsIDocShell;
 
@@ -86,11 +86,11 @@ class PaintFragment final {
 
   typedef mozilla::ipc::ByteBuf ByteBuf;
 
-  PaintFragment(IntSize, ByteBuf&&, nsTHashtable<nsUint64HashKey>&&);
+  PaintFragment(IntSize, ByteBuf&&, nsTHashSet<uint64_t>&&);
 
   IntSize mSize;
   ByteBuf mRecording;
-  nsTHashtable<nsUint64HashKey> mDependencies;
+  nsTHashSet<uint64_t> mDependencies;
 };
 
 /**
@@ -126,20 +126,19 @@ class CrossProcessPaint final {
                     float aScale, nscolor aBackgroundColor,
                     CrossProcessPaintFlags aFlags, dom::Promise* aPromise);
 
-  static RefPtr<ResolvePromise> Start(
-      nsTHashtable<nsUint64HashKey>&& aDependencies);
+  static RefPtr<ResolvePromise> Start(nsTHashSet<uint64_t>&& aDependencies);
 
   void ReceiveFragment(dom::WindowGlobalParent* aWGP,
                        PaintFragment&& aFragment);
   void LostFragment(dom::WindowGlobalParent* aWGP);
 
  private:
-  typedef nsDataHashtable<nsUint64HashKey, PaintFragment> ReceivedFragmentMap;
+  typedef nsTHashMap<nsUint64HashKey, PaintFragment> ReceivedFragmentMap;
 
   CrossProcessPaint(float aScale, dom::TabId aRoot);
   ~CrossProcessPaint();
 
-  void QueueDependencies(const nsTHashtable<nsUint64HashKey>& aDependencies);
+  void QueueDependencies(const nsTHashSet<uint64_t>& aDependencies);
 
   void QueuePaint(
       dom::WindowGlobalParent* aWGP, const Maybe<IntRect>& aRect,

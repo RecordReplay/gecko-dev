@@ -55,7 +55,6 @@ EXPORTS.mozilla = [
     "HashTable.h",
     "HelperMacros.h",
     "InitializedOnce.h",
-    "IntegerPrintfMacros.h",
     "IntegerRange.h",
     "IntegerTypeTraits.h",
     "JSONWriter.h",
@@ -68,6 +67,7 @@ EXPORTS.mozilla = [
     "MathAlgorithms.h",
     "Maybe.h",
     "MaybeOneOf.h",
+    "MaybeStorageBase.h",
     "MemoryChecking.h",
     "MemoryReporting.h",
     "NonDereferenceable.h",
@@ -101,7 +101,6 @@ EXPORTS.mozilla = [
     "SmallPointerArray.h",
     "Span.h",
     "SplayTree.h",
-    "Sprintf.h",
     "SPSCQueue.h",
     "StaticAnalysisFunctions.h",
     "TaggedAnonymousMemory.h",
@@ -140,6 +139,11 @@ LOCAL_INCLUDES += [
 if CONFIG["OS_ARCH"] == "WINNT":
     EXPORTS.mozilla += [
         "WindowsVersion.h",
+    ]
+
+if CONFIG["OS_ARCH"] == "WASI":
+    EXPORTS.mozilla += [
+        "WasiAtomic.h",
     ]
 
 if CONFIG["MOZ_TSAN"]:

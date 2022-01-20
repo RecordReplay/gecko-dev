@@ -8,13 +8,19 @@
 #include "ipc/IPCMessageUtilsSpecializations.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
+#include "nsFrameLoader.h"
 #include "nsIHttpChannel.h"
+#include "nsIXULRuntime.h"
 #include "nsSHEntryShared.h"
 #include "nsSHistory.h"
 #include "nsStructuredCloneContainer.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/PresState.h"
+#include "mozilla/StaticPrefs_fission.h"
 #include "mozilla/Tuple.h"
+#include "mozilla/dom/BrowserParent.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/CSPMessageUtils.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/nsCSPContext.h"
@@ -36,12 +42,13 @@ SessionHistoryInfo::SessionHistoryInfo(nsDocShellLoadState* aLoadState,
       mResultPrincipalURI(aLoadState->ResultPrincipalURI()),
       mPostData(aLoadState->PostDataStream()),
       mLoadType(aLoadState->LoadType()),
-      mSrcdocData(aLoadState->SrcdocData()),
+      mSrcdocData(aLoadState->SrcdocData().IsVoid()
+                      ? Nothing()
+                      : Some(aLoadState->SrcdocData())),
       mBaseURI(aLoadState->BaseURI()),
       mLoadReplace(aLoadState->LoadReplace()),
-      /* FIXME Should this be aLoadState->IsSrcdocLoad()? */
-      mIsSrcdocEntry(!aLoadState->SrcdocData().IsEmpty()),
       mHasUserInteraction(false),
+      mHasUserActivation(aLoadState->HasValidUserGestureActivation()),
       mSharedState(SharedState::Create(
           aLoadState->TriggeringPrincipal(), aLoadState->PrincipalToInherit(),
           aLoadState->PartitionedPrincipalToInherit(), aLoadState->Csp(),
@@ -126,14 +133,14 @@ void SessionHistoryInfo::Reset(nsIURI* aURI, const nsID& aDocShellID,
   mScrollPositionX = 0;
   mScrollPositionY = 0;
   mStateData = nullptr;
-  mSrcdocData.Truncate();
+  mSrcdocData = Nothing();
   mBaseURI = nullptr;
   mLoadReplace = false;
   mURIWasModified = false;
-  mIsSrcdocEntry = false;
   mScrollRestorationIsManual = false;
   mPersist = false;
   mHasUserInteraction = false;
+  mHasUserActivation = false;
 
   mSharedState.Get()->mTriggeringPrincipal = aTriggeringPrincipal;
   mSharedState.Get()->mPrincipalToInherit = aPrincipalToInherit;
@@ -194,6 +201,12 @@ bool SessionHistoryInfo::IsSubFrame() const {
   return mSharedState.Get()->mIsFrameNavigation;
 }
 
+void SessionHistoryInfo::SetSaveLayoutStateFlag(bool aSaveLayoutStateFlag) {
+  MOZ_ASSERT(XRE_IsParentProcess());
+  static_cast<SHEntrySharedParentState*>(mSharedState.Get())->mSaveLayoutState =
+      aSaveLayoutStateFlag;
+}
+
 void SessionHistoryInfo::FillLoadInfo(nsDocShellLoadState& aLoadState) const {
   aLoadState.SetOriginalURI(mOriginalURI);
   aLoadState.SetMaybeResultPrincipalURI(Some(mResultPrincipalURI));
@@ -217,8 +230,8 @@ void SessionHistoryInfo::FillLoadInfo(nsDocShellLoadState& aLoadState) const {
   // first created. bug 947716 has been created to address this issue.
   nsAutoString srcdoc;
   nsCOMPtr<nsIURI> baseURI;
-  if (mIsSrcdocEntry) {
-    srcdoc = mSrcdocData;
+  if (mSrcdocData) {
+    srcdoc = mSrcdocData.value();
     baseURI = mBaseURI;
     flags |= nsDocShell::InternalLoad::INTERNAL_LOAD_FLAGS_IS_SRCDOC;
   } else {
@@ -226,7 +239,7 @@ void SessionHistoryInfo::FillLoadInfo(nsDocShellLoadState& aLoadState) const {
   }
   aLoadState.SetSrcdocData(srcdoc);
   aLoadState.SetBaseURI(baseURI);
-  aLoadState.SetLoadFlags(flags);
+  aLoadState.SetInternalLoadFlags(flags);
 
   aLoadState.SetFirstParty(true);
 }
@@ -321,7 +334,7 @@ void SessionHistoryInfo::SharedState::Init(
 
 static uint64_t gLoadingSessionHistoryInfoLoadId = 0;
 
-nsDataHashtable<nsUint64HashKey, SessionHistoryEntry*>*
+nsTHashMap<nsUint64HashKey, SessionHistoryEntry*>*
     SessionHistoryEntry::sLoadIdToEntry = nullptr;
 
 LoadingSessionHistoryInfo::LoadingSessionHistoryInfo(
@@ -331,10 +344,15 @@ LoadingSessionHistoryInfo::LoadingSessionHistoryInfo(
 }
 
 LoadingSessionHistoryInfo::LoadingSessionHistoryInfo(
-    SessionHistoryEntry* aEntry, uint64_t aLoadId)
-    : mInfo(aEntry->Info()), mLoadId(aLoadId) {
+    SessionHistoryEntry* aEntry, LoadingSessionHistoryInfo* aInfo)
+    : mInfo(aEntry->Info()),
+      mLoadId(aInfo->mLoadId),
+      mLoadIsFromSessionHistory(aInfo->mLoadIsFromSessionHistory),
+      mRequestedIndex(aInfo->mRequestedIndex),
+      mSessionHistoryLength(aInfo->mSessionHistoryLength),
+      mLoadingCurrentActiveEntry(aInfo->mLoadingCurrentActiveEntry) {
   MOZ_ASSERT(SessionHistoryEntry::sLoadIdToEntry &&
-             SessionHistoryEntry::sLoadIdToEntry->Get(aLoadId) == aEntry);
+             SessionHistoryEntry::sLoadIdToEntry->Get(mLoadId) == aEntry);
 }
 
 already_AddRefed<nsDocShellLoadState>
@@ -363,14 +381,13 @@ SessionHistoryEntry* SessionHistoryEntry::GetByLoadId(uint64_t aLoadId) {
 void SessionHistoryEntry::SetByLoadId(uint64_t aLoadId,
                                       SessionHistoryEntry* aEntry) {
   if (!sLoadIdToEntry) {
-    sLoadIdToEntry =
-        new nsDataHashtable<nsUint64HashKey, SessionHistoryEntry*>();
+    sLoadIdToEntry = new nsTHashMap<nsUint64HashKey, SessionHistoryEntry*>();
   }
 
   MOZ_LOG(
       gSHLog, LogLevel::Verbose,
       ("SessionHistoryEntry::SetByLoadId(%" PRIu64 " - %p)", aLoadId, aEntry));
-  sLoadIdToEntry->Put(aLoadId, aEntry);
+  sLoadIdToEntry->InsertOrUpdate(aLoadId, aEntry);
 }
 
 void SessionHistoryEntry::RemoveLoadId(uint64_t aLoadId) {
@@ -385,19 +402,28 @@ void SessionHistoryEntry::RemoveLoadId(uint64_t aLoadId) {
 }
 
 SessionHistoryEntry::SessionHistoryEntry()
-    : mInfo(new SessionHistoryInfo()), mID(++gEntryID) {}
+    : mInfo(new SessionHistoryInfo()), mID(++gEntryID) {
+  MOZ_ASSERT(mozilla::SessionHistoryInParent());
+}
 
 SessionHistoryEntry::SessionHistoryEntry(nsDocShellLoadState* aLoadState,
                                          nsIChannel* aChannel)
-    : mInfo(new SessionHistoryInfo(aLoadState, aChannel)), mID(++gEntryID) {}
+    : mInfo(new SessionHistoryInfo(aLoadState, aChannel)), mID(++gEntryID) {
+  MOZ_ASSERT(mozilla::SessionHistoryInParent());
+}
 
 SessionHistoryEntry::SessionHistoryEntry(SessionHistoryInfo* aInfo)
-    : mInfo(MakeUnique<SessionHistoryInfo>(*aInfo)), mID(++gEntryID) {}
+    : mInfo(MakeUnique<SessionHistoryInfo>(*aInfo)), mID(++gEntryID) {
+  MOZ_ASSERT(mozilla::SessionHistoryInParent());
+}
 
 SessionHistoryEntry::SessionHistoryEntry(const SessionHistoryEntry& aEntry)
     : mInfo(MakeUnique<SessionHistoryInfo>(*aEntry.mInfo)),
       mParent(aEntry.mParent),
-      mID(aEntry.mID) {}
+      mID(aEntry.mID),
+      mBCHistoryLength(aEntry.mBCHistoryLength) {
+  MOZ_ASSERT(mozilla::SessionHistoryInParent());
+}
 
 SessionHistoryEntry::~SessionHistoryEntry() {
   // Null out the mParent pointers on all our kids.
@@ -533,6 +559,18 @@ SessionHistoryEntry::SetHasUserInteraction(bool aFlag) {
 }
 
 NS_IMETHODIMP
+SessionHistoryEntry::GetHasUserActivation(bool* aFlag) {
+  *aFlag = mInfo->mHasUserActivation;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+SessionHistoryEntry::SetHasUserActivation(bool aFlag) {
+  mInfo->mHasUserActivation = aFlag;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 SessionHistoryEntry::GetReferrerInfo(nsIReferrerInfo** aReferrerInfo) {
   nsCOMPtr<nsIReferrerInfo> referrerInfo = mInfo->mReferrerInfo;
   referrerInfo.forget(aReferrerInfo);
@@ -547,7 +585,6 @@ SessionHistoryEntry::SetReferrerInfo(nsIReferrerInfo* aReferrerInfo) {
 
 NS_IMETHODIMP
 SessionHistoryEntry::GetContentViewer(nsIContentViewer** aContentViewer) {
-  NS_WARNING("This lives in the child process");
   *aContentViewer = nullptr;
   return NS_OK;
 }
@@ -797,19 +834,19 @@ SessionHistoryEntry::SetDocshellID(const nsID& aDocshellID) {
 
 NS_IMETHODIMP
 SessionHistoryEntry::GetIsSrcdocEntry(bool* aIsSrcdocEntry) {
-  *aIsSrcdocEntry = mInfo->mIsSrcdocEntry;
+  *aIsSrcdocEntry = mInfo->mSrcdocData.isSome();
   return NS_OK;
 }
 
 NS_IMETHODIMP
 SessionHistoryEntry::GetSrcdocData(nsAString& aSrcdocData) {
-  aSrcdocData = mInfo->mSrcdocData;
+  aSrcdocData = mInfo->mSrcdocData.valueOr(EmptyString());
   return NS_OK;
 }
 
 NS_IMETHODIMP
 SessionHistoryEntry::SetSrcdocData(const nsAString& aSrcdocData) {
-  mInfo->mSrcdocData = aSrcdocData;
+  mInfo->mSrcdocData = Some(nsString(aSrcdocData));
   return NS_OK;
 }
 
@@ -960,7 +997,8 @@ SessionHistoryEntry::Create(
     nsIContentSecurityPolicy* aCsp, const nsID& aDocshellID,
     bool aDynamicCreation, nsIURI* aOriginalURI, nsIURI* aResultPrincipalURI,
     bool aLoadReplace, nsIReferrerInfo* aReferrerInfo, const nsAString& aSrcdoc,
-    bool aSrcdocEntry, nsIURI* aBaseURI, bool aSaveLayoutState, bool aExpired) {
+    bool aSrcdocEntry, nsIURI* aBaseURI, bool aSaveLayoutState, bool aExpired,
+    bool aUserActivation) {
   MOZ_CRASH("Might need to implement this");
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -1022,9 +1060,8 @@ SessionHistoryEntry::HasDynamicallyAddedChild(bool* aHasDynamicallyAddedChild) {
 }
 
 NS_IMETHODIMP_(bool)
-SessionHistoryEntry::HasBFCacheEntry(nsIBFCacheEntry* aEntry) {
-  MOZ_CRASH("This lives in the child process");
-  return false;
+SessionHistoryEntry::HasBFCacheEntry(SHEntrySharedParentState* aEntry) {
+  return SharedInfo() == aEntry;
 }
 
 NS_IMETHODIMP
@@ -1333,6 +1370,33 @@ SHEntrySharedParentState* SessionHistoryEntry::SharedInfo() const {
   return static_cast<SHEntrySharedParentState*>(mInfo->mSharedState.Get());
 }
 
+void SessionHistoryEntry::SetFrameLoader(nsFrameLoader* aFrameLoader) {
+  MOZ_ASSERT_IF(aFrameLoader, !SharedInfo()->mFrameLoader);
+  // If the pref is disabled, we still allow evicting the existing entries.
+  MOZ_RELEASE_ASSERT(!aFrameLoader || mozilla::BFCacheInParent());
+  SharedInfo()->SetFrameLoader(aFrameLoader);
+  if (aFrameLoader) {
+    if (BrowserParent* bp = aFrameLoader->GetBrowserParent()) {
+      bp->Deactivated();
+    }
+
+    // When a new frameloader is stored, try to evict some older
+    // frameloaders. Non-SHIP session history has a similar call in
+    // nsDocumentViewer::Show.
+    nsCOMPtr<nsISHistory> shistory;
+    GetShistory(getter_AddRefs(shistory));
+    if (shistory) {
+      int32_t index = 0;
+      shistory->GetIndex(&index);
+      shistory->EvictOutOfRangeContentViewers(index);
+    }
+  }
+}
+
+nsFrameLoader* SessionHistoryEntry::GetFrameLoader() {
+  return SharedInfo()->mFrameLoader;
+}
+
 void SessionHistoryEntry::SetInfo(SessionHistoryInfo* aInfo) {
   // FIXME Assert that we're not changing shared state!
   mInfo = MakeUnique<SessionHistoryInfo>(*aInfo);
@@ -1352,16 +1416,21 @@ void IPDLParamTraits<dom::SessionHistoryInfo>::Write(
     NS_ENSURE_SUCCESS_VOID(aParam.mStateData->GetFormatVersion(&version));
     Get<0>(*stateData) = version;
 
-    JSStructuredCloneData& data = aParam.mStateData->Data();
-    auto iter = data.Start();
-    bool success;
-    Get<1>(*stateData).data().data = data.Borrow(iter, data.Size(), &success);
-    if (NS_WARN_IF(!success)) {
-      return;
+    IToplevelProtocol* topLevel = aActor->ToplevelProtocol();
+    MOZ_RELEASE_ASSERT(topLevel->GetProtocolId() == PContentMsgStart);
+    if (topLevel->GetSide() == ChildSide) {
+      auto* contentChild = static_cast<dom::ContentChild*>(topLevel);
+      if (NS_WARN_IF(!aParam.mStateData->BuildClonedMessageDataForChild(
+              contentChild, Get<1>(*stateData)))) {
+        return;
+      }
+    } else {
+      auto* contentParent = static_cast<dom::ContentParent*>(topLevel);
+      if (NS_WARN_IF(!aParam.mStateData->BuildClonedMessageDataForParent(
+              contentParent, Get<1>(*stateData)))) {
+        return;
+      }
     }
-    MOZ_ASSERT(aParam.mStateData->PortIdentifiers().IsEmpty() &&
-               aParam.mStateData->BlobImpls().IsEmpty() &&
-               aParam.mStateData->InputStreams().IsEmpty());
   }
 
   WriteIPDLParam(aMsg, aActor, aParam.mURI);
@@ -1379,10 +1448,10 @@ void IPDLParamTraits<dom::SessionHistoryInfo>::Write(
   WriteIPDLParam(aMsg, aActor, aParam.mBaseURI);
   WriteIPDLParam(aMsg, aActor, aParam.mLoadReplace);
   WriteIPDLParam(aMsg, aActor, aParam.mURIWasModified);
-  WriteIPDLParam(aMsg, aActor, aParam.mIsSrcdocEntry);
   WriteIPDLParam(aMsg, aActor, aParam.mScrollRestorationIsManual);
   WriteIPDLParam(aMsg, aActor, aParam.mPersist);
   WriteIPDLParam(aMsg, aActor, aParam.mHasUserInteraction);
+  WriteIPDLParam(aMsg, aActor, aParam.mHasUserActivation);
   WriteIPDLParam(aMsg, aActor, aParam.mSharedState.Get()->mId);
   WriteIPDLParam(aMsg, aActor, aParam.mSharedState.Get()->mTriggeringPrincipal);
   WriteIPDLParam(aMsg, aActor, aParam.mSharedState.Get()->mPrincipalToInherit);
@@ -1415,11 +1484,11 @@ bool IPDLParamTraits<dom::SessionHistoryInfo>::Read(
       !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mBaseURI) ||
       !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mLoadReplace) ||
       !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mURIWasModified) ||
-      !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mIsSrcdocEntry) ||
       !ReadIPDLParam(aMsg, aIter, aActor,
                      &aResult->mScrollRestorationIsManual) ||
       !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mPersist) ||
       !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mHasUserInteraction) ||
+      !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mHasUserActivation) ||
       !ReadIPDLParam(aMsg, aIter, aActor, &sharedId)) {
     aActor->FatalError("Error reading fields for SessionHistoryInfo");
     return false;
@@ -1514,6 +1583,8 @@ void IPDLParamTraits<dom::LoadingSessionHistoryInfo>::Write(
   WriteIPDLParam(aMsg, aActor, aParam.mLoadIsFromSessionHistory);
   WriteIPDLParam(aMsg, aActor, aParam.mRequestedIndex);
   WriteIPDLParam(aMsg, aActor, aParam.mSessionHistoryLength);
+  WriteIPDLParam(aMsg, aActor, aParam.mLoadingCurrentActiveEntry);
+  WriteIPDLParam(aMsg, aActor, aParam.mForceMaybeResetName);
 }
 
 bool IPDLParamTraits<dom::LoadingSessionHistoryInfo>::Read(
@@ -1524,7 +1595,10 @@ bool IPDLParamTraits<dom::LoadingSessionHistoryInfo>::Read(
       !ReadIPDLParam(aMsg, aIter, aActor,
                      &aResult->mLoadIsFromSessionHistory) ||
       !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mRequestedIndex) ||
-      !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mSessionHistoryLength)) {
+      !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mSessionHistoryLength) ||
+      !ReadIPDLParam(aMsg, aIter, aActor,
+                     &aResult->mLoadingCurrentActiveEntry) ||
+      !ReadIPDLParam(aMsg, aIter, aActor, &aResult->mForceMaybeResetName)) {
     aActor->FatalError("Error reading fields for LoadingSessionHistoryInfo");
     return false;
   }

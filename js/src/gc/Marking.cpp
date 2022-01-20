@@ -11,13 +11,10 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/ReentrancyGuard.h"
 #include "mozilla/ScopeExit.h"
-#include "mozilla/Unused.h"
 
 #include <algorithm>
 #include <initializer_list>
 #include <type_traits>
-
-#include "jsfriendapi.h"
 
 #include "builtin/ModuleObject.h"
 #include "debugger/DebugAPI.h"
@@ -35,8 +32,10 @@
 #include "vm/ArrayObject.h"
 #include "vm/BigIntType.h"
 #include "vm/GeneratorObject.h"
+#include "vm/GetterSetter.h"
+#include "vm/PropMap.h"
 #include "vm/RegExpShared.h"
-#include "vm/Scope.h"
+#include "vm/Scope.h"  // GetScopeDataTrailingNames
 #include "vm/Shape.h"
 #include "vm/SymbolType.h"
 #include "vm/TypedArrayObject.h"
@@ -106,13 +105,15 @@ using mozilla::PodCopy;
 //  |         +------------+---------------+             +<----------+     :
 //  |         |                            |             |           |     :
 //  |         v                            v             v           |     :
-//  |    DoCallback                    DoMarking    traverseEdge     |     :
+//  |    DoCallback                    DoMarking markAndTraverseEdge |     :
 //  |         |                            |             |           |     :
 //  |         |                            +------+------+           |     :
 //  |         |                                   |                  |     :
 //  |         v                                   v                  |     :
-//  |  CallbackTracer::                   GCMarker::traverse         |     :
+//  |  CallbackTracer::                    markAndTraverse           |     :
 //  |    onSomeEdge                               |                  |     :
+//  |                                             |                  |     :
+//  |                                          traverse              |     :
 //  |                                             |                  |     :
 //  |             +-------------------+-----------+------+           |     :
 //  |             |                   |                  |           |     :
@@ -387,10 +388,6 @@ void js::gc::AssertRootMarkingPhase(JSTracer* trc) {
 /*** Tracing Interface ******************************************************/
 
 template <typename T>
-bool DoCallback(GenericTracer* trc, T** thingp, const char* name);
-template <typename T>
-bool DoCallback(GenericTracer* trc, T* thingp, const char* name);
-template <typename T>
 void DoMarking(GCMarker* gcmarker, T* thing);
 template <typename T>
 void DoMarking(GCMarker* gcmarker, const T& thing);
@@ -549,6 +546,48 @@ template void js::TraceManuallyBarrieredCrossCompartmentEdge<JSObject*>(
 template void js::TraceManuallyBarrieredCrossCompartmentEdge<BaseScript*>(
     JSTracer*, JSObject*, BaseScript**, const char*);
 
+class MOZ_RAII AutoDisableCompartmentCheckTracer {
+#ifdef DEBUG
+  JSContext* cx_;
+  bool prev_;
+
+ public:
+  AutoDisableCompartmentCheckTracer()
+      : cx_(TlsContext.get()), prev_(cx_->disableCompartmentCheckTracer) {
+    cx_->disableCompartmentCheckTracer = true;
+  }
+  ~AutoDisableCompartmentCheckTracer() {
+    cx_->disableCompartmentCheckTracer = prev_;
+  }
+#else
+ public:
+  AutoDisableCompartmentCheckTracer(){};
+#endif
+};
+
+template <typename T>
+void js::TraceSameZoneCrossCompartmentEdge(JSTracer* trc,
+                                           const WriteBarriered<T>* dst,
+                                           const char* name) {
+#ifdef DEBUG
+  if (trc->isMarkingTracer()) {
+    MOZ_ASSERT((*dst)->maybeCompartment(),
+               "Use TraceEdge for GC things without a compartment");
+
+    GCMarker* gcMarker = GCMarker::fromTracer(trc);
+    MOZ_ASSERT_IF(gcMarker->tracingZone,
+                  (*dst)->zone() == gcMarker->tracingZone);
+  }
+#endif
+
+  // Clear expected compartment for cross-compartment edge.
+  AutoClearTracingSource acts(trc);
+  AutoDisableCompartmentCheckTracer adcct;
+  TraceEdgeInternal(trc, ConvertToBase(dst->unbarrieredAddress()), name);
+}
+template void js::TraceSameZoneCrossCompartmentEdge(
+    JSTracer*, const WriteBarriered<Shape*>*, const char*);
+
 template <typename T>
 void js::TraceWeakMapKeyEdgeInternal(JSTracer* trc, Zone* weakMapZone,
                                      T** thingp, const char* name) {
@@ -587,14 +626,17 @@ void js::TraceProcessGlobalRoot(JSTracer* trc, T* thing, const char* name) {
   // them. Fortunately, atoms (permanent and non) cannot refer to other GC
   // things so they do not need to go through the mark stack and may simply
   // be marked directly.  Moreover, well-known symbols can refer only to
-  // permanent atoms, so likewise require no subsquent marking.
-  CheckTracedThing(trc, *ConvertToBase(&thing));
-  AutoClearTracingSource acts(trc);
+  // permanent atoms, so likewise require no subsequent marking.
   if (trc->isMarkingTracer()) {
+    CheckTracedThing(trc, *ConvertToBase(&thing));
+    AutoClearTracingSource acts(trc);
     thing->asTenured().markIfUnmarked(gc::MarkColor::Black);
-  } else {
-    DoCallback(trc->asCallbackTracer(), ConvertToBase(&thing), name);
+    return;
   }
+
+  T* tmp = thing;
+  TraceEdgeInternal(trc, ConvertToBase(&tmp), name);
+  MOZ_ASSERT(tmp == thing);  // We shouldn't move process global roots.
 }
 template void js::TraceProcessGlobalRoot<JSAtom>(JSTracer*, JSAtom*,
                                                  const char*);
@@ -660,6 +702,48 @@ void js::TraceGCCellPtrRoot(JSTracer* trc, JS::GCCellPtr* thingp,
   }
 }
 
+template <typename T>
+inline bool DoCallback(GenericTracer* trc, T** thingp, const char* name) {
+  CheckTracedThing(trc, *thingp);
+  JS::AutoTracingName ctx(trc, name);
+
+  T* thing = *thingp;
+  T* post = DispatchToOnEdge(trc, thing);
+  if (post != thing) {
+    *thingp = post;
+  }
+
+  return post;
+}
+
+template <typename T>
+inline bool DoCallback(GenericTracer* trc, T* thingp, const char* name) {
+  JS::AutoTracingName ctx(trc, name);
+
+  // Return true by default. For some types the lambda below won't be called.
+  bool ret = true;
+  auto thing = MapGCThingTyped(*thingp, [trc, &ret](auto thing) {
+    CheckTracedThing(trc, thing);
+
+    auto* post = DispatchToOnEdge(trc, thing);
+    if (!post) {
+      ret = false;
+      return TaggedPtr<T>::empty();
+    }
+
+    return TaggedPtr<T>::wrap(post);
+  });
+
+  // Only update *thingp if the value changed, to avoid TSan false positives for
+  // template objects when using DumpHeapTracer or UbiNode tracers while Ion
+  // compiling off-thread.
+  if (thing.isSome() && thing.value() != *thingp) {
+    *thingp = thing.value();
+  }
+
+  return ret;
+}
+
 // This method is responsible for dynamic dispatch to the real tracer
 // implementation. Consider replacing this choke point with virtual dispatch:
 // a sufficiently smart C++ compiler may be able to devirtualize some paths.
@@ -718,125 +802,83 @@ struct ImplicitEdgeHolderType<BaseScript*> {
   using Type = BaseScript*;
 };
 
-void GCMarker::markEphemeronValues(gc::Cell* markedCell,
-                                   WeakEntryVector& values) {
-  DebugOnly<size_t> initialLen = values.length();
+void GCMarker::markEphemeronEdges(EphemeronEdgeVector& edges) {
+  DebugOnly<size_t> initialLength = edges.length();
 
-  for (const auto& markable : values) {
-    markable.weakmap->markKey(this, markedCell, markable.key);
+  for (auto& edge : edges) {
+    gc::AutoSetMarkColor autoColor(*this,
+                                   std::min(edge.color, CellColor(color)));
+    ApplyGCThingTyped(edge.target, edge.target->getTraceKind(),
+                      [this](auto t) { markAndTraverse(t); });
   }
 
-  // The vector should not be appended to during iteration because the key is
-  // already marked, and even in cases where we have a multipart key, we
-  // should only be inserting entries for the unmarked portions.
-  MOZ_ASSERT(values.length() == initialLen);
-}
-
-void GCMarker::forgetWeakKey(js::gc::WeakKeyTable& weakKeys, WeakMapBase* map,
-                             gc::Cell* keyOrDelegate, gc::Cell* keyToRemove) {
-  // Find and remove the exact pair <map,keyToRemove> from the values of the
-  // weak keys table.
-  //
-  // This function is called when 'keyToRemove' is removed from a weakmap
-  // 'map'. If 'keyToRemove' has a delegate, then the delegate will be used as
-  // the lookup key in gcWeakKeys; otherwise, 'keyToRemove' itself will be. In
-  // either case, 'keyToRemove' is what we will be filtering out of the
-  // Markable values in the weakKey table.
-  auto p = weakKeys.get(keyOrDelegate);
-
-  // Note that this is not guaranteed to find anything. The key will have
-  // only been inserted into the weakKeys table if it was unmarked when the
-  // map was traced.
-  if (p) {
-    // Entries should only have been added to weakKeys if the map was marked.
-    for (auto r = p->value.all(); !r.empty(); r.popFront()) {
-      MOZ_ASSERT(r.front().weakmap->mapColor);
-    }
-
-    p->value.eraseIfEqual(WeakMarkable(map, keyToRemove));
-  }
-}
-
-void GCMarker::forgetWeakMap(WeakMapBase* map, Zone* zone) {
-  for (auto table : {&zone->gcNurseryWeakKeys(), &zone->gcWeakKeys()}) {
-    for (auto p = table->all(); !p.empty(); p.popFront()) {
-      p.front().value.eraseIf([map](const WeakMarkable& markable) -> bool {
-        return markable.weakmap == map;
-      });
-    }
-  }
+  // The above marking always goes through markAndPush, which will not cause
+  // 'edges' to be appended to while iterating.
+  MOZ_ASSERT(edges.length() == initialLength);
 }
 
 // 'delegate' is no longer the delegate of 'key'.
 void GCMarker::severWeakDelegate(JSObject* key, JSObject* delegate) {
   JS::Zone* zone = delegate->zone();
   if (!zone->needsIncrementalBarrier()) {
-    MOZ_ASSERT(!zone->gcWeakKeys(delegate).get(delegate),
-               "non-collecting zone should not have populated gcWeakKeys");
+    MOZ_ASSERT(
+        !zone->gcEphemeronEdges(delegate).get(delegate),
+        "non-collecting zone should not have populated gcEphemeronEdges");
     return;
   }
-  auto p = zone->gcWeakKeys(delegate).get(delegate);
+  auto* p = zone->gcEphemeronEdges(delegate).get(delegate);
   if (!p) {
     return;
   }
 
-  // Remove all <weakmap, key> pairs associated with this delegate and key, and
-  // call postSeverDelegate on each of the maps found to record the key
-  // instead.
+  // We are losing 3 edges here: key -> delegate, delegate -> key, and
+  // <delegate, map> -> value. Maintain snapshot-at-beginning (hereafter,
+  // S-A-B) by conservatively assuming the delegate will end up black and
+  // marking through the latter 2 edges.
   //
-  // But be careful: if key and delegate are in different compartments but the
-  // same zone, then the same gcWeakKeys table will be mutated by both the
-  // eraseIf and the postSeverDelegate, so we cannot nest them.
-  js::Vector<WeakMapBase*, 10, SystemAllocPolicy> severedKeyMaps;
-  p->value.eraseIf(
-      [key, &severedKeyMaps](const WeakMarkable& markable) -> bool {
-        if (markable.key != key) {
-          return false;
-        }
-        AutoEnterOOMUnsafeRegion oomUnsafe;
-        if (!severedKeyMaps.append(markable.weakmap)) {
-          oomUnsafe.crash("OOM while recording all weakmaps with severed key");
-        }
-        return true;
-      });
+  // Note that this does not fully give S-A-B:
+  //
+  //  1. If the map is gray, then the value will only be marked gray here even
+  //  though the map could later be discovered to be black.
+  //
+  //  2. If the map has not yet been marked, we won't have any entries to mark
+  //  here in the first place.
+  //
+  //  3. We're not marking the delegate, since that would cause eg nukeAllCCWs
+  //  to keep everything alive for another collection.
+  //
+  // We can't even assume that the delegate passed in here is live, because we
+  // could have gotten here from nukeAllCCWs, which iterates over all CCWs
+  // including dead ones.
+  //
+  // This is ok because S-A-B is only needed to prevent the case where an
+  // unmarked object is removed from the graph and then re-inserted where it is
+  // reachable only by things that have already been marked. None of the 3
+  // target objects will be re-inserted anywhere as a result of this action.
 
-  for (WeakMapBase* weakmap : severedKeyMaps) {
-    if (weakmap->zone()->needsIncrementalBarrier()) {
-      weakmap->postSeverDelegate(this, key);
-    }
-  }
+  EphemeronEdgeVector& edges = p->value;
+  gc::AutoSetMarkColor autoColor(*this, MarkColor::Black);
+  markEphemeronEdges(edges);
 }
 
 // 'delegate' is now the delegate of 'key'. Update weakmap marking state.
 void GCMarker::restoreWeakDelegate(JSObject* key, JSObject* delegate) {
   if (!key->zone()->needsIncrementalBarrier() ||
       !delegate->zone()->needsIncrementalBarrier()) {
-    MOZ_ASSERT(!key->zone()->gcWeakKeys(key).get(key),
-               "non-collecting zone should not have populated gcWeakKeys");
+    MOZ_ASSERT(
+        !key->zone()->gcEphemeronEdges(key).has(key),
+        "non-collecting zone should not have populated gcEphemeronEdges");
     return;
   }
-  auto p = key->zone()->gcWeakKeys(key).get(key);
+  auto* p = key->zone()->gcEphemeronEdges(key).get(key);
   if (!p) {
     return;
   }
 
-  js::Vector<WeakMapBase*, 10, SystemAllocPolicy> maps;
-  p->value.eraseIf([key, &maps](const WeakMarkable& markable) -> bool {
-    if (markable.key != key) {
-      return false;
-    }
-    AutoEnterOOMUnsafeRegion oomUnsafe;
-    if (!maps.append(markable.weakmap)) {
-      oomUnsafe.crash("OOM while recording all weakmaps with severed key");
-    }
-    return true;
-  });
-
-  for (WeakMapBase* weakmap : maps) {
-    if (weakmap->zone()->needsIncrementalBarrier()) {
-      weakmap->postRestoreDelegate(this, key, delegate);
-    }
-  }
+  // Similar to severWeakDelegate above, mark through the key -> value edge.
+  EphemeronEdgeVector& edges = p->value;
+  gc::AutoSetMarkColor autoColor(*this, MarkColor::Black);
+  markEphemeronEdges(edges);
 }
 
 template <typename T>
@@ -849,18 +891,19 @@ void GCMarker::markImplicitEdgesHelper(T markedThing) {
   MOZ_ASSERT(zone->isGCMarking());
   MOZ_ASSERT(!zone->isGCSweeping());
 
-  auto p = zone->gcWeakKeys().get(markedThing);
+  auto p = zone->gcEphemeronEdges().get(markedThing);
   if (!p) {
     return;
   }
-  WeakEntryVector& markables = p->value;
+  EphemeronEdgeVector& edges = p->value;
 
   // markedThing might be a key in a debugger weakmap, which can end up marking
   // values that are in a different compartment.
   AutoClearTracingSource acts(this);
 
-  markEphemeronValues(markedThing, markables);
-  markables.clear();  // If key address is reused, it should do nothing
+  CellColor thingColor = gc::detail::GetEffectiveColor(runtime(), markedThing);
+  gc::AutoSetMarkColor autoColor(*this, thingColor);
+  markEphemeronEdges(edges);
 }
 
 template <>
@@ -904,7 +947,7 @@ void DoMarking(GCMarker* gcmarker, T* thing) {
 
   CheckTracedThing(gcmarker, thing);
   AutoClearTracingSource acts(gcmarker);
-  gcmarker->traverse(thing);
+  gcmarker->markAndTraverse(thing);
 
   // Mark the compartment as live.
   SetMaybeAliveFlag(thing);
@@ -921,10 +964,6 @@ JS_PUBLIC_API void js::gc::PerformIncrementalReadBarrier(JS::GCCellPtr thing) {
   // performing a read barrier. This means we can skip a bunch of checks and
   // call info the tracer directly.
 
-  AutoGeckoProfilerEntry profilingStackFrame(
-      TlsContext.get(), "PerformIncrementalReadBarrier",
-      JS::ProfilingCategoryPair::GCCC_Barrier);
-
   MOZ_ASSERT(thing);
   MOZ_ASSERT(!JS::RuntimeHeapIsMajorCollecting());
 
@@ -932,16 +971,51 @@ JS_PUBLIC_API void js::gc::PerformIncrementalReadBarrier(JS::GCCellPtr thing) {
   Zone* zone = cell->zone();
   MOZ_ASSERT(zone->needsIncrementalBarrier());
 
-  // Skip disptaching on known tracer type.
-  GCMarker* gcmarker = GCMarker::fromTracer(zone->barrierTracer());
+  // Skip dispatching on known tracer type.
+  BarrierTracer* trc = BarrierTracer::fromTracer(zone->barrierTracer());
+  trc->performBarrier(thing);
+}
 
-  // Mark the argument, as DoMarking above.
-  ApplyGCThingTyped(thing, [gcmarker](auto thing) {
-    MOZ_ASSERT(ShouldMark(gcmarker, thing));
-    CheckTracedThing(gcmarker, thing);
-    AutoClearTracingSource acts(gcmarker);
-    gcmarker->traverse(thing);
-  });
+void js::gc::PerformIncrementalBarrier(TenuredCell* cell) {
+  // Internal version of previous function called for both read and pre-write
+  // barriers.
+
+  MOZ_ASSERT(cell);
+  MOZ_ASSERT(!JS::RuntimeHeapIsMajorCollecting());
+
+  Zone* zone = cell->zone();
+  MOZ_ASSERT(zone->needsIncrementalBarrier());
+
+  // Skip disptaching on known tracer type.
+  BarrierTracer* trc = BarrierTracer::fromTracer(zone->barrierTracer());
+
+  trc->performBarrier(JS::GCCellPtr(cell, cell->getTraceKind()));
+}
+
+void js::gc::PerformIncrementalBarrierDuringFlattening(JSString* str) {
+  TenuredCell* cell = &str->asTenured();
+
+  // Skip recording ropes. Buffering them is problematic because they will have
+  // their flags temporarily overwritten during flattening. Fortunately their
+  // children will also be barriered by flattening process so we don't need to
+  // traverse them.
+  if (str->isRope()) {
+    cell->markBlack();
+    return;
+  }
+
+  PerformIncrementalBarrier(cell);
+}
+
+template <typename T>
+void js::GCMarker::markAndTraverse(T* thing) {
+  if (thing->isPermanentAndMayBeShared()) {
+    return;
+  }
+
+  if (mark(thing)) {
+    traverse(thing);
+  }
 }
 
 // The simplest traversal calls out to the fully generic traceChildren function
@@ -950,31 +1024,32 @@ JS_PUBLIC_API void js::gc::PerformIncrementalReadBarrier(JS::GCCellPtr thing) {
 // Thus, this generic tracing should only be used in cases where subsequent
 // tracing will not recurse.
 template <typename T>
-void js::GCMarker::markAndTraceChildren(T* thing) {
-  if (thing->isPermanentAndMayBeShared()) {
-    return;
-  }
-  if (mark(thing)) {
-    AutoSetTracingSource asts(this, thing);
-    thing->traceChildren(this);
-  }
+void js::GCMarker::traceChildren(T* thing) {
+  MOZ_ASSERT(!thing->isPermanentAndMayBeShared());
+  MOZ_ASSERT(thing->isMarkedAny());
+  AutoSetTracingSource asts(this, thing);
+  thing->traceChildren(this);
 }
 namespace js {
 template <>
 void GCMarker::traverse(BaseShape* thing) {
-  markAndTraceChildren(thing);
+  traceChildren(thing);
+}
+template <>
+void GCMarker::traverse(GetterSetter* thing) {
+  traceChildren(thing);
 }
 template <>
 void GCMarker::traverse(JS::Symbol* thing) {
-  markAndTraceChildren(thing);
+  traceChildren(thing);
 }
 template <>
 void GCMarker::traverse(JS::BigInt* thing) {
-  markAndTraceChildren(thing);
+  traceChildren(thing);
 }
 template <>
 void GCMarker::traverse(RegExpShared* thing) {
-  markAndTraceChildren(thing);
+  traceChildren(thing);
 }
 }  // namespace js
 
@@ -982,26 +1057,27 @@ void GCMarker::traverse(RegExpShared* thing) {
 // recursion. We traverse trees of these edges immediately, with aggressive,
 // manual inlining, implemented by eagerlyTraceChildren.
 template <typename T>
-void js::GCMarker::markAndScan(T* thing) {
-  if (thing->isPermanentAndMayBeShared()) {
-    return;
-  }
-  if (mark(thing)) {
-    eagerlyMarkChildren(thing);
-  }
+void js::GCMarker::scanChildren(T* thing) {
+  MOZ_ASSERT(!thing->isPermanentAndMayBeShared());
+  MOZ_ASSERT(thing->isMarkedAny());
+  eagerlyMarkChildren(thing);
 }
 namespace js {
 template <>
 void GCMarker::traverse(JSString* thing) {
-  markAndScan(thing);
+  scanChildren(thing);
 }
 template <>
 void GCMarker::traverse(Shape* thing) {
-  markAndScan(thing);
+  scanChildren(thing);
+}
+template <>
+void GCMarker::traverse(PropMap* thing) {
+  scanChildren(thing);
 }
 template <>
 void GCMarker::traverse(js::Scope* thing) {
-  markAndScan(thing);
+  scanChildren(thing);
 }
 }  // namespace js
 
@@ -1011,35 +1087,23 @@ void GCMarker::traverse(js::Scope* thing) {
 // included for historical reasons. JSScript normally cannot recurse, but may
 // be used as a weakmap key and thereby recurse into weakmapped values.
 template <typename T>
-void js::GCMarker::markAndPush(T* thing) {
-  if (!mark(thing)) {
-    return;
-  }
+void js::GCMarker::pushThing(T* thing) {
+  MOZ_ASSERT(!thing->isPermanentAndMayBeShared());
+  MOZ_ASSERT(thing->isMarkedAny());
   pushTaggedPtr(thing);
 }
 namespace js {
 template <>
 void GCMarker::traverse(JSObject* thing) {
-  markAndPush(thing);
-}
-template <>
-void GCMarker::traverse(ObjectGroup* thing) {
-  markAndPush(thing);
+  pushThing(thing);
 }
 template <>
 void GCMarker::traverse(jit::JitCode* thing) {
-  markAndPush(thing);
+  pushThing(thing);
 }
 template <>
 void GCMarker::traverse(BaseScript* thing) {
-  markAndPush(thing);
-}
-}  // namespace js
-
-namespace js {
-template <>
-void GCMarker::traverse(AccessorShape* thing) {
-  MOZ_CRASH("AccessorShape must be marked as a Shape");
+  pushThing(thing);
 }
 }  // namespace js
 
@@ -1090,15 +1154,17 @@ inline void GCMarker::checkTraversedEdge(S source, T* target) {
 }
 
 template <typename S, typename T>
-void js::GCMarker::traverseEdge(S source, T* target) {
+void js::GCMarker::markAndTraverseEdge(S source, T* target) {
   checkTraversedEdge(source, target);
-  traverse(target);
+  if (!target->isPermanentAndMayBeShared()) {
+    markAndTraverse(target);
+  }
 }
 
 template <typename S, typename T>
-void js::GCMarker::traverseEdge(S source, const T& thing) {
-  ApplyGCThingTyped(thing,
-                    [this, source](auto t) { this->traverseEdge(source, t); });
+void js::GCMarker::markAndTraverseEdge(S source, const T& thing) {
+  ApplyGCThingTyped(
+      thing, [this, source](auto t) { this->markAndTraverseEdge(source, t); });
 }
 
 namespace {
@@ -1161,17 +1227,6 @@ void BaseScript::traceChildren(JSTracer* trc) {
     data_->trace(trc);
   }
 
-  // Scripts with bytecode may have optional data stored in per-runtime or
-  // per-zone maps. Note that a failed compilation must not have entries since
-  // the script itself will not be marked as having bytecode.
-  if (hasBytecode()) {
-    JSScript* script = this->asJSScript();
-
-    if (hasDebugScript()) {
-      DebugAPI::traceDebugScript(trc, script);
-    }
-  }
-
   if (trc->isMarkingTracer()) {
     GCMarker::fromTracer(trc)->markImplicitEdges(this);
   }
@@ -1179,60 +1234,21 @@ void BaseScript::traceChildren(JSTracer* trc) {
 
 void Shape::traceChildren(JSTracer* trc) {
   TraceCellHeaderEdge(trc, this, "base");
-  TraceEdge(trc, &propidRef(), "propid");
-  if (parent) {
-    TraceEdge(trc, &parent, "parent");
-  }
-  if (dictNext.isObject()) {
-    JSObject* obj = dictNext.toObject();
-    TraceManuallyBarrieredEdge(trc, &obj, "dictNext object");
-    if (obj != dictNext.toObject()) {
-      dictNext.setObject(obj);
-    }
-  }
-
-  if (hasGetterObject()) {
-    TraceManuallyBarrieredEdge(trc, &asAccessorShape().getterObj, "getter");
-  }
-  if (hasSetterObject()) {
-    TraceManuallyBarrieredEdge(trc, &asAccessorShape().setterObj, "setter");
-  }
+  TraceNullableEdge(trc, &propMap_, "propertymap");
 }
+
 inline void js::GCMarker::eagerlyMarkChildren(Shape* shape) {
   MOZ_ASSERT(shape->isMarked(markColor()));
 
-  do {
-    // Special case: if a base shape has a shape table then all its pointers
-    // must point to this shape or an anscestor.  Since these pointers will
-    // be traced by this loop they do not need to be traced here as well.
-    BaseShape* base = shape->base();
-    checkTraversedEdge(shape, base);
-    if (mark(base)) {
-      MOZ_ASSERT(base->canSkipMarkingShapeCache(shape));
-      base->traceChildrenSkipShapeCache(this);
-    }
+  BaseShape* base = shape->base();
+  checkTraversedEdge(shape, base);
+  if (mark(base)) {
+    base->traceChildren(this);
+  }
 
-    traverseEdge(shape, shape->propidRef().get());
-
-    // Normally only the last shape in a dictionary list can have a pointer to
-    // an object here, but it's possible that we can see this if we trace
-    // barriers while removing a shape from a dictionary list.
-    if (shape->dictNext.isObject()) {
-      traverseEdge(shape, shape->dictNext.toObject());
-    }
-
-    // When triggered between slices on behalf of a barrier, these
-    // objects may reside in the nursery, so require an extra check.
-    // FIXME: Bug 1157967 - remove the isTenured checks.
-    if (shape->hasGetterObject() && shape->getterObject()->isTenured()) {
-      traverseEdge(shape, shape->getterObject());
-    }
-    if (shape->hasSetterObject() && shape->setterObject()->isTenured()) {
-      traverseEdge(shape, shape->setterObject());
-    }
-
-    shape = shape->previous();
-  } while (shape && mark(shape));
+  if (PropMap* map = shape->propMap()) {
+    markAndTraverseEdge(shape, map);
+  }
 }
 
 void JSString::traceChildren(JSTracer* trc) {
@@ -1262,6 +1278,15 @@ inline void js::GCMarker::eagerlyMarkChildren(JSLinearString* linearStr) {
   // Use iterative marking to avoid blowing out the stack.
   while (linearStr->hasBase()) {
     linearStr = linearStr->base();
+
+    // It's possible to observe a rope as the base of a linear string if we
+    // process barriers during rope flattening. See the assignment of base in
+    // JSRope::flattenInternal's finish_node section.
+    if (static_cast<JSString*>(linearStr)->isRope()) {
+      MOZ_ASSERT(!JS::RuntimeHeapIsMajorCollecting());
+      break;
+    }
+
     MOZ_ASSERT(linearStr->JSString::isLinear());
     if (linearStr->isPermanentAtom()) {
       break;
@@ -1354,60 +1379,58 @@ void AbstractBindingName<JSAtom>::trace(JSTracer* trc) {
 void BindingIter::trace(JSTracer* trc) {
   TraceNullableBindingNames(trc, names_, length_);
 }
-void LexicalScope::RuntimeData::trace(JSTracer* trc) {
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
+
+template <typename SlotInfo>
+void RuntimeScopeData<SlotInfo>::trace(JSTracer* trc) {
+  TraceBindingNames(trc, GetScopeDataTrailingNamesPointer(this), length);
 }
+template void RuntimeScopeData<LexicalScope::SlotInfo>::trace(JSTracer* trc);
+template void RuntimeScopeData<ClassBodyScope::SlotInfo>::trace(JSTracer* trc);
+template void RuntimeScopeData<VarScope::SlotInfo>::trace(JSTracer* trc);
+template void RuntimeScopeData<GlobalScope::SlotInfo>::trace(JSTracer* trc);
+template void RuntimeScopeData<EvalScope::SlotInfo>::trace(JSTracer* trc);
+template void RuntimeScopeData<WasmFunctionScope::SlotInfo>::trace(
+    JSTracer* trc);
+
 void FunctionScope::RuntimeData::trace(JSTracer* trc) {
   TraceNullableEdge(trc, &canonicalFunction, "scope canonical function");
-  TraceNullableBindingNames(trc, trailingNames.start(), slotInfo.length);
-}
-void VarScope::RuntimeData::trace(JSTracer* trc) {
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
-}
-void GlobalScope::RuntimeData::trace(JSTracer* trc) {
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
-}
-void EvalScope::RuntimeData::trace(JSTracer* trc) {
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
+  TraceNullableBindingNames(trc, GetScopeDataTrailingNamesPointer(this),
+                            length);
 }
 void ModuleScope::RuntimeData::trace(JSTracer* trc) {
   TraceNullableEdge(trc, &module, "scope module");
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
+  TraceBindingNames(trc, GetScopeDataTrailingNamesPointer(this), length);
 }
 void WasmInstanceScope::RuntimeData::trace(JSTracer* trc) {
   TraceNullableEdge(trc, &instance, "wasm instance");
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
+  TraceBindingNames(trc, GetScopeDataTrailingNamesPointer(this), length);
 }
-void WasmFunctionScope::RuntimeData::trace(JSTracer* trc) {
-  TraceBindingNames(trc, trailingNames.start(), slotInfo.length);
-}
+
 void Scope::traceChildren(JSTracer* trc) {
   TraceNullableEdge(trc, &environmentShape_, "scope env shape");
   TraceNullableEdge(trc, &enclosingScope_, "scope enclosing");
   applyScopeDataTyped([trc](auto data) { data->trace(trc); });
 }
+
 inline void js::GCMarker::eagerlyMarkChildren(Scope* scope) {
   do {
     if (scope->environmentShape()) {
-      traverseEdge(scope, scope->environmentShape());
+      markAndTraverseEdge(scope, scope->environmentShape());
     }
-    AbstractTrailingNamesArray<JSAtom>* names = nullptr;
-    uint32_t length = 0;
+    mozilla::Span<AbstractBindingName<JSAtom>> names;
     switch (scope->kind()) {
       case ScopeKind::Function: {
         FunctionScope::RuntimeData& data = scope->as<FunctionScope>().data();
         if (data.canonicalFunction) {
-          traverseObjectEdge(scope, data.canonicalFunction);
+          markAndTraverseObjectEdge(scope, data.canonicalFunction);
         }
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
       case ScopeKind::FunctionBodyVar: {
         VarScope::RuntimeData& data = scope->as<VarScope>().data();
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
@@ -1416,37 +1439,38 @@ inline void js::GCMarker::eagerlyMarkChildren(Scope* scope) {
       case ScopeKind::Catch:
       case ScopeKind::NamedLambda:
       case ScopeKind::StrictNamedLambda:
-      case ScopeKind::FunctionLexical:
-      case ScopeKind::ClassBody: {
+      case ScopeKind::FunctionLexical: {
         LexicalScope::RuntimeData& data = scope->as<LexicalScope>().data();
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
+        break;
+      }
+
+      case ScopeKind::ClassBody: {
+        ClassBodyScope::RuntimeData& data = scope->as<ClassBodyScope>().data();
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
       case ScopeKind::Global:
       case ScopeKind::NonSyntactic: {
         GlobalScope::RuntimeData& data = scope->as<GlobalScope>().data();
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
       case ScopeKind::Eval:
       case ScopeKind::StrictEval: {
         EvalScope::RuntimeData& data = scope->as<EvalScope>().data();
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
       case ScopeKind::Module: {
         ModuleScope::RuntimeData& data = scope->as<ModuleScope>().data();
         if (data.module) {
-          traverseObjectEdge(scope, data.module);
+          markAndTraverseObjectEdge(scope, data.module);
         }
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
@@ -1456,61 +1480,106 @@ inline void js::GCMarker::eagerlyMarkChildren(Scope* scope) {
       case ScopeKind::WasmInstance: {
         WasmInstanceScope::RuntimeData& data =
             scope->as<WasmInstanceScope>().data();
-        traverseObjectEdge(scope, data.instance);
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        markAndTraverseObjectEdge(scope, data.instance);
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
 
       case ScopeKind::WasmFunction: {
         WasmFunctionScope::RuntimeData& data =
             scope->as<WasmFunctionScope>().data();
-        names = &data.trailingNames;
-        length = data.slotInfo.length;
+        names = GetScopeDataTrailingNames(&data);
         break;
       }
     }
     if (scope->kind_ == ScopeKind::Function) {
-      for (uint32_t i = 0; i < length; i++) {
-        if (JSAtom* name = names->get(i).name()) {
-          traverseStringEdge(scope, name);
+      for (auto& binding : names) {
+        if (JSAtom* name = binding.name()) {
+          markAndTraverseStringEdge(scope, name);
         }
       }
     } else {
-      for (uint32_t i = 0; i < length; i++) {
-        traverseStringEdge(scope, names->get(i).name());
+      for (auto& binding : names) {
+        markAndTraverseStringEdge(scope, binding.name());
       }
     }
     scope = scope->enclosing();
   } while (scope && mark(scope));
 }
 
-void js::ObjectGroup::traceChildren(JSTracer* trc) {
-  if (proto().isObject()) {
-    TraceEdge(trc, &proto(), "group_proto");
-  }
-
+void BaseShape::traceChildren(JSTracer* trc) {
   // Note: the realm's global can be nullptr if we GC while creating the global.
   if (JSObject* global = realm()->unsafeUnbarrieredMaybeGlobal()) {
-    TraceManuallyBarrieredEdge(trc, &global, "group_global");
+    TraceManuallyBarrieredEdge(trc, &global, "baseshape_global");
   }
 
-  TraceNullableEdge(trc, &typeDescr_, "group_typedescr");
+  if (proto_.isObject()) {
+    TraceEdge(trc, &proto_, "baseshape_proto");
+  }
 }
 
-void js::GCMarker::lazilyMarkChildren(ObjectGroup* group) {
-  if (group->proto().isObject()) {
-    traverseEdge(group, group->proto().toObject());
+void GetterSetter::traceChildren(JSTracer* trc) {
+  if (getter()) {
+    TraceCellHeaderEdge(trc, this, "gettersetter_getter");
+  }
+  if (setter()) {
+    TraceEdge(trc, &setter_, "gettersetter_setter");
+  }
+}
+
+void PropMap::traceChildren(JSTracer* trc) {
+  if (hasPrevious()) {
+    TraceEdge(trc, &asLinked()->data_.previous, "propmap_previous");
   }
 
-  // Note: the realm's global can be nullptr if we GC while creating the global.
-  if (GlobalObject* global = group->realm()->unsafeUnbarrieredMaybeGlobal()) {
-    traverseEdge(group, static_cast<JSObject*>(global));
+  if (isShared()) {
+    SharedPropMap::TreeData& treeData = asShared()->treeDataRef();
+    if (SharedPropMap* parent = treeData.parent.maybeMap()) {
+      TraceManuallyBarrieredEdge(trc, &parent, "propmap_parent");
+      if (parent != treeData.parent.map()) {
+        treeData.setParent(parent, treeData.parent.index());
+      }
+    }
   }
 
-  if (TypeDescr* descr = group->maybeTypeDescr()) {
-    traverseEdge(group, static_cast<JSObject*>(descr));
+  for (uint32_t i = 0; i < PropMap::Capacity; i++) {
+    if (hasKey(i)) {
+      TraceEdge(trc, &keys_[i], "propmap_key");
+    }
   }
+
+  if (canHaveTable() && asLinked()->hasTable()) {
+    asLinked()->data_.table->trace(trc);
+  }
+}
+
+void js::GCMarker::eagerlyMarkChildren(PropMap* map) {
+  MOZ_ASSERT(map->isMarkedAny());
+  do {
+    for (uint32_t i = 0; i < PropMap::Capacity; i++) {
+      if (map->hasKey(i)) {
+        markAndTraverseEdge(map, map->getKey(i));
+      }
+    }
+
+    if (map->canHaveTable()) {
+      // Special case: if a map has a table then all its pointers must point to
+      // this map or an ancestor. Since these pointers will be traced by this
+      // loop they do not need to be traced here as well.
+      MOZ_ASSERT(map->asLinked()->canSkipMarkingTable());
+    }
+
+    if (map->isDictionary()) {
+      map = map->asDictionary()->previous();
+    } else {
+      // For shared maps follow the |parent| link and not the |previous| link.
+      // They're different when a map had a branch that wasn't at the end of the
+      // map, but in this case they must have the same |previous| map. This is
+      // asserted in SharedPropMap::addChild. In other words, marking all
+      // |parent| maps will also mark all |previous| maps.
+      map = map->asShared()->treeDataRef().parent.maybeMap();
+    }
+  } while (map && mark(map));
 }
 
 void JS::BigInt::traceChildren(JSTracer* trc) {}
@@ -1519,65 +1588,11 @@ void JS::BigInt::traceChildren(JSTracer* trc) {}
 static inline void CallTraceHook(JSTracer* trc, JSObject* obj) {
   const JSClass* clasp = obj->getClass();
   MOZ_ASSERT(clasp);
-  MOZ_ASSERT(obj->isNative() == clasp->isNative());
 
   if (clasp->hasTrace()) {
     AutoSetTracingSource asts(trc, obj);
     clasp->doTrace(trc, obj);
   }
-}
-
-template <typename Functor>
-static void VisitTraceListWithFunctor(const Functor& f,
-                                      const uint32_t* traceList,
-                                      uint8_t* memory) {
-  size_t stringCount = *traceList++;
-  size_t objectCount = *traceList++;
-  size_t valueCount = *traceList++;
-  for (size_t i = 0; i < stringCount; i++) {
-    f(reinterpret_cast<JSString**>(memory + *traceList));
-    traceList++;
-  }
-  for (size_t i = 0; i < objectCount; i++) {
-    auto** objp = reinterpret_cast<JSObject**>(memory + *traceList);
-    if (*objp) {
-      f(objp);
-    }
-    traceList++;
-  }
-  for (size_t i = 0; i < valueCount; i++) {
-    f(reinterpret_cast<Value*>(memory + *traceList));
-    traceList++;
-  }
-}
-
-/*
- * Trace TypedObject memory according to the layout specified by |traceList|
- * with optimized paths for GC tracers.
- *
- * I'm not sure how much difference this makes versus calling TraceEdge for each
- * edge; that at least has to dispatch on the tracer kind each time.
- */
-void js::gc::VisitTraceList(JSTracer* trc, JSObject* obj,
-                            const uint32_t* traceList, uint8_t* memory) {
-  if (trc->isMarkingTracer()) {
-    auto* marker = GCMarker::fromTracer(trc);
-    VisitTraceListWithFunctor([=](auto thingp) { DoMarking(marker, *thingp); },
-                              traceList, memory);
-    return;
-  }
-
-  if (trc->isTenuringTracer()) {
-    auto* ttrc = static_cast<TenuringTracer*>(trc);
-    VisitTraceListWithFunctor([=](auto thingp) { ttrc->traverse(thingp); },
-                              traceList, memory);
-    return;
-  }
-
-  VisitTraceListWithFunctor(
-      [=](auto thingp) { TraceEdgeInternal(trc, thingp, "TypedObject edge"); },
-      traceList, memory);
-  return;
 }
 
 /*** Mark-stack Marking *****************************************************/
@@ -1646,7 +1661,7 @@ GCMarker::MarkQueueProgress GCMarker::processMarkQueue() {
       }
 
       // Mark the object and push it onto the stack.
-      traverse(obj);
+      markAndTraverse(obj);
 
       if (isMarkStackEmpty()) {
         if (obj->asTenured().arena()->onDelayedMarkingList()) {
@@ -1738,7 +1753,11 @@ bool GCMarker::markUntilBudgetExhausted(SliceBudget& budget,
   // This method leaves the mark color as it found it.
   AutoSetMarkColor autoSetBlack(*this, MarkColor::Black);
 
-  for (;;) {
+  while (!isDrained()) {
+    if (!traceBarrieredCells(budget)) {
+      return false;
+    }
+
     while (hasBlackEntries()) {
       MOZ_ASSERT(markColor() == MarkColor::Black);
       processMarkStackTop(budget);
@@ -1763,28 +1782,24 @@ bool GCMarker::markUntilBudgetExhausted(SliceBudget& budget,
       } while (hasGrayEntries());
     }
 
-    if (hasBlackEntries()) {
-      // We can end up marking black during gray marking in the following case:
-      // a WeakMap has a CCW key whose delegate (target) is black, and during
-      // gray marking we mark the map (gray). The delegate's color will be
-      // propagated to the key. (And we can't avoid this by marking the key
-      // gray, because even though the value will end up gray in either case,
-      // the WeakMap entry must be preserved because the CCW could get
-      // collected and then we could re-wrap the delegate and look it up in the
-      // map again, and need to get back the original value.)
+    // Do all normal marking before any delayed marking.
+    //
+    // We can end up marking black during gray marking in the following case: a
+    // WeakMap has a CCW key whose delegate (target) is black, and during gray
+    // marking we mark the map (gray). The delegate's color will be propagated
+    // to the key. (And we can't avoid this by marking the key gray, because
+    // even though the value will end up gray in either case, the WeakMap entry
+    // must be preserved because the CCW could get collected and then we could
+    // re-wrap the delegate and look it up in the map again, and need to get
+    // back the original value.)
+    MOZ_ASSERT(!hasGrayEntries());
+    if (!barrierBuffer().empty() || hasBlackEntries()) {
       continue;
     }
 
-    if (!hasDelayedChildren()) {
-      break;
-    }
-
-    /*
-     * Mark children of things that caused too deep recursion during the
-     * above tracing. Don't do this until we're done with everything
-     * else.
-     */
-    if (!markAllDelayedChildren(budget)) {
+    // Mark children of things that caused too deep recursion during the
+    // above tracing.
+    if (hasDelayedChildren() && !markAllDelayedChildren(budget, reportTime)) {
       return false;
     }
   }
@@ -1879,11 +1894,6 @@ inline void GCMarker::processMarkStackTop(SliceBudget& budget) {
       goto scan_obj;
     }
 
-    case MarkStack::GroupTag: {
-      auto group = stack.popPtr().as<ObjectGroup>();
-      return lazilyMarkChildren(group);
-    }
-
     case MarkStack::JitCodeTag: {
       auto code = stack.popPtr().as<jit::JitCode>();
       AutoSetTracingSource asts(this, code);
@@ -1913,7 +1923,7 @@ scan_value_range:
     index++;
 
     if (v.isString()) {
-      traverseEdge(obj, v.toString());
+      markAndTraverseEdge(obj, v.toString());
     } else if (v.isObject()) {
       JSObject* obj2 = &v.toObject();
 #ifdef DEBUG
@@ -1934,13 +1944,13 @@ scan_value_range:
         goto scan_obj;
       }
     } else if (v.isSymbol()) {
-      traverseEdge(obj, v.toSymbol());
+      markAndTraverseEdge(obj, v.toSymbol());
     } else if (v.isBigInt()) {
-      traverseEdge(obj, v.toBigInt());
+      markAndTraverseEdge(obj, v.toBigInt());
     } else if (v.isPrivateGCThing()) {
       // v.toGCCellPtr cannot be inlined, so construct one manually.
       Cell* cell = v.toGCThing();
-      traverseEdge(obj, JS::GCCellPtr(cell, cell->getTraceKind()));
+      markAndTraverseEdge(obj, JS::GCCellPtr(cell, cell->getTraceKind()));
     }
   }
   return;
@@ -1955,17 +1965,15 @@ scan_obj : {
   }
 
   markImplicitEdges(obj);
-  traverseEdge(obj, obj->group());
+  markAndTraverseEdge(obj, obj->shape());
 
   CallTraceHook(this, obj);
 
-  if (!obj->isNative()) {
+  if (!obj->is<NativeObject>()) {
     return;
   }
 
   NativeObject* nobj = &obj->as<NativeObject>();
-  Shape* shape = nobj->lastProperty();
-  traverseEdge(obj, shape);
 
   unsigned nslots = nobj->slotSpan();
 
@@ -2024,10 +2032,6 @@ struct MapTypeToMarkStackTag<JSObject*> {
   static const auto value = MarkStack::ObjectTag;
 };
 template <>
-struct MapTypeToMarkStackTag<ObjectGroup*> {
-  static const auto value = MarkStack::GroupTag;
-};
-template <>
 struct MapTypeToMarkStackTag<jit::JitCode*> {
   static const auto value = MarkStack::JitCodeTag;
 };
@@ -2056,7 +2060,7 @@ inline Cell* MarkStack::TaggedPtr::ptr() const {
 }
 
 inline void MarkStack::TaggedPtr::assertValid() const {
-  mozilla::Unused << tag();
+  (void)tag();
   MOZ_ASSERT(IsCellPointerValid(ptr()));
 }
 
@@ -2151,7 +2155,7 @@ void MarkStack::setMaxCapacity(size_t maxCapacity) {
   if (capacity() > maxCapacity_) {
     // If the realloc fails, just keep using the existing stack; it's
     // not ideal but better than failing.
-    mozilla::Unused << resize(maxCapacity_);
+    (void)resize(maxCapacity_);
   }
 }
 
@@ -2220,14 +2224,14 @@ inline MarkStack::SlotsOrElementsRange MarkStack::popSlotsOrElementsRange() {
 }
 
 inline bool MarkStack::ensureSpace(size_t count) {
-  if ((topIndex_ + count) <= capacity()) {
+  if (MOZ_LIKELY((topIndex_ + count) <= capacity())) {
     return !js::oom::ShouldFailWithOOM();
   }
 
   return enlarge(count);
 }
 
-bool MarkStack::enlarge(size_t count) {
+MOZ_NEVER_INLINE bool MarkStack::enlarge(size_t count) {
   size_t newCapacity = std::min(maxCapacity_.ref(), capacity() * 2);
   if (newCapacity < capacity() + count) {
     return false;
@@ -2343,6 +2347,10 @@ bool GCMarker::init() {
          auxStack.init(gc::MarkStack::AuxiliaryStack, incrementalGCEnabled);
 }
 
+bool GCMarker::isDrained() {
+  return barrierBuffer().empty() && isMarkStackEmpty() && !delayedMarkingList;
+}
+
 void GCMarker::start() {
   MOZ_ASSERT(state == MarkingState::NotActive);
   state = MarkingState::RegularMarking;
@@ -2367,15 +2375,16 @@ void GCMarker::stop() {
   }
   state = MarkingState::NotActive;
 
+  barrierBuffer().clearAndFree();
   stack.clear();
   auxStack.clear();
   setMainStackColor(MarkColor::Black);
   AutoEnterOOMUnsafeRegion oomUnsafe;
   for (GCZonesIter zone(runtime()); !zone.done(); zone.next()) {
-    if (!zone->gcWeakKeys().clear()) {
+    if (!zone->gcEphemeronEdges().clear()) {
       oomUnsafe.crash("clearing weak keys in GCMarker::stop()");
     }
-    if (!zone->gcNurseryWeakKeys().clear()) {
+    if (!zone->gcNurseryEphemeronEdges().clear()) {
       oomUnsafe.crash("clearing (nursery) weak keys in GCMarker::stop()");
     }
   }
@@ -2395,6 +2404,7 @@ inline void GCMarker::forEachDelayedMarkingArena(F&& f) {
 void GCMarker::reset() {
   color = MarkColor::Black;
 
+  barrierBuffer().clearAndFree();
   stack.clear();
   auxStack.clear();
   setMainStackColor(MarkColor::Black);
@@ -2435,10 +2445,10 @@ void GCMarker::setMainStackColor(gc::MarkColor newColor) {
 }
 
 template <typename T>
-void GCMarker::pushTaggedPtr(T* ptr) {
+inline void GCMarker::pushTaggedPtr(T* ptr) {
   checkZone(ptr);
   if (!currentStack().push(ptr)) {
-    delayMarkingChildren(ptr);
+    delayMarkingChildrenOnOOM(ptr);
   }
 }
 
@@ -2453,7 +2463,7 @@ void GCMarker::pushValueRange(JSObject* obj, SlotsOrElementsKind kind,
   }
 
   if (!currentStack().push(obj, kind, start)) {
-    delayMarkingChildren(obj);
+    delayMarkingChildrenOnOOM(obj);
   }
 }
 
@@ -2477,8 +2487,8 @@ bool GCMarker::enterWeakMarkingMode() {
   // the table will already hold all such keys.)
 
   // Set state before doing anything else, so any new key that is marked
-  // during the following gcWeakKeys scan will itself be looked up in
-  // gcWeakKeys and marked according to ephemeron rules.
+  // during the following gcEphemeronEdges scan will itself be looked up in
+  // gcEphemeronEdges and marked according to ephemeron rules.
   state = MarkingState::WeakMarking;
 
   // If there was an 'enter-weak-marking-mode' token in the queue, then it
@@ -2497,59 +2507,44 @@ IncrementalProgress JS::Zone::enterWeakMarkingMode(GCMarker* marker,
   if (!marker->incrementalWeakMapMarkingEnabled) {
     for (WeakMapBase* m : gcWeakMapList()) {
       if (m->mapColor) {
-        mozilla::Unused << m->markEntries(marker);
+        (void)m->markEntries(marker);
       }
     }
     return IncrementalProgress::Finished;
   }
 
-  // gcWeakKeys contains the keys from all weakmaps marked so far, or at least
-  // the keys that might still need to be marked through. Scan through
-  // gcWeakKeys and mark all values whose keys are marked. This marking may
-  // recursively mark through other weakmap entries (immediately since we are
-  // now in WeakMarking mode). The end result is a consistent state where all
-  // values are marked if both their map and key are marked -- though note that
-  // we may later leave weak marking mode, do some more marking, and then enter
-  // back in.
+  // gcEphemeronEdges contains the keys from all weakmaps marked so far, or at
+  // least the keys that might still need to be marked through. Scan through
+  // gcEphemeronEdges and mark all values whose keys are marked. This marking
+  // may recursively mark through other weakmap entries (immediately since we
+  // are now in WeakMarking mode). The end result is a consistent state where
+  // all values are marked if both their map and key are marked -- though note
+  // that we may later leave weak marking mode, do some more marking, and then
+  // enter back in.
   if (!isGCMarking()) {
     return IncrementalProgress::Finished;
   }
 
-  MOZ_ASSERT(gcNurseryWeakKeys().count() == 0);
+  MOZ_ASSERT(gcNurseryEphemeronEdges().count() == 0);
 
   // An OrderedHashMap::Range stays valid even when the underlying table
-  // (zone->gcWeakKeys) is mutated, which is useful here since we may add
+  // (zone->gcEphemeronEdges) is mutated, which is useful here since we may add
   // additional entries while iterating over the Range.
-  gc::WeakKeyTable::Range r = gcWeakKeys().all();
+  gc::EphemeronEdgeTable::Range r = gcEphemeronEdges().all();
   while (!r.empty()) {
-    gc::Cell* key = r.front().key;
-    gc::CellColor keyColor =
-        gc::detail::GetEffectiveColor(marker->runtime(), key);
-    if (keyColor) {
-      MOZ_ASSERT(key == r.front().key);
-      auto& markables = r.front().value;
+    gc::Cell* src = r.front().key;
+    gc::CellColor srcColor =
+        gc::detail::GetEffectiveColor(marker->runtime(), src);
+    if (srcColor) {
+      MOZ_ASSERT(src == r.front().key);
+      auto& edges = r.front().value;
       r.popFront();  // Pop before any mutations happen.
-      size_t end = markables.length();
-      for (size_t i = 0; i < end; i++) {
-        WeakMarkable& v = markables[i];
-        // Note: if the key is marked gray but not black, then the markables
-        // vector may be appended to within this loop body. So iterate just
-        // over the ones from before weak marking mode was switched on.
-        v.weakmap->markKey(marker, key, v.key);
-        budget.step();
+      if (edges.length() > 0) {
+        gc::AutoSetMarkColor autoColor(*marker, srcColor);
+        marker->markEphemeronEdges(edges);
+        budget.step(edges.length());
         if (budget.isOverBudget()) {
           return NotFinished;
-        }
-      }
-
-      if (keyColor == gc::CellColor::Black) {
-        // We can't mark the key any more than already is, so it no longer
-        // needs to be in the weak keys table.
-        if (end == markables.length()) {
-          bool found;
-          gcWeakKeys().remove(key, &found);
-        } else {
-          markables.erase(markables.begin(), &markables[end]);
         }
       }
     } else {
@@ -2560,17 +2555,6 @@ IncrementalProgress JS::Zone::enterWeakMarkingMode(GCMarker* marker,
   return IncrementalProgress::Finished;
 }
 
-#ifdef DEBUG
-void JS::Zone::checkWeakMarkingMode() {
-  for (auto r = gcWeakKeys().all(); !r.empty(); r.popFront()) {
-    for (auto markable : r.front().value) {
-      MOZ_ASSERT(markable.weakmap->mapColor,
-                 "unmarked weakmaps in weak keys table");
-    }
-  }
-}
-#endif
-
 void GCMarker::leaveWeakMarkingMode() {
   MOZ_ASSERT(state == MarkingState::WeakMarking ||
              state == MarkingState::IterativeMarking);
@@ -2579,8 +2563,12 @@ void GCMarker::leaveWeakMarkingMode() {
     state = MarkingState::RegularMarking;
   }
 
-  // The gcWeakKeys table is still populated and may be used during a future
-  // weak marking mode within this GC.
+  // The gcEphemeronEdges table is still populated and may be used during a
+  // future weak marking mode within this GC.
+}
+
+MOZ_NEVER_INLINE void GCMarker::delayMarkingChildrenOnOOM(Cell* cell) {
+  delayMarkingChildren(cell);
 }
 
 void GCMarker::delayMarkingChildren(Cell* cell) {
@@ -2646,13 +2634,14 @@ bool GCMarker::processDelayedMarkingList(MarkColor color, SliceBudget& budget) {
   return true;
 }
 
-bool GCMarker::markAllDelayedChildren(SliceBudget& budget) {
+bool GCMarker::markAllDelayedChildren(SliceBudget& budget,
+                                      ShouldReportMarkTime reportTime) {
   MOZ_ASSERT(!hasBlackEntries());
   MOZ_ASSERT(markColor() == MarkColor::Black);
 
   GCRuntime& gc = runtime()->gc;
   mozilla::Maybe<gcstats::AutoPhase> ap;
-  if (gc.state() == State::Mark) {
+  if (reportTime) {
     ap.emplace(gc.stats(), gcstats::PhaseKind::MARK_DELAYED);
   }
 
@@ -2731,6 +2720,11 @@ size_t GCMarker::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
 
 /*** Tenuring Tracer ********************************************************/
 
+static inline void UpdateAllocSiteOnTenure(Cell* cell) {
+  AllocSite* site = NurseryCellHeader::from(cell)->allocSite();
+  site->incTenuredCount();
+}
+
 JSObject* TenuringTracer::onObjectEdge(JSObject* obj) {
   if (!IsInsideNursery(obj)) {
     return obj;
@@ -2740,6 +2734,8 @@ JSObject* TenuringTracer::onObjectEdge(JSObject* obj) {
     const gc::RelocationOverlay* overlay = gc::RelocationOverlay::fromCell(obj);
     return static_cast<JSObject*>(overlay->forwardingAddress());
   }
+
+  UpdateAllocSiteOnTenure(obj);
 
   // Take a fast path for tenuring a plain object which is by far the most
   // common case.
@@ -2760,6 +2756,8 @@ JSString* TenuringTracer::onStringEdge(JSString* str) {
     return static_cast<JSString*>(overlay->forwardingAddress());
   }
 
+  UpdateAllocSiteOnTenure(str);
+
   return moveToTenured(str);
 }
 
@@ -2773,6 +2771,8 @@ JS::BigInt* TenuringTracer::onBigIntEdge(JS::BigInt* bi) {
     return static_cast<JS::BigInt*>(overlay->forwardingAddress());
   }
 
+  UpdateAllocSiteOnTenure(bi);
+
   return moveToTenured(bi);
 }
 
@@ -2784,26 +2784,15 @@ js::Shape* TenuringTracer::onShapeEdge(Shape* shape) { return shape; }
 js::RegExpShared* TenuringTracer::onRegExpSharedEdge(RegExpShared* shared) {
   return shared;
 }
-js::ObjectGroup* TenuringTracer::onObjectGroupEdge(ObjectGroup* group) {
-  return group;
-}
 js::BaseShape* TenuringTracer::onBaseShapeEdge(BaseShape* base) { return base; }
+js::GetterSetter* TenuringTracer::onGetterSetterEdge(GetterSetter* gs) {
+  return gs;
+}
+js::PropMap* TenuringTracer::onPropMapEdge(PropMap* map) { return map; }
 js::jit::JitCode* TenuringTracer::onJitCodeEdge(jit::JitCode* code) {
   return code;
 }
 js::Scope* TenuringTracer::onScopeEdge(Scope* scope) { return scope; }
-
-template <typename T>
-inline void TenuringTracer::traverse(T** thingp) {
-  // This is only used by VisitTraceList.
-  MOZ_ASSERT(!nursery().isInside(thingp));
-  CheckTracedThing(this, *thingp);
-  T* thing = *thingp;
-  T* post = DispatchToOnEdge(this, thing);
-  if (post != thing) {
-    *thingp = post;
-  }
-}
 
 void TenuringTracer::traverse(JS::Value* thingp) {
   MOZ_ASSERT(!nursery().isInside(thingp));
@@ -2858,7 +2847,7 @@ void js::gc::StoreBuffer::SlotsEdge::trace(TenuringTracer& mover) const {
   MOZ_ASSERT(IsCellPointerValid(obj));
 
   // Beware JSObject::swap exchanging a native object for a non-native one.
-  if (!obj->isNative()) {
+  if (!obj->is<NativeObject>()) {
     return;
   }
 
@@ -3079,7 +3068,7 @@ void js::gc::StoreBuffer::ValueEdge::trace(TenuringTracer& mover) const {
 void js::TenuringTracer::traceObject(JSObject* obj) {
   CallTraceHook(this, obj);
 
-  if (!obj->isNative()) {
+  if (!obj->is<NativeObject>()) {
     return;
   }
 
@@ -3193,7 +3182,7 @@ JSObject* js::TenuringTracer::moveToTenuredSlow(JSObject* src) {
     if (tarray->hasInlineElements()) {
       AllocKind srcKind = GetGCObjectKind(TypedArrayObject::FIXED_DATA_START);
       size_t headerSize = Arena::thingSize(srcKind);
-      srcSize = headerSize + tarray->byteLength().get();
+      srcSize = headerSize + tarray->byteLength();
     }
   }
 
@@ -3206,7 +3195,7 @@ JSObject* js::TenuringTracer::moveToTenuredSlow(JSObject* src) {
   js_memcpy(dst, src, srcSize);
 
   // Move the slots and elements, if we need to.
-  if (src->isNative()) {
+  if (src->is<NativeObject>()) {
     NativeObject* ndst = &dst->as<NativeObject>();
     NativeObject* nsrc = &src->as<NativeObject>();
     tenuredSize += moveSlotsToTenured(ndst, nsrc);
@@ -3447,9 +3436,12 @@ JSString* js::TenuringTracer::moveToTenured(JSString* src) {
 
   auto* overlay = StringRelocationOverlay::forwardCell(src, dst);
   MOZ_ASSERT(dst->isDeduplicatable());
-  // The base root might be deduplicated, so the non-inlined chars might no
-  // longer be valid. Insert the overlay into this list to relocate it later.
-  insertIntoStringFixupList(overlay);
+
+  if (dst->hasBase() || dst->isRope()) {
+    // dst or one of its leaves might have a base that will be deduplicated.
+    // Insert the overlay into the fixup list to relocate it later.
+    insertIntoStringFixupList(overlay);
+  }
 
   gcprobes::PromoteToTenured(src, dst);
   return dst;
@@ -3519,13 +3511,6 @@ void js::Nursery::relocateDependentStringChars(
   }
 }
 
-inline void js::TenuringTracer::insertIntoBigIntFixupList(
-    RelocationOverlay* entry) {
-  *bigIntTail = entry;
-  bigIntTail = &entry->nextRef();
-  *bigIntTail = nullptr;
-}
-
 JS::BigInt* js::TenuringTracer::moveToTenured(JS::BigInt* src) {
   MOZ_ASSERT(IsInsideNursery(src));
   MOZ_ASSERT(!src->nurseryZone()->usedByHelperThread());
@@ -3538,19 +3523,20 @@ JS::BigInt* js::TenuringTracer::moveToTenured(JS::BigInt* src) {
   tenuredSize += moveBigIntToTenured(dst, src, dstKind);
   tenuredCells++;
 
-  RelocationOverlay* overlay = RelocationOverlay::forwardCell(src, dst);
-  insertIntoBigIntFixupList(overlay);
+  RelocationOverlay::forwardCell(src, dst);
 
   gcprobes::PromoteToTenured(src, dst);
   return dst;
 }
 
-void js::Nursery::collectToFixedPoint(TenuringTracer& mover) {
+void js::Nursery::collectToObjectFixedPoint(TenuringTracer& mover) {
   for (RelocationOverlay* p = mover.objHead; p; p = p->next()) {
     auto* obj = static_cast<JSObject*>(p->forwardingAddress());
     mover.traceObject(obj);
   }
+}
 
+void js::Nursery::collectToStringFixedPoint(TenuringTracer& mover) {
   for (StringRelocationOverlay* p = mover.stringHead; p; p = p->next()) {
     auto* tenuredStr = static_cast<JSString*>(p->forwardingAddress());
     // To ensure the NON_DEDUP_BIT was reset properly.
@@ -3595,10 +3581,6 @@ void js::Nursery::collectToFixedPoint(TenuringTracer& mover) {
       }
       tenuredStr->setBase(tenuredRootBase);
     }
-  }
-
-  for (RelocationOverlay* p = mover.bigIntHead; p; p = p->next()) {
-    mover.traceBigInt(static_cast<JS::BigInt*>(p->forwardingAddress()));
   }
 }
 
@@ -3825,15 +3807,16 @@ js::BaseScript* SweepingTracer::onScriptEdge(js::BaseScript* script) {
 BaseShape* SweepingTracer::onBaseShapeEdge(BaseShape* base) {
   return onEdge(base);
 }
+GetterSetter* SweepingTracer::onGetterSetterEdge(GetterSetter* gs) {
+  return onEdge(gs);
+}
+PropMap* SweepingTracer::onPropMapEdge(PropMap* map) { return onEdge(map); }
 jit::JitCode* SweepingTracer::onJitCodeEdge(jit::JitCode* jit) {
   return onEdge(jit);
 }
 Scope* SweepingTracer::onScopeEdge(Scope* scope) { return onEdge(scope); }
 RegExpShared* SweepingTracer::onRegExpSharedEdge(RegExpShared* shared) {
   return onEdge(shared);
-}
-ObjectGroup* SweepingTracer::onObjectGroupEdge(ObjectGroup* group) {
-  return onEdge(group);
 }
 BigInt* SweepingTracer::onBigIntEdge(BigInt* bi) { return onEdge(bi); }
 JS::Symbol* SweepingTracer::onSymbolEdge(JS::Symbol* sym) {
@@ -3981,15 +3964,14 @@ void UnmarkGrayTracer::onChild(const JS::GCCellPtr& thing) {
   }
 
   // If the cell is in a zone that we're currently marking, then it's possible
-  // that it is currently white but will end up gray. To handle this case, push
-  // any cells in zones that are currently being marked onto the mark stack and
-  // they will eventually get marked black.
+  // that it is currently white but will end up gray. To handle this case,
+  // trigger the barrier for any cells in zones that are currently being
+  // marked. This will ensure they will eventually get marked black.
   if (zone->isGCMarking()) {
     if (!cell->isMarkedBlack()) {
-      Cell* tmp = cell;
-      JSTracer* trc = &runtime()->gc.marker;
-      TraceManuallyBarrieredGenericPointerEdge(trc, &tmp, "read barrier");
-      MOZ_ASSERT(tmp == cell);
+      // Skip disptaching on known tracer type.
+      BarrierTracer* trc = &runtime()->gc.barrierTracer;
+      trc->performBarrier(thing);
       unmarkedAny = true;
     }
     return;
@@ -4042,7 +4024,7 @@ bool js::gc::UnmarkGrayGCThingUnchecked(JSRuntime* rt, JS::GCCellPtr thing) {
   return unmarker.unmarkedAny;
 }
 
-JS_FRIEND_API bool JS::UnmarkGrayGCThingRecursively(JS::GCCellPtr thing) {
+JS_PUBLIC_API bool JS::UnmarkGrayGCThingRecursively(JS::GCCellPtr thing) {
   MOZ_ASSERT(!JS::RuntimeHeapIsCollecting());
   MOZ_ASSERT(!JS::RuntimeHeapIsCycleCollecting());
 
@@ -4069,6 +4051,181 @@ bool js::UnmarkGrayShapeRecursively(Shape* shape) {
 #ifdef DEBUG
 Cell* js::gc::UninlinedForwarded(const Cell* cell) { return Forwarded(cell); }
 #endif
+
+#ifdef DEBUG
+static bool CellHasChildren(JS::GCCellPtr cell) {
+  struct Tracer : public JS::CallbackTracer {
+    bool hasChildren = false;
+    explicit Tracer(JSRuntime* runtime) : JS::CallbackTracer(runtime) {}
+    void onChild(const JS::GCCellPtr& thing) { hasChildren = true; }
+  };
+
+  Tracer trc(cell.asCell()->runtimeFromMainThread());
+  JS::TraceChildren(&trc, cell);
+  return trc.hasChildren;
+}
+#endif
+
+static bool CellMayHaveChildren(JS::GCCellPtr cell) {
+  bool mayHaveChildren;
+
+  switch (cell.kind()) {
+    case JS::TraceKind::BigInt:
+      mayHaveChildren = false;
+      break;
+
+    case JS::TraceKind::String: {
+      JSString* string = &cell.as<JSString>();
+      mayHaveChildren = string->hasBase() || string->isRope();
+      break;
+    }
+
+    default:
+      mayHaveChildren = true;
+      break;
+  }
+
+  MOZ_ASSERT_IF(!mayHaveChildren, !CellHasChildren(cell));
+  return mayHaveChildren;
+}
+
+/* static */
+BarrierTracer* BarrierTracer::fromTracer(JSTracer* trc) {
+  MOZ_ASSERT(trc->kind() == JS::TracerKind::Barrier);
+  return static_cast<BarrierTracer*>(trc->asGenericTracer());
+}
+
+BarrierTracer::BarrierTracer(JSRuntime* rt)
+    : GenericTracer(rt, JS::TracerKind::Barrier, JS::WeakEdgeTraceAction::Skip),
+      marker(rt->gc.marker) {}
+
+JSObject* BarrierTracer::onObjectEdge(JSObject* obj) {
+  PreWriteBarrier(obj);
+  return obj;
+}
+Shape* BarrierTracer::onShapeEdge(Shape* shape) {
+  PreWriteBarrier(shape);
+  return shape;
+}
+JSString* BarrierTracer::onStringEdge(JSString* string) {
+  PreWriteBarrier(string);
+  return string;
+}
+js::BaseScript* BarrierTracer::onScriptEdge(js::BaseScript* script) {
+  PreWriteBarrier(script);
+  return script;
+}
+BaseShape* BarrierTracer::onBaseShapeEdge(BaseShape* base) {
+  PreWriteBarrier(base);
+  return base;
+}
+GetterSetter* BarrierTracer::onGetterSetterEdge(GetterSetter* gs) {
+  PreWriteBarrier(gs);
+  return gs;
+}
+PropMap* BarrierTracer::onPropMapEdge(PropMap* map) {
+  PreWriteBarrier(map);
+  return map;
+}
+Scope* BarrierTracer::onScopeEdge(Scope* scope) {
+  PreWriteBarrier(scope);
+  return scope;
+}
+RegExpShared* BarrierTracer::onRegExpSharedEdge(RegExpShared* shared) {
+  PreWriteBarrier(shared);
+  return shared;
+}
+BigInt* BarrierTracer::onBigIntEdge(BigInt* bi) {
+  PreWriteBarrier(bi);
+  return bi;
+}
+JS::Symbol* BarrierTracer::onSymbolEdge(JS::Symbol* sym) {
+  PreWriteBarrier(sym);
+  return sym;
+}
+jit::JitCode* BarrierTracer::onJitCodeEdge(jit::JitCode* jit) {
+  PreWriteBarrier(jit);
+  return jit;
+}
+
+// If the barrier buffer grows too large, trace all barriered things at that
+// point.
+constexpr static size_t MaxBarrierBufferSize = 4096;
+
+void BarrierTracer::performBarrier(JS::GCCellPtr cell) {
+  MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime()));
+  MOZ_ASSERT(!runtime()->gc.isBackgroundMarking());
+  MOZ_ASSERT(!cell.asCell()->isForwarded());
+
+  // Mark the cell here to prevent us recording it again.
+  if (!cell.asCell()->asTenured().markIfUnmarked()) {
+    return;
+  }
+
+  // NOTE: This assumes that cells that don't have children do not require their
+  // traceChildren method to be called.
+  bool requiresTracing = CellMayHaveChildren(cell);
+  if (!requiresTracing) {
+    return;
+  }
+
+  BarrierBuffer& buffer = marker.barrierBuffer();
+  if (buffer.length() >= MaxBarrierBufferSize || !buffer.append(cell)) {
+    handleBufferFull(cell);
+  }
+}
+
+void BarrierTracer::handleBufferFull(JS::GCCellPtr cell) {
+  SliceBudget budget = SliceBudget::unlimited();
+  marker.traceBarrieredCells(budget);
+  marker.traceBarrieredCell(cell);
+}
+
+bool GCMarker::traceBarrieredCells(SliceBudget& budget) {
+  MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime()) ||
+             CurrentThreadIsGCMarking());
+  MOZ_ASSERT(markColor() == MarkColor::Black);
+
+  AutoGeckoProfilerEntry profilingStackFrame(
+      TlsContext.get(), "GCMarker::traceBarrieredCells",
+      JS::ProfilingCategoryPair::GCCC_Barrier);
+
+  BarrierBuffer& buffer = barrierBuffer();
+  while (!buffer.empty()) {
+    traceBarrieredCell(buffer.popCopy());
+    budget.step();
+    if (budget.isOverBudget()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void GCMarker::traceBarrieredCell(JS::GCCellPtr cell) {
+  MOZ_ASSERT(cell.asCell()->isTenured());
+  MOZ_ASSERT(cell.asCell()->isMarkedBlack());
+  MOZ_ASSERT(!cell.asCell()->isForwarded());
+
+  ApplyGCThingTyped(cell, [this](auto thing) {
+    MOZ_ASSERT(ShouldMark(this, thing));
+    MOZ_ASSERT(thing->isMarkedBlack());
+
+    if constexpr (std::is_same_v<decltype(thing), JSString*>) {
+      if (thing->isRope() && thing->asRope().isBeingFlattened()) {
+        // This string is an interior node of a rope that is currently being
+        // flattened. The flattening process invokes the barrier on all nodes in
+        // the tree, so interior nodes need not be traversed.
+        return;
+      }
+    }
+
+    CheckTracedThing(this, thing);
+    AutoClearTracingSource acts(this);
+
+    traverse(thing);
+  });
+}
 
 namespace js {
 namespace debug {

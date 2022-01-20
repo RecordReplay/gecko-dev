@@ -41,9 +41,9 @@ const { E10SUtils } = ChromeUtils.import(
   "resource://gre/modules/E10SUtils.jsm"
 );
 
-const { ExperimentAPI } = ChromeUtils.import(
-  "resource://messaging-system/experiments/ExperimentAPI.jsm"
-);
+XPCOMUtils.defineLazyModuleGetters(this, {
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
+});
 
 /**
  * BEWARE: Do not add variables for holding state in the global scope.
@@ -54,11 +54,8 @@ const { ExperimentAPI } = ChromeUtils.import(
  * Constants are fine in the global scope.
  */
 
-const PREF_ABOUT_HOME_CACHE_ENABLED =
-  "browser.startup.homepage.abouthome_cache.enabled";
 const PREF_ABOUT_HOME_CACHE_TESTING =
   "browser.startup.homepage.abouthome_cache.testing";
-const PREF_ABOUT_WELCOME_ENABLED = "browser.aboutwelcome.enabled";
 const ABOUT_WELCOME_URL =
   "resource://activity-stream/aboutwelcome/aboutwelcome.html";
 
@@ -128,7 +125,7 @@ const AboutHomeStartupCacheChild = {
       );
     }
 
-    if (!Services.prefs.getBoolPref(PREF_ABOUT_HOME_CACHE_ENABLED, false)) {
+    if (!NimbusFeatures.abouthomecache.isEnabled()) {
       return;
     }
 
@@ -404,13 +401,6 @@ class BaseAboutNewTabService {
 
     XPCOMUtils.defineLazyPreferenceGetter(
       this,
-      "isAboutWelcomePrefEnabled",
-      PREF_ABOUT_WELCOME_ENABLED,
-      false
-    );
-
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
       "privilegedAboutProcessEnabled",
       PREF_SEPARATE_PRIVILEGEDABOUT_CONTENT_PROCESS,
       false
@@ -454,9 +444,10 @@ class BaseAboutNewTabService {
      */
 
     if (
-      this.isAboutWelcomePrefEnabled &&
-      // about:welcome should be enabled by default if no experiment exists.
-      ExperimentAPI.isFeatureEnabled("aboutwelcome", true)
+      NimbusFeatures.aboutwelcome.isEnabled({
+        defaultValue: true,
+        sendExposureEvent: true,
+      })
     ) {
       return ABOUT_WELCOME_URL;
     }

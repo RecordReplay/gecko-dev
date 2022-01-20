@@ -31,6 +31,7 @@
 #include "mozilla/Tokenizer.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
+#include "nsCRT.h"
 #include "nsNetUtil.h"
 #include "nsIChannel.h"
 #include "nsUnicharUtils.h"
@@ -51,13 +52,12 @@ StaticRefPtr<nsHttpNTLMAuth> nsHttpNTLMAuth::gSingleton;
 
 static bool IsNonFqdn(nsIURI* uri) {
   nsAutoCString host;
-  PRNetAddr addr;
-
-  if (NS_FAILED(uri->GetAsciiHost(host))) return false;
+  if (NS_FAILED(uri->GetAsciiHost(host))) {
+    return false;
+  }
 
   // return true if host does not contain a dot and is not an ip address
-  return !host.IsEmpty() && !host.Contains('.') &&
-         PR_StringToNetAddr(host.BeginReading(), &addr) != PR_SUCCESS;
+  return !host.IsEmpty() && !host.Contains('.') && !HostIsIPLiteral(host);
 }
 
 // Check to see if we should use our generic (internal) NTLM auth module.
@@ -113,8 +113,9 @@ static bool CanUseDefaultCredentials(nsIHttpAuthenticableChannel* channel,
   Unused << channel->GetURI(getter_AddRefs(uri));
 
   bool allowNonFqdn;
-  if (NS_FAILED(prefs->GetBoolPref(kAllowNonFqdn, &allowNonFqdn)))
+  if (NS_FAILED(prefs->GetBoolPref(kAllowNonFqdn, &allowNonFqdn))) {
     allowNonFqdn = false;
+  }
   if (allowNonFqdn && uri && IsNonFqdn(uri)) {
     LOG(("Host is non-fqdn, default credentials are allowed\n"));
     return true;
@@ -171,7 +172,7 @@ nsHttpNTLMAuth::ChallengeReceived(nsIHttpAuthenticableChannel* channel,
   // Start a new auth sequence if the challenge is exactly "NTLM".
   // If native NTLM auth apis are available and enabled through prefs,
   // try to use them.
-  if (PL_strcasecmp(challenge, "NTLM") == 0) {
+  if (nsCRT::strcasecmp(challenge, "NTLM") == 0) {
     nsCOMPtr<nsIAuthModule> module;
 
     // Check to see if we should default to our generic NTLM auth module
@@ -285,7 +286,7 @@ nsHttpNTLMAuth::GenerateCredentials(nsIHttpAuthenticableChannel* authChannel,
   Maybe<nsTArray<uint8_t>> certArray;
 
   // initial challenge
-  if (PL_strcasecmp(challenge, "NTLM") == 0) {
+  if (nsCRT::strcasecmp(challenge, "NTLM") == 0) {
     // NTLM service name format is 'HTTP@host' for both http and https
     nsCOMPtr<nsIURI> uri;
     rv = authChannel->GetURI(getter_AddRefs(uri));

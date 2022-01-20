@@ -86,10 +86,8 @@ class nsCSSBorderRenderer final {
   friend class nsDisplayButtonForeground;
 
  public:
-  nsCSSBorderRenderer(nsPresContext* aPresContext,
-                      const mozilla::dom::Document* aDocument,
-                      DrawTarget* aDrawTarget, const Rect& aDirtyRect,
-                      Rect& aOuterRect,
+  nsCSSBorderRenderer(nsPresContext* aPresContext, DrawTarget* aDrawTarget,
+                      const Rect& aDirtyRect, Rect& aOuterRect,
                       const mozilla::StyleBorderStyle* aBorderStyles,
                       const Float* aBorderWidths, RectCornerRadii& aBorderRadii,
                       const nscolor* aBorderColors, bool aBackfaceIsVisible,
@@ -121,9 +119,7 @@ class nsCSSBorderRenderer final {
  private:
   RectCornerRadii mBorderCornerDimensions;
 
-  // Target document to report warning
   nsPresContext* mPresContext;
-  const mozilla::dom::Document* mDocument;
 
   // destination DrawTarget and dirty rect
   DrawTarget* mDrawTarget;

@@ -34,7 +34,6 @@
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
-#include "mozilla/Unused.h"
 
 #include "jit/arm/Assembler-arm.h"
 #include "jit/arm/disasm/Constants-arm.h"
@@ -1063,11 +1062,10 @@ void SimulatorProcess::checkICacheLocked(SimInstruction* instr) {
 
   if (cache_hit) {
     // Check that the data in memory matches the contents of the I-cache.
-    int cmpret =
+    mozilla::DebugOnly<int> cmpret =
         memcmp(reinterpret_cast<void*>(instr), cache_page->cachedData(offset),
                SimInstruction::kInstrSize);
     MOZ_ASSERT(cmpret == 0);
-    mozilla::Unused << cmpret;
   } else {
     // Cache miss. Load memory into the cache.
     memcpy(cached_line, line, CachePage::kLineLength);
@@ -2389,6 +2387,8 @@ typedef int32_t (*Prototype_Int32_GeneralInt32GeneralInt32)(int32_t, int32_t,
 typedef int32_t (*Prototype_Int32_GeneralInt32GeneralInt32Int32)(
     int32_t, int32_t, int32_t, int32_t, int32_t);
 typedef int32_t (*Prototype_Int32_GeneralGeneral)(int32_t, int32_t);
+typedef int32_t (*Prototype_Int32_GeneralGeneralGeneral)(int32_t, int32_t,
+                                                         int32_t);
 typedef int32_t (*Prototype_Int32_GeneralGeneralInt32Int32)(int32_t, int32_t,
                                                             int32_t, int32_t);
 typedef int32_t (*Prototype_General_GeneralInt32)(int32_t, int32_t);
@@ -2898,6 +2898,14 @@ void Simulator::softwareInterrupt(SimInstruction* instr) {
           Prototype_Int32_GeneralGeneral target =
               reinterpret_cast<Prototype_Int32_GeneralGeneral>(external);
           int64_t result = target(arg0, arg1);
+          scratchVolatileRegisters(/* scratchFloat = true */);
+          setCallResult(result);
+          break;
+        }
+        case Args_Int32_GeneralGeneralGeneral: {
+          Prototype_Int32_GeneralGeneralGeneral target =
+              reinterpret_cast<Prototype_Int32_GeneralGeneralGeneral>(external);
+          int64_t result = target(arg0, arg1, arg2);
           scratchVolatileRegisters(/* scratchFloat = true */);
           setCallResult(result);
           break;
@@ -4783,8 +4791,12 @@ void Simulator::decodeSpecialCondition(SimInstruction* instr) {
           get_d_register(Vd + r, data);
           // TODO: We should AllowUnaligned here only if the alignment attribute
           // of the instruction calls for default alignment.
-          writeW(address, data[0], instr, AllowUnaligned);
-          writeW(address + 4, data[1], instr, AllowUnaligned);
+          //
+          // Use writeQ to get handling of traps right.  (The spec says to
+          // perform two individual word writes, but let's not worry about
+          // that.)
+          writeQ(address, (uint64_t(data[1]) << 32) | uint64_t(data[0]), instr,
+                 AllowUnaligned);
           address += 8;
           r++;
         }
@@ -4825,12 +4837,63 @@ void Simulator::decodeSpecialCondition(SimInstruction* instr) {
           uint32_t data[2];
           // TODO: We should AllowUnaligned here only if the alignment attribute
           // of the instruction calls for default alignment.
-          data[0] = readW(address, instr, AllowUnaligned);
-          data[1] = readW(address + 4, instr, AllowUnaligned);
+          //
+          // Use readQ to get handling of traps right.  (The spec says to
+          // perform two individual word reads, but let's not worry about that.)
+          uint64_t tmp = readQ(address, instr, AllowUnaligned);
+          data[0] = tmp;
+          data[1] = tmp >> 32;
           set_d_register(Vd + r, data);
           address += 8;
           r++;
         }
+        if (Rm != 15) {
+          if (Rm == 13) {
+            set_register(Rn, address);
+          } else {
+            set_register(Rn, get_register(Rn) + get_register(Rm));
+          }
+        }
+      } else {
+        MOZ_CRASH();
+      }
+      break;
+    case 9:
+      if (instr->bits(9, 8) == 0) {
+        int Vd = (instr->bit(22) << 4) | instr->vdValue();
+        int Rn = instr->vnValue();
+        int size = instr->bits(11, 10);
+        int Rm = instr->vmValue();
+        int index = instr->bits(7, 5);
+        int align = instr->bit(4);
+        int32_t address = get_register(Rn);
+        if (size != 2 || align) {
+          MOZ_CRASH("NYI");
+        }
+        int a = instr->bits(5, 4);
+        if (a != 0 && a != 3) {
+          MOZ_CRASH("Unspecified");
+        }
+        if (index > 1) {
+          Vd++;
+          index -= 2;
+        }
+        uint32_t data[2];
+        get_d_register(Vd, data);
+        switch (instr->bits(21, 20)) {
+          case 0:
+            // vst1 single element from one lane
+            writeW(address, data[index], instr, AllowUnaligned);
+            break;
+          case 2:
+            // vld1 single element to one lane
+            data[index] = readW(address, instr, AllowUnaligned);
+            set_d_register(Vd, data);
+            break;
+          default:
+            MOZ_CRASH("NYI");
+        }
+        address += 4;
         if (Rm != 15) {
           if (Rm == 13) {
             set_register(Rn, address);

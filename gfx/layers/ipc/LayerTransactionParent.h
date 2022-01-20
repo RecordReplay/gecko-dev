@@ -36,7 +36,6 @@ class LayerTransactionParent final : public PLayerTransactionParent,
                                      public mozilla::ipc::IShmemAllocator {
   typedef nsTArray<Edit> EditArray;
   typedef nsTArray<OpDestroy> OpDestroyArray;
-  typedef nsTArray<PluginWindowData> PluginsArray;
 
   friend class PLayerTransactionParent;
 
@@ -80,8 +79,8 @@ class LayerTransactionParent final : public PLayerTransactionParent,
                                const TimeStamp& aTxnEndTime, bool aContainsSVG,
                                const nsCString& aURL,
                                const TimeStamp& aFwdTime);
-  TransactionId FlushTransactionId(const VsyncId& aId,
-                                   TimeStamp& aCompositeEnd);
+  void FlushPendingTransactions(const VsyncId& aId, TimeStamp& aCompositeEnd,
+                                nsTArray<TransactionId>& aOutTransactions);
 
   // CompositableParentManager
   void SendAsyncMessage(

@@ -96,21 +96,34 @@ function onMessageManagerClose(messageManager, topic, data) {
 function closeWatcherTransports(watcher) {
   for (let i = 0; i < Services.ppmm.childCount; i++) {
     const messageManager = Services.ppmm.getChildAt(i);
-    let list = actors.get(messageManager);
-    if (!list || list.length == 0) {
+    const targetActorDescriptions = actors.get(messageManager);
+    if (!targetActorDescriptions || targetActorDescriptions.length == 0) {
       continue;
     }
-    list = list.filter(item => item.watcher != watcher);
-    for (const item of list) {
-      // If we have a child transport, the actor has already
-      // been created. We need to stop using this message manager.
-      item.childTransport.close();
-      watcher.conn.cancelForwarding(item.prefix);
+
+    // Destroy all transports related to this watcher and tells the client to purge all related actors
+    const matchingTargetActorDescriptions = targetActorDescriptions.filter(
+      item => item.watcher === watcher
+    );
+    for (const {
+      prefix,
+      childTransport,
+      actor,
+    } of matchingTargetActorDescriptions) {
+      watcher.notifyTargetDestroyed(actor);
+
+      childTransport.close();
+      watcher.conn.cancelForwarding(prefix);
     }
-    if (list.length == 0) {
+
+    // Then update global `actors` WeakMap by stripping all data about this watcher
+    const remainingTargetActorDescriptions = targetActorDescriptions.filter(
+      item => item.watcher !== watcher
+    );
+    if (remainingTargetActorDescriptions.length == 0) {
       actors.delete(messageManager);
     } else {
-      actors.set(messageManager, list);
+      actors.set(messageManager, remainingTargetActorDescriptions);
     }
   }
 }
@@ -170,19 +183,33 @@ async function createTargets(watcher) {
   // actor for each existing content process.
   // Also, we substract one as the parent process has a message manager and is counted
   // in `childCount`, but we ignore it from the process script and it won't reply.
-  const contentProcessCount = Services.ppmm.childCount - 1;
+  let contentProcessCount = Services.ppmm.childCount - 1;
   if (contentProcessCount == 0) {
     return;
   }
   const onTargetsCreated = new Promise(resolve => {
     let receivedTargetCount = 0;
     const listener = () => {
-      if (++receivedTargetCount == contentProcessCount) {
-        watcher.off("target-available-form", listener);
-        resolve();
-      }
+      receivedTargetCount++;
+      mayBeResolve();
     };
     watcher.on("target-available-form", listener);
+    const onContentProcessClosed = () => {
+      // Update the content process count as one has been just destroyed
+      contentProcessCount--;
+      mayBeResolve();
+    };
+    Services.obs.addObserver(onContentProcessClosed, "message-manager-close");
+    function mayBeResolve() {
+      if (receivedTargetCount >= contentProcessCount) {
+        watcher.off("target-available-form", listener);
+        Services.obs.removeObserver(
+          onContentProcessClosed,
+          "message-manager-close"
+        );
+        resolve();
+      }
+    }
   });
 
   Services.ppmm.broadcastAsyncMessage("debug:instantiate-already-available", {

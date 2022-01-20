@@ -27,7 +27,7 @@
 #include "nsBoxLayoutState.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsCSSFrameConstructor.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsDisplayList.h"
 #include "nsHashKeys.h"
 #include "nsFieldSetFrame.h"
@@ -699,7 +699,7 @@ struct nsGridContainerFrame::GridItemInfo {
     bool isAuto = size.IsAuto() ||
                   (isInlineAxis ==
                        aContainerWM.IsOrthogonalTo(mFrame->GetWritingMode()) &&
-                   size.IsExtremumLength());
+                   size.BehavesLikeInitialValueOnBlockAxis());
     // NOTE: if we have a definite size then our automatic minimum size
     // can't affect our size.  Excluding these simplifies applying
     // the clamping in the right cases later.
@@ -715,7 +715,7 @@ struct nsGridContainerFrame::GridItemInfo {
     isAuto = minSize.IsAuto() ||
              (isInlineAxis ==
                   aContainerWM.IsOrthogonalTo(mFrame->GetWritingMode()) &&
-              minSize.IsExtremumLength());
+              minSize.BehavesLikeInitialValueOnBlockAxis());
     return isAuto &&
            mFrame->StyleDisplay()->mOverflowX == StyleOverflow::Visible;
   }
@@ -2586,6 +2586,18 @@ struct nsGridContainerFrame::Tracks {
     return mSizes[aLine].mPosition;
   }
 
+  nscoord SumOfGridTracksAndGaps() {
+    return SumOfGridTracks() + SumOfGridGaps();
+  }
+
+  nscoord SumOfGridTracks() const {
+    nscoord result = 0;
+    for (const TrackSize& size : mSizes) {
+      result += size.mBase;
+    }
+    return result;
+  }
+
   nscoord SumOfGridGaps() const {
     auto len = mSizes.Length();
     return MOZ_LIKELY(len > 1) ? (len - 1) * mGridGap : 0;
@@ -3420,21 +3432,29 @@ static Subgrid* SubgridComputeMarginBorderPadding(
     const GridItemInfo& aGridItem, const LogicalSize& aPercentageBasis) {
   auto* subgridFrame = aGridItem.SubgridFrame();
   auto cbWM = aGridItem.mFrame->GetParent()->GetWritingMode();
-  nsMargin physicalMBP;
-  {
-    auto wm = subgridFrame->GetWritingMode();
-    auto pmPercentageBasis = cbWM.IsOrthogonalTo(wm)
-                                 ? aPercentageBasis.BSize(wm)
-                                 : aPercentageBasis.ISize(wm);
-    SizeComputationInput sz(subgridFrame, nullptr, cbWM, pmPercentageBasis);
-    physicalMBP =
-        sz.ComputedPhysicalMargin() + sz.ComputedPhysicalBorderPadding();
-  }
   auto* subgrid = subgridFrame->GetProperty(Subgrid::Prop());
-  subgrid->mMarginBorderPadding = LogicalMargin(cbWM, physicalMBP);
+  auto wm = subgridFrame->GetWritingMode();
+  auto pmPercentageBasis = cbWM.IsOrthogonalTo(wm) ? aPercentageBasis.BSize(wm)
+                                                   : aPercentageBasis.ISize(wm);
+  SizeComputationInput sz(subgridFrame, nullptr, cbWM, pmPercentageBasis);
+  subgrid->mMarginBorderPadding =
+      sz.ComputedLogicalMargin(cbWM) + sz.ComputedLogicalBorderPadding(cbWM);
+
   if (aGridItem.mFrame != subgridFrame) {
     nsIScrollableFrame* scrollFrame = aGridItem.mFrame->GetScrollTargetFrame();
     if (scrollFrame) {
+      MOZ_ASSERT(
+          sz.ComputedLogicalMargin(cbWM) == LogicalMargin(cbWM) &&
+              sz.ComputedLogicalBorder(cbWM) == LogicalMargin(cbWM),
+          "A scrolled inner frame should not have any margin or border!");
+
+      // Add the margin and border from the (outer) scroll frame.
+      SizeComputationInput szScrollFrame(aGridItem.mFrame, nullptr, cbWM,
+                                         pmPercentageBasis);
+      subgrid->mMarginBorderPadding +=
+          szScrollFrame.ComputedLogicalMargin(cbWM) +
+          szScrollFrame.ComputedLogicalBorder(cbWM);
+
       nsMargin ssz = scrollFrame->GetActualScrollbarSizes();
       subgrid->mMarginBorderPadding += LogicalMargin(cbWM, ssz);
     }
@@ -3875,8 +3895,7 @@ nsContainerFrame* NS_NewGridContainerFrame(PresShell* aPresShell,
 // ===========================================
 
 /*static*/ const nsRect& nsGridContainerFrame::GridItemCB(nsIFrame* aChild) {
-  MOZ_ASSERT(aChild->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW) &&
-             aChild->IsAbsolutelyPositioned());
+  MOZ_ASSERT(aChild->IsAbsolutelyPositioned());
   nsRect* cb = aChild->GetProperty(GridItemContainingBlockRect());
   MOZ_ASSERT(cb,
              "this method must only be called on grid items, and the grid "
@@ -3889,7 +3908,7 @@ void nsGridContainerFrame::AddImplicitNamedAreas(
   // http://dev.w3.org/csswg/css-grid/#implicit-named-areas
   // Note: recording these names for fast lookup later is just an optimization.
   const uint32_t len = std::min(aLineNameLists.Length(), size_t(kMaxLine));
-  nsTHashtable<nsStringHashKey> currentStarts;
+  nsTHashSet<nsString> currentStarts;
   ImplicitNamedAreas* areas = GetImplicitNamedAreas();
   for (uint32_t i = 0; i < len; ++i) {
     for (const auto& nameIdent : aLineNameLists[i].AsSpan()) {
@@ -4635,7 +4654,7 @@ void nsGridContainerFrame::Grid::PlaceGridItems(
   uint32_t clampMaxRowLine = rowLineNameMap.mClampMaxLine + offsetToRowZero;
   // We need 1 cursor per row (or column) if placement is sparse.
   {
-    Maybe<nsDataHashtable<nsUint32HashKey, uint32_t>> cursors;
+    Maybe<nsTHashMap<nsUint32HashKey, uint32_t>> cursors;
     if (isSparse) {
       cursors.emplace();
     }
@@ -4650,10 +4669,7 @@ void nsGridContainerFrame::Grid::PlaceGridItems(
       LineRange& minor = isRowOrder ? area.mCols : area.mRows;
       if (major.IsDefinite() && minor.IsAuto()) {
         // Items with 'auto' in the minor dimension only.
-        uint32_t cursor = 0;
-        if (isSparse) {
-          cursors->Get(major.mStart, &cursor);
-        }
+        const uint32_t cursor = isSparse ? cursors->Get(major.mStart) : 0;
         (this->*placeAutoMinorFunc)(cursor, &area, clampMaxLine);
         if (isMasonry) {
           item.MaybeInhibitSubgridInMasonry(aState.mFrame, gridAxisTrackCount);
@@ -4665,7 +4681,7 @@ void nsGridContainerFrame::Grid::PlaceGridItems(
         mCellMap.Fill(area);
         SetSubgridChildEdgeBits(item);
         if (isSparse) {
-          cursors->Put(major.mStart, minor.mEnd);
+          cursors->InsertOrUpdate(major.mStart, minor.mEnd);
         }
       }
       InflateGridFor(area);  // Step 2, inflating for auto items too
@@ -4984,7 +5000,7 @@ static nscoord MeasuringReflow(nsIFrame* aChild,
   } else {
     aChild->RemoveProperty(nsIFrame::BClampMarginBoxMinSizeProperty());
   }
-  ReflowInput childRI(pc, *rs, aChild, aAvailableSize, Some(aCBSize), {},
+  ReflowInput childRI(pc, *rs, aChild, aAvailableSize, Some(aCBSize), {}, {},
                       csFlags);
 
   // Because we pass ComputeSizeFlag::UseAutoBSize, and the
@@ -5036,7 +5052,7 @@ static void PostReflowStretchChild(
     aChild->RemoveProperty(nsIFrame::BClampMarginBoxMinSizeProperty());
   }
   ReflowInput ri(pc, aReflowInput, aChild, aAvailableSize, Some(aCBSize), {},
-                 csFlags);
+                 {}, csFlags);
   if (aChildAxis == eLogicalAxisBlock) {
     ri.SetComputedBSize(ri.ApplyMinMaxBSize(aNewContentBoxSize));
   } else {
@@ -5369,7 +5385,7 @@ static nscoord MinSize(const GridItemInfo& aGridItem,
   // FIXME: Bug 567039: moz-fit-content and -moz-available are not supported
   // for block size dimension on sizing properties (e.g. height), so we
   // treat it as `auto`.
-  if (axis != ourInlineAxis && sizeStyle.IsExtremumLength()) {
+  if (axis != ourInlineAxis && sizeStyle.BehavesLikeInitialValueOnBlockAxis()) {
     sizeStyle = StyleSize::Auto();
   }
 
@@ -5408,8 +5424,9 @@ static nscoord MinSize(const GridItemInfo& aGridItem,
   // treat it as `auto`.
   const bool inInlineAxis = axis == ourInlineAxis;
   const bool isAuto =
-      style.IsAuto() || (!inInlineAxis && style.IsExtremumLength());
-  if ((inInlineAxis && style.IsExtremumLength()) ||
+      style.IsAuto() ||
+      (!inInlineAxis && style.BehavesLikeInitialValueOnBlockAxis());
+  if ((inInlineAxis && nsIFrame::ToExtremumLength(style)) ||
       (isAuto && child->StyleDisplay()->mOverflowX == StyleOverflow::Visible)) {
     // Now calculate the "content size" part and return whichever is smaller.
     MOZ_ASSERT(isAuto || sz == NS_UNCONSTRAINEDSIZE);
@@ -6472,12 +6489,8 @@ void nsGridContainerFrame::Tracks::StretchFlexibleTracks(
       // the grid container’s min-width/height (or larger than the grid
       // container’s max-width/height), then redo this step, treating the free
       // space as definite [...]"
-      nscoord newSize = 0;
-      for (auto& sz : mSizes) {
-        newSize += sz.mBase;
-      }
       const auto sumOfGridGaps = SumOfGridGaps();
-      newSize += sumOfGridGaps;
+      nscoord newSize = SumOfGridTracks() + sumOfGridGaps;
       if (newSize > maxSize) {
         aAvailableSize = maxSize;
       } else if (newSize < minSize) {
@@ -7245,7 +7258,7 @@ void nsGridContainerFrame::ReflowInFlowChild(
   }
   LogicalSize percentBasis(cb.Size(wm).ConvertTo(childWM, wm));
   ReflowInput childRI(pc, *aState.mReflowInput, aChild, childCBSize,
-                      Some(percentBasis), {}, csFlags);
+                      Some(percentBasis), {}, {}, csFlags);
   childRI.mFlags.mIsTopOfPage =
       aFragmentainer ? aFragmentainer->mIsTopOfPage : false;
 
@@ -7258,18 +7271,6 @@ void nsGridContainerFrame::ReflowInFlowChild(
   // ComputeSizeFlag::UseAutoBSize.
   childRI.SetBResize(true);
   childRI.mFlags.mIsBResizeForPercentages = true;
-
-  // A table-wrapper needs to propagate the CB size we give it to its
-  // inner table frame later.  @see nsTableWrapperFrame::InitChildReflowInput.
-  if (aChild->IsTableWrapperFrame()) {
-    LogicalSize* cb =
-        aChild->GetProperty(nsTableWrapperFrame::GridItemCBSizeProperty());
-    if (!cb) {
-      cb = new LogicalSize(childWM);
-      aChild->SetProperty(nsTableWrapperFrame::GridItemCBSizeProperty(), cb);
-    }
-    *cb = percentBasis;
-  }
 
   // If the child is stretching in its block axis, and we might be fragmenting
   // it in that axis, then setup a frame property to tell
@@ -7651,7 +7652,7 @@ nscoord nsGridContainerFrame::ReflowRowsInFragmentainer(
     MOZ_ASSERT(child->GetPrevInFlow() ? row < aStartRow : row >= aStartRow,
                "unexpected child start row");
     if (row >= aEndRow) {
-      pushedItems.PutEntry(child);
+      pushedItems.Insert(child);
       continue;
     }
 
@@ -7776,9 +7777,9 @@ nscoord nsGridContainerFrame::ReflowRowsInFragmentainer(
     MOZ_ASSERT(!childStatus.IsInlineBreakBefore(),
                "should've handled InlineBreak::Before above");
     if (childStatus.IsIncomplete()) {
-      incompleteItems.PutEntry(child);
+      incompleteItems.Insert(child);
     } else if (!childStatus.IsFullyComplete()) {
-      overflowIncompleteItems.PutEntry(child);
+      overflowIncompleteItems.Insert(child);
     }
     if (isColMasonry) {
       auto childWM = child->GetWritingMode();
@@ -8082,14 +8083,14 @@ nscoord nsGridContainerFrame::MasonryLayout(GridReflowInput& aState,
       }
       if (aChildStatus.IsInlineBreakBefore()) {
         aStatus.SetIncomplete();
-        pushedItems.PutEntry(child);
+        pushedItems.Insert(child);
       } else if (aChildStatus.IsIncomplete()) {
         recordAutoPlacement(aItem, gridAxis);
         aStatus.SetIncomplete();
-        incompleteItems.PutEntry(child);
+        incompleteItems.Insert(child);
       } else if (!aChildStatus.IsFullyComplete()) {
         recordAutoPlacement(aItem, gridAxis);
-        overflowIncompleteItems.PutEntry(child);
+        overflowIncompleteItems.Insert(child);
       }
     }
     return result;
@@ -8652,6 +8653,55 @@ void nsGridContainerFrame::Reflow(nsPresContext* aPresContext,
       child->MovePositionBy(physicalDelta);
       ConsiderChildOverflow(aDesiredSize.mOverflowAreas, child);
     }
+  }
+
+  if (Style()->GetPseudoType() == PseudoStyleType::scrolledContent) {
+    // Per spec, the grid area is included in a grid container's scrollable
+    // overflow region [1], as well as the padding on the end-edge sides that
+    // would satisfy the requirements of 'place-content: end' alignment [2].
+    //
+    // Note that we include the padding from all sides of the grid area, not
+    // just the end sides; this is fine because the grid area is relative to our
+    // content-box origin. The inflated bounds won't go beyond our padding-box
+    // edges on the start sides.
+    //
+    // The margin areas of grid item boxes are also included in the scrollable
+    // overflow region [2].
+    //
+    // [1] https://drafts.csswg.org/css-grid-1/#overflow
+    // [2] https://drafts.csswg.org/css-overflow-3/#scrollable
+
+    // Synthesize a grid area covering all columns and rows, and compute its
+    // rect relative to our border-box.
+    //
+    // Note: the grid columns and rows exist only if there is an explicit grid;
+    // or when an implicit grid is needed to place any grid items. See
+    // nsGridContainerFrame::Grid::PlaceGridItems().
+    const auto numCols =
+        static_cast<int32_t>(gridReflowInput.mCols.mSizes.Length());
+    const auto numRows =
+        static_cast<int32_t>(gridReflowInput.mRows.mSizes.Length());
+    if (numCols > 0 && numRows > 0) {
+      const GridArea gridArea(LineRange(0, numCols), LineRange(0, numRows));
+      const LogicalRect gridAreaRect =
+          gridReflowInput.ContainingBlockFor(gridArea) +
+          LogicalPoint(wm, bp.IStart(wm), bp.BStart(wm));
+
+      MOZ_ASSERT(bp == aReflowInput.ComputedLogicalPadding(wm),
+                 "A scrolled inner frame shouldn't have any border!");
+      const LogicalMargin& padding = bp;
+      nsRect physicalGridAreaRectWithPadding =
+          gridAreaRect.GetPhysicalRect(wm, containerSize);
+      physicalGridAreaRectWithPadding.Inflate(padding.GetPhysicalMargin(wm));
+      aDesiredSize.mOverflowAreas.UnionAllWith(physicalGridAreaRectWithPadding);
+    }
+
+    nsRect gridItemMarginBoxBounds;
+    for (const auto& item : gridReflowInput.mGridItems) {
+      gridItemMarginBoxBounds =
+          gridItemMarginBoxBounds.Union(item.mFrame->GetMarginRect());
+    }
+    aDesiredSize.mOverflowAreas.UnionAllWith(gridItemMarginBoxBounds);
   }
 
   // TODO: fix align-tracks alignment in fragments
@@ -9227,11 +9277,7 @@ nscoord nsGridContainerFrame::IntrinsicISize(gfxContext* aRenderingContext,
                                    NS_UNCONSTRAINEDSIZE, constraint);
 
   if (MOZ_LIKELY(!IsSubgrid())) {
-    nscoord length = 0;
-    for (const TrackSize& sz : state.mCols.mSizes) {
-      length += sz.mBase;
-    }
-    return length + state.mCols.SumOfGridGaps();
+    return state.mCols.SumOfGridTracksAndGaps();
   }
   const auto& last = state.mCols.mSizes.LastElement();
   return last.mPosition + last.mBase;

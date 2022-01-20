@@ -6,9 +6,15 @@
 
 "use strict";
 
-ChromeUtils.import("resource://gre/modules/Integration.jsm", this);
-ChromeUtils.import("resource:///modules/PermissionUI.jsm", this);
-ChromeUtils.import("resource:///modules/SitePermissions.jsm", this);
+const { Integration } = ChromeUtils.import(
+  "resource://gre/modules/Integration.jsm"
+);
+const { PermissionUI } = ChromeUtils.import(
+  "resource:///modules/PermissionUI.jsm"
+);
+const { SitePermissions } = ChromeUtils.import(
+  "resource:///modules/SitePermissions.jsm"
+);
 const { PermissionTestUtils } = ChromeUtils.import(
   "resource://testing-common/PermissionTestUtils.jsm"
 );
@@ -108,11 +114,8 @@ async function testPrompt(Prompt) {
 
       let isNotificationPrompt =
         Prompt == PermissionUI.DesktopNotificationPermissionPrompt;
-      let isPersistentStoragePrompt =
-        Prompt == PermissionUI.PersistentStoragePermissionPrompt;
 
-      let expectedSecondaryActionsCount =
-        isNotificationPrompt || isPersistentStoragePrompt ? 2 : 1;
+      let expectedSecondaryActionsCount = isNotificationPrompt ? 2 : 1;
       Assert.equal(
         notification.secondaryActions.length,
         expectedSecondaryActionsCount,
@@ -165,7 +168,7 @@ async function testPrompt(Prompt) {
       // or by clicking the "never" option from the dropdown (for notifications and persistent-storage).
       popupNotification = getPopupNotificationNode();
       let secondaryActionToClickIndex = 0;
-      if (isNotificationPrompt || isPersistentStoragePrompt) {
+      if (isNotificationPrompt) {
         secondaryActionToClickIndex = 1;
       } else {
         popupNotification.checkbox.checked = true;

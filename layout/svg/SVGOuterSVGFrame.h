@@ -12,6 +12,7 @@
 #include "mozilla/SVGContainerFrame.h"
 #include "mozilla/UniquePtr.h"
 #include "nsRegion.h"
+#include "nsTHashSet.h"
 
 class gfxContext;
 
@@ -62,13 +63,12 @@ class SVGOuterSVGFrame final : public SVGDisplayContainerFrame,
   virtual IntrinsicSize GetIntrinsicSize() override;
   AspectRatio GetIntrinsicRatio() const override;
 
-  SizeComputationResult ComputeSize(gfxContext* aRenderingContext,
-                                    WritingMode aWritingMode,
-                                    const LogicalSize& aCBSize,
-                                    nscoord aAvailableISize,
-                                    const LogicalSize& aMargin,
-                                    const LogicalSize& aBorderPadding,
-                                    ComputeSizeFlags aFlags) override;
+  SizeComputationResult ComputeSize(
+      gfxContext* aRenderingContext, WritingMode aWritingMode,
+      const LogicalSize& aCBSize, nscoord aAvailableISize,
+      const LogicalSize& aMargin, const LogicalSize& aBorderPadding,
+      const mozilla::StyleSizeOverrides& aSizeOverrides,
+      ComputeSizeFlags aFlags) override;
 
   virtual void Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
                       const ReflowInput& aReflowInput,
@@ -197,8 +197,7 @@ class SVGOuterSVGFrame final : public SVGDisplayContainerFrame,
   // A hash-set containing our SVGForeignObjectFrame descendants. Note we use
   // a hash-set to avoid the O(N^2) behavior we'd get tearing down an SVG frame
   // subtree if we were to use a list (see bug 381285 comment 20).
-  UniquePtr<nsTHashtable<nsPtrHashKey<SVGForeignObjectFrame>>>
-      mForeignObjectHash;
+  UniquePtr<nsTHashSet<SVGForeignObjectFrame*>> mForeignObjectHash;
 
   nsRegion mInvalidRegion;
 

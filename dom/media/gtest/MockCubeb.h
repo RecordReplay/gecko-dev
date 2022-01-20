@@ -42,7 +42,6 @@ struct cubeb_ops {
   void (*stream_destroy)(cubeb_stream* stream);
   int (*stream_start)(cubeb_stream* stream);
   int (*stream_stop)(cubeb_stream* stream);
-  int (*stream_reset_default_device)(cubeb_stream* stream);
   int (*stream_get_position)(cubeb_stream* stream, uint64_t* position);
   int (*stream_get_latency)(cubeb_stream* stream, uint32_t* latency);
   int (*stream_get_input_latency)(cubeb_stream* stream, uint32_t* latency);
@@ -89,6 +88,9 @@ static char const* cubeb_mock_get_backend_id(cubeb* context);
 
 static int cubeb_mock_stream_set_volume(cubeb_stream* stream, float volume);
 
+static int cubeb_mock_stream_set_name(cubeb_stream* stream,
+                                      char const* stream_name);
+
 static int cubeb_mock_get_min_latency(cubeb* context,
                                       cubeb_stream_params params,
                                       uint32_t* latency_ms);
@@ -110,12 +112,11 @@ cubeb_ops const mock_ops = {
     /*.stream_destroy =*/cubeb_mock_stream_destroy,
     /*.stream_start =*/cubeb_mock_stream_start,
     /*.stream_stop =*/cubeb_mock_stream_stop,
-    /*.stream_reset_default_device =*/NULL,
     /*.stream_get_position =*/NULL,
     /*.stream_get_latency =*/NULL,
     /*.stream_get_input_latency =*/NULL,
     /*.stream_set_volume =*/cubeb_mock_stream_set_volume,
-    /*.stream_set_name =*/NULL,
+    /*.stream_set_name =*/cubeb_mock_stream_set_name,
     /*.stream_get_current_device =*/NULL,
     /*.stream_device_destroy =*/NULL,
     /*.stream_register_device_changed_callback =*/NULL,
@@ -442,6 +443,11 @@ static char const* cubeb_mock_get_backend_id(cubeb* context) {
 }
 
 static int cubeb_mock_stream_set_volume(cubeb_stream* stream, float volume) {
+  return CUBEB_OK;
+}
+
+static int cubeb_mock_stream_set_name(cubeb_stream* stream,
+                                      char const* stream_name) {
   return CUBEB_OK;
 }
 

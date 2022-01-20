@@ -13,29 +13,33 @@ class nsNativeBasicThemeGTK : public nsNativeBasicTheme {
  public:
   nsNativeBasicThemeGTK() = default;
 
-  NS_IMETHOD GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
-                                  StyleAppearance aAppearance,
+  NS_IMETHOD GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame*,
+                                  StyleAppearance,
                                   mozilla::LayoutDeviceIntSize* aResult,
                                   bool* aIsOverridable) override;
 
-  nsITheme::Transparency GetWidgetTransparency(
-      nsIFrame* aFrame, StyleAppearance aAppearance) override;
-  void PaintScrollbarThumb(DrawTarget* aDrawTarget,
-                           const LayoutDeviceRect& aRect, bool aHorizontal,
-                           nsIFrame* aFrame, const ComputedStyle& aStyle,
+  nsITheme::Transparency GetWidgetTransparency(nsIFrame*,
+                                               StyleAppearance) override;
+  bool PaintScrollbarThumb(DrawTarget&, const LayoutDeviceRect&,
+                           bool aHorizontal, nsIFrame*,
+                           const ComputedStyle& aStyle,
                            const EventStates& aElementState,
-                           const EventStates& aDocumentState,
-                           DPIRatio aDpiRatio) override;
-  void PaintScrollbar(DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect,
-                      bool aHorizontal, nsIFrame* aFrame,
-                      const ComputedStyle& aStyle,
-                      const EventStates& aDocumentState, DPIRatio aDpiRatio,
-                      bool aIsRoot) override;
-  void PaintScrollCorner(DrawTarget* aDrawTarget, const LayoutDeviceRect& aRect,
-                         nsIFrame* aFrame, const ComputedStyle& aStyle,
-                         const EventStates& aDocumentState, DPIRatio aDpiRatio,
-                         bool aIsRoot) override;
-  bool ThemeSupportsScrollbarButtons() override { return false; }
+                           const EventStates& aDocumentState, UseSystemColors,
+                           DPIRatio) override;
+  bool PaintScrollbarThumb(WebRenderBackendData&, const LayoutDeviceRect&,
+                           bool aHorizontal, nsIFrame*,
+                           const ComputedStyle& aStyle,
+                           const EventStates& aElementState,
+                           const EventStates& aDocumentState, UseSystemColors,
+                           DPIRatio) override;
+  template <typename PaintBackendData>
+  bool DoPaintScrollbarThumb(PaintBackendData&, const LayoutDeviceRect&,
+                             bool aHorizontal, nsIFrame*, const ComputedStyle&,
+                             const EventStates& aElementState,
+                             const EventStates& aDocumentState, UseSystemColors,
+                             DPIRatio);
+
+  bool ThemeSupportsScrollbarButtons() override;
 
  protected:
   virtual ~nsNativeBasicThemeGTK() = default;

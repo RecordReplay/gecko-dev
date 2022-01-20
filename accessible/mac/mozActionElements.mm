@@ -8,7 +8,7 @@
 #import "mozActionElements.h"
 
 #import "MacUtils.h"
-#include "Accessible-inl.h"
+#include "LocalAccessible-inl.h"
 #include "DocAccessible.h"
 #include "XULTabAccessible.h"
 #include "HTMLFormControlAccessible.h"
@@ -33,7 +33,7 @@ enum CheckboxValue {
 
 - (NSString*)moxPopupValue {
   if ([self stateWithMask:states::HASPOPUP] != 0) {
-    return utils::GetAccAttr(self, "haspopup");
+    return utils::GetAccAttr(self, nsGkAtoms::aria_haspopup);
   }
 
   return nil;
@@ -106,11 +106,11 @@ enum CheckboxValue {
 }
 
 - (id)moxValue {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   return [NSNumber numberWithInt:[self isChecked]];
 
-  NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
+  NS_OBJC_END_TRY_BLOCK_RETURN(nil);
 }
 
 - (void)stateChanged:(uint64_t)state isEnabled:(BOOL)enabled {
@@ -132,7 +132,7 @@ enum CheckboxValue {
       do_QueryFrame(mGeckoAccessible.AsAccessible()->GetFrame());
   nsIFrame* selectedFrame = deckFrame ? deckFrame->GetSelectedBox() : nullptr;
 
-  Accessible* selectedAcc = nullptr;
+  LocalAccessible* selectedAcc = nullptr;
   if (selectedFrame) {
     nsINode* node = selectedFrame->GetContent();
     selectedAcc =
@@ -152,6 +152,10 @@ enum CheckboxValue {
 @end
 
 @implementation mozIncrementableAccessible
+
+- (void)moxSetValue:(id)value {
+  [self setValue:([value doubleValue])];
+}
 
 - (void)moxPerformIncrement {
   [self changeValueBySteps:1];
@@ -174,35 +178,52 @@ enum CheckboxValue {
 }
 
 /*
- * Updates the accessible's current value by (factor * step).
- * If incrementing factor should be positive, if decrementing
- * factor should be negative.
+ * Updates the accessible's current value by factor and step.
+ *
+ * factor: A signed integer representing the number of times to
+ *    apply step to the current value. A positive value will increment,
+ *    while a negative one will decrement.
+ * step: An unsigned integer specified by the webauthor and indicating the
+ *    amount by which to increment/decrement the current value.
  */
-
 - (void)changeValueBySteps:(int)factor {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  MOZ_ASSERT(!mGeckoAccessible.IsNull(), "mGeckoAccessible is null");
 
-  if (Accessible* acc = mGeckoAccessible.AsAccessible()) {
-    double newVal = acc->CurValue() + (acc->Step() * factor);
+  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+    double newValue = acc->CurValue() + (acc->Step() * factor);
+    [self setValue:(newValue)];
+  } else {
+    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+    double newValue = proxy->CurValue() + (proxy->Step() * factor);
+    [self setValue:(newValue)];
+  }
+}
+
+/*
+ * Updates the accessible's current value to the specified value
+ */
+- (void)setValue:(double)value {
+  MOZ_ASSERT(!mGeckoAccessible.IsNull(), "mGeckoAccessible is null");
+
+  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
     double min = acc->MinValue();
     double max = acc->MaxValue();
-    if ((IsNaN(min) || newVal >= min) && (IsNaN(max) || newVal <= max)) {
-      acc->SetCurValue(newVal);
-    }
-  } else if (ProxyAccessible* proxy = mGeckoAccessible.AsProxy()) {
-    double newVal = proxy->CurValue() + (proxy->Step() * factor);
-    double min = proxy->MinValue();
-    double max = proxy->MaxValue();
     // Because min and max are not required attributes, we first check
     // if the value is undefined. If this check fails,
-    // the value is defined, and we we verify our new value falls
+    // the value is defined, and we verify our new value falls
     // within the bound (inclusive).
-    if ((IsNaN(min) || newVal >= min) && (IsNaN(max) || newVal <= max)) {
-      proxy->SetCurValue(newVal);
+    if ((IsNaN(min) || value >= min) && (IsNaN(max) || value <= max)) {
+      acc->SetCurValue(value);
+    }
+  } else {
+    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+    double min = proxy->MinValue();
+    double max = proxy->MaxValue();
+    // As above, check if the value is within bounds.
+    if ((IsNaN(min) || value >= min) && (IsNaN(max) || value <= max)) {
+      proxy->SetCurValue(value);
     }
   }
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
 @end

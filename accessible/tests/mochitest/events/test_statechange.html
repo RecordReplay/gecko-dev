@@ -81,6 +81,23 @@
       }
     }
 
+    async function toggleStateChange(aID, aAttr, aState, aIsExtraState) {
+      let p = waitForEvents([
+        stateChange(aState, aIsExtraState, true, aID),
+        [EVENT_STATE_CHANGE, "sentinel"]
+        ]);
+      getNode(aID).setAttribute(aAttr, "true");
+      toggleSentinel();
+      await p;
+      p = waitForEvents([
+        stateChange(aState, aIsExtraState, false, aID),
+        [EVENT_STATE_CHANGE, "sentinel"]
+        ]);
+      getNode(aID).setAttribute(aAttr, "false");
+      toggleSentinel();
+      await p;
+    }
+
     async function dupeStateChange(aID, aAttr, aValue,
                              aState, aIsExtraState, aIsEnabled) {
       let p = waitForEvents([
@@ -220,6 +237,7 @@
 
       await testHasPopup();
 
+      await toggleStateChange("textbox", "aria-multiline", EXT_STATE_MULTI_LINE, true);
       SimpleTest.finish();
     }
 
@@ -309,6 +327,8 @@
   <a id="link1" href="#">I am a link link</a>
   <a id="link2" onclick="console.log('hi')">I am a link-ish link</a>
   <a id="link3">I am a non-link link</a>
+
+  <div id="textbox" role="textbox" aria-multiline="false">hello</div>
 
   <div id="eventdump"></div>
 

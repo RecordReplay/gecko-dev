@@ -37,7 +37,13 @@
 int profiler_current_process_id() { return getpid(); }
 
 int profiler_current_thread_id() {
-  return static_cast<int>(static_cast<pid_t>(syscall(SYS_thread_selfid)));
+  uint64_t tid;
+  pthread_threadid_np(nullptr, &tid);
+  // Cast the uint64_t value to an int.
+  // In theory, this risks truncating the value. It's unknown if such large
+  // values occur in reality.
+  // It may be worth changing our cross-platform tid type to 64 bits.
+  return static_cast<int>(tid);
 }
 
 void* GetStackTop(void* aGuess) {
@@ -119,6 +125,13 @@ static RunningTimes GetThreadRunningTimesDiff(
       newRunningTimes - platformData->PreviousThreadRunningTimesRef();
   platformData->PreviousThreadRunningTimesRef() = newRunningTimes;
   return diff;
+}
+
+static void ClearThreadRunningTimes(PSLockRef aLock,
+                                    const RegisteredThread& aRegisteredThread) {
+  PlatformData* const platformData = aRegisteredThread.GetPlatformData();
+  MOZ_RELEASE_ASSERT(platformData);
+  platformData->PreviousThreadRunningTimesRef().Clear();
 }
 
 template <typename Func>
@@ -216,7 +229,9 @@ static void* ThreadEntry(void* aArg) {
 }
 
 SamplerThread::SamplerThread(PSLockRef aLock, uint32_t aActivityGeneration,
-                             double aIntervalMilliseconds)
+                             double aIntervalMilliseconds,
+                             bool aStackWalkEnabled,
+                             bool aNoTimerResolutionChange)
     : mSampler(aLock),
       mActivityGeneration(aActivityGeneration),
       mIntervalMicroseconds(

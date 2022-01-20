@@ -84,7 +84,6 @@ static void DrawLayerInfo(const RenderTargetIntRect& aClipRect,
 }
 
 static void PrintUniformityInfo(Layer* aLayer) {
-#if defined(MOZ_GECKO_PROFILER)
   if (!profiler_thread_is_being_profiled()) {
     return;
   }
@@ -132,7 +131,6 @@ static void PrintUniformityInfo(Layer* aLayer) {
   profiler_add_marker("LayerTranslation", geckoprofiler::category::GRAPHICS, {},
                       LayerTranslationMarker{},
                       WrapProfileBufferRawPointer(aLayer), translation);
-#endif
 }
 
 static Maybe<gfx::Polygon> SelectLayerGeometry(
@@ -226,7 +224,7 @@ void ContainerPrepare(ContainerT* aContainer, LayerManagerComposite* aManager,
 
   for (LayerPolygon& layer : polygons) {
     LayerComposite* layerToRender =
-        static_cast<LayerComposite*>(layer.layer->ImplData());
+        static_cast<LayerComposite*>(layer.data->ImplData());
 
     RenderTargetIntRect clipRect =
         layerToRender->GetLayer()->CalculateScissorRect(aClipRect);
@@ -530,10 +528,11 @@ void RenderLayers(ContainerT* aContainer, LayerManagerComposite* aManager,
               DiagnosticFlags::CONTAINER, compositionBounds.ToUnknownRect(),
               aClipRect.ToUnknownRect(),
               asyncTransform * aContainer->GetEffectiveTransform());
-          asyncTransform =
-              sampler->GetCurrentAsyncTransformWithOverscroll(wrapper)
-                  .ToUnknownMatrix() *
-              asyncTransform;
+          asyncTransform = sampler
+                               ->GetCurrentAsyncTransformWithOverscroll(
+                                   wrapper, LayoutAndVisual)
+                               .ToUnknownMatrix() *
+                           asyncTransform;
         }
       }
 

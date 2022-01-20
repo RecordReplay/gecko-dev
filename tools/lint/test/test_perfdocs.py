@@ -1,5 +1,5 @@
 import contextlib
-import mock
+from unittest import mock
 import os
 import pytest
 import shutil
@@ -74,7 +74,17 @@ suites:
     suite:
         description: "Performance tests from the 'suite' folder."
         tests:
-            Example: ""
+            Example: "Performance test Example from suite."
+    another_suite:
+        description: "Performance tests from the 'another_suite' folder."
+        tests:
+            Example: "Performance test Example from another_suite."
+"""
+
+
+SAMPLE_INI = """
+[Example]
+test_url = Example_url
 """
 
 
@@ -84,7 +94,7 @@ def temp_file(name="temp", tempdir=None, content=None):
         tempdir = tempfile.mkdtemp()
     path = os.path.join(tempdir, name)
     if content is not None:
-        with open(path, "w") as f:
+        with open(path, "w", newline="\n") as f:
             f.write(content)
     try:
         yield path
@@ -168,6 +178,48 @@ def test_perfdocs_bad_paths(structured_logger, config, paths):
 
 
 @mock.patch("perfdocs.logger.PerfDocLogger")
+def test_perfdocs_gatherer_fetch_perfdocs_tree(
+    logger, structured_logger, perfdocs_sample
+):
+    top_dir = perfdocs_sample["top_dir"]
+    setup_sample_logger(logger, structured_logger, top_dir)
+
+    from perfdocs.gatherer import Gatherer
+
+    gatherer = Gatherer(top_dir)
+    assert not gatherer._perfdocs_tree
+
+    gatherer.fetch_perfdocs_tree()
+
+    expected = "Found 1 perfdocs directories"
+    args, _ = logger.log.call_args
+
+    assert expected in args[0]
+    assert logger.log.call_count == 1
+    assert gatherer._perfdocs_tree
+
+    expected = ["path", "yml", "rst", "static"]
+    for i, key in enumerate(gatherer._perfdocs_tree[0].keys()):
+        assert key == expected[i]
+
+
+@mock.patch("perfdocs.logger.PerfDocLogger")
+def test_perfdocs_gatherer_get_test_list(logger, structured_logger, perfdocs_sample):
+    top_dir = perfdocs_sample["top_dir"]
+    setup_sample_logger(logger, structured_logger, top_dir)
+
+    from perfdocs.gatherer import Gatherer
+
+    gatherer = Gatherer(top_dir)
+    gatherer.fetch_perfdocs_tree()
+    framework = gatherer.get_test_list(gatherer._perfdocs_tree[0])
+
+    expected = ["name", "test_list", "yml_content", "yml_path"]
+    for i, key in enumerate(sorted(framework.keys())):
+        assert key == expected[i]
+
+
+@mock.patch("perfdocs.logger.PerfDocLogger")
 def test_perfdocs_verification(logger, structured_logger, perfdocs_sample):
     top_dir = perfdocs_sample["top_dir"]
     setup_sample_logger(logger, structured_logger, top_dir)
@@ -248,7 +300,7 @@ def test_perfdocs_verifier_invalid_rst(logger, structured_logger, perfdocs_sampl
 
     filedata = filedata.replace("documentation", "Invalid Keyword")
 
-    with open(rst_path, "w") as file:
+    with open(rst_path, "w", newline="\n") as file:
         file.write(filedata)
 
     from perfdocs.verifier import Verifier
@@ -318,7 +370,7 @@ def test_perfdocs_verifier_not_existing_tests_in_suites(
     with open(perfdocs_sample["config"], "r") as file:
         filedata = file.read()
         filedata = filedata.replace("Example", "DifferentName")
-    with open(perfdocs_sample["config"], "w") as file:
+    with open(perfdocs_sample["config"], "w", newline="\n") as file:
         file.write(filedata)
 
     from perfdocs.verifier import Verifier
@@ -330,6 +382,35 @@ def test_perfdocs_verifier_not_existing_tests_in_suites(
         "Could not find an existing test for DifferentName - bad test name?",
         "Could not find a test description for Example",
     ]
+
+    assert logger.warning.call_count == 2
+    for i, call in enumerate(logger.warning.call_args_list):
+        args, _ = call
+        assert args[0] == expected[i]
+
+
+@mock.patch("perfdocs.logger.PerfDocLogger")
+def test_perfdocs_verifier_missing_contents_in_suite(
+    logger, structured_logger, perfdocs_sample
+):
+    top_dir = perfdocs_sample["top_dir"]
+    setup_sample_logger(logger, structured_logger, top_dir)
+
+    with open(perfdocs_sample["config"], "r") as file:
+        filedata = file.read()
+        filedata = filedata.replace("suite:", "InvalidSuite:")
+    with open(perfdocs_sample["config"], "w", newline="\n") as file:
+        file.write(filedata)
+
+    from perfdocs.verifier import Verifier
+
+    verifier = Verifier(top_dir)
+    verifier._check_framework_descriptions(verifier._gatherer.perfdocs_tree[0])
+
+    expected = (
+        "Could not find an existing suite for InvalidSuite - bad suite name?",
+        "Missing suite description for suite",
+    )
 
     assert logger.warning.call_count == 2
     for i, call in enumerate(logger.warning.call_args_list):
@@ -383,7 +464,7 @@ def test_perfdocs_framework_gatherers(logger, structured_logger, perfdocs_sample
     from perfdocs.gatherer import frameworks
 
     for framework, gatherer in frameworks.items():
-        with open(perfdocs_sample["config"], "w") as f:
+        with open(perfdocs_sample["config"], "w", newline="\n") as f:
             f.write(DYNAMIC_SAMPLE_CONFIG.format(framework))
 
         fg = gatherer(perfdocs_sample["config"], top_dir)
@@ -405,6 +486,64 @@ def test_perfdocs_framework_gatherers(logger, structured_logger, perfdocs_sample
             for test, manifest in suitetests.items():
                 assert test == "Example"
                 assert manifest == perfdocs_sample["manifest"]
+
+
+@mock.patch("perfdocs.logger.PerfDocLogger")
+def test_perfdocs_framework_gatherers_urls(logger, structured_logger, perfdocs_sample):
+    top_dir = perfdocs_sample["top_dir"]
+    setup_sample_logger(logger, structured_logger, top_dir)
+
+    from perfdocs.gatherer import frameworks
+    from perfdocs.verifier import Verifier
+    from perfdocs.generator import Generator
+    from perfdocs.utils import read_yaml
+
+    # This test is only for raptor
+    gatherer = frameworks["raptor"]
+    with open(perfdocs_sample["config"], "w", newline="\n") as f:
+        f.write(DYNAMIC_SAMPLE_CONFIG.format("raptor"))
+
+    fg = gatherer(perfdocs_sample["config_2"], top_dir)
+    fg.get_suite_list = mock.Mock()
+    fg.get_suite_list.return_value = {
+        "suite": [perfdocs_sample["example1_manifest"]],
+        "another_suite": [perfdocs_sample["example2_manifest"]],
+    }
+
+    v = Verifier(top_dir)
+    gn = Generator(v, generate=True, workspace=top_dir)
+
+    # Check to make sure that if a test is present under multiple
+    # suties the urls are generated correctly for the test under
+    # every suite
+    for suite, suitetests in fg.get_test_list().items():
+        url = fg._descriptions.get(suite)
+        assert url is not None
+        assert url[0]["name"] == "Example"
+        assert url[0]["test_url"] == "Example_url"
+
+    perfdocs_tree = gn._perfdocs_tree[0]
+    yaml_content = read_yaml(
+        os.path.join(os.path.join(perfdocs_tree["path"], perfdocs_tree["yml"]))
+    )
+    suites = yaml_content["suites"]
+
+    # Check that the sections for each suite are generated correctly
+    for suite_name, suite_details in suites.items():
+        gn._verifier._gatherer = mock.Mock(framework_gatherers={"raptor": gatherer})
+        section = gn._verifier._gatherer.framework_gatherers[
+            "raptor"
+        ].build_suite_section(fg, suite_name, suites.get(suite_name)["description"])
+        assert suite_name.capitalize() == section[0]
+        assert suite_name in section[2]
+
+        tests = suites.get(suite_name).get("tests", {})
+        for test_name in tests.keys():
+            desc = gn._verifier._gatherer.framework_gatherers[
+                "raptor"
+            ].build_test_description(fg, test_name, tests[test_name], suite_name)
+            assert suite_name in desc[0]
+            assert test_name in desc[0]
 
 
 def test_perfdocs_logger_failure(config, paths):

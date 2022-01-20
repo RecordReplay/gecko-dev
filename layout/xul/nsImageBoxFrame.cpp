@@ -18,6 +18,7 @@
 #include "nsStyleConsts.h"
 #include "nsStyleUtil.h"
 #include "nsCOMPtr.h"
+#include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsBoxLayoutState.h"
 
@@ -38,6 +39,7 @@
 #include "nsThreadUtils.h"
 #include "nsDisplayList.h"
 #include "ImageLayers.h"
+#include "ImageRegion.h"
 #include "ImageContainer.h"
 #include "nsIContent.h"
 
@@ -47,6 +49,7 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_image.h"
 #include "mozilla/SVGImageContext.h"
 #include "Units.h"
 #include "mozilla/layers/RenderRootStateManager.h"
@@ -267,9 +270,11 @@ void nsImageBoxFrame::UpdateImage() {
         doc->ImageTracker()->Add(mImageRequest);
       }
     }
-  } else if (auto* styleRequest = GetRequestFromStyle()) {
-    styleRequest->SyncClone(mListener, mContent->GetComposedDoc(),
-                            getter_AddRefs(mImageRequest));
+  } else if (auto* styleImage = GetImageFromStyle()) {
+    if (auto* styleRequest = styleImage->GetImageRequest()) {
+      styleRequest->SyncClone(mListener, mContent->GetComposedDoc(),
+                              getter_AddRefs(mImageRequest));
+    }
   }
 
   if (!mImageRequest) {
@@ -408,13 +413,9 @@ ImgDrawResult nsImageBoxFrame::CreateWebRenderCommands(
     return result;
   }
 
-  uint32_t containerFlags = imgIContainer::FLAG_ASYNC_NOTIFY;
-  if (aFlags & (nsImageRenderer::FLAG_PAINTING_TO_WINDOW |
-                nsImageRenderer::FLAG_HIGH_QUALITY_SCALING)) {
-    containerFlags |= imgIContainer::FLAG_HIGH_QUALITY_SCALING;
-  }
-  if (aFlags & nsImageRenderer::FLAG_SYNC_DECODE_IMAGES) {
-    containerFlags |= imgIContainer::FLAG_SYNC_DECODE;
+  if (StaticPrefs::image_svg_blob_image() &&
+      imgCon->GetType() == imgIContainer::TYPE_VECTOR) {
+    aFlags |= imgIContainer::FLAG_RECORD_BLOB;
   }
 
   const int32_t appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
@@ -422,13 +423,15 @@ ImgDrawResult nsImageBoxFrame::CreateWebRenderCommands(
       LayoutDeviceRect::FromAppUnits(dest, appUnitsPerDevPixel);
 
   Maybe<SVGImageContext> svgContext;
+  Maybe<ImageIntRegion> region;
   gfx::IntSize decodeSize =
       nsLayoutUtils::ComputeImageContainerDrawingParameters(
-          imgCon, aItem->Frame(), fillRect, aSc, containerFlags, svgContext);
+          imgCon, aItem->Frame(), fillRect, fillRect, aSc, aFlags, svgContext,
+          region);
 
   RefPtr<layers::ImageContainer> container;
   result = imgCon->GetImageContainerAtSize(aManager->LayerManager(), decodeSize,
-                                           svgContext, containerFlags,
+                                           svgContext, region, aFlags,
                                            getter_AddRefs(container));
   if (!container) {
     NS_WARNING("Failed to get image container");
@@ -437,6 +440,20 @@ ImgDrawResult nsImageBoxFrame::CreateWebRenderCommands(
 
   mozilla::wr::ImageRendering rendering = wr::ToImageRendering(
       nsLayoutUtils::GetSamplingFilterForFrame(aItem->Frame()));
+  wr::LayoutRect fill = wr::ToLayoutRect(fillRect);
+
+  if (aFlags & imgIContainer::FLAG_RECORD_BLOB) {
+    Maybe<wr::BlobImageKey> key = aManager->CommandBuilder().CreateBlobImageKey(
+        aItem, container, aResources);
+    if (key.isNothing()) {
+      return result;
+    }
+
+    aBuilder.PushImage(fill, fill, !BackfaceIsHidden(), rendering,
+                       wr::AsImageKey(key.value()));
+    return result;
+  }
+
   gfx::IntSize size;
   Maybe<wr::ImageKey> key = aManager->CommandBuilder().CreateImageKey(
       aItem, container, aBuilder, aResources, rendering, aSc, size, Nothing());
@@ -444,7 +461,6 @@ ImgDrawResult nsImageBoxFrame::CreateWebRenderCommands(
     return result;
   }
 
-  wr::LayoutRect fill = wr::ToLayoutRect(fillRect);
   aBuilder.PushImage(fill, fill, !BackfaceIsHidden(), rendering, key.value());
 
   return result;
@@ -527,7 +543,8 @@ bool nsDisplayXULImage::CreateWebRenderCommands(
     return true;
   }
 
-  uint32_t flags = imgIContainer::FLAG_SYNC_DECODE_IF_FAST;
+  uint32_t flags = imgIContainer::FLAG_SYNC_DECODE_IF_FAST |
+                   imgIContainer::FLAG_ASYNC_NOTIFY;
   if (aDisplayListBuilder->ShouldSyncDecodeImages()) {
     flags |= imgIContainer::FLAG_SYNC_DECODE;
   }
@@ -603,17 +620,36 @@ bool nsImageBoxFrame::CanOptimizeToImageLayer() {
   return true;
 }
 
-imgRequestProxy* nsImageBoxFrame::GetRequestFromStyle() {
-  const nsStyleDisplay* disp = StyleDisplay();
+const mozilla::StyleImage* nsImageBoxFrame::GetImageFromStyle(
+    const ComputedStyle& aStyle) const {
+  const nsStyleDisplay* disp = aStyle.StyleDisplay();
   if (disp->HasAppearance()) {
     nsPresContext* pc = PresContext();
-    if (pc->Theme()->ThemeSupportsWidget(pc, this,
+    if (pc->Theme()->ThemeSupportsWidget(pc, const_cast<nsImageBoxFrame*>(this),
                                          disp->EffectiveAppearance())) {
       return nullptr;
     }
   }
+  auto& image = aStyle.StyleList()->mListStyleImage;
+  if (!image.IsImageRequestType()) {
+    return nullptr;
+  }
+  return &image;
+}
 
-  return StyleList()->GetListStyleImage();
+ImageResolution nsImageBoxFrame::GetImageResolution() const {
+  if (auto* image = GetImageFromStyle()) {
+    return image->GetResolution();
+  }
+  if (!mImageRequest) {
+    return {};
+  }
+  nsCOMPtr<imgIContainer> image;
+  mImageRequest->GetImage(getter_AddRefs(image));
+  if (!image) {
+    return {};
+  }
+  return image->GetResolution();
 }
 
 /* virtual */
@@ -624,26 +660,18 @@ void nsImageBoxFrame::DidSetComputedStyle(ComputedStyle* aOldStyle) {
   const nsStyleList* myList = StyleList();
   mSubRect = myList->GetImageRegion();  // before |mSuppressStyleCheck| test!
 
-  if (mUseSrcAttr || mSuppressStyleCheck)
+  if (mUseSrcAttr || mSuppressStyleCheck) {
     return;  // No more work required, since the image isn't specified by style.
+  }
 
-  // If the image to use changes, we have a new image.
-  nsCOMPtr<nsIURI> oldURI, newURI;
-  if (mImageRequest) {
-    mImageRequest->GetURI(getter_AddRefs(oldURI));
-  }
-  if (auto* newImage = GetRequestFromStyle()) {
-    newImage->GetURI(getter_AddRefs(newURI));
-  }
-  bool equal;
-  if (newURI == oldURI ||  // handles null==null
-      (newURI && oldURI && NS_SUCCEEDED(newURI->Equals(oldURI, &equal)) &&
-       equal)) {
+  auto* oldImage = aOldStyle ? GetImageFromStyle(*aOldStyle) : nullptr;
+  auto* newImage = GetImageFromStyle();
+  if (newImage == oldImage ||
+      (newImage && oldImage && *oldImage == *newImage)) {
     return;
   }
-
   UpdateImage();
-}  // DidSetComputedStyle
+}
 
 void nsImageBoxFrame::GetImageSize() {
   if (mIntrinsicSize.width > 0 && mIntrinsicSize.height > 0) {
@@ -797,12 +825,13 @@ void nsImageBoxFrame::OnSizeAvailable(imgIRequest* aRequest,
 
   aImage->SetAnimationMode(PresContext()->ImageAnimationMode());
 
-  nscoord w, h;
+  int32_t w = 0, h = 0;
   aImage->GetWidth(&w);
   aImage->GetHeight(&h);
 
-  mIntrinsicSize.SizeTo(nsPresContext::CSSPixelsToAppUnits(w),
-                        nsPresContext::CSSPixelsToAppUnits(h));
+  mIntrinsicSize.SizeTo(CSSPixel::ToAppUnits(w), CSSPixel::ToAppUnits(h));
+
+  GetImageResolution().ApplyTo(mIntrinsicSize.width, mIntrinsicSize.height);
 
   if (!HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
     PresShell()->FrameNeedsReflow(this, IntrinsicDirty::StyleChange,

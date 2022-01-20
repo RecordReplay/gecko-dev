@@ -79,6 +79,7 @@ NrTcpSocket::~NrTcpSocket() {
 }
 
 int NrTcpSocket::create(nr_transport_addr* aAddr) {
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::create %p\n", this);
   int32_t port;
   nsCString host;
 
@@ -94,8 +95,8 @@ int NrTcpSocket::create(nr_transport_addr* aAddr) {
   return 0;
 }
 
-int NrTcpSocket::connect(nr_transport_addr* aAddr) {
-  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::Connect %p\n", this);
+int NrTcpSocket::connect(const nr_transport_addr* aAddr) {
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::connect %p\n", this);
 
   nsCString remote_host;
   int remote_port;
@@ -105,11 +106,7 @@ int NrTcpSocket::connect(nr_transport_addr* aAddr) {
     return R_FAILED;
   }
 
-  bool use_tls = false;
-  if (my_addr_.tls_host[0]) {
-    remote_host = my_addr_.tls_host;
-    use_tls = true;
-  }
+  bool use_tls = aAddr->tls;
 
   nsCString local_addr;
   int local_port;
@@ -129,7 +126,7 @@ int NrTcpSocket::connect(nr_transport_addr* aAddr) {
 }
 
 void NrTcpSocket::close() {
-  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::Close %p\n", this);
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::close %p\n", this);
 
   if (mClosed) {
     return;
@@ -145,7 +142,7 @@ void NrTcpSocket::close() {
 }
 
 int NrTcpSocket::write(const void* aBuffer, size_t aCount, size_t* aWrote) {
-  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::Write %p count=%zu\n", this,
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::write %p count=%zu\n", this,
         aCount);
 
   if (mClosed) {
@@ -174,7 +171,7 @@ int NrTcpSocket::write(const void* aBuffer, size_t aCount, size_t* aWrote) {
 }
 
 int NrTcpSocket::read(void* aBuffer, size_t aCount, size_t* aRead) {
-  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::Read %p\n", this);
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::read %p\n", this);
 
   if (mClosed) {
     return R_FAILED;
@@ -214,12 +211,12 @@ int NrTcpSocket::read(void* aBuffer, size_t aCount, size_t* aRead) {
 }
 
 int NrTcpSocket::getaddr(nr_transport_addr* aAddr) {
-  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::GetAddr %p\n", this);
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::getaddr %p\n", this);
   return nr_transport_addr_copy(aAddr, &my_addr_);
 }
 
 int NrTcpSocket::sendto(const void* aBuffer, size_t aCount, int aFlags,
-                        nr_transport_addr* aAddr) {
+                        const nr_transport_addr* aAddr) {
   // never call this
   MOZ_ASSERT(0);
   return R_FAILED;
@@ -232,9 +229,13 @@ int NrTcpSocket::recvfrom(void* aBuffer, size_t aCount, size_t* aRead,
   return R_FAILED;
 }
 
-int NrTcpSocket::listen(int aBacklog) { return R_INTERNAL; }
+int NrTcpSocket::listen(int aBacklog) {
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::listen %p\n", this);
+  return R_INTERNAL;
+}
 
 int NrTcpSocket::accept(nr_transport_addr* aAddr, nr_socket** aSocket) {
+  r_log(LOG_GENERIC, LOG_DEBUG, "NrTcpSocket::accept %p\n", this);
   return R_INTERNAL;
 }
 

@@ -119,14 +119,14 @@ class D3D11TextureData final : public TextureData {
   // Hold on to the DrawTarget because it is expensive to create one each
   // ::Lock.
   RefPtr<gfx::DrawTarget> mDrawTarget;
-  gfx::IntSize mSize;
-  gfx::SurfaceFormat mFormat;
-  gfx::YUVColorSpace mYUVColorSpace = gfx::YUVColorSpace::UNKNOWN;
+  const gfx::IntSize mSize;
+  const gfx::SurfaceFormat mFormat;
+  gfx::YUVColorSpace mYUVColorSpace = gfx::YUVColorSpace::Identity;
   gfx::ColorRange mColorRange = gfx::ColorRange::LIMITED;
-  bool mNeedsClear;
-  bool mNeedsClearWhite;
-  bool mHasSynchronization;
-  bool mIsForOutOfBandContent;
+  bool mNeedsClear = false;
+  bool mNeedsClearWhite = false;
+  const bool mHasSynchronization;
+  const bool mIsForOutOfBandContent;
 
   RefPtr<ID3D11Texture2D> mTexture;
   const TextureAllocationFlags mAllocationFlags;
@@ -253,7 +253,8 @@ class DataTextureSourceD3D11 : public DataTextureSource,
 
   bool Update(gfx::DataSourceSurface* aSurface,
               nsIntRegion* aDestRegion = nullptr,
-              gfx::IntPoint* aSrcOffset = nullptr) override;
+              gfx::IntPoint* aSrcOffset = nullptr,
+              gfx::IntPoint* aDstOffset = nullptr) override;
 
   // TextureSource
 
@@ -364,7 +365,7 @@ class DXGITextureHostD3D11 : public TextureHost {
                         const Range<wr::ImageKey>& aImageKeys,
                         PushDisplayItemFlagSet aFlags) override;
 
-  bool SupportsExternalCompositing() override;
+  bool SupportsExternalCompositing(WebRenderBackend aBackend) override;
 
  protected:
   bool LockInternal();
@@ -435,7 +436,7 @@ class DXGIYCbCrTextureHostD3D11 : public TextureHost {
                         const Range<wr::ImageKey>& aImageKeys,
                         PushDisplayItemFlagSet aFlags) override;
 
-  bool SupportsExternalCompositing() override;
+  bool SupportsExternalCompositing(WebRenderBackend aBackend) override;
 
  private:
   bool EnsureTextureSource();

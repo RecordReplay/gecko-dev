@@ -42,13 +42,6 @@ var bookmarksObserver = {
     }
   },
 
-  onBeginUpdateBatch() {
-    this._beginUpdateBatch = true;
-  },
-  onEndUpdateBatch() {
-    this._endUpdateBatch = true;
-  },
-
   onItemChanged(
     id,
     property,
@@ -65,13 +58,6 @@ var bookmarksObserver = {
     this._itemChangedProperty = property;
     this._itemChangedValue = value;
     this._itemChangedOldValue = oldValue;
-  },
-  onItemMoved(id, oldParent, oldIndex, newParent, newIndex, itemType) {
-    this._itemMovedId = id;
-    this._itemMovedOldParent = oldParent;
-    this._itemMovedOldIndex = oldIndex;
-    this._itemMovedNewParent = newParent;
-    this._itemMovedNewIndex = newIndex;
   },
   QueryInterface: ChromeUtils.generateQI(["nsINavBookmarkObserver"]),
 };

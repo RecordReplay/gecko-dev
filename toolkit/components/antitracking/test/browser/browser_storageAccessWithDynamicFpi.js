@@ -43,6 +43,10 @@ add_task(async function setup() {
         "network.cookie.cookieBehavior",
         Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
       ],
+      [
+        "network.cookie.cookieBehavior.pbmode",
+        Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
+      ],
       ["privacy.restrict3rdpartystorage.heuristic.redirect", false],
       ["privacy.trackingprotection.enabled", false],
       ["privacy.trackingprotection.pbmode.enabled", false],
@@ -304,6 +308,33 @@ add_task(async function testExceptionListPref() {
   Services.prefs.setStringPref(
     EXCEPTION_LIST_PREF_NAME,
     `${TEST_DOMAIN},${TEST_3RD_PARTY_DOMAIN}`
+  );
+
+  info("check data");
+  await Promise.all([
+    checkData(browserFirstParty, {
+      firstParty: "firstParty",
+      thirdParty: "ExceptionListFirstParty",
+    }),
+    checkData(browserThirdParty, { firstParty: "ExceptionListFirstParty" }),
+  ]);
+
+  info("set incomplete exception list pref");
+  Services.prefs.setStringPref(EXCEPTION_LIST_PREF_NAME, `${TEST_DOMAIN}`);
+
+  info("check data");
+  await Promise.all([
+    checkData(browserFirstParty, {
+      firstParty: "firstParty",
+      thirdParty: "thirdParty",
+    }),
+    checkData(browserThirdParty, { firstParty: "ExceptionListFirstParty" }),
+  ]);
+
+  info("set exception list pref, with extra semicolons");
+  Services.prefs.setStringPref(
+    EXCEPTION_LIST_PREF_NAME,
+    `;${TEST_DOMAIN},${TEST_3RD_PARTY_DOMAIN};;`
   );
 
   info("check data");

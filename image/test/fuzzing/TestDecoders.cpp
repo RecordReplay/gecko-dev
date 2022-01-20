@@ -78,13 +78,16 @@ static int RunDecodeToSurfaceFuzzing(nsCOMPtr<nsIInputStream> inputStream,
     return 0;
   }
 
+  // Ensure CMS state is initialized on the main thread.
+  gfxPlatform::GetCMSMode();
+
   nsCOMPtr<nsIThread> thread;
   nsresult rv =
       NS_NewNamedThread("Decoder Test", getter_AddRefs(thread), nullptr);
   MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
 
   // We run the DecodeToSurface tests off-main-thread to ensure that
-  // DecodeToSurface doesn't require any main-thread-only code.
+  // DecodeToSurface doesn't require any other main-thread-only code.
   RefPtr<SourceSurface> surface;
   nsCOMPtr<nsIRunnable> runnable =
       new DecodeToSurfaceRunnableFuzzing(surface, inputStream, mimeType);
@@ -126,8 +129,17 @@ static int RunDecodeToSurfaceFuzzingAVIF(nsCOMPtr<nsIInputStream> inputStream) {
   return RunDecodeToSurfaceFuzzing(inputStream, "image/avif");
 }
 
+#ifdef MOZ_JXL
+static int RunDecodeToSurfaceFuzzingJXL(nsCOMPtr<nsIInputStream> inputStream) {
+  return RunDecodeToSurfaceFuzzing(inputStream, "image/jxl");
+}
+#endif
+
 int FuzzingInitImage(int* argc, char*** argv) {
   Preferences::SetBool("image.avif.enabled", true);
+#ifdef MOZ_JXL
+  Preferences::SetBool("image.jxl.enabled", true);
+#endif
 
   nsCOMPtr<imgITools> imgTools =
       do_CreateInstance("@mozilla.org/image/tools;1");
@@ -159,3 +171,8 @@ MOZ_FUZZING_INTERFACE_STREAM(FuzzingInitImage, RunDecodeToSurfaceFuzzingWebP,
 
 MOZ_FUZZING_INTERFACE_STREAM(FuzzingInitImage, RunDecodeToSurfaceFuzzingAVIF,
                              ImageAVIF);
+
+#ifdef MOZ_JXL
+MOZ_FUZZING_INTERFACE_STREAM(FuzzingInitImage, RunDecodeToSurfaceFuzzingJXL,
+                             ImageJXL);
+#endif

@@ -6,6 +6,7 @@
 #include "gtest/gtest.h"
 
 #include "js/RegExp.h"
+#include "mozilla/BinarySearch.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/UntrustedModulesProcessor.h"
 #include "mozilla/WinDllServices.h"
@@ -16,14 +17,14 @@
 #include "UntrustedModulesDataSerializer.h"
 
 class ModuleLoadCounter final {
-  nsDataHashtable<nsStringCaseInsensitiveHashKey, int> mCounters;
+  nsTHashMap<nsStringCaseInsensitiveHashKey, int> mCounters;
 
  public:
   template <int N>
   ModuleLoadCounter(const nsString (&aNames)[N], const int (&aCounts)[N])
       : mCounters(N) {
     for (int i = 0; i < N; ++i) {
-      mCounters.Put(aNames[i], aCounts[i]);
+      mCounters.InsertOrUpdate(aNames[i], aCounts[i]);
     }
   }
 
@@ -36,7 +37,7 @@ class ModuleLoadCounter final {
 
     bool result = true;
     for (int i = 0; i < N; ++i) {
-      int* entry = mCounters.GetValue(aNames[i]);
+      auto entry = mCounters.Lookup(aNames[i]);
       if (!entry) {
         wprintf(L"%s is not registered.\n", aNames[i].get());
         result = false;
@@ -52,13 +53,13 @@ class ModuleLoadCounter final {
 
   bool IsDone() const {
     bool allZero = true;
-    for (auto iter = mCounters.ConstIter(); !iter.Done(); iter.Next()) {
-      if (iter.Data() < 0) {
+    for (const auto& data : mCounters.Values()) {
+      if (data < 0) {
         // If any counter is negative, we know the test fails.
         // No need to continue.
         return true;
       }
-      if (iter.Data() > 0) {
+      if (data > 0) {
         allZero = false;
       }
     }
@@ -68,14 +69,14 @@ class ModuleLoadCounter final {
   }
 
   void Decrement(const nsString& aName) {
-    if (int* entry = mCounters.GetValue(aName)) {
+    if (auto entry = mCounters.Lookup(aName)) {
       --(*entry);
     }
   }
 };
 
 class UntrustedModulesCollector {
-  static constexpr int kMaximumPendingQueries = 200;
+  static constexpr int kMaximumPendingQueries = 500;
   Vector<UntrustedModulesData> mData;
 
  public:
@@ -134,32 +135,6 @@ class UntrustedModulesCollector {
   }
 };
 
-static void ValidateUntrustedModules(const UntrustedModulesData& aData) {
-  EXPECT_EQ(aData.mProcessType, GeckoProcessType_Default);
-  EXPECT_EQ(aData.mPid, ::GetCurrentProcessId());
-
-  nsTHashtable<nsPtrHashKey<void>> moduleSet;
-  for (auto iter = aData.mModules.ConstIter(); !iter.Done(); iter.Next()) {
-    const RefPtr<ModuleRecord>& module = iter.Data();
-    moduleSet.PutEntry(module);
-  }
-
-  for (const auto& evt : aData.mEvents) {
-    EXPECT_EQ(evt.mThreadId, ::GetCurrentThreadId());
-    // Make sure mModule is pointing to an entry of mModules.
-    EXPECT_TRUE(moduleSet.Contains(evt.mModule));
-    EXPECT_FALSE(evt.mIsDependent);
-    EXPECT_EQ(evt.mLoadStatus, 0);
-  }
-
-  // No check for the mXULLoadDurationMS field because the field has a value
-  // in CCov build GTest, but it is empty in non-CCov build (bug 1681936).
-  EXPECT_GT(aData.mEvents.length(), 0);
-  EXPECT_GT(aData.mStacks.GetModuleCount(), 0);
-  EXPECT_EQ(aData.mSanitizationFailures, 0);
-  EXPECT_EQ(aData.mTrustTestFailures, 0);
-}
-
 class UntrustedModulesFixture : public TelemetryTestFixture {
   static constexpr int kLoadCountBeforeDllServices = 5;
   static constexpr int kLoadCountAfterDllServices = 5;
@@ -195,6 +170,8 @@ class UntrustedModulesFixture : public TelemetryTestFixture {
   static constexpr int kInitLoadCount =
       kLoadCountBeforeDllServices + kLoadCountAfterDllServices;
   static const nsString kTestModules[];
+
+  static void ValidateUntrustedModules(const UntrustedModulesData& aData);
 
   static void LoadAndFree(const nsAString& aLeaf) {
     nsModuleHandle dll(::LoadLibraryW(PrependWorkingDir(aLeaf).get()));
@@ -259,7 +236,7 @@ class UntrustedModulesFixture : public TelemetryTestFixture {
     // On match, with aOnlyMatch = true, ExecuteRegExpNoStatics returns boolean
     // true.  If no match, ExecuteRegExpNoStatics returns Null.
     EXPECT_TRUE(matchResult.isBoolean() && matchResult.toBoolean());
-    if (!matchResult.toBoolean()) {
+    if (!matchResult.isBoolean() || !matchResult.toBoolean()) {
       // If match failed, print out the actual JSON kindly.
       wprintf(L"JSON: %s\n", json.get());
       wprintf(L"RE: %s\n", aPattern);
@@ -268,9 +245,80 @@ class UntrustedModulesFixture : public TelemetryTestFixture {
 };
 
 const nsString UntrustedModulesFixture::kTestModules[] = {
-    u"TestUntrustedModules_Dll1.dll"_ns, u"TestUntrustedModules_Dll2.dll"_ns};
+    // Sorted for binary-search
+    u"TestUntrustedModules_Dll1.dll"_ns,
+    u"TestUntrustedModules_Dll2.dll"_ns,
+};
+
 INIT_ONCE UntrustedModulesFixture::sInitLoadOnce = INIT_ONCE_STATIC_INIT;
 UntrustedModulesCollector UntrustedModulesFixture::sInitLoadDataCollector;
+
+void UntrustedModulesFixture::ValidateUntrustedModules(
+    const UntrustedModulesData& aData) {
+  // This defines a list of modules which are listed on our blocklist and
+  // thus its loading status is not expected to be Status::Loaded.
+  // Although the UntrustedModulesFixture test does not touch any of them,
+  // the current process might have run a test like TestDllBlocklist where
+  // we try to load and block them.
+  const struct {
+    const wchar_t* mName;
+    ModuleLoadInfo::Status mStatus;
+  } kKnownModules[] = {
+      // Sorted by mName for binary-search
+      {L"TestDllBlocklist_MatchByName.dll", ModuleLoadInfo::Status::Blocked},
+      {L"TestDllBlocklist_MatchByVersion.dll", ModuleLoadInfo::Status::Blocked},
+      {L"TestDllBlocklist_NoOpEntryPoint.dll",
+       ModuleLoadInfo::Status::Redirected},
+  };
+
+  EXPECT_EQ(aData.mProcessType, GeckoProcessType_Default);
+  EXPECT_EQ(aData.mPid, ::GetCurrentProcessId());
+
+  nsTHashtable<nsPtrHashKey<void>> moduleSet;
+  for (const RefPtr<ModuleRecord>& module : aData.mModules.Values()) {
+    moduleSet.PutEntry(module);
+  }
+
+  for (const auto& evt : aData.mEvents) {
+    const nsDependentSubstring leafName =
+        nt::GetLeafName(evt.mModule->mResolvedNtName);
+    const nsAutoString leafNameStr(leafName.Data(), leafName.Length());
+    size_t match;
+    if (BinarySearchIf(
+            kKnownModules, 0, ArrayLength(kKnownModules),
+            [&leafNameStr](const auto& aVal) {
+              return _wcsicmp(leafNameStr.get(), aVal.mName);
+            },
+            &match)) {
+      EXPECT_EQ(evt.mLoadStatus,
+                static_cast<uint32_t>(kKnownModules[match].mStatus));
+    } else {
+      EXPECT_EQ(evt.mLoadStatus, 0);
+    }
+
+    if (BinarySearchIf(
+            kTestModules, 0, ArrayLength(kTestModules),
+            [&leafNameStr](const auto& aVal) {
+              return _wcsicmp(leafNameStr.get(), aVal.get());
+            },
+            &match)) {
+      // We know the test modules are loaded in the main thread,
+      // but we don't know about other modules.
+      EXPECT_EQ(evt.mThreadId, ::GetCurrentThreadId());
+    }
+
+    // Make sure mModule is pointing to an entry of mModules.
+    EXPECT_TRUE(moduleSet.Contains(evt.mModule));
+    EXPECT_FALSE(evt.mIsDependent);
+  }
+
+  // No check for the mXULLoadDurationMS field because the field has a value
+  // in CCov build GTest, but it is empty in non-CCov build (bug 1681936).
+  EXPECT_GT(aData.mEvents.length(), 0);
+  EXPECT_GT(aData.mStacks.GetModuleCount(), 0);
+  EXPECT_EQ(aData.mSanitizationFailures, 0);
+  EXPECT_EQ(aData.mTrustTestFailures, 0);
+}
 
 BOOL CALLBACK UntrustedModulesFixture::InitialModuleLoadOnce(PINIT_ONCE, void*,
                                                              void**) {
@@ -318,8 +366,8 @@ BOOL CALLBACK UntrustedModulesFixture::InitialModuleLoadOnce(PINIT_ONCE, void*,
     u"\"combinedStacks\":{" \
       u"\"memoryMap\":\\[\\[\"\\w+\\.\\w+\",\"[0-9A-Z]+\"\\]" \
         u"(,\\[\"\\w+\\.\\w+\",\"[0-9A-Z]+\\\"\\])*\\]," \
-      u"\"stacks\":\\[\\[\\[\\d+,\\d+\\]" \
-        u"(,\\[\\d+,\\d+\\])*\\]\\]}}"
+      u"\"stacks\":\\[\\[\\[(-1|\\d+),\\d+\\]" \
+        u"(,\\[(-1|\\d+),\\d+\\])*\\]\\]}}"
 
 TEST_F(UntrustedModulesFixture, Serialize) {
   // clang-format off
@@ -371,12 +419,11 @@ TEST_F(UntrustedModulesFixture, Backup) {
   backupSvc->SettleAllStagingData();
   EXPECT_TRUE(backupSvc->Ref(BackupType::Staging).IsEmpty());
 
-  for (auto iter = backupSvc->Ref(BackupType::Settled).ConstIter();
-       !iter.Done(); iter.Next()) {
-    const RefPtr<UntrustedModulesDataContainer>& container = iter.Data();
+  for (const auto& entry : backupSvc->Ref(BackupType::Settled)) {
+    const RefPtr<UntrustedModulesDataContainer>& container = entry.GetData();
     EXPECT_TRUE(!!container);
     const UntrustedModulesData& data = container->mData;
-    EXPECT_EQ(iter.Key(), ProcessHashKey(data.mProcessType, data.mPid));
+    EXPECT_EQ(entry.GetKey(), ProcessHashKey(data.mProcessType, data.mPid));
     ValidateUntrustedModules(data);
   }
 }

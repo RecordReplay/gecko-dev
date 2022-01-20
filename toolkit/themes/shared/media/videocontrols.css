@@ -35,6 +35,10 @@
   --pip-toggle-padding: 5px;
   --pip-toggle-icon-width-height: 16px;
   --pip-toggle-translate-x: calc(100% - var(--pip-toggle-icon-width-height) - 2 * var(--pip-toggle-padding));
+  --control-focus-outline: 2px solid #00DDFF;
+  --control-focus-outline-offset: -2px;
+
+  color: #fff;
 }
 .controlsContainer.touch {
   --clickToPlay-size: 64px;
@@ -117,7 +121,6 @@
   justify-content: center;
   align-items: center;
   background-color: rgb(80,80,80, .85);
-  color: #fff;
 }
 
 .controlsOverlay {
@@ -145,7 +148,6 @@
   height: 40px;
   padding: 0 9px;
   background-color: rgba(26,26,26,.8);
-  color: #fff;
 }
 
 .touch .controlBar {
@@ -171,6 +173,17 @@
   outline: none;
 }
 
+/* Keyboard focus styling for interactive control elements (includes control
+   bar, click to play and track list) */
+.controlBar > .button:focus-visible,
+.volumeControl:focus-visible,
+.scrubber:focus-visible,
+.clickToPlay:focus-visible,
+.textTrackList > .textTrackItem:focus-visible {
+  outline: var(--control-focus-outline);
+  outline-offset: var(--control-focus-outline-offset);
+}
+
 .touch .controlBar > .button {
   background-size: 24px 24px;
 }
@@ -184,17 +197,17 @@
 }
 
 .playButton {
-  background-image: url(chrome://global/skin/media/pauseButton.svg);
+  background-image: url(chrome://global/skin/media/pause-fill.svg);
 }
 .playButton[paused] {
-  background-image: url(chrome://global/skin/media/playButton.svg);
+  background-image: url(chrome://global/skin/media/play-fill.svg);
 }
 
 .muteButton {
-  background-image: url(chrome://global/skin/media/audioUnmutedButton.svg);
+  background-image: url(chrome://global/skin/media/audio.svg);
 }
 .muteButton[muted] {
-  background-image: url(chrome://global/skin/media/audioMutedButton.svg);
+  background-image: url(chrome://global/skin/media/audio-muted.svg);
 }
 .muteButton[noAudio] {
   background-image: url(chrome://global/skin/media/audioNoAudioButton.svg);
@@ -235,7 +248,8 @@
   width: var(--thumb-size);
   border: none;
   border-radius: 50%;
-  background-color: #fff;
+  /* this is a foreground element even though it is implemented as a background */
+  background-color: currentColor;
   filter: drop-shadow(0px 0px 2px rgba(0,0,0,0.65));
 }
 
@@ -280,6 +294,7 @@
 .scrubber,
 .volumeControl {
   bottom: 0;
+  color: inherit;
   left: 0;
   position: absolute;
   width: 100%;
@@ -328,7 +343,8 @@
 }
 
 .volumeControl::-moz-range-progress {
-  background-color: #fff;
+  /* this is a foreground element even though it is implemented as a background */
+  background-color: currentColor;
 }
 
 .volumeControl::-moz-range-track {
@@ -383,8 +399,8 @@
   overflow: hidden;
   text-align: left;
   text-overflow: ellipsis;
-  color: #fff;
   background-color: transparent;
+  color: inherit;
 }
 
 .textTrackList > .textTrackItem:hover {
@@ -455,7 +471,7 @@
 .statusIcon[type="pictureInPicture"] {
   min-width: 84px;
   min-height: 84px;
-  background-image: url(chrome://global/skin/media/pictureinpicture.svg);
+  background-image: url(chrome://global/skin/media/picture-in-picture-open.svg);
   -moz-context-properties: fill;
   fill: currentColor;
 }
@@ -465,7 +481,7 @@
   appearance: none;
   position: absolute;
   background-color: #0060df;
-  color: #fff;
+  color: inherit;
   border: 0;
   padding: var(--pip-toggle-padding);
   right: 0;
@@ -519,16 +535,19 @@
 
 /* Overlay Play button */
 .clickToPlay {
+  appearance: none;
+  border: none;
   min-width: var(--clickToPlay-size);
   min-height: var(--clickToPlay-size);
   border-radius: 50%;
-  background-image: url(chrome://global/skin/media/playButton.svg);
+  background-image: url(chrome://global/skin/media/play-fill.svg);
   background-repeat: no-repeat;
   background-position: 54% 50%;
   background-size: 40% 40%;
   background-color: #1a1a1a;
   -moz-context-properties: fill;
-  fill: #fff;
+  fill: currentColor;
+  color: inherit;
   opacity: 0.8;
   position: relative;
   top: 20px;
@@ -559,7 +578,6 @@
   align-items: center;
   opacity: 1;
   background-color: rgb(12, 12, 13);
-  color: #fff;
 }
 
 /* Status description formatting */
@@ -598,6 +616,7 @@
   cursor: pointer;
   -moz-appearance: none;
   background: none;
+  color: inherit;
   border: none;
   text-align: unset;
   top: calc(70% - 40px);
@@ -655,10 +674,10 @@
   top: 8px;
   left: 8px;
   pointer-events: none;
-  background-image: url("chrome://global/skin/media/pictureinpicture.svg");
+  background-image: url("chrome://global/skin/media/picture-in-picture-open.svg");
   background-size: var(--pip-icon-size) var(--pip-icon-size);
   -moz-context-properties: fill;
-  fill: #fff;
+  fill: currentColor;
   height: var(--pip-icon-size);
   width: var(--pip-icon-size);
   background-repeat: no-repeat;
@@ -719,7 +738,6 @@
   width: max-content;
   border-radius: 8px;
   opacity: 0;
-  color: #fff;
   align-items: center;
   scale: 0.33 1;
   font-size: 14px;

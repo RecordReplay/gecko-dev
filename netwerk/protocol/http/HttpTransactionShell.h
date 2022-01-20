@@ -70,15 +70,15 @@ class HttpTransactionShell : public nsISupports {
   //        the dispatch target were notifications should be sent.
   // @param callbacks
   //        the notification callbacks to be given to PSM.
-  // @param topLevelOuterContentWindowId
-  //        indicate the top level outer content window in which
+  // @param topBrowsingContextId
+  //        indicate the id of the top browsing context in which
   //        this transaction is being loaded.
   [[nodiscard]] nsresult virtual Init(
       uint32_t caps, nsHttpConnectionInfo* connInfo,
       nsHttpRequestHead* reqHeaders, nsIInputStream* reqBody,
       uint64_t reqContentLength, bool reqBodyIncludesHeaders,
       nsIEventTarget* consumerTarget, nsIInterfaceRequestor* callbacks,
-      nsITransportEventSink* eventsink, uint64_t topLevelOuterContentWindowId,
+      nsITransportEventSink* eventsink, uint64_t topBrowsingContextId,
       HttpTrafficCategory trafficCategory, nsIRequestContext* requestContext,
       uint32_t classOfService, uint32_t initialRwin,
       bool responseTimeoutEnabled, uint64_t channelId,
@@ -128,7 +128,7 @@ class HttpTransactionShell : public nsISupports {
   virtual void SetDomainLookupEnd(mozilla::TimeStamp timeStamp,
                                   bool onlyIfNull = false) = 0;
 
-  virtual const TimingStruct Timings() = 0;
+  virtual TimingStruct Timings() = 0;
 
   // Called to set/find out if the transaction generated a complete response.
   virtual bool ResponseIsComplete() = 0;
@@ -170,7 +170,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(HttpTransactionShell, HTTPTRANSACTIONSHELL_IID)
       nsHttpRequestHead* reqHeaders, nsIInputStream* reqBody,                  \
       uint64_t reqContentLength, bool reqBodyIncludesHeaders,                  \
       nsIEventTarget* consumerTarget, nsIInterfaceRequestor* callbacks,        \
-      nsITransportEventSink* eventsink, uint64_t topLevelOuterContentWindowId, \
+      nsITransportEventSink* eventsink, uint64_t topBrowsingContextId,         \
       HttpTrafficCategory trafficCategory, nsIRequestContext* requestContext,  \
       uint32_t classOfService, uint32_t initialRwin,                           \
       bool responseTimeoutEnabled, uint64_t channelId,                         \
@@ -201,7 +201,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(HttpTransactionShell, HTTPTRANSACTIONSHELL_IID)
                                     bool onlyIfNull = false) override;         \
   virtual void SetDomainLookupEnd(mozilla::TimeStamp timeStamp,                \
                                   bool onlyIfNull = false) override;           \
-  virtual const TimingStruct Timings() override;                               \
+  virtual TimingStruct Timings() override;                                     \
   virtual bool ResponseIsComplete() override;                                  \
   virtual int64_t GetTransferSize() override;                                  \
   virtual int64_t GetRequestSize() override;                                   \

@@ -1,6 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
-/* globals getTestActorWithoutToolbox */
+/* globals getHighlighterTestFrontWithoutToolbox */
 "use strict";
 
 // Test that locking the pseudoclass displays correctly in the ruleview
@@ -20,7 +20,9 @@ const TEST_URL =
 
 add_task(async function() {
   info("Creating the test tab and opening the rule-view");
-  let { toolbox, inspector, testActor } = await openInspectorForURL(TEST_URL);
+  let { toolbox, inspector, highlighterTestFront } = await openInspectorForURL(
+    TEST_URL
+  );
 
   info("Selecting the ruleview sidebar");
   inspector.sidebar.select("ruleview");
@@ -31,27 +33,47 @@ add_task(async function() {
   await selectNode("#div-1", inspector);
 
   await togglePseudoClass(inspector);
-  await assertPseudoAddedToNode(inspector, testActor, view, "#div-1");
+  await assertPseudoAddedToNode(
+    inspector,
+    highlighterTestFront,
+    view,
+    "#div-1"
+  );
 
   await togglePseudoClass(inspector);
-  await assertPseudoRemovedFromNode(testActor, "#div-1");
-  await assertPseudoRemovedFromView(inspector, testActor, view, "#div-1");
+  await assertPseudoRemovedFromNode(highlighterTestFront, "#div-1");
+  await assertPseudoRemovedFromView(
+    inspector,
+    highlighterTestFront,
+    view,
+    "#div-1"
+  );
 
   await togglePseudoClass(inspector);
-  await testNavigate(inspector, testActor, view);
+  await testNavigate(inspector);
 
   info("Toggle pseudo on the parent and ensure everything is toggled off");
   await selectNode("#parent-div", inspector);
   await togglePseudoClass(inspector);
-  await assertPseudoRemovedFromNode(testActor, "#div-1");
-  await assertPseudoRemovedFromView(inspector, testActor, view, "#div-1");
+  await assertPseudoRemovedFromNode(highlighterTestFront, "#div-1");
+  await assertPseudoRemovedFromView(
+    inspector,
+    highlighterTestFront,
+    view,
+    "#div-1"
+  );
 
   await togglePseudoClass(inspector);
   info("Assert pseudo is dismissed when toggling it on a sibling node");
   await selectNode("#div-2", inspector);
   await togglePseudoClass(inspector);
-  await assertPseudoAddedToNode(inspector, testActor, view, "#div-2");
-  const hasLock = await testActor.hasPseudoClassLock("#div-1", PSEUDO);
+  await assertPseudoAddedToNode(
+    inspector,
+    highlighterTestFront,
+    view,
+    "#div-2"
+  );
+  const hasLock = await hasPseudoClassLock("#div-1", PSEUDO);
   ok(
     !hasLock,
     "pseudo-class lock has been removed for the previous locked node"
@@ -62,10 +84,10 @@ add_task(async function() {
   await toolbox.destroy();
 
   // As the toolbox get destroyed, we need to fetch a new test-actor
-  testActor = await getTestActorWithoutToolbox(tab);
+  highlighterTestFront = await getHighlighterTestFrontWithoutToolbox(tab);
 
-  await assertPseudoRemovedFromNode(testActor, "#div-1");
-  await assertPseudoRemovedFromNode(testActor, "#div-2");
+  await assertPseudoRemovedFromNode(highlighterTestFront, "#div-1");
+  await assertPseudoRemovedFromNode(highlighterTestFront, "#div-2");
 });
 
 async function togglePseudoClass(inspector) {
@@ -85,13 +107,13 @@ async function togglePseudoClass(inspector) {
   await onMutations;
 }
 
-async function testNavigate(inspector, testActor, ruleview) {
+async function testNavigate(inspector) {
   await selectNode("#parent-div", inspector);
 
   info("Make sure the pseudoclass is still on after navigating to a parent");
 
   ok(
-    await testActor.hasPseudoClassLock("#div-1", PSEUDO),
+    await hasPseudoClassLock("#div-1", PSEUDO),
     "pseudo-class lock is still applied after inspecting ancestor"
   );
 
@@ -102,7 +124,7 @@ async function testNavigate(inspector, testActor, ruleview) {
       "non-hierarchy node"
   );
   ok(
-    await testActor.hasPseudoClassLock("#div-1", PSEUDO),
+    await hasPseudoClassLock("#div-1", PSEUDO),
     "pseudo-class lock is still on after inspecting sibling node"
   );
 
@@ -111,7 +133,7 @@ async function testNavigate(inspector, testActor, ruleview) {
 
 async function assertPseudoAddedToNode(
   inspector,
-  testActor,
+  highlighterTestFront,
   ruleview,
   selector
 ) {
@@ -121,11 +143,11 @@ async function assertPseudoAddedToNode(
       " and its ancestors"
   );
 
-  let hasLock = await testActor.hasPseudoClassLock(selector, PSEUDO);
+  let hasLock = await hasPseudoClassLock(selector, PSEUDO);
   ok(hasLock, "pseudo-class lock has been applied");
-  hasLock = await testActor.hasPseudoClassLock("#parent-div", PSEUDO);
+  hasLock = await hasPseudoClassLock("#parent-div", PSEUDO);
   ok(hasLock, "pseudo-class lock has been applied");
-  hasLock = await testActor.hasPseudoClassLock("body", PSEUDO);
+  hasLock = await hasPseudoClassLock("body", PSEUDO);
   ok(hasLock, "pseudo-class lock has been applied");
 
   info("Check that the ruleview contains the pseudo-class rule");
@@ -149,7 +171,7 @@ async function assertPseudoAddedToNode(
   );
 
   info("Check that the infobar selector contains the pseudo-class");
-  const value = await testActor.getHighlighterNodeTextContent(
+  const value = await highlighterTestFront.getHighlighterNodeTextContent(
     "box-model-infobar-pseudo-classes"
   );
   is(value, PSEUDO, "pseudo-class in infobar selector");
@@ -158,23 +180,23 @@ async function assertPseudoAddedToNode(
   );
 }
 
-async function assertPseudoRemovedFromNode(testActor, selector) {
+async function assertPseudoRemovedFromNode(highlighterTestFront, selector) {
   info(
     "Make sure the pseudoclass lock is removed from #div-1 and its " +
       "ancestors"
   );
 
-  let hasLock = await testActor.hasPseudoClassLock(selector, PSEUDO);
+  let hasLock = await hasPseudoClassLock(selector, PSEUDO);
   ok(!hasLock, "pseudo-class lock has been removed");
-  hasLock = await testActor.hasPseudoClassLock("#parent-div", PSEUDO);
+  hasLock = await hasPseudoClassLock("#parent-div", PSEUDO);
   ok(!hasLock, "pseudo-class lock has been removed");
-  hasLock = await testActor.hasPseudoClassLock("body", PSEUDO);
+  hasLock = await hasPseudoClassLock("body", PSEUDO);
   ok(!hasLock, "pseudo-class lock has been removed");
 }
 
 async function assertPseudoRemovedFromView(
   inspector,
-  testActor,
+  highlighterTestFront,
   ruleview,
   selector
 ) {
@@ -188,11 +210,28 @@ async function assertPseudoRemovedFromView(
     nodeFront
   );
 
-  const value = await testActor.getHighlighterNodeTextContent(
+  const value = await highlighterTestFront.getHighlighterNodeTextContent(
     "box-model-infobar-pseudo-classes"
   );
   is(value, "", "pseudo-class removed from infobar selector");
   await inspector.highlighters.hideHighlighterType(
     inspector.highlighters.TYPES.BOXMODEL
+  );
+}
+
+/**
+ * Check that an element currently has a pseudo-class lock.
+ * @param {String} selector The node selector to get the pseudo-class from
+ * @param {String} pseudo The pseudoclass to check for
+ * @return {Promise<Boolean>}
+ */
+function hasPseudoClassLock(selector, pseudoClass) {
+  return SpecialPowers.spawn(
+    gBrowser.selectedBrowser,
+    [selector, pseudoClass],
+    (_selector, _pseudoClass) => {
+      const element = content.document.querySelector(_selector);
+      return InspectorUtils.hasPseudoClassLock(element, _pseudoClass);
+    }
   );
 }

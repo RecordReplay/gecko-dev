@@ -1,7 +1,9 @@
 // The tab closing code leaves an uncaught rejection. This test has been
 // whitelisted until the issue is fixed.
 if (!gMultiProcessBrowser) {
-  ChromeUtils.import("resource://testing-common/PromiseTestUtils.jsm", this);
+  const { PromiseTestUtils } = ChromeUtils.import(
+    "resource://testing-common/PromiseTestUtils.jsm"
+  );
   PromiseTestUtils.expectUncaughtRejection(/is no longer, usable/);
 }
 
@@ -48,7 +50,9 @@ add_task(async function mute_web_audio() {
 
   info("- mute browser -");
   ok(!tab.linkedBrowser.audioMuted, "Audio should not be muted by default");
-  await clickIcon(tab.soundPlayingIcon);
+  let tabContent = tab.querySelector(".tab-content");
+  await hoverIcon(tabContent);
+  await clickIcon(tab.overlayIcon);
   ok(tab.linkedBrowser.audioMuted, "Audio should be muted now");
 
   info("- stop web audip -");
@@ -59,7 +63,8 @@ add_task(async function mute_web_audio() {
 
   info("- unmute browser -");
   ok(tab.linkedBrowser.audioMuted, "Audio should be muted now");
-  await clickIcon(tab.soundPlayingIcon);
+  await hoverIcon(tabContent);
+  await clickIcon(tab.overlayIcon);
   ok(!tab.linkedBrowser.audioMuted, "Audio should be unmuted now");
 
   info("- tab should be audible -");

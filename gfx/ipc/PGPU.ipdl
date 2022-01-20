@@ -143,7 +143,9 @@ child:
   async RecordChildEvents(ChildEventData[] events);
   async RecordDiscardedData(DiscardedData data);
 
+  async DeclareStable();
   async NotifyDeviceReset(GPUDeviceData status);
+  async FlushMemory(nsString reason);
 
   async AddMemoryReport(MemoryReport aReport);
 

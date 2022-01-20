@@ -115,13 +115,10 @@ interface Element : Node {
   boolean mozMatchesSelector(UTF8String selector);
 
   // Pointer events methods.
-  [Throws, Pref="dom.w3c_pointer_events.enabled"]
+  [UseCounter, Throws]
   void setPointerCapture(long pointerId);
-
-  [Throws, Pref="dom.w3c_pointer_events.enabled"]
+  [UseCounter, Throws]
   void releasePointerCapture(long pointerId);
-
-  [Pref="dom.w3c_pointer_events.enabled"]
   boolean hasPointerCapture(long pointerId);
 
   // Proprietary extensions
@@ -133,14 +130,14 @@ interface Element : Node {
    * element.
    *
    */
-  [UseCounter]
+  [Deprecated=ElementSetCapture, Pref="dom.mouse_capture.enabled"]
   void setCapture(optional boolean retargetToElement = false);
 
   /**
    * If this element has captured the mouse, release the capture. If another
    * element has captured the mouse, this method has no effect.
    */
-  [UseCounter]
+  [Deprecated=ElementReleaseCapture, Pref="dom.mouse_capture.enabled"]
   void releaseCapture();
 
   /*
@@ -172,6 +169,9 @@ interface Element : Node {
 // https://html.spec.whatwg.org/#focus-management-apis
 dictionary FocusOptions {
   boolean preventScroll = false;
+  // Prevents the focus ring if this is not a text control / editable element.
+  [Func="nsContentUtils::IsCallerChromeOrErrorPage"]
+  boolean preventFocusRing = false;
 };
 
 interface mixin HTMLOrForeignElement {
@@ -242,9 +242,9 @@ partial interface Element {
 // http://domparsing.spec.whatwg.org/#extensions-to-the-element-interface
 partial interface Element {
   [CEReactions, SetterNeedsSubjectPrincipal=NonSystem, Pure, SetterThrows, GetterCanOOM]
-  attribute [TreatNullAs=EmptyString] DOMString innerHTML;
+  attribute [LegacyNullToEmptyString] DOMString innerHTML;
   [CEReactions, Pure, SetterThrows]
-  attribute [TreatNullAs=EmptyString] DOMString outerHTML;
+  attribute [LegacyNullToEmptyString] DOMString outerHTML;
   [CEReactions, Throws]
   void insertAdjacentHTML(DOMString position, DOMString text);
 };

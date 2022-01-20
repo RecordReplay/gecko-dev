@@ -154,7 +154,7 @@ const threadColumns = [
     {
       name: "ImgDecoder",
       id: "img-decoder",
-      l10nId: "perftools-thread-dns-resolver",
+      l10nId: "perftools-thread-img-decoder",
     },
     {
       name: "DNS Resolver",
@@ -162,9 +162,10 @@ const threadColumns = [
       l10nId: "perftools-thread-dns-resolver",
     },
     {
-      name: "JS Helper",
-      id: "js-helper",
-      l10nId: "perftools-thread-js-helper",
+      // Threads that are part of XPCOM's TaskController thread pool.
+      name: "TaskController",
+      id: "task-controller",
+      l10nId: "perftools-thread-task-controller",
     },
   ],
 ];
@@ -285,7 +286,7 @@ class Settings extends PureComponent {
           label(
             {
               className:
-                "perf-settings-checkbox-label perf-settings-thread-label",
+                "perf-settings-checkbox-label perf-settings-thread-label toggle-container-with-text",
             },
             input({
               className: "perf-settings-checkbox",
@@ -316,13 +317,14 @@ class Settings extends PureComponent {
           threadColumns.map(this._renderThreadsColumns)
         ),
         div(
-          { className: "perf-settings-all-threads" },
+          {
+            className: "perf-settings-checkbox-label perf-settings-all-threads",
+          },
           label(
             {
-              className: "perf-settings-checkbox-label",
+              className: "toggle-container-with-text",
             },
             input({
-              className: "perf-settings-checkbox",
               id: "perf-settings-thread-checkbox-all-threads",
               type: "checkbox",
               value: "*",
@@ -388,30 +390,26 @@ class Settings extends PureComponent {
           : "perf-settings-checkbox-label-disabled";
         return label(
           {
-            className: `perf-settings-checkbox-label perf-settings-feature-label ${extraClassName}`,
+            className: `perf-settings-checkbox-label perf-toggle-label ${extraClassName}`,
             key: value,
           },
+          input({
+            id: `perf-settings-feature-checkbox-${value}`,
+            type: "checkbox",
+            value,
+            checked: isSupported && this.props.features.includes(value),
+            onChange: this._handleFeaturesCheckboxChange,
+            disabled: !isSupported,
+          }),
           div(
-            { className: "perf-settings-checkbox-and-name" },
-            input({
-              className: "perf-settings-checkbox",
-              id: `perf-settings-feature-checkbox-${value}`,
-              type: "checkbox",
-              value,
-              checked: isSupported && this.props.features.includes(value),
-              onChange: this._handleFeaturesCheckboxChange,
-              disabled: !isSupported,
-            }),
-            div(
-              { className: "perf-settings-feature-name" },
-              !isSupported && featureDescription.experimental
-                ? // Note when unsupported features are experimental.
-                  `${name} (Experimental)`
-                : name
-            )
+            { className: "perf-toggle-text-label" },
+            !isSupported && featureDescription.experimental
+              ? // Note when unsupported features are experimental.
+                `${name} (Experimental)`
+              : name
           ),
           div(
-            { className: "perf-settings-feature-title" },
+            { className: "perf-toggle-description" },
             title,
             !isSupported && disabledReason
               ? div(

@@ -20,7 +20,12 @@ async function test() {
   var subframe = document.getElementById('bugzilla-body');
 
   // layerize subframe
-  await promiseNativeClickAndClickEvent(subframe, 10, 10);
+  await promiseNativeMouseEventWithAPZAndWaitForEvent({
+    type: "click",
+    target: subframe,
+    offsetX: 10,
+    offsetY: 10,
+  });
 
   // verify layerization
   await promiseAllPaintsDone();
@@ -73,7 +78,7 @@ async function test() {
   // pan right to expose the bug
   await promiseNativeTouchDrag(window,
                                100,
-                               1,
+                               20,
                                -180,
                                0,
                                3);

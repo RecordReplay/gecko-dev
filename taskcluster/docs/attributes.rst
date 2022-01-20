@@ -46,6 +46,7 @@ Project names are the repositories.  They can be:
 * `mozilla-beta`
 * `mozilla-release`
 * `mozilla-esr78`
+* `mozilla-esr91`
 * ... A partial list can be found in taskcluster/taskgraph/util/attributes.py
 
 For try, this attribute applies only if ``-p all`` is specified.  All jobs can
@@ -433,3 +434,8 @@ This build is an artifact build.
 This deliberately excludes builds that are implemented using the artifact build
 machinery, but are not primarily intended to short-circuit build time. In
 particular the Windows aarch64 builds are not marked this way.
+
+supports-artifact-builds
+========================
+
+If false, the task requires a compiled build and will not work with artifact builds.

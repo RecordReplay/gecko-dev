@@ -57,7 +57,7 @@ fn simple_lifecycle() {
 
     // Create a custom configuration to use a validating uploader.
     let dir = tempfile::tempdir().unwrap();
-    let tmpname = dir.path().display().to_string();
+    let tmpname = dir.path().to_path_buf();
 
     let cfg = Configuration {
         data_path: tmpname,
@@ -68,6 +68,7 @@ fn simple_lifecycle() {
         channel: Some("testing".into()),
         server_endpoint: Some("invalid-test-host".into()),
         uploader: None,
+        use_core_mps: false,
     };
     common::initialize(cfg);
 

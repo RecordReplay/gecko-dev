@@ -61,6 +61,7 @@ struct MOZ_STACK_CLASS MediaDecoderInit {
   const bool mHasSuspendTaint;
   const bool mLooping;
   const MediaContainerType mContainerType;
+  const nsAutoString mStreamName;
 
   MediaDecoderInit(MediaDecoderOwner* aOwner,
                    TelemetryProbesReporterOwner* aReporterOwner, double aVolume,
@@ -153,6 +154,7 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   void SetPlaybackRate(double aPlaybackRate);
   void SetPreservesPitch(bool aPreservesPitch);
   void SetLooping(bool aLooping);
+  void SetStreamName(const nsAutoString& aStreamName);
 
   // Set the given device as the output device.
   RefPtr<GenericPromise> SetSink(AudioDeviceInfo* aSinkDevice);
@@ -293,14 +295,6 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   VideoFrameContainer* GetVideoFrameContainer() { return mVideoFrameContainer; }
 
   layers::ImageContainer* GetImageContainer();
-
-  // Fire timeupdate events if needed according to the time constraints
-  // outlined in the specification.
-  void FireTimeUpdate();
-
-  // True if we're going to loop back to the head position when media is in
-  // looping.
-  bool IsLoopingBack(double aPrevPos, double aCurPos) const;
 
   // Returns true if we can play the entire media through without stopping
   // to buffer, given the current download and playback rates.
@@ -449,6 +443,8 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   virtual void MetadataLoaded(UniquePtr<MediaInfo> aInfo,
                               UniquePtr<MetadataTags> aTags,
                               MediaDecoderEventVisibility aEventVisibility);
+
+  void SetLogicalPosition(double aNewPosition);
 
   /******
    * The following members should be accessed with the decoder lock held.
@@ -631,6 +627,8 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
 
   Canonical<bool> mLooping;
 
+  Canonical<nsAutoString> mStreamName;
+
   // The device used with SetSink, or nullptr if no explicit device has been
   // set.
   Canonical<RefPtr<AudioDeviceInfo>> mSinkDevice;
@@ -690,6 +688,9 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
     return &mPreservesPitch;
   }
   AbstractCanonical<bool>* CanonicalLooping() { return &mLooping; }
+  AbstractCanonical<nsAutoString>* CanonicalStreamName() {
+    return &mStreamName;
+  }
   AbstractCanonical<RefPtr<AudioDeviceInfo>>* CanonicalSinkDevice() {
     return &mSinkDevice;
   }
@@ -723,6 +724,19 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   double GetVideoDecodeSuspendedTimeInSeconds() const;
 
  private:
+  /**
+   * This enum describes the reason why we need to update the logical position.
+   * ePeriodicUpdate : the position grows periodically during playback
+   * eSeamlessLoopingSeeking : the position changes due to demuxer level seek.
+   * eOther : due to normal seeking or other attributes changes, eg. playstate
+   */
+  enum class PositionUpdate {
+    ePeriodicUpdate,
+    eSeamlessLoopingSeeking,
+    eOther,
+  };
+  PositionUpdate GetPositionUpdateReason(double aPrevPos, double aCurPos) const;
+
   // Notify owner when the audible state changed
   void NotifyAudibleStateChanged();
 

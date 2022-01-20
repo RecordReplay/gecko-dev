@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ScriptPreloader-inl.h"
+#include "mozilla/Monitor.h"
 #include "mozilla/ScriptPreloader.h"
 #include "mozilla/loader/ScriptCacheActors.h"
 
@@ -25,6 +26,7 @@
 #include "mozilla/dom/Document.h"
 
 #include "js/CompileOptions.h"  // JS::ReadOnlyCompileOptions
+#include "js/Transcoding.h"
 #include "MainThreadUtils.h"
 #include "nsDebug.h"
 #include "nsDirectoryServiceUtils.h"
@@ -208,7 +210,7 @@ static void TraceOp(JSTracer* trc, void* data) {
 }  // anonymous namespace
 
 void ScriptPreloader::Trace(JSTracer* trc) {
-  for (auto& script : IterHash(mScripts)) {
+  for (const auto& script : mScripts.Values()) {
     script->mScript.Trace(trc);
   }
 }
@@ -282,9 +284,7 @@ void ScriptPreloader::InvalidateCache() {
     MOZ_ASSERT(mParsingSources.empty());
     MOZ_ASSERT(mPendingScripts.isEmpty());
 
-    for (auto& script : IterHash(mScripts)) {
-      script.Remove();
-    }
+    mScripts.Clear();
 
     // If we've already finished saving the cache at this point, start a new
     // delayed save operation. This will write out an empty cache file in place
@@ -318,6 +318,7 @@ nsresult ScriptPreloader::Observe(nsISupports* subject, const char* topic,
     MOZ_ASSERT(XRE_IsParentProcess());
 
     mStartupFinished = true;
+    URLPreloader::GetSingleton().SetStartupFinished();
   } else if (!strcmp(topic, CACHE_WRITE_TOPIC)) {
     obs->RemoveObserver(this, CACHE_WRITE_TOPIC);
 
@@ -570,8 +571,8 @@ Result<Ok, nsresult> ScriptPreloader::InitCacheInternal(
         script->mReadyToExecute = true;
       }
 
-      mScripts.Put(script->mCachePath, script.get());
-      Unused << script.release();
+      const auto& cachePath = script->mCachePath;
+      mScripts.InsertOrUpdate(cachePath, std::move(script));
     }
 
     if (buf.error()) {
@@ -794,7 +795,7 @@ void ScriptPreloader::NoteScript(const nsCString& url,
   }
 
   auto script =
-      mScripts.LookupOrAdd(cachePath, *this, url, cachePath, jsscript);
+      mScripts.GetOrInsertNew(cachePath, *this, url, cachePath, jsscript);
   if (isRunOnce) {
     script->mIsRunOnce = true;
   }
@@ -823,7 +824,8 @@ void ScriptPreloader::NoteScript(const nsCString& url,
     return;
   }
 
-  auto script = mScripts.LookupOrAdd(cachePath, *this, url, cachePath, nullptr);
+  auto script =
+      mScripts.GetOrInsertNew(cachePath, *this, url, cachePath, nullptr);
 
   if (!script->HasRange()) {
     MOZ_ASSERT(!script->HasArray());
@@ -858,15 +860,27 @@ void ScriptPreloader::NoteScript(const nsCString& url,
 /* static */
 void ScriptPreloader::FillCompileOptionsForCachedScript(
     JS::CompileOptions& options) {
-  // See IsMultiDecodeCompileOptionsMatching in js/src/vm/JSScript.cpp.
+  // Users of the cache do not require return values, so inform the JS parser in
+  // order for it to generate simpler bytecode.
   options.setNoScriptRval(true);
-  MOZ_ASSERT(!options.selfHostingMode);
-  MOZ_ASSERT(!options.isRunOnce);
+
+  // The ScriptPreloader trades off having bytecode available but not source
+  // text. This means the JS syntax-only parser is not used. If `toString` is
+  // called on functions in these scripts, the source-hook will fetch it over,
+  // so using `toString` of functions should be avoided in chrome js.
+  options.setSourceIsLazy(true);
 }
 
 JSScript* ScriptPreloader::GetCachedScript(
     JSContext* cx, const JS::ReadOnlyCompileOptions& options,
     const nsCString& path) {
+  // Users of ScriptPreloader must agree on a standard set of compile options so
+  // that bytecode data can safely saved from one context and loaded in another.
+  MOZ_ASSERT(options.noScriptRval);
+  MOZ_ASSERT(!options.selfHostingMode);
+  MOZ_ASSERT(!options.isRunOnce);
+  MOZ_ASSERT(options.sourceIsLazy);
+
   // If a script is used by both the parent and the child, it's stored only
   // in the child cache.
   if (mChildCache) {
@@ -1088,7 +1102,6 @@ void ScriptPreloader::DecodeNextBatch(size_t chunkSize,
 
   JS::CompileOptions options(cx);
   FillCompileOptionsForCachedScript(options);
-  options.setSourceIsLazy(true);
 
   if (!JS::CanCompileOffThread(cx, options, size) ||
       !JS::DecodeMultiOffThreadScripts(cx, options, mParsingSources,
@@ -1156,7 +1169,7 @@ bool ScriptPreloader::CachedScript::XDREncode(JSContext* cx) {
   mXDRData.construct<JS::TranscodeBuffer>();
 
   JS::TranscodeResult code = JS::EncodeScript(cx, Buffer(), jsscript);
-  if (code == JS::TranscodeResult_Ok) {
+  if (code == JS::TranscodeResult::Ok) {
     mXDRRange.emplace(Buffer().begin(), Buffer().length());
     mSize = Range().length();
     return true;
@@ -1194,7 +1207,19 @@ JSScript* ScriptPreloader::CachedScript::GetJSScript(
   LOG(Info, "Decoding script %s on main thread...\n", mURL.get());
 
   JS::RootedScript script(cx);
-  if (JS::DecodeScript(cx, options, Range(), &script)) {
+  if (JS::DecodeScript(cx, options, Range(), &script) ==
+      JS::TranscodeResult::Ok) {
+    // Lock the monitor here to avoid data races on mScript
+    // from other threads like the cache writing thread.
+    //
+    // It is possible that we could end up decoding the same
+    // script twice, because DecodeScript isn't being guarded
+    // by the monitor; however, to encourage off-thread decode
+    // to proceed for other scripts we don't hold the monitor
+    // while doing main thread decode, merely while updating
+    // mScript.
+    mCache.mMonitor.AssertNotCurrentThreadOwns();
+    MonitorAutoLock mal(mCache.mMonitor);
     mScript.Set(script);
 
     if (mCache.mSaveComplete) {

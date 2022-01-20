@@ -14,6 +14,32 @@ include!(concat!(
     "/toolkit/components/glean/api/src/metrics.rs"
 ));
 
+#[cfg(not(feature = "cargo-clippy"))]
+use crate::private::{EventMetric, EventRecordingError, ExtraKeys};
+
+/// Helper to get the number of allowed extra keys for a given event metric.
+#[cfg(not(feature = "cargo-clippy"))]
+fn extra_keys_len<K: ExtraKeys>(_event: &EventMetric<K>) -> usize {
+    K::ALLOWED_KEYS.len()
+}
+
+/// Helper to get the extra key ID from its string representation.
+///
+/// Takes a reference to the conrete event metric to use the associated `ALLOWED_KEYS`.
+///
+/// Returns the numeric key ID or an `InvalidExtraKey` error if the key is not allowed.
+#[cfg(not(feature = "cargo-clippy"))]
+fn id_for_extra_key<K: ExtraKeys>(
+    key: &str,
+    _event: &EventMetric<K>,
+) -> Result<i32, EventRecordingError> {
+    K::ALLOWED_KEYS
+        .iter()
+        .position(|&elem| elem == key)
+        .map(|pos| pos as i32)
+        .ok_or(EventRecordingError::InvalidExtraKey)
+}
+
 // When running clippy the linter, `MOZ_TOPOBJDIR` is not set
 // (and the `metrics.rs` file might not even be generated yet),
 // so we need to manually define some things we expect from it so the rest of the build can assume
@@ -30,31 +56,60 @@ pub(crate) mod __glean_metric_maps {
     pub static TIMESPAN_MAP: Lazy<HashMap<MetricId, &Lazy<TimespanMetric>>> =
         Lazy::new(HashMap::new);
 
-    pub static COUNTER_MAP: Lazy<HashMap<MetricId, &Lazy<CounterMetric>>> = Lazy::new(HashMap::new);
-
     pub static BOOLEAN_MAP: Lazy<HashMap<MetricId, &Lazy<BooleanMetric>>> = Lazy::new(HashMap::new);
 
-    pub static DATETIME_MAP: Lazy<HashMap<MetricId, &Lazy<DatetimeMetric>>> =
-        Lazy::new(HashMap::new);
-
-    pub static STRING_MAP: Lazy<HashMap<MetricId, &Lazy<StringMetric>>> = Lazy::new(HashMap::new);
+    pub static COUNTER_MAP: Lazy<HashMap<MetricId, &Lazy<CounterMetric>>> = Lazy::new(HashMap::new);
 
     pub static MEMORY_DISTRIBUTION_MAP: Lazy<HashMap<MetricId, &Lazy<MemoryDistributionMetric>>> =
         Lazy::new(HashMap::new);
 
+    pub static TIMING_DISTRIBUTION_MAP: Lazy<HashMap<MetricId, &Lazy<TimingDistributionMetric>>> =
+        Lazy::new(HashMap::new);
+
+    pub static CUSTOM_DISTRIBUTION_MAP: Lazy<HashMap<MetricId, &Lazy<CustomDistributionMetric>>> =
+        Lazy::new(HashMap::new);
+
+    pub static STRING_MAP: Lazy<HashMap<MetricId, &Lazy<StringMetric>>> = Lazy::new(HashMap::new);
+
     pub static STRING_LIST_MAP: Lazy<HashMap<MetricId, &Lazy<StringListMetric>>> =
+        Lazy::new(HashMap::new);
+
+    pub static DATETIME_MAP: Lazy<HashMap<MetricId, &Lazy<DatetimeMetric>>> =
         Lazy::new(HashMap::new);
 
     pub static UUID_MAP: Lazy<HashMap<MetricId, &Lazy<UuidMetric>>> = Lazy::new(HashMap::new);
 
-    pub(crate) fn event_record_wrapper(
+    pub static LABELED_COUNTER_MAP: Lazy<
+        HashMap<MetricId, &Lazy<LabeledMetric<LabeledCounterMetric>>>,
+    > = Lazy::new(HashMap::new);
+
+    pub static LABELED_BOOLEAN_MAP: Lazy<
+        HashMap<MetricId, &Lazy<LabeledMetric<LabeledBooleanMetric>>>,
+    > = Lazy::new(HashMap::new);
+
+    pub static LABELED_STRING_MAP: Lazy<
+        HashMap<MetricId, &Lazy<LabeledMetric<LabeledStringMetric>>>,
+    > = Lazy::new(HashMap::new);
+
+    pub static QUANTITY_MAP: Lazy<HashMap<MetricId, &Lazy<QuantityMetric>>> =
+        Lazy::new(HashMap::new);
+
+    pub(crate) fn record_event_by_id(
         _metric_id: u32,
         _extra: Option<HashMap<i32, String>>,
     ) -> Result<(), EventRecordingError> {
         Err(EventRecordingError::InvalidId)
     }
 
-    pub(crate) fn event_record_wrapper_str(
+    pub(crate) fn record_event_by_id_with_time(
+        _metric_id: MetricId,
+        _timestamp: u64,
+        _extra: HashMap<i32, String>,
+    ) -> Result<(), EventRecordingError> {
+        Ok(())
+    }
+
+    pub(crate) fn record_event_by_id_with_strings(
         _metric_id: u32,
         _extra: Option<HashMap<String, String>>,
     ) -> Result<(), EventRecordingError> {

@@ -67,7 +67,7 @@ add_task(async function navigateFrameNotExpandedInMarkupView() {
   }
 
   const { inspector } = await openInspectorForURL(TEST_ORG_URI);
-  const resourceWatcher = inspector.toolbox.resourceWatcher;
+  const resourceCommand = inspector.toolbox.resourceCommand;
 
   // At this stage the expected layout of the markup view is
   // v html     (expanded)
@@ -81,7 +81,7 @@ add_task(async function navigateFrameNotExpandedInMarkupView() {
 
   is(
     resource.resourceType,
-    resourceWatcher.TYPES.ROOT_NODE,
+    resourceCommand.TYPES.ROOT_NODE,
     "A resource with resourceType ROOT_NODE was received when navigating"
   );
 
@@ -109,12 +109,12 @@ add_task(async function navigateFrameNotExpandedInMarkupView() {
 async function navigateIframeTo(inspector, url) {
   info("Navigate the test iframe to " + url);
 
-  const { resourceWatcher, targetList } = inspector.toolbox;
-  const onTargetProcessed = waitForTargetProcessed(targetList, url);
+  const { commands } = inspector;
+  const { resourceCommand } = inspector.toolbox;
+  const onTargetProcessed = waitForTargetProcessed(commands, url);
 
-  const onNewRoot = waitForNextResource(
-    resourceWatcher,
-    resourceWatcher.TYPES.ROOT_NODE,
+  const { onResource: onNewRoot } = await resourceCommand.waitForNextResource(
+    resourceCommand.TYPES.ROOT_NODE,
     {
       ignoreExistingResources: true,
     }
@@ -132,7 +132,7 @@ async function navigateIframeTo(inspector, url) {
   await inspector.markup._waitForChildren();
 
   if (isFissionEnabled()) {
-    info("Wait until the new target has been processed by TargetList");
+    info("Wait until the new target has been processed by TargetCommand");
     await onTargetProcessed;
   }
 
@@ -141,20 +141,23 @@ async function navigateIframeTo(inspector, url) {
 }
 
 /**
- * Returns a promise that waits until the provided TargetList has fully
+ * Returns a promise that waits until the provided commands's TargetCommand has fully
  * processed a target with the provided URL.
- * This will avoid navigating again before the new resource watchers have fully
+ * This will avoid navigating again before the new resource command  have fully
  * attached to the new target.
  */
-function waitForTargetProcessed(targetList, url) {
+function waitForTargetProcessed(commands, url) {
   return new Promise(resolve => {
     const onTargetProcessed = targetFront => {
       if (targetFront.url !== encodeURI(url)) {
         return;
       }
-      targetList.off("processed-available-target", onTargetProcessed);
+      commands.targetCommand.off(
+        "processed-available-target",
+        onTargetProcessed
+      );
       resolve();
     };
-    targetList.on("processed-available-target", onTargetProcessed);
+    commands.targetCommand.on("processed-available-target", onTargetProcessed);
   });
 }

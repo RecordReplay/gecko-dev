@@ -14,6 +14,7 @@
 #include "mozilla/dom/JSExecutionContext.h"
 
 #include <utility>
+#include "ErrorList.h"
 #include "MainThreadUtils.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/CompileOptions.h"
@@ -47,8 +48,11 @@ static nsresult EvaluationExceptionToNSResult(JSContext* aCx) {
   return NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW_UNCATCHABLE;
 }
 
-JSExecutionContext::JSExecutionContext(JSContext* aCx,
-                                       JS::Handle<JSObject*> aGlobal)
+JSExecutionContext::JSExecutionContext(
+    JSContext* aCx, JS::Handle<JSObject*> aGlobal,
+    JS::CompileOptions& aCompileOptions,
+    JS::Handle<JS::Value> aDebuggerPrivateValue,
+    JS::Handle<JSScript*> aDebuggerIntroductionScript)
     :
 #ifdef MOZ_GECKO_PROFILER
       mAutoProfilerLabel("JSExecutionContext",
@@ -58,8 +62,10 @@ JSExecutionContext::JSExecutionContext(JSContext* aCx,
       mCx(aCx),
       mRealm(aCx, aGlobal),
       mRetValue(aCx),
-      mScopeChain(aCx),
       mScript(aCx),
+      mCompileOptions(aCompileOptions),
+      mDebuggerPrivateValue(aCx, aDebuggerPrivateValue),
+      mDebuggerIntroductionScript(aCx, aDebuggerIntroductionScript),
       mRv(NS_OK),
       mSkip(false),
       mCoerceToString(false),
@@ -67,7 +73,6 @@ JSExecutionContext::JSExecutionContext(JSContext* aCx,
 #ifdef DEBUG
       ,
       mWantsReturnValue(false),
-      mExpectScopeChain(false),
       mScriptUsed(false)
 #endif
 {
@@ -84,40 +89,12 @@ JSExecutionContext::JSExecutionContext(JSContext* aCx,
   }
 }
 
-void JSExecutionContext::SetScopeChain(
-    JS::HandleVector<JSObject*> aScopeChain) {
-  if (mSkip) {
-    return;
-  }
-
-#ifdef DEBUG
-  mExpectScopeChain = true;
-#endif
-  // Now make sure to wrap the scope chain into the right compartment.
-  if (!mScopeChain.reserve(aScopeChain.length())) {
-    mSkip = true;
-    mRv = NS_ERROR_OUT_OF_MEMORY;
-    return;
-  }
-
-  for (size_t i = 0; i < aScopeChain.length(); ++i) {
-    JS::ExposeObjectToActiveJS(aScopeChain[i]);
-    mScopeChain.infallibleAppend(aScopeChain[i]);
-    if (!JS_WrapObject(mCx, mScopeChain[i])) {
-      mSkip = true;
-      mRv = NS_ERROR_OUT_OF_MEMORY;
-      return;
-    }
-  }
-}
-
 nsresult JSExecutionContext::JoinCompile(JS::OffThreadToken** aOffThreadToken) {
   if (mSkip) {
     return mRv;
   }
 
   MOZ_ASSERT(!mWantsReturnValue);
-  MOZ_ASSERT(!mExpectScopeChain);
   MOZ_ASSERT(!mScript);
 
   if (mEncodeBytecode) {
@@ -133,12 +110,14 @@ nsresult JSExecutionContext::JoinCompile(JS::OffThreadToken** aOffThreadToken) {
     return mRv;
   }
 
+  if (!UpdateDebugMetadata()) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
   return NS_OK;
 }
 
 template <typename Unit>
-nsresult JSExecutionContext::InternalCompile(
-    JS::CompileOptions& aCompileOptions, JS::SourceText<Unit>& aSrcBuf) {
+nsresult JSExecutionContext::InternalCompile(JS::SourceText<Unit>& aSrcBuf) {
   if (mSkip) {
     return mRv;
   }
@@ -146,20 +125,16 @@ nsresult JSExecutionContext::InternalCompile(
   MOZ_ASSERT(aSrcBuf.get());
   MOZ_ASSERT(mRetValue.isUndefined());
 #ifdef DEBUG
-  mWantsReturnValue = !aCompileOptions.noScriptRval;
+  mWantsReturnValue = !mCompileOptions.noScriptRval;
 #endif
 
   MOZ_ASSERT(!mScript);
 
-  if (mScopeChain.length() != 0) {
-    aCompileOptions.setNonSyntacticScope(true);
-  }
-
   if (mEncodeBytecode) {
     mScript =
-        JS::CompileAndStartIncrementalEncoding(mCx, aCompileOptions, aSrcBuf);
+        JS::CompileAndStartIncrementalEncoding(mCx, mCompileOptions, aSrcBuf);
   } else {
-    mScript = JS::Compile(mCx, aCompileOptions, aSrcBuf);
+    mScript = JS::Compile(mCx, mCompileOptions, aSrcBuf);
   }
 
   if (!mScript) {
@@ -168,21 +143,22 @@ nsresult JSExecutionContext::InternalCompile(
     return mRv;
   }
 
+  if (!UpdateDebugMetadata()) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   return NS_OK;
 }
 
-nsresult JSExecutionContext::Compile(JS::CompileOptions& aCompileOptions,
-                                     JS::SourceText<char16_t>& aSrcBuf) {
-  return InternalCompile(aCompileOptions, aSrcBuf);
+nsresult JSExecutionContext::Compile(JS::SourceText<char16_t>& aSrcBuf) {
+  return InternalCompile(aSrcBuf);
 }
 
-nsresult JSExecutionContext::Compile(JS::CompileOptions& aCompileOptions,
-                                     JS::SourceText<Utf8Unit>& aSrcBuf) {
-  return InternalCompile(aCompileOptions, aSrcBuf);
+nsresult JSExecutionContext::Compile(JS::SourceText<Utf8Unit>& aSrcBuf) {
+  return InternalCompile(aSrcBuf);
 }
 
-nsresult JSExecutionContext::Compile(JS::CompileOptions& aCompileOptions,
-                                     const nsAString& aScript) {
+nsresult JSExecutionContext::Compile(const nsAString& aScript) {
   if (mSkip) {
     return mRv;
   }
@@ -196,11 +172,10 @@ nsresult JSExecutionContext::Compile(JS::CompileOptions& aCompileOptions,
     return mRv;
   }
 
-  return Compile(aCompileOptions, srcBuf);
+  return Compile(srcBuf);
 }
 
-nsresult JSExecutionContext::Decode(JS::CompileOptions& aCompileOptions,
-                                    mozilla::Vector<uint8_t>& aBytecodeBuf,
+nsresult JSExecutionContext::Decode(mozilla::Vector<uint8_t>& aBytecodeBuf,
                                     size_t aBytecodeIndex) {
   if (mSkip) {
     return mRv;
@@ -208,19 +183,32 @@ nsresult JSExecutionContext::Decode(JS::CompileOptions& aCompileOptions,
 
   MOZ_ASSERT(!mWantsReturnValue);
   JS::TranscodeResult tr = JS::DecodeScriptMaybeStencil(
-      mCx, aCompileOptions, aBytecodeBuf, &mScript, aBytecodeIndex);
+      mCx, mCompileOptions, aBytecodeBuf, &mScript, aBytecodeIndex);
   // These errors are external parameters which should be handled before the
   // decoding phase, and which are the only reasons why you might want to
   // fallback on decoding failures.
-  MOZ_ASSERT(tr != JS::TranscodeResult_Failure_BadBuildId &&
-             tr != JS::TranscodeResult_Failure_WrongCompileOption);
-  if (tr != JS::TranscodeResult_Ok) {
+  MOZ_ASSERT(tr != JS::TranscodeResult::Failure_BadBuildId &&
+             tr != JS::TranscodeResult::Failure_WrongCompileOption);
+  if (tr != JS::TranscodeResult::Ok) {
     mSkip = true;
     mRv = NS_ERROR_DOM_JS_DECODING_ERROR;
     return mRv;
   }
 
+  if (!UpdateDebugMetadata()) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   return mRv;
+}
+
+bool JSExecutionContext::UpdateDebugMetadata() {
+  if (!mCompileOptions.deferDebugMetadata) {
+    return true;
+  }
+  return JS::UpdateDebugMetadata(mCx, mScript, mCompileOptions,
+                                 mDebuggerPrivateValue, nullptr,
+                                 mDebuggerIntroductionScript, nullptr);
 }
 
 nsresult JSExecutionContext::JoinDecode(JS::OffThreadToken** aOffThreadToken) {
@@ -229,7 +217,6 @@ nsresult JSExecutionContext::JoinDecode(JS::OffThreadToken** aOffThreadToken) {
   }
 
   MOZ_ASSERT(!mWantsReturnValue);
-  MOZ_ASSERT(!mExpectScopeChain);
   mScript.set(JS::FinishOffThreadScriptDecoder(mCx, *aOffThreadToken));
   *aOffThreadToken = nullptr;  // Mark the token as having been finished.
   if (!mScript) {
@@ -238,17 +225,11 @@ nsresult JSExecutionContext::JoinDecode(JS::OffThreadToken** aOffThreadToken) {
     return mRv;
   }
 
+  if (!UpdateDebugMetadata()) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   return NS_OK;
-}
-
-nsresult JSExecutionContext::JoinDecodeBinAST(
-    JS::OffThreadToken** aOffThreadToken) {
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-nsresult JSExecutionContext::DecodeBinAST(JS::CompileOptions& aCompileOptions,
-                                          const uint8_t* aBuf, size_t aLength) {
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 JSScript* JSExecutionContext::GetScript() {
@@ -270,7 +251,7 @@ nsresult JSExecutionContext::ExecScript() {
 
   MOZ_ASSERT(mScript);
 
-  if (!JS_ExecuteScript(mCx, mScopeChain, mScript)) {
+  if (!JS_ExecuteScript(mCx, mScript)) {
     mSkip = true;
     mRv = EvaluationExceptionToNSResult(mCx);
     return mRv;
@@ -303,7 +284,7 @@ nsresult JSExecutionContext::ExecScript(
   MOZ_ASSERT(mScript);
   MOZ_ASSERT(mWantsReturnValue);
 
-  if (!JS_ExecuteScript(mCx, mScopeChain, mScript, aRetValue)) {
+  if (!JS_ExecuteScript(mCx, mScript, aRetValue)) {
     mSkip = true;
     mRv = EvaluationExceptionToNSResult(mCx);
     return mRv;

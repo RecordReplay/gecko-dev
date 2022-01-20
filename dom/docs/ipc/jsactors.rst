@@ -398,12 +398,7 @@ Here's an example ``JSWindowActor`` registration pulled from ``BrowserGlue.jsm``
       child: {
         moduleURI: "resource:///actors/PluginChild.jsm",
         events: {
-          PluginBindingAttached: { capture: true, wantUntrusted: true },
           PluginCrashed: { capture: true },
-          PluginOutdated: { capture: true },
-          PluginInstantiated: { capture: true },
-          PluginRemoved: { capture: true },
-          HiddenPlugin: { capture: true },
         },
 
         observers: ["decoder-doctor-notification"],
@@ -412,7 +407,7 @@ Here's an example ``JSWindowActor`` registration pulled from ``BrowserGlue.jsm``
       allFrames: true,
     },
 
-This example is for the JSWindowActor implementation of click-to-play for Flash.
+This example is for the JSWindowActor implementation of crash reporting for GMP.
 
 Let's examine parent registration:
 
@@ -434,12 +429,7 @@ Let's look at the second chunk:
       child: {
         moduleURI: "resource:///actors/PluginChild.jsm",
         events: {
-          PluginBindingAttached: { capture: true, wantUntrusted: true },
           PluginCrashed: { capture: true },
-          PluginOutdated: { capture: true },
-          PluginInstantiated: { capture: true },
-          PluginRemoved: { capture: true },
-          HiddenPlugin: { capture: true },
         },
 
         observers: ["decoder-doctor-notification"],
@@ -450,7 +440,7 @@ Let's look at the second chunk:
 
 We're similarly declaring where the ``PluginChild`` subclassing ``JSWindowActorChild`` can be found.
 
-Next, we declare the content events, if fired in a BrowsingContext, will cause the JSWindowActor pair to instantiate if it doesn't already exist, and then have ``handleEvent`` called on the ``PluginChild`` instance. For each event name, an Object of event listener options can be passed. You can use the same event listener options as accepted by ``addEventListener``.
+Next, we declare the content events which, when fired in a window, will cause the ``JSWindowActorChild`` to instantiate if it doesn't already exist, and then have ``handleEvent`` called on the ``PluginChild`` instance. For each event name, an Object of event listener options can be passed. You can use the same event listener options as accepted by ``addEventListener``. If an event listener has no useful effect when the actor hasn't been created yet, ``createActor: false`` may also be specified to avoid creating the actor when not needed.
 
 .. note::
   Content events make sense for ``JSWindowActorChild`` (which *have* a content) but are ignored for ``JSProcessActorChild`` (which don't).

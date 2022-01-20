@@ -61,8 +61,28 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
   }
 
   _onTargetDestroyed(form) {
-    const front = this.getActorByID(form.actor);
-    this.emit("target-destroyed", front);
+    const front = this._getTargetFront(form);
+
+    // When server side target switching is off,
+    // the watcher may notify us about the top level target destruction a bit late.
+    // The descriptor (`this.parentFront`) already switched to the new target.
+    // Missing `target-destroyed` isn't critical when target switching is off
+    // as `TargetCommand.switchToTarget` will end calling `TargetCommandonTargetDestroyed` for all
+    // existing targets.
+    // https://searchfox.org/mozilla-central/rev/af8e5d37fd56be90ccddae2203e7b875d3f3ae87/devtools/shared/commands/target/target-command.js#166-173
+    if (front) {
+      this.emit("target-destroyed", front);
+    }
+  }
+
+  _getTargetFront(form) {
+    let front = this.getActorByID(form.actor);
+    // For top level target, the target will be a child of the descriptor front,
+    // which happens to be the parent front of the watcher.
+    if (!front) {
+      front = this.parentFront.getActorByID(form.actor);
+    }
+    return front;
   }
 
   /**
@@ -75,6 +95,36 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
       return null;
     }
     return this.getBrowsingContextTarget(id);
+  }
+
+  /**
+   * Memoized getter for the "breakpoint-list" actor
+   */
+  async getBreakpointListActor() {
+    if (!this._breakpointListActor) {
+      this._breakpointListActor = await super.getBreakpointListActor();
+    }
+    return this._breakpointListActor;
+  }
+
+  /**
+   * Memoized getter for the "target-configuration" actor
+   */
+  async getTargetConfigurationActor() {
+    if (!this._targetConfigurationActor) {
+      this._targetConfigurationActor = await super.getTargetConfigurationActor();
+    }
+    return this._targetConfigurationActor;
+  }
+
+  /**
+   * Memoized getter for the "thread-configuration" actor
+   */
+  async getThreadConfigurationActor() {
+    if (!this._threadConfigurationActor) {
+      this._threadConfigurationActor = await super.getThreadConfigurationActor();
+    }
+    return this._threadConfigurationActor;
   }
 
   /**
@@ -93,7 +143,7 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
     // This code could go away or be simplified if the Descriptor starts fetch all
     // the targets, including the top level one via the Watcher. i.e. drop Descriptor.getTarget().
     const topLevelTarget = await this.parentFront.getTarget();
-    if (topLevelTarget.browsingContextID == id) {
+    if (topLevelTarget?.browsingContextID == id) {
       return topLevelTarget;
     }
 
@@ -108,6 +158,16 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
     }
 
     return null;
+  }
+
+  /**
+   * Memoized getter for the "networkParent" actor
+   */
+  async getNetworkParentActor() {
+    if (!this._networkParentActor) {
+      this._networkParentActor = await super.getNetworkParentActor();
+    }
+    return this._networkParentActor;
   }
 }
 registerFront(WatcherFront);

@@ -349,11 +349,6 @@ ClassifierDummyChannel::SetCookie(const nsACString& aCookieHeader) {
 }
 
 NS_IMETHODIMP
-ClassifierDummyChannel::SetupFallbackChannel(const char* aFallbackKey) {
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
 ClassifierDummyChannel::GetIsAuthChannel(bool* aIsAuthChannel) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -518,6 +513,16 @@ ClassifierDummyChannel::GetIsResolvedByTRR(bool* aResolvedByTRR) {
 }
 
 NS_IMETHODIMP
+ClassifierDummyChannel::GetIsOCSP(bool* value) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ClassifierDummyChannel::SetIsOCSP(bool value) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 ClassifierDummyChannel::GetTlsFlags(uint32_t* aTlsFlags) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -656,11 +661,6 @@ void ClassifierDummyChannel::SetIPv4Disabled() {}
 
 void ClassifierDummyChannel::SetIPv6Disabled() {}
 
-bool ClassifierDummyChannel::GetHasNonEmptySandboxingFlag() { return false; }
-
-void ClassifierDummyChannel::SetHasNonEmptySandboxingFlag(
-    bool aHasNonEmptySandboxingFlag) {}
-
 NS_IMETHODIMP ClassifierDummyChannel::ComputeCrossOriginOpenerPolicy(
     nsILoadInfo::CrossOriginOpenerPolicy aInitiatorPolicy,
     nsILoadInfo::CrossOriginOpenerPolicy* aOutPolicy) {
@@ -768,6 +768,11 @@ NS_IMETHODIMP ClassifierDummyChannel::SetWaitForHTTPSSVCRecord() {
 NS_IMETHODIMP
 ClassifierDummyChannel::GetSupportsHTTP3(bool* aSupportsHTTP3) {
   *aSupportsHTTP3 = false;
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ClassifierDummyChannel::GetHasHTTPSRR(bool*) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

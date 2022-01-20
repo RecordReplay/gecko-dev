@@ -13,15 +13,11 @@ add_task(async function init() {
     gBrowser,
     url: "http://example.com/",
   });
-
-  await disableNonReleaseActions();
   registerCleanupFunction(async () => {
     BrowserTestUtils.removeTab(tab);
   });
 
-  // Ensure screenshots is really disabled (bug 1498738)
-  const addon = await AddonManager.getAddonByID("screenshots@mozilla.org");
-  await addon.disable({ allowSystemAddons: true });
+  await initPageActionsTest();
 });
 
 // Tests a simple non-built-in action without an iframe or subview.  Also
@@ -83,7 +79,7 @@ add_task(async function simple() {
 
   Assert.equal(action.getIconURL(), iconURL, "iconURL");
   Assert.equal(action.id, id, "id");
-  Assert.equal(action.pinnedToUrlbar, false, "pinnedToUrlbar");
+  Assert.equal(action.pinnedToUrlbar, true, "pinnedToUrlbar");
   Assert.equal(action.getDisabled(), false, "disabled");
   Assert.equal(action.getDisabled(window), false, "disabled in window");
   Assert.equal(action.getTitle(), title, "title");
@@ -109,8 +105,8 @@ add_task(async function simple() {
   );
   Assert.equal(
     onPlacedInUrlbarCallCount,
-    0,
-    "onPlacedInUrlbarCallCount should remain 0"
+    1,
+    "onPlacedInUrlbarCallCount after adding the action"
   );
   Assert.equal(
     onShowingInPanelCallCount,
@@ -180,11 +176,9 @@ add_task(async function simple() {
     "Actions in panel after adding the action"
   );
 
-  // The actions in the urlbar should be the same since the test action isn't
-  // shown there.
   Assert.deepEqual(
     PageActions.actionsInUrlbar(window),
-    initialActionsInUrlbar,
+    [action].concat(initialActionsInUrlbar),
     "Actions in urlbar after adding the action"
   );
 
@@ -228,9 +222,8 @@ add_task(async function simple() {
     "sepNode.id"
   );
 
-  // The action's urlbar button should not have been created.
   let urlbarButtonNode = document.getElementById(urlbarButtonID);
-  Assert.equal(urlbarButtonNode, null, "urlbarButtonNode");
+  Assert.equal(!!urlbarButtonNode, true, "urlbarButtonNode");
 
   // Open the panel, click the action's button.
   await promiseOpenPageActionPanel();
@@ -736,9 +729,6 @@ add_task(async function insertBeforeActionID() {
   let initialActions = PageActions.actionsInPanel(window);
   let initialBuiltInActions = PageActions._builtInActions.slice();
   let initialNonBuiltInActions = PageActions._nonBuiltInActions.slice();
-  let initialBookmarkSeparatorIndex = initialActions.findIndex(a => {
-    return a.id == PageActions.ACTION_ID_BOOKMARK_SEPARATOR;
-  });
 
   let action = PageActions.addAction(
     new PageActions.Action({
@@ -777,38 +767,9 @@ add_task(async function insertBeforeActionID() {
     "PageActions._nonBuiltInActions.length should remain the same"
   );
 
-  let actionIndex = newActions.findIndex(a => a.id == id);
-  Assert.equal(
-    initialBookmarkSeparatorIndex,
-    actionIndex,
-    "initialBookmarkSeparatorIndex"
-  );
-  let newBookmarkSeparatorIndex = newActions.findIndex(a => {
-    return a.id == PageActions.ACTION_ID_BOOKMARK_SEPARATOR;
-  });
-  Assert.equal(
-    newBookmarkSeparatorIndex,
-    initialBookmarkSeparatorIndex + 1,
-    "newBookmarkSeparatorIndex"
-  );
-
   // The action's panel button should have been created.
   let panelButtonNode = document.getElementById(panelButtonID);
   Assert.notEqual(panelButtonNode, null, "panelButtonNode");
-
-  // The button's next sibling should be the bookmark separator.
-  Assert.notEqual(
-    panelButtonNode.nextElementSibling,
-    null,
-    "panelButtonNode.nextElementSibling"
-  );
-  Assert.equal(
-    panelButtonNode.nextElementSibling.id,
-    BrowserPageActions.panelButtonNodeIDForActionID(
-      PageActions.ACTION_ID_BOOKMARK_SEPARATOR
-    ),
-    "panelButtonNode.nextElementSibling.id"
-  );
 
   // The separator between the built-in and non-built-in actions should not have
   // been created.
@@ -1224,8 +1185,8 @@ add_task(async function transient() {
   Assert.equal(onPlacedInPanelCount, 0, "onPlacedInPanelCount should remain 0");
   Assert.equal(
     onBeforePlacedInWindowCount,
-    0,
-    "onBeforePlacedInWindowCount should remain 0"
+    1,
+    "onBeforePlacedInWindowCount after adding transient action"
   );
 
   Assert.deepEqual(

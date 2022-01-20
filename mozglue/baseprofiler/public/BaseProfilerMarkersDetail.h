@@ -13,18 +13,16 @@
 
 #include "mozilla/BaseProfilerMarkersPrerequisites.h"
 
-#ifdef MOZ_GECKO_PROFILER
-
 //                        ~~ HERE BE DRAGONS ~~
 //
 // Everything below is internal implementation detail, you shouldn't need to
 // look at it unless working on the profiler code.
 
-#  include "mozilla/BaseProfileJSONWriter.h"
-#  include "mozilla/ProfileBufferEntryKinds.h"
+#include "mozilla/BaseProfileJSONWriter.h"
+#include "mozilla/ProfileBufferEntryKinds.h"
 
-#  include <limits>
-#  include <tuple>
+#include <limits>
+#include <tuple>
 
 namespace mozilla::baseprofiler {
 // Implemented in platform.cpp
@@ -251,7 +249,8 @@ static ProfileBufferBlockIndex AddMarkerWithOptionalStackToBuffer(
 
 // Pointer to a function that can capture a backtrace into the provided
 // `ProfileChunkedBuffer`, and returns true when successful.
-using BacktraceCaptureFunction = bool (*)(ProfileChunkedBuffer&);
+using BacktraceCaptureFunction = bool (*)(ProfileChunkedBuffer&,
+                                          StackCaptureOptions);
 
 // Add a marker with the given name, options, and arguments to the given buffer.
 // Because this may be called from either Base or Gecko Profiler functions, the
@@ -271,7 +270,8 @@ ProfileBufferBlockIndex AddMarkerToBuffer(
     aOptions.Set(MarkerTiming::InstantNow());
   }
 
-  if (aOptions.Stack().IsCaptureNeeded()) {
+  StackCaptureOptions captureOptions = aOptions.Stack().CaptureOptions();
+  if (captureOptions != StackCaptureOptions::NoStack) {
     // A capture was requested, let's attempt to do it here&now. This avoids a
     // lot of allocations that would be necessary if capturing a backtrace
     // separately.
@@ -282,7 +282,9 @@ ProfileBufferBlockIndex AddMarkerToBuffer(
     ProfileChunkedBuffer chunkedBuffer(
         ProfileChunkedBuffer::ThreadSafety::WithoutMutex, chunkManager);
     aOptions.StackRef().UseRequestedBacktrace(
-        aBacktraceCaptureFunction(chunkedBuffer) ? &chunkedBuffer : nullptr);
+        aBacktraceCaptureFunction(chunkedBuffer, captureOptions)
+            ? &chunkedBuffer
+            : nullptr);
     // This call must be made from here, while chunkedBuffer is in scope.
     return AddMarkerWithOptionalStackToBuffer<MarkerType>(
         aBuffer, aName, aCategory, std::move(aOptions), aTs...);
@@ -668,7 +670,5 @@ struct ProfileBufferEntryReader::Deserializer<MarkerOptions> {
 };
 
 }  // namespace mozilla
-
-#endif  // MOZ_GECKO_PROFILER
 
 #endif  // BaseProfilerMarkersDetail_h

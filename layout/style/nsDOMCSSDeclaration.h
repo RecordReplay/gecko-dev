@@ -107,6 +107,7 @@ class nsDOMCSSDeclaration : public nsICSSDeclaration {
   }
 
 #define CSS_PROP_LIST_EXCLUDE_INTERNAL
+#define CSS_PROP_LIST_EXCLUDE_NOT_IN_STYLE
 #define CSS_PROP_LONGHAND(name_, id_, method_, ...) CSS_PROP(id_, method_)
 #define CSS_PROP_SHORTHAND(name_, id_, method_, ...) CSS_PROP(id_, method_)
 #define CSS_PROP_ALIAS(name_, aliasid_, id_, method_, ...) \
@@ -116,6 +117,7 @@ class nsDOMCSSDeclaration : public nsICSSDeclaration {
 #undef CSS_PROP_SHORTHAND
 #undef CSS_PROP_LONGHAND
 #undef CSS_PROP_LIST_EXCLUDE_INTERNAL
+#undef CSS_PROP_LIST_EXCLUDE_NOT_IN_STYLE
 #undef CSS_PROP
 #undef CSS_PROP_PUBLIC_OR_PRIVATE
 
@@ -135,26 +137,26 @@ class nsDOMCSSDeclaration : public nsICSSDeclaration {
 
  protected:
   // The reason for calling GetOrCreateCSSDeclaration.
-  enum Operation {
+  enum class Operation {
     // We are calling GetOrCreateCSSDeclaration so that we can read from it.
     // Does not allocate a new declaration if we don't have one yet; returns
     // nullptr in this case.
-    eOperation_Read,
+    Read,
 
     // We are calling GetOrCreateCSSDeclaration so that we can set a property on
     // it or re-parse the whole declaration.  Allocates a new declaration if we
     // don't have one yet. A nullptr return value indicates an error allocating
     // the declaration.
-    eOperation_Modify,
+    Modify,
 
     // We are calling GetOrCreateCSSDeclaration so that we can remove a property
     // from it. Does not allocate a new declaration if we don't have one yet;
     // returns nullptr in this case.
-    eOperation_RemoveProperty
+    RemoveProperty,
   };
 
-  // If aOperation is eOperation_Modify, aCreated must be non-null and
-  // the call may set it to point to the newly created object.
+  // If aOperation is Modify, aCreated must be non-null and the call may set it
+  // to point to the newly created object.
   virtual mozilla::DeclarationBlock* GetOrCreateCSSDeclaration(
       Operation aOperation, mozilla::DeclarationBlock** aCreated) = 0;
 

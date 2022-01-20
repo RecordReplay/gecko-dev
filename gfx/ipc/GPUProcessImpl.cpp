@@ -6,7 +6,7 @@
 #include "GPUProcessImpl.h"
 #include "mozilla/ipc/IOThreadChild.h"
 #include "nsXPCOM.h"
-#include "ProcessUtils.h"
+#include "mozilla/ipc/ProcessUtils.h"
 
 #if defined(OS_WIN) && defined(MOZ_SANDBOX)
 #  include "mozilla/sandboxTarget.h"
@@ -73,8 +73,8 @@ bool GPUProcessImpl::Init(int aArgc, char* aArgv[]) {
     return false;
   }
 
-  return mGPU.Init(ParentPid(), parentBuildID, IOThreadChild::message_loop(),
-                   IOThreadChild::TakeChannel());
+  return mGPU.Init(ParentPid(), parentBuildID,
+                   IOThreadChild::TakeInitialPort());
 }
 
 void GPUProcessImpl::CleanUp() { NS_ShutdownXPCOM(nullptr); }

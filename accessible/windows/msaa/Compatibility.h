@@ -7,8 +7,8 @@
 #ifndef COMPATIBILITY_MANAGER_H
 #define COMPATIBILITY_MANAGER_H
 
+#include <windows.h>
 #include "mozilla/Maybe.h"
-#include "nsString.h"
 #include <stdint.h>
 
 namespace mozilla {
@@ -46,12 +46,6 @@ class Compatibility {
    * all require window emulation to be enabled.
    */
   static bool IsVisperoShared() { return !!(sConsumers & VISPEROSHARED); }
-
-  /**
-   * @return ID of a11y manifest resource to be passed to
-   * mscom::ActivationContext
-   */
-  static uint16_t GetActCtxResourceId();
 
   /**
    * Return a string describing sConsumers suitable for about:support.

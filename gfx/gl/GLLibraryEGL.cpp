@@ -37,13 +37,14 @@
 #include "GLReadTexImageHelper.h"
 #include "ScopedGLHelpers.h"
 #ifdef MOZ_WIDGET_GTK
-#  include <gdk/gdk.h>
+#  include "mozilla/WidgetUtilsGtk.h"
 #  ifdef MOZ_WAYLAND
-#    include <gdk/gdkwayland.h>
-#    include <dlfcn.h>
 #    include "mozilla/widget/nsWaylandDisplay.h"
 #  endif  // MOZ_WIDGET_GTK
-#endif    // MOZ_WAYLAND
+#  include <gdk/gdk.h>
+#endif  // MOZ_WAYLAND
+
+#include <mutex>  // for call_once
 
 namespace mozilla {
 namespace gl {
@@ -79,7 +80,8 @@ static const char* sEGLExtensionNames[] = {
     "EGL_EXT_swap_buffers_with_damage",
     "EGL_KHR_swap_buffers_with_damage",
     "EGL_EXT_buffer_age",
-    "EGL_KHR_partial_update"};
+    "EGL_KHR_partial_update",
+    "EGL_NV_robustness_video_memory_purge"};
 
 PRLibrary* LoadApitraceLibrary() {
   const char* path = nullptr;
@@ -316,6 +318,8 @@ static std::shared_ptr<EglDisplay> GetAndInitDisplayForAccelANGLE(
 #if defined(XP_UNIX)
 #  define GLES2_LIB "libGLESv2.so"
 #  define GLES2_LIB2 "libGLESv2.so.2"
+#  define GL_LIB "libGL.so"
+#  define GL_LIB2 "libGL.so.1"
 #elif defined(XP_WIN)
 #  define GLES2_LIB "libGLESv2.dll"
 #else
@@ -397,6 +401,18 @@ bool GLLibraryEGL::Init(nsACString* const out_failureId) {
 #  ifdef APITRACE_LIB
   if (!mGLLibrary) {
     mGLLibrary = PR_LoadLibrary(APITRACE_LIB);
+  }
+#  endif
+
+#  ifdef GL_LIB
+  if (!mGLLibrary) {
+    mGLLibrary = PR_LoadLibrary(GL_LIB);
+  }
+#  endif
+
+#  ifdef GL_LIB2
+  if (!mGLLibrary) {
+    mGLLibrary = PR_LoadLibrary(GL_LIB2);
   }
 #  endif
 
@@ -650,6 +666,10 @@ std::shared_ptr<EglDisplay> EglDisplay::Create(GLLibraryEGL& lib,
   if (!lib.fInitialize(display, nullptr, nullptr)) {
     return nullptr;
   }
+
+  static std::once_flag sMesaLeakFlag;
+  std::call_once(sMesaLeakFlag, MesaMemoryLeakWorkaround);
+
   const auto ret =
       std::make_shared<EglDisplay>(PrivateUseOnly{}, lib, display, isWarp);
   lib.mActiveDisplays.insert({display, ret});
@@ -769,7 +789,7 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplay(
 #ifdef MOZ_WAYLAND
     // Some drivers doesn't support EGL_DEFAULT_DISPLAY
     GdkDisplay* gdkDisplay = gdk_display_get_default();
-    if (gdkDisplay && !GDK_IS_X11_DISPLAY(gdkDisplay)) {
+    if (widget::GdkIsWaylandDisplay(gdkDisplay)) {
       nativeDisplay = widget::WaylandDisplayGetWLDisplay(gdkDisplay);
       if (!nativeDisplay) {
         NS_WARNING("Failed to get wl_display.");

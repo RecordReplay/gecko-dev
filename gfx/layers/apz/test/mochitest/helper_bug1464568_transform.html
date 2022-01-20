@@ -48,14 +48,14 @@ async function test_transform() {
 
   utils.setAsyncScrollOffset(document.documentElement, 0, 300);
 
-  await new Promise(resolve => waitForApzFlushedRepaints(resolve));
+  await promiseApzFlushedRepaints();
 
   transform = parseTransform(utils.getOMTCTransform(anim));
   isTransformClose(transform, [1, 0, 0, 1, 200 * dpr, -300 * dpr],
      "Element should have been moved by the offset");
 }
 
-if (utils.layerManagerType == "WebRender") {
+if (utils.layerManagerType.startsWith("WebRender")) {
   ok(true, "This test doesn't need to run on WebRender");
   subtestDone();
 } else {

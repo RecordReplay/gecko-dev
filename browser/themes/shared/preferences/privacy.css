@@ -5,7 +5,7 @@
 /* Permissions */
 
 #trackingGroup {
-  --section-highlight-background-color: rgba(69, 161, 255, 0.2);
+  --section-highlight-background-color: color-mix(in srgb, var(--in-content-accent-color) 20%, transparent);
 }
 
 .content-blocking-icon,
@@ -18,43 +18,6 @@
 
 .permission-icon {
   margin-inline-end: 0.2em;
-}
-
-.content-blocking-checkbox .checkbox-icon {
-  margin-inline: 4px 8px;
-  width: 16px;
-}
-
-#contentBlockingTrackingProtectionCheckbox > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/tracker-image.svg");
-}
-
-#contentBlockingTrackingProtectionCheckbox[checked] > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/tracker-image-disabled.svg");
-}
-
-#contentBlockingBlockCookiesCheckbox > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/3rdpartycookies.svg");
-}
-
-#contentBlockingBlockCookiesCheckbox[checked] > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/3rdpartycookies-disabled.svg");
-}
-
-#contentBlockingCryptominersCheckbox > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/cryptominers.svg");
-}
-
-#contentBlockingCryptominersCheckbox[checked] > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/cryptominers-disabled.svg");
-}
-
-#contentBlockingFingerprintersCheckbox > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/fingerprinters.svg");
-}
-
-#contentBlockingFingerprintersCheckbox[checked] > .checkbox-label-box {
-  list-style-image: url("chrome://browser/skin/controlcenter/fingerprinters-disabled.svg");
 }
 
 .content-blocking-icon,
@@ -105,7 +68,7 @@
 }
 
 .autoplay-icon {
-  list-style-image: url(chrome://browser/skin/notification-icons/autoplay-media-detailed.svg);
+  list-style-image: url(chrome://browser/skin/notification-icons/autoplay-media.svg);
 }
 
 .midi-icon {
@@ -151,8 +114,8 @@
 }
 
 .content-blocking-category {
-  border: 1px solid var(--in-content-border-color);
-  background-color: rgba(215, 215, 219, 0.2);
+  border: 1px solid var(--in-content-box-border-color);
+  background-color: rgba(215, 215, 219, 0.1);
 }
 
 .content-blocking-category.disabled {
@@ -176,26 +139,22 @@
   min-width: 20px;
   max-height: 20px;
   max-width: 20px;
-  list-style-image: url("chrome://global/skin/icons/arrow-dropdown-12.svg");
+  list-style-image: url("chrome://global/skin/icons/arrow-down-12.svg");
   background-color: transparent;
   padding: 3px;
 }
 
 .arrowhead:not([disabled]):hover {
   cursor: pointer;
-  background-color: var(--grey-90-a10);
+  background-color: var(--in-content-button-background-hover);
 }
 
 .arrowhead:not([disabled]):hover:active {
-  background-color: var(--grey-90-a20);
+  background-color: var(--in-content-button-background-active);
 }
 
 .arrowhead.up {
   list-style-image: url("chrome://global/skin/icons/arrow-up-12.svg");
-}
-
-.arrowhead > .button-box {
-  padding: 0 !important;
 }
 
 .content-blocking-category.expanded:not(.selected) .reload-tabs {
@@ -224,7 +183,7 @@
 }
 
 .content-blocking-reload-desc-container > .content-blocking-info-image {
-  list-style-image: url(chrome://global/skin/icons/identity-icon.svg);
+  list-style-image: url(chrome://global/skin/icons/info.svg);
   margin-inline-end: 12px;
   margin-top: 0.4em;
   flex-shrink: 0;
@@ -236,29 +195,20 @@
   min-height: 30px;
   padding: 0 20px;
   list-style-image: url("chrome://browser/skin/reload.svg");
-  background-color: var(--blue-50);
   align-self: center;
-}
-
-.reload-tabs-button:not([disabled="true"]):hover {
-  background-color: var(--blue-60);
-}
-
-.reload-tabs-button:not([disabled="true"]):hover:active {
-  background-color: var(--blue-70);
 }
 
 .reload-tabs-button .button-icon {
   margin: 0 6px;
-  color: white;
+  color: inherit;
 }
 
 .reload-tabs-button .button-text {
-  color: white;
+  color: inherit;
 }
 
 .content-blocking-category.expanded:not(.selected) .content-blocking-warning {
-  background-color: var(--grey-90-a10);
+  background-color: var(--in-content-box-info-background);
 }
 
 .content-blocking-category.selected .arrowhead {
@@ -266,7 +216,7 @@
 }
 
 .content-blocking-category.selected {
-  border: 1px solid #45A1FF;
+  border: 1px solid var(--in-content-accent-color);
   background-color: var(--section-highlight-background-color);
 }
 
@@ -317,29 +267,15 @@
   margin-top: 0;
 }
 
-.content-blocking-trackers-image {
-  list-style-image: url("chrome://browser/skin/controlcenter/tracker-image-disabled.svg");
-  margin-inline-end: 5px;
+.content-blocking-extra-blocking-desc {
+  margin-inline-start: 0.5em;
+  position: relative;
+  top: 0.65em;
 }
 
-.content-blocking-social-media-image {
-  list-style-image: url("chrome://browser/skin/controlcenter/socialblock-disabled.svg");
-  margin-inline-end: 5px;
-}
-
-.content-blocking-cookies-image {
-  list-style-image: url("chrome://browser/skin/controlcenter/3rdpartycookies-disabled.svg");
-  margin-inline-end: 5px;
-}
-
-.content-blocking-cryptominers-image {
-  list-style-image: url("chrome://browser/skin/controlcenter/cryptominers-disabled.svg");
-  margin-inline-end: 5px;
-}
-
-.content-blocking-fingerprinters-image {
-  list-style-image: url("chrome://browser/skin/controlcenter/fingerprinters-disabled.svg");
-  margin-inline-end: 5px;
+.content-blocking-label {
+  display: list-item;
+  line-height: 1.2em;
 }
 
 .content-blocking-warning-image {
@@ -380,7 +316,7 @@
 }
 
 .warning-description {
-  background: url(chrome://browser/skin/controlcenter/warning.svg) no-repeat 0 5px;
+  background: url(chrome://global/skin/icons/warning.svg) no-repeat 0 5px;
   opacity: 0.6;
   -moz-context-properties: fill, stroke;
   fill: #d7b600;
@@ -404,9 +340,4 @@
 
 #submitHealthReportBox {
   display: -moz-inline-box;
-}
-
-/* HTTPS-Only Mode */
-#httpsOnlyBox[hidehttpsonly] {
-  display: none;
 }

@@ -17,7 +17,7 @@
 #include "gc/PublicIterators.h"
 #include "gc/Zone.h"
 #include "js/Date.h"
-#include "js/friend/StackLimits.h"  // js::CheckSystemRecursionLimit
+#include "js/friend/StackLimits.h"  // js::AutoCheckRecursionLimit
 #include "js/friend/WindowProxy.h"  // js::IsWindow, js::IsWindowProxy, js::ToWindowProxyIfWindow
 #include "js/Proxy.h"
 #include "js/RootingAPI.h"
@@ -279,7 +279,8 @@ bool Compartment::getNonWrapperObjectForCurrentCompartment(
   // We're a bit worried about infinite recursion here, so we do a check -
   // see bug 809295.
   auto preWrap = cx->runtime()->wrapObjectCallbacks->preWrap;
-  if (!CheckSystemRecursionLimit(cx)) {
+  AutoCheckRecursionLimit recursion(cx);
+  if (!recursion.checkSystem(cx)) {
     return false;
   }
   if (preWrap) {
@@ -406,22 +407,36 @@ bool Compartment::rewrap(JSContext* cx, MutableHandleObject obj,
 
 bool Compartment::wrap(JSContext* cx,
                        MutableHandle<JS::PropertyDescriptor> desc) {
-  if (!wrap(cx, desc.object())) {
+  if (desc.hasGetter()) {
+    if (!wrap(cx, desc.getter())) {
+      return false;
+    }
+  }
+  if (desc.hasSetter()) {
+    if (!wrap(cx, desc.setter())) {
+      return false;
+    }
+  }
+  if (desc.hasValue()) {
+    if (!wrap(cx, desc.value())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Compartment::wrap(JSContext* cx,
+                       MutableHandle<mozilla::Maybe<PropertyDescriptor>> desc) {
+  if (desc.isNothing()) {
+    return true;
+  }
+
+  Rooted<PropertyDescriptor> desc_(cx, *desc);
+  if (!wrap(cx, &desc_)) {
     return false;
   }
-
-  if (desc.hasGetterObject()) {
-    if (!wrap(cx, desc.getterObject())) {
-      return false;
-    }
-  }
-  if (desc.hasSetterObject()) {
-    if (!wrap(cx, desc.setterObject())) {
-      return false;
-    }
-  }
-
-  return wrap(cx, desc.value());
+  desc.set(mozilla::Some(desc_.get()));
+  return true;
 }
 
 bool Compartment::wrap(JSContext* cx, MutableHandle<GCVector<Value>> vec) {
@@ -554,11 +569,11 @@ GlobalObject& Compartment::firstGlobal() const {
   MOZ_CRASH("If all our globals are dead, why is someone expecting a global?");
 }
 
-JS_FRIEND_API JSObject* js::GetFirstGlobalInCompartment(JS::Compartment* comp) {
+JS_PUBLIC_API JSObject* js::GetFirstGlobalInCompartment(JS::Compartment* comp) {
   return &comp->firstGlobal();
 }
 
-JS_FRIEND_API bool js::CompartmentHasLiveGlobal(JS::Compartment* comp) {
+JS_PUBLIC_API bool js::CompartmentHasLiveGlobal(JS::Compartment* comp) {
   MOZ_ASSERT(comp);
   for (Realm* r : comp->realms()) {
     if (r->hasLiveGlobal()) {

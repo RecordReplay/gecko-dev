@@ -58,15 +58,29 @@ WINBASEAPI BOOL WINAPI QueryPerformanceFrequency(LARGE_INTEGER* lpFrequency);
 }
 
 #else
-#  define ALWAYS_INLINE __attribute__((always_inline)) inline
+// GCC is slower when dealing with always_inline, especially in debug builds.
+// When using Clang, use always_inline more aggressively.
+#  if defined(__clang__) || defined(NDEBUG)
+#    define ALWAYS_INLINE __attribute__((always_inline)) inline
+#  else
+#    define ALWAYS_INLINE inline
+#  endif
 #  define NO_INLINE __attribute__((noinline))
+#endif
+
+// Some functions may cause excessive binary bloat if inlined in debug or with
+// GCC builds, so use PREFER_INLINE on these instead of ALWAYS_INLINE.
+#if defined(__clang__) && defined(NDEBUG)
+#  define PREFER_INLINE ALWAYS_INLINE
+#else
+#  define PREFER_INLINE inline
 #endif
 
 #define UNREACHABLE __builtin_unreachable()
 
-#define UNUSED __attribute__((unused))
+#define UNUSED [[maybe_unused]]
 
-#define FALLTHROUGH __attribute__((fallthrough))
+#define FALLTHROUGH [[fallthrough]]
 
 #ifdef MOZILLA_CLIENT
 #  define IMPLICIT __attribute__((annotate("moz_implicit")))
@@ -157,6 +171,44 @@ struct IntRect {
     return IntRect(*this).offset(-o);
   }
 };
+
+typedef vec2_scalar Point2D;
+typedef vec4_scalar Point3D;
+
+struct IntRange {
+  int start;
+  int end;
+
+  int len() const { return end - start; }
+
+  IntRange intersect(IntRange r) const {
+    return {max(start, r.start), min(end, r.end)};
+  }
+};
+
+struct FloatRange {
+  float start;
+  float end;
+
+  float clip(float x) const { return clamp(x, start, end); }
+
+  FloatRange clip(FloatRange r) const { return {clip(r.start), clip(r.end)}; }
+
+  FloatRange merge(FloatRange r) const {
+    return {min(start, r.start), max(end, r.end)};
+  }
+
+  IntRange round() const {
+    return {int(floor(start + 0.5f)), int(floor(end + 0.5f))};
+  }
+
+  IntRange round_out() const { return {int(floor(start)), int(ceil(end))}; }
+};
+
+template <typename P>
+static inline FloatRange x_range(P p0, P p1) {
+  return {min(p0.x, p1.x), max(p0.x, p1.x)};
+}
 
 struct VertexAttrib {
   size_t size = 0;  // in bytes
@@ -279,7 +331,6 @@ struct Buffer {
 
 struct Framebuffer {
   GLuint color_attachment = 0;
-  GLint layer = 0;
   GLuint depth_attachment = 0;
 };
 
@@ -309,242 +360,10 @@ TextureFilter gl_filter_to_texture_filter(int type) {
   }
 }
 
-// The SWGL depth buffer is roughly organized as a span buffer where each row
-// of the depth buffer is a list of spans, and each span has a constant depth
-// and a run length (represented by DepthRun). The span from start..start+count
-// is placed directly at that start index in the row's array of runs, so that
-// there is no need to explicitly record the start index at all. This also
-// avoids the need to move items around in the run array to manage insertions
-// since space is implicitly always available for a run between any two
-// pre-existing runs. Linkage from one run to the next is implicitly defined by
-// the count, so if a run exists from start..start+count, the next run will
-// implicitly pick up right at index start+count where that preceding run left
-// off. All of the DepthRun items that are after the head of the run can remain
-// uninitialized until the run needs to be split and a new run needs to start
-// somewhere in between.
-// For uses like perspective-correct rasterization or with a discard mask, a
-// run is not an efficient representation, and it is more beneficial to have
-// a flattened array of individual depth samples that can be masked off easily.
-// To support this case, the first run in a given row's run array may have a
-// zero count, signaling that this entire row is flattened. Critically, the
-// depth and count fields in DepthRun are ordered (endian-dependently) so that
-// the DepthRun struct can be interpreted as a sign-extended int32_t depth. It
-// is then possible to just treat the entire row as an array of int32_t depth
-// samples that can be processed with SIMD comparisons, since the count field
-// behaves as just the sign-extension of the depth field.
-// When a depth buffer is cleared, each row is initialized to a single run
-// spanning the entire row. In the normal case, the depth buffer will continue
-// to manage itself as a list of runs. If perspective or discard is used for
-// a given row, the row will be converted to the flattened representation to
-// support it, after which it will only ever revert back to runs if the depth
-// buffer is cleared.
-struct DepthRun {
-  // Ensure that depth always occupies the LSB and count the MSB so that we
-  // can sign-extend depth just by setting count to zero, marking it flat.
-  // When count is non-zero, then this is interpreted as an actual run and
-  // depth is read in isolation.
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-  uint16_t depth;
-  uint16_t count;
-#else
-  uint16_t count;
-  uint16_t depth;
-#endif
-
-  DepthRun() = default;
-  DepthRun(uint16_t depth, uint16_t count) : depth(depth), count(count) {}
-
-  // If count is zero, this is actually a flat depth sample rather than a run.
-  bool is_flat() const { return !count; }
-
-  // Compare a source depth from rasterization with a stored depth value.
-  template <int FUNC>
-  ALWAYS_INLINE bool compare(uint16_t src) const {
-    switch (FUNC) {
-      case GL_LEQUAL:
-        return src <= depth;
-      case GL_LESS:
-        return src < depth;
-      case GL_ALWAYS:
-        return true;
-      default:
-        assert(false);
-        return false;
-    }
-  }
-};
-
-// A cursor for reading and modifying a row's depth run array. It locates
-// and iterates through a desired span within all the runs, testing if
-// the depth of this span passes or fails the depth test against existing
-// runs. If desired, new runs may be inserted to represent depth occlusion
-// from this span in the run array.
-struct DepthCursor {
-  // Current position of run the cursor has advanced to.
-  DepthRun* cur = nullptr;
-  // The start of the remaining potential samples in the desired span.
-  DepthRun* start = nullptr;
-  // The end of the potential samples in the desired span.
-  DepthRun* end = nullptr;
-
-  DepthCursor() = default;
-
-  // Construct a cursor with runs for a given row's run array and the bounds
-  // of the span we wish to iterate within it.
-  DepthCursor(DepthRun* runs, int num_runs, int span_offset, int span_count)
-      : cur(runs), start(&runs[span_offset]), end(start + span_count) {
-    // This cursor should never iterate over flat runs
-    assert(!runs->is_flat());
-    DepthRun* end_runs = &runs[num_runs];
-    // Clamp end of span to end of row
-    if (end > end_runs) {
-      end = end_runs;
-    }
-    // If the span starts past the end of the row, just advance immediately
-    // to it to signal that we're done.
-    if (start >= end_runs) {
-      cur = end_runs;
-      start = end_runs;
-      return;
-    }
-    // Otherwise, find the first depth run that contains the start of the span.
-    // If the span starts after the given run, then we need to keep searching
-    // through the row to find an appropriate run. The check above already
-    // guaranteed that the span starts within the row's runs, and the search
-    // won't fall off the end.
-    for (;;) {
-      assert(cur < end);
-      DepthRun* next = cur + cur->count;
-      if (start < next) {
-        break;
-      }
-      cur = next;
-    }
-  }
-
-  // The cursor is valid if the current position is at the end or if the run
-  // contains the start position.
-  bool valid() const {
-    return cur >= end || (cur <= start && start < cur + cur->count);
-  }
-
-  // Skip past any initial runs that fail the depth test. If we find a run that
-  // would pass, then return the accumulated length between where we started
-  // and that position. Otherwise, if we fall off the end, return -1 to signal
-  // that there are no more passed runs at the end of this failed region and
-  // so it is safe for the caller to stop processing any more regions in this
-  // row.
-  template <int FUNC>
-  int skip_failed(uint16_t val) {
-    assert(valid());
-    DepthRun* prev = start;
-    while (cur < end) {
-      if (cur->compare<FUNC>(val)) {
-        return start - prev;
-      }
-      cur += cur->count;
-      start = cur;
-    }
-    return -1;
-  }
-
-  // Helper to convert function parameters into template parameters to hoist
-  // some checks out of inner loops.
-  ALWAYS_INLINE int skip_failed(uint16_t val, GLenum func) {
-    switch (func) {
-      case GL_LEQUAL:
-        return skip_failed<GL_LEQUAL>(val);
-      case GL_LESS:
-        return skip_failed<GL_LESS>(val);
-      default:
-        assert(false);
-        return -1;
-    }
-  }
-
-  // Find a region of runs that passes the depth test. It is assumed the caller
-  // has called skip_failed first to skip past any runs that failed the depth
-  // test. This stops when it finds a run that fails the depth test or we fall
-  // off the end of the row. If the write mask is enabled, this will insert runs
-  // to represent this new region that passed the depth test. The length of the
-  // region is returned.
-  template <int FUNC, bool MASK>
-  int check_passed(uint16_t val) {
-    assert(valid());
-    DepthRun* prev = cur;
-    while (cur < end) {
-      if (!cur->compare<FUNC>(val)) {
-        break;
-      }
-      DepthRun* next = cur + cur->count;
-      if (next > end) {
-        if (MASK) {
-          // Chop the current run where the end of the span falls, making a new
-          // run from the end of the span till the next run. The beginning of
-          // the current run will be folded into the run from the start of the
-          // passed region before returning below.
-          *end = DepthRun(cur->depth, next - end);
-        }
-        // If the next run starts past the end, then just advance the current
-        // run to the end to signal that we're now at the end of the row.
-        next = end;
-      }
-      cur = next;
-    }
-    // If we haven't advanced past the start of the span region, then we found
-    // nothing that passed.
-    if (cur <= start) {
-      return 0;
-    }
-    // If 'end' fell within the middle of a passing run, then 'cur' will end up
-    // pointing at the new partial run created at 'end' where the passing run
-    // was split to accommodate starting in the middle. The preceding runs will
-    // be fixed below to properly join with this new split.
-    int passed = cur - start;
-    if (MASK) {
-      // If the search started from a run before the start of the span, then
-      // edit that run to meet up with the start.
-      if (prev < start) {
-        prev->count = start - prev;
-      }
-      // Create a new run for the entirety of the passed samples.
-      *start = DepthRun(val, passed);
-    }
-    start = cur;
-    return passed;
-  }
-
-  // Helper to convert function parameters into template parameters to hoist
-  // some checks out of inner loops.
-  template <bool MASK>
-  ALWAYS_INLINE int check_passed(uint16_t val, GLenum func) {
-    switch (func) {
-      case GL_LEQUAL:
-        return check_passed<GL_LEQUAL, MASK>(val);
-      case GL_LESS:
-        return check_passed<GL_LESS, MASK>(val);
-      default:
-        assert(false);
-        return 0;
-    }
-  }
-
-  ALWAYS_INLINE int check_passed(uint16_t val, GLenum func, bool mask) {
-    return mask ? check_passed<true>(val, func)
-                : check_passed<false>(val, func);
-  }
-
-  // Fill a region of runs with a given depth value, bypassing any depth test.
-  ALWAYS_INLINE void fill(uint16_t depth) {
-    check_passed<GL_ALWAYS, true>(depth);
-  }
-};
-
 struct Texture {
   GLenum internal_format = 0;
   int width = 0;
   int height = 0;
-  int depth = 0;
   char* buf = nullptr;
   size_t buf_size = 0;
   uint32_t buf_stride = 0;
@@ -599,8 +418,8 @@ struct Texture {
   uint32_t clear_val = 0;
   uint32_t* cleared_rows = nullptr;
 
-  void init_depth_runs(uint16_t z);
-  void fill_depth_runs(uint16_t z);
+  void init_depth_runs(uint32_t z);
+  void fill_depth_runs(uint32_t z, const IntRect& scissor);
 
   void enable_delayed_clear(uint32_t val) {
     delay_clear = height;
@@ -631,11 +450,14 @@ struct Texture {
   // Set an external backing buffer of this texture.
   void set_buffer(void* new_buf, size_t new_stride) {
     assert(!should_free());
-    // Ensure that the supplied stride is at least as big as the internally
-    // calculated aligned stride.
+    // Ensure that the supplied stride is at least as big as the row data and
+    // is aligned to the smaller of either the BPP or word-size. We need to at
+    // least be able to sample data from within a row and sample whole pixels
+    // of smaller formats without risking unaligned access.
     set_bpp();
     set_stride();
-    assert(new_stride >= buf_stride);
+    assert(new_stride >= size_t(bpp() * width) &&
+           new_stride % min(bpp(), sizeof(uint32_t)) == 0);
 
     buf = (char*)new_buf;
     buf_size = 0;
@@ -657,7 +479,7 @@ struct Texture {
       // the current stride, to hopefully avoid reallocations when size would
       // otherwise change too much...
       size_t max_stride = max(buf_stride, aligned_stride(buf_bpp * min_width));
-      size_t size = max_stride * max(height, min_height) * max(depth, 1);
+      size_t size = max_stride * max(height, min_height);
       if ((!buf && size > 0) || size > buf_size) {
         // Allocate with a SIMD register-sized tail of padding at the end so we
         // can safely read or write past the end of the texture with SIMD ops.
@@ -668,7 +490,7 @@ struct Texture {
         // just to be safe. All other texture types and use-cases should be
         // safe to omit padding.
         size_t padding =
-            internal_format == GL_DEPTH_COMPONENT16 || max(width, min_width) < 2
+            internal_format == GL_DEPTH_COMPONENT24 || max(width, min_width) < 2
                 ? sizeof(Float)
                 : 0;
         char* new_buf = (char*)realloc(buf, size + padding);
@@ -718,19 +540,19 @@ struct Texture {
   }
 
   // Get a pointer for sampling at the given offset
-  char* sample_ptr(int x, int y, int z = 0) const {
-    return buf + (height * z + y) * stride() + x * bpp();
+  char* sample_ptr(int x, int y) const {
+    return buf + y * stride() + x * bpp();
   }
 
   // Get a pointer for sampling the requested region and limit to the provided
   // sampling bounds
-  char* sample_ptr(const IntRect& req, const IntRect& bounds, int z,
+  char* sample_ptr(const IntRect& req, const IntRect& bounds,
                    bool invertY = false) const {
     // Offset the sample pointer by the clamped bounds
     int x = req.x0 + bounds.x0;
     // Invert the Y offset if necessary
     int y = invertY ? req.y1 - 1 - bounds.y0 : req.y0 + bounds.y0;
-    return sample_ptr(x, y, z);
+    return sample_ptr(x, y);
   }
 };
 
@@ -762,10 +584,15 @@ struct Program {
 };
 
 // clang-format off
-// for GL defines to fully expand
+// Fully-expand GL defines while ignoring more than 4 suffixes
 #define CONCAT_KEY(prefix, x, y, z, w, ...) prefix##x##y##z##w
-#define BLEND_KEY(...) CONCAT_KEY(BLEND_, __VA_ARGS__, 0, 0)
-#define MASK_BLEND_KEY(...) CONCAT_KEY(MASK_BLEND_, __VA_ARGS__, 0, 0)
+// Generate a blend key enum symbol
+#define BLEND_KEY(...) CONCAT_KEY(BLEND_, __VA_ARGS__, 0, 0, 0)
+#define MASK_BLEND_KEY(...) CONCAT_KEY(MASK_BLEND_, __VA_ARGS__, 0, 0, 0)
+#define AA_BLEND_KEY(...) CONCAT_KEY(AA_BLEND_, __VA_ARGS__, 0, 0, 0)
+#define AA_MASK_BLEND_KEY(...) CONCAT_KEY(AA_MASK_BLEND_, __VA_ARGS__, 0, 0, 0)
+
+// Utility macro to easily generate similar code for all implemented blend modes
 #define FOR_EACH_BLEND_KEY(macro)                                              \
   macro(GL_ONE, GL_ZERO, 0, 0)                                                 \
   macro(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)  \
@@ -778,15 +605,40 @@ struct Program {
   macro(GL_ONE, GL_ONE, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)                        \
   macro(GL_ONE_MINUS_DST_ALPHA, GL_ONE, GL_ZERO, GL_ONE)                       \
   macro(GL_CONSTANT_COLOR, GL_ONE_MINUS_SRC_COLOR, 0, 0)                       \
-  macro(GL_ONE, GL_ONE_MINUS_SRC1_COLOR, 0, 0)
+  macro(GL_ONE, GL_ONE_MINUS_SRC1_COLOR, 0, 0)                                 \
+  macro(GL_MIN, 0, 0, 0)                                                       \
+  macro(GL_MAX, 0, 0, 0)                                                       \
+  macro(GL_MULTIPLY_KHR, 0, 0, 0)                                              \
+  macro(GL_SCREEN_KHR, 0, 0, 0)                                                \
+  macro(GL_OVERLAY_KHR, 0, 0, 0)                                               \
+  macro(GL_DARKEN_KHR, 0, 0, 0)                                                \
+  macro(GL_LIGHTEN_KHR, 0, 0, 0)                                               \
+  macro(GL_COLORDODGE_KHR, 0, 0, 0)                                            \
+  macro(GL_COLORBURN_KHR, 0, 0, 0)                                             \
+  macro(GL_HARDLIGHT_KHR, 0, 0, 0)                                             \
+  macro(GL_SOFTLIGHT_KHR, 0, 0, 0)                                             \
+  macro(GL_DIFFERENCE_KHR, 0, 0, 0)                                            \
+  macro(GL_EXCLUSION_KHR, 0, 0, 0)                                             \
+  macro(GL_HSL_HUE_KHR, 0, 0, 0)                                               \
+  macro(GL_HSL_SATURATION_KHR, 0, 0, 0)                                        \
+  macro(GL_HSL_COLOR_KHR, 0, 0, 0)                                             \
+  macro(GL_HSL_LUMINOSITY_KHR, 0, 0, 0)                                        \
+  macro(SWGL_BLEND_DROP_SHADOW, 0, 0, 0)                                       \
+  macro(SWGL_BLEND_SUBPIXEL_TEXT, 0, 0, 0)
 
 #define DEFINE_BLEND_KEY(...) BLEND_KEY(__VA_ARGS__),
 #define DEFINE_MASK_BLEND_KEY(...) MASK_BLEND_KEY(__VA_ARGS__),
+#define DEFINE_AA_BLEND_KEY(...) AA_BLEND_KEY(__VA_ARGS__),
+#define DEFINE_AA_MASK_BLEND_KEY(...) AA_MASK_BLEND_KEY(__VA_ARGS__),
 enum BlendKey : uint8_t {
   FOR_EACH_BLEND_KEY(DEFINE_BLEND_KEY)
   FOR_EACH_BLEND_KEY(DEFINE_MASK_BLEND_KEY)
+  FOR_EACH_BLEND_KEY(DEFINE_AA_BLEND_KEY)
+  FOR_EACH_BLEND_KEY(DEFINE_AA_MASK_BLEND_KEY)
   BLEND_KEY_NONE = BLEND_KEY(GL_ONE, GL_ZERO),
-  MASK_BLEND_KEY_NONE = MASK_BLEND_KEY(GL_ONE, GL_ZERO)
+  MASK_BLEND_KEY_NONE = MASK_BLEND_KEY(GL_ONE, GL_ZERO),
+  AA_BLEND_KEY_NONE = AA_BLEND_KEY(GL_ONE, GL_ZERO),
+  AA_MASK_BLEND_KEY_NONE = AA_MASK_BLEND_KEY(GL_ONE, GL_ZERO),
 };
 // clang-format on
 
@@ -904,7 +756,7 @@ struct Context {
   bool scissortest = false;
   IntRect scissor = {0, 0, 0, 0};
 
-  uint32_t clearcolor = 0;
+  GLfloat clearcolor[4] = {0, 0, 0, 0};
   GLdouble cleardepth = 1;
 
   int unpack_row_length = 0;
@@ -914,14 +766,10 @@ struct Context {
 
   struct TextureUnit {
     GLuint texture_2d_binding = 0;
-    GLuint texture_3d_binding = 0;
-    GLuint texture_2d_array_binding = 0;
     GLuint texture_rectangle_binding = 0;
 
     void unlink(GLuint n) {
       ::unlink(texture_2d_binding, n);
-      ::unlink(texture_3d_binding, n);
-      ::unlink(texture_2d_array_binding, n);
       ::unlink(texture_rectangle_binding, n);
     }
   };
@@ -955,10 +803,6 @@ struct Context {
         return vertex_arrays[current_vertex_array].element_array_buffer_binding;
       case GL_TEXTURE_2D:
         return texture_units[active_texture_unit].texture_2d_binding;
-      case GL_TEXTURE_2D_ARRAY:
-        return texture_units[active_texture_unit].texture_2d_array_binding;
-      case GL_TEXTURE_3D:
-        return texture_units[active_texture_unit].texture_3d_binding;
       case GL_TEXTURE_RECTANGLE:
         return texture_units[active_texture_unit].texture_rectangle_binding;
       case GL_TIME_ELAPSED:
@@ -986,10 +830,6 @@ struct Context {
     return textures[texture_units[unit].texture_2d_binding];
   }
 
-  Texture& get_texture(sampler2DArray, int unit) {
-    return textures[texture_units[unit].texture_2d_array_binding];
-  }
-
   Texture& get_texture(sampler2DRect, int unit) {
     return textures[texture_units[unit].texture_rectangle_binding];
   }
@@ -1009,12 +849,6 @@ static FragmentShaderImpl* fragment_shader = nullptr;
 static BlendKey blend_key = BLEND_KEY_NONE;
 
 static void prepare_texture(Texture& t, const IntRect* skip = nullptr);
-
-template <typename S>
-static inline void init_depth(S* s, Texture& t) {
-  s->depth = max(t.depth, 1);
-  s->height_stride = s->stride * t.height;
-}
 
 template <typename S>
 static inline void init_filter(S* s, Texture& t) {
@@ -1063,12 +897,6 @@ static inline void null_filter(S* s) {
 }
 
 template <typename S>
-static inline void null_depth(S* s) {
-  s->depth = 1;
-  s->height_stride = s->stride;
-}
-
-template <typename S>
 S* lookup_sampler(S* s, int texture) {
   Texture& t = ctx->get_texture(s, texture);
   if (!t.buf) {
@@ -1088,21 +916,6 @@ S* lookup_isampler(S* s, int texture) {
     null_sampler(s);
   } else {
     init_sampler(s, t);
-  }
-  return s;
-}
-
-template <typename S>
-S* lookup_sampler_array(S* s, int texture) {
-  Texture& t = ctx->get_texture(s, texture);
-  if (!t.buf) {
-    null_sampler(s);
-    null_depth(s);
-    null_filter(s);
-  } else {
-    init_sampler(s, t);
-    init_depth(s, t);
-    init_filter(s, t);
   }
   return s;
 }
@@ -1290,10 +1103,17 @@ void Disable(GLenum cap) {
 GLenum GetError() { return GL_NO_ERROR; }
 
 static const char* const extensions[] = {
-    "GL_ARB_blend_func_extended", "GL_ARB_copy_image",
-    "GL_ARB_draw_instanced",      "GL_ARB_explicit_attrib_location",
-    "GL_ARB_instanced_arrays",    "GL_ARB_invalidate_subdata",
-    "GL_ARB_texture_storage",     "GL_EXT_timer_query",
+    "GL_ARB_blend_func_extended",
+    "GL_ARB_clear_texture",
+    "GL_ARB_copy_image",
+    "GL_ARB_draw_instanced",
+    "GL_ARB_explicit_attrib_location",
+    "GL_ARB_instanced_arrays",
+    "GL_ARB_invalidate_subdata",
+    "GL_ARB_texture_storage",
+    "GL_EXT_timer_query",
+    "GL_KHR_blend_equation_advanced",
+    "GL_KHR_blend_equation_advanced_coherent",
     "GL_APPLE_rgb_422",
 };
 
@@ -1308,7 +1128,7 @@ void GetIntegerv(GLenum pname, GLint* params) {
       params[0] = 1 << 15;
       break;
     case GL_MAX_ARRAY_TEXTURE_LAYERS:
-      params[0] = 1 << 15;
+      params[0] = 0;
       break;
     case GL_READ_FRAMEBUFFER_BINDING:
       params[0] = ctx->read_framebuffer_binding;
@@ -1357,6 +1177,8 @@ const char* GetString(GLenum name) {
       return "Software WebRender";
     case GL_VERSION:
       return "3.2";
+    case GL_SHADING_LANGUAGE_VERSION:
+      return "1.50";
     default:
       debugf("unhandled glGetString parameter %x\n", name);
       assert(false);
@@ -1432,6 +1254,37 @@ GLenum remap_blendfunc(GLenum rgb, GLenum a) {
   return a;
 }
 
+// Generate a hashed blend key based on blend func and equation state. This
+// allows all the blend state to be processed down to a blend key that can be
+// dealt with inside a single switch statement.
+static void hash_blend_key() {
+  GLenum srgb = ctx->blendfunc_srgb;
+  GLenum drgb = ctx->blendfunc_drgb;
+  GLenum sa = ctx->blendfunc_sa;
+  GLenum da = ctx->blendfunc_da;
+  GLenum equation = ctx->blend_equation;
+#define HASH_BLEND_KEY(x, y, z, w) ((x << 4) | (y) | (z << 24) | (w << 20))
+  // Basic non-separate blend funcs used the two argument form
+  int hash = HASH_BLEND_KEY(srgb, drgb, 0, 0);
+  // Separate alpha blend funcs use the 4 argument hash
+  if (srgb != sa || drgb != da) hash |= HASH_BLEND_KEY(0, 0, sa, da);
+  // Any other blend equation than the default func_add ignores the func and
+  // instead generates a one-argument hash based on the equation
+  if (equation != GL_FUNC_ADD) hash = HASH_BLEND_KEY(equation, 0, 0, 0);
+  switch (hash) {
+#define MAP_BLEND_KEY(...)                   \
+  case HASH_BLEND_KEY(__VA_ARGS__):          \
+    ctx->blend_key = BLEND_KEY(__VA_ARGS__); \
+    break;
+    FOR_EACH_BLEND_KEY(MAP_BLEND_KEY)
+    default:
+      debugf("blendfunc: %x, %x, separate: %x, %x, equation: %x\n", srgb, drgb,
+             sa, da, equation);
+      assert(false);
+      break;
+  }
+}
+
 void BlendFunc(GLenum srgb, GLenum drgb, GLenum sa, GLenum da) {
   ctx->blendfunc_srgb = srgb;
   ctx->blendfunc_drgb = drgb;
@@ -1440,20 +1293,7 @@ void BlendFunc(GLenum srgb, GLenum drgb, GLenum sa, GLenum da) {
   ctx->blendfunc_sa = sa;
   ctx->blendfunc_da = da;
 
-#define HASH_BLEND_KEY(x, y, z, w) ((x << 4) | (y) | (z << 24) | (w << 20))
-  int hash = HASH_BLEND_KEY(srgb, drgb, 0, 0);
-  if (srgb != sa || drgb != da) hash |= HASH_BLEND_KEY(0, 0, sa, da);
-  switch (hash) {
-#define MAP_BLEND_KEY(...)                   \
-  case HASH_BLEND_KEY(__VA_ARGS__):          \
-    ctx->blend_key = BLEND_KEY(__VA_ARGS__); \
-    break;
-    FOR_EACH_BLEND_KEY(MAP_BLEND_KEY)
-    default:
-      debugf("blendfunc: %x, %x, separate: %x, %x\n", srgb, drgb, sa, da);
-      assert(false);
-      break;
-  }
+  hash_blend_key();
 }
 
 void BlendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
@@ -1462,8 +1302,12 @@ void BlendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
 }
 
 void BlendEquation(GLenum mode) {
-  assert(mode == GL_FUNC_ADD);
-  ctx->blend_equation = mode;
+  assert(mode == GL_FUNC_ADD || mode == GL_MIN || mode == GL_MAX ||
+         (mode >= GL_MULTIPLY_KHR && mode <= GL_HSL_LUMINOSITY_KHR));
+  if (mode != ctx->blend_equation) {
+    ctx->blend_equation = mode;
+    hash_blend_key();
+  }
 }
 
 void DepthMask(GLboolean flag) { ctx->depthmask = flag; }
@@ -1484,8 +1328,10 @@ void SetScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
 }
 
 void ClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
-  I32 c = round_pixel((Float){b, g, r, a});
-  ctx->clearcolor = bit_cast<uint32_t>(CONVERT(c, U8));
+  ctx->clearcolor[0] = r;
+  ctx->clearcolor[1] = g;
+  ctx->clearcolor[2] = b;
+  ctx->clearcolor[3] = a;
 }
 
 void ClearDepth(GLdouble depth) { ctx->cleardepth = depth; }
@@ -1737,7 +1583,7 @@ void PixelStorei(GLenum name, GLint param) {
 static GLenum remap_internal_format(GLenum format) {
   switch (format) {
     case GL_DEPTH_COMPONENT:
-      return GL_DEPTH_COMPONENT16;
+      return GL_DEPTH_COMPONENT24;
     case GL_RGBA:
       return GL_RGBA8;
     case GL_RED:
@@ -1749,24 +1595,6 @@ static GLenum remap_internal_format(GLenum format) {
     default:
       return format;
   }
-}
-
-void TexStorage3D(GLenum target, GLint levels, GLenum internal_format,
-                  GLsizei width, GLsizei height, GLsizei depth) {
-  assert(levels == 1);
-  Texture& t = ctx->textures[ctx->get_binding(target)];
-  internal_format = remap_internal_format(internal_format);
-  bool changed = false;
-  if (t.width != width || t.height != height || t.depth != depth ||
-      t.internal_format != internal_format) {
-    changed = true;
-    t.internal_format = internal_format;
-    t.width = width;
-    t.height = height;
-    t.depth = depth;
-  }
-  t.disable_delayed_clear();
-  t.allocate(changed);
 }
 
 }  // extern "C"
@@ -1828,13 +1656,12 @@ static void set_tex_storage(Texture& t, GLenum external_format, GLsizei width,
                             GLsizei min_height = 0) {
   GLenum internal_format = remap_internal_format(external_format);
   bool changed = false;
-  if (t.width != width || t.height != height || t.depth != 0 ||
+  if (t.width != width || t.height != height ||
       t.internal_format != internal_format) {
     changed = true;
     t.internal_format = internal_format;
     t.width = width;
     t.height = height;
-    t.depth = 0;
   }
   // If we are changed from an internally managed buffer to an externally
   // supplied one or vice versa, ensure that we clean up old buffer state.
@@ -1959,51 +1786,6 @@ void TexImage2D(GLenum target, GLint level, GLint internal_format,
   TexSubImage2D(target, 0, 0, 0, width, height, format, ty, data);
 }
 
-void TexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                   GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
-                   GLenum format, GLenum ty, void* data) {
-  if (level != 0) {
-    assert(false);
-    return;
-  }
-  data = get_pixel_unpack_buffer_data(data);
-  if (!data) return;
-  Texture& t = ctx->textures[ctx->get_binding(target)];
-  prepare_texture(t);
-  assert(ctx->unpack_row_length == 0 || ctx->unpack_row_length >= width);
-  GLsizei row_length =
-      ctx->unpack_row_length != 0 ? ctx->unpack_row_length : width;
-  assert(t.internal_format == internal_format_for_data(format, ty));
-  int src_bpp = format_requires_conversion(format, t.internal_format)
-                    ? bytes_for_internal_format(format)
-                    : t.bpp();
-  if (!src_bpp || !t.buf) return;
-  const uint8_t* src = (const uint8_t*)data;
-  assert(xoffset + width <= t.width);
-  assert(yoffset + height <= t.height);
-  assert(zoffset + depth <= t.depth);
-  size_t dest_stride = t.stride();
-  size_t src_stride = row_length * src_bpp;
-  for (int z = 0; z < depth; z++) {
-    convert_copy(format, t.internal_format,
-                 (uint8_t*)t.sample_ptr(xoffset, yoffset, zoffset + z),
-                 dest_stride, src, src_stride, width, height);
-    src += src_stride * height;
-  }
-}
-
-void TexImage3D(GLenum target, GLint level, GLint internal_format,
-                GLsizei width, GLsizei height, GLsizei depth, GLint border,
-                GLenum format, GLenum ty, void* data) {
-  if (level != 0) {
-    assert(false);
-    return;
-  }
-  assert(border == 0);
-  TexStorage3D(target, 1, internal_format, width, height, depth);
-  TexSubImage3D(target, 0, 0, 0, 0, width, height, depth, format, ty, data);
-}
-
 void GenerateMipmap(UNUSED GLenum target) {
   // TODO: support mipmaps
 }
@@ -2057,9 +1839,7 @@ void GenRenderbuffers(int n, GLuint* result) {
 void Renderbuffer::on_erase() {
   for (auto* fb : ctx->framebuffers) {
     if (fb) {
-      if (unlink(fb->color_attachment, texture)) {
-        fb->layer = 0;
-      }
+      unlink(fb->color_attachment, texture);
       unlink(fb->depth_attachment, texture);
     }
   }
@@ -2095,10 +1875,11 @@ void RenderbufferStorage(GLenum target, GLenum internal_format, GLsizei width,
   }
   switch (internal_format) {
     case GL_DEPTH_COMPONENT:
+    case GL_DEPTH_COMPONENT16:
     case GL_DEPTH_COMPONENT24:
     case GL_DEPTH_COMPONENT32:
-      // Force depth format to 16 bits...
-      internal_format = GL_DEPTH_COMPONENT16;
+      // Force depth format to 24 bits...
+      internal_format = GL_DEPTH_COMPONENT24;
       break;
   }
   set_tex_storage(ctx->textures[r.texture], internal_format, width, height);
@@ -2250,24 +2031,7 @@ void FramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget,
   Framebuffer& fb = ctx->framebuffers[ctx->get_binding(target)];
   if (attachment == GL_COLOR_ATTACHMENT0) {
     fb.color_attachment = texture;
-    fb.layer = 0;
   } else if (attachment == GL_DEPTH_ATTACHMENT) {
-    fb.depth_attachment = texture;
-  } else {
-    assert(0);
-  }
-}
-
-void FramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture,
-                             GLint level, GLint layer) {
-  assert(target == GL_READ_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER);
-  assert(level == 0);
-  Framebuffer& fb = ctx->framebuffers[ctx->get_binding(target)];
-  if (attachment == GL_COLOR_ATTACHMENT0) {
-    fb.color_attachment = texture;
-    fb.layer = layer;
-  } else if (attachment == GL_DEPTH_ATTACHMENT) {
-    assert(layer == 0);
     fb.depth_attachment = texture;
   } else {
     assert(0);
@@ -2282,7 +2046,6 @@ void FramebufferRenderbuffer(GLenum target, GLenum attachment,
   Renderbuffer& rb = ctx->renderbuffers[renderbuffer];
   if (attachment == GL_COLOR_ATTACHMENT0) {
     fb.color_attachment = rb.texture;
-    fb.layer = 0;
   } else if (attachment == GL_DEPTH_ATTACHMENT) {
     fb.depth_attachment = rb.texture;
   } else {
@@ -2292,11 +2055,18 @@ void FramebufferRenderbuffer(GLenum target, GLenum attachment,
 
 }  // extern "C"
 
-static inline Framebuffer* get_framebuffer(GLenum target) {
+static inline Framebuffer* get_framebuffer(GLenum target,
+                                           bool fallback = false) {
   if (target == GL_FRAMEBUFFER) {
     target = GL_DRAW_FRAMEBUFFER;
   }
-  return ctx->framebuffers.find(ctx->get_binding(target));
+  Framebuffer* fb = ctx->framebuffers.find(ctx->get_binding(target));
+  if (fallback && !fb) {
+    // If the specified framebuffer isn't found and a fallback is requested,
+    // use the default framebuffer.
+    fb = &ctx->framebuffers[0];
+  }
+  return fb;
 }
 
 template <typename T>
@@ -2345,20 +2115,22 @@ static inline void clear_row(T* buf, size_t len, T value, uint32_t chunk) {
 }
 
 template <typename T>
-static void clear_buffer(Texture& t, T value, int layer, IntRect bb,
-                         int skip_start = 0, int skip_end = 0) {
+static void clear_buffer(Texture& t, T value, IntRect bb, int skip_start = 0,
+                         int skip_end = 0) {
   if (!t.buf) return;
   skip_start = max(skip_start, bb.x0);
   skip_end = max(skip_end, skip_start);
   assert(sizeof(T) == t.bpp());
   size_t stride = t.stride();
-  // When clearing multiple full-width rows, collapse them into a single
-  // large "row" to avoid redundant setup from clearing each row individually.
-  if (bb.width() == t.width && bb.height() > 1 && skip_start >= skip_end) {
+  // When clearing multiple full-width rows, collapse them into a single large
+  // "row" to avoid redundant setup from clearing each row individually. Note
+  // that we can only safely do this if the stride is tightly packed.
+  if (bb.width() == t.width && bb.height() > 1 && skip_start >= skip_end &&
+      (t.should_free() || stride == t.width * sizeof(T))) {
     bb.x1 += (stride / sizeof(T)) * (bb.height() - 1);
     bb.y1 = bb.y0 + 1;
   }
-  T* buf = (T*)t.sample_ptr(bb.x0, bb.y0, layer);
+  T* buf = (T*)t.sample_ptr(bb.x0, bb.y0);
   uint32_t chunk = clear_chunk(value);
   for (int rows = bb.height(); rows > 0; rows--) {
     if (bb.x0 < skip_start) {
@@ -2368,14 +2140,6 @@ static void clear_buffer(Texture& t, T value, int layer, IntRect bb,
       clear_row(buf + (skip_end - bb.x0), bb.x1 - skip_end, value, chunk);
     }
     buf += stride / sizeof(T);
-  }
-}
-
-template <typename T>
-static inline void clear_buffer(Texture& t, T value, int layer = 0) {
-  IntRect bb = ctx->apply_scissor(t);
-  if (bb.width() > 0) {
-    clear_buffer<T>(t, value, layer, bb);
   }
 }
 
@@ -2424,7 +2188,7 @@ static void force_clear(Texture& t, const IntRect* skip = nullptr) {
       while (mask) {
         int count = __builtin_ctz(mask);
         if (count > 0) {
-          clear_buffer<T>(t, t.clear_val, 0,
+          clear_buffer<T>(t, t.clear_val,
                           IntRect{0, start, t.width, start + count}, skip_start,
                           skip_end);
           t.delay_clear -= count;
@@ -2437,7 +2201,7 @@ static void force_clear(Texture& t, const IntRect* skip = nullptr) {
       }
       int count = (i + 1) * 32 - start;
       if (count > 0) {
-        clear_buffer<T>(t, t.clear_val, 0,
+        clear_buffer<T>(t, t.clear_val,
                         IntRect{0, start, t.width, start + count}, skip_start,
                         skip_end);
         t.delay_clear -= count;
@@ -2466,69 +2230,27 @@ static void prepare_texture(Texture& t, const IntRect* skip) {
   }
 }
 
-static inline bool clear_requires_scissor(Texture& t) {
-  return ctx->scissortest && !ctx->scissor.contains(t.offset_bounds());
-}
-
 // Setup a clear on a texture. This may either force an immediate clear or
 // potentially punt to a delayed clear, if applicable.
 template <typename T>
-static void request_clear(Texture& t, int layer, T value) {
+static void request_clear(Texture& t, T value, const IntRect& scissor) {
   // If the clear would require a scissor, force clear anything outside
   // the scissor, and then immediately clear anything inside the scissor.
-  if (clear_requires_scissor(t)) {
-    IntRect skip = ctx->scissor - t.offset;
+  if (!scissor.contains(t.offset_bounds())) {
+    IntRect skip = scissor - t.offset;
     force_clear<T>(t, &skip);
-    clear_buffer<T>(t, value, layer);
-  } else if (t.depth > 1) {
-    // Delayed clear is not supported on texture arrays.
-    t.disable_delayed_clear();
-    clear_buffer<T>(t, value, layer);
+    clear_buffer<T>(t, value, skip.intersection(t.bounds()));
   } else {
     // Do delayed clear for 2D texture without scissor.
     t.enable_delayed_clear(value);
   }
 }
 
-// Initialize a depth texture by setting the first run in each row to encompass
-// the entire row.
-void Texture::init_depth_runs(uint16_t depth) {
-  if (!buf) return;
-  DepthRun* runs = (DepthRun*)buf;
-  for (int y = 0; y < height; y++) {
-    runs[0] = DepthRun(depth, width);
-    runs += stride() / sizeof(DepthRun);
-  }
-  set_cleared(true);
-}
-
-// Fill a portion of the run array with flattened depth samples.
-static ALWAYS_INLINE void fill_depth_run(DepthRun* dst, size_t n,
-                                         uint16_t depth) {
-  fill_n((uint32_t*)dst, n, uint32_t(depth));
-}
-
-// Fills a scissored region of a depth texture with a given depth.
-void Texture::fill_depth_runs(uint16_t depth) {
-  if (!buf) return;
-  assert(cleared());
-  IntRect bb = ctx->apply_scissor(*this);
-  DepthRun* runs = (DepthRun*)sample_ptr(0, bb.y0);
-  for (int rows = bb.height(); rows > 0; rows--) {
-    if (bb.width() >= width) {
-      // If the scissor region encompasses the entire row, reset the row to a
-      // single run encompassing the entire row.
-      runs[0] = DepthRun(depth, width);
-    } else if (runs->is_flat()) {
-      // If the row is flattened, just directly fill the portion of the row.
-      fill_depth_run(&runs[bb.x0], bb.width(), depth);
-    } else {
-      // Otherwise, if we are still using runs, then set up a cursor to fill
-      // it with depth runs.
-      DepthCursor(runs, width, bb.x0, bb.width()).fill(depth);
-    }
-    runs += stride() / sizeof(DepthRun);
-  }
+template <typename T>
+static inline void request_clear(Texture& t, T value) {
+  // If scissoring is enabled, use the scissor rect. Otherwise, just scissor to
+  // the entire texture bounds.
+  request_clear(t, value, ctx->scissortest ? ctx->scissor : t.offset_bounds());
 }
 
 extern "C" {
@@ -2538,7 +2260,6 @@ void InitDefaultFramebuffer(int x, int y, int width, int height, int stride,
   Framebuffer& fb = ctx->framebuffers[0];
   if (!fb.color_attachment) {
     GenTextures(1, &fb.color_attachment);
-    fb.layer = 0;
   }
   // If the dimensions or buffer properties changed, we need to reallocate
   // the underlying storage for the color buffer texture.
@@ -2550,7 +2271,7 @@ void InitDefaultFramebuffer(int x, int y, int width, int height, int stride,
   }
   // Ensure dimensions of the depth buffer match the color buffer.
   Texture& depthtex = ctx->textures[fb.depth_attachment];
-  set_tex_storage(depthtex, GL_DEPTH_COMPONENT16, width, height);
+  set_tex_storage(depthtex, GL_DEPTH_COMPONENT24, width, height);
   depthtex.offset = IntPoint(x, y);
 }
 
@@ -2565,10 +2286,25 @@ void* GetColorBuffer(GLuint fbo, GLboolean flush, int32_t* width,
     prepare_texture(colortex);
   }
   assert(colortex.offset == IntPoint(0, 0));
-  *width = colortex.width;
-  *height = colortex.height;
-  *stride = colortex.stride();
-  return colortex.buf ? colortex.sample_ptr(0, 0, fb->layer) : nullptr;
+  if (width) {
+    *width = colortex.width;
+  }
+  if (height) {
+    *height = colortex.height;
+  }
+  if (stride) {
+    *stride = colortex.stride();
+  }
+  return colortex.buf ? colortex.sample_ptr(0, 0) : nullptr;
+}
+
+void ResolveFramebuffer(GLuint fbo) {
+  Framebuffer* fb = ctx->framebuffers.find(fbo);
+  if (!fb || !fb->color_attachment) {
+    return;
+  }
+  Texture& colortex = ctx->textures[fb->color_attachment];
+  prepare_texture(colortex);
 }
 
 void SetTextureBuffer(GLuint texid, GLenum internal_format, GLsizei width,
@@ -2587,40 +2323,168 @@ GLenum CheckFramebufferStatus(GLenum target) {
   return GL_FRAMEBUFFER_COMPLETE;
 }
 
-void Clear(GLbitfield mask) {
-  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER);
-  if ((mask & GL_COLOR_BUFFER_BIT) && fb.color_attachment) {
-    Texture& t = ctx->textures[fb.color_attachment];
-    assert(!t.locked);
-    if (t.internal_format == GL_RGBA8) {
-      uint32_t color = ctx->clearcolor;
-      request_clear<uint32_t>(t, fb.layer, color);
-    } else if (t.internal_format == GL_R8) {
-      uint8_t color = uint8_t((ctx->clearcolor >> 16) & 0xFF);
-      request_clear<uint8_t>(t, fb.layer, color);
-    } else if (t.internal_format == GL_RG8) {
-      uint16_t color = uint16_t((ctx->clearcolor & 0xFF00) |
-                                ((ctx->clearcolor >> 16) & 0xFF));
-      request_clear<uint16_t>(t, fb.layer, color);
-    } else {
-      assert(false);
-    }
+void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset,
+                      GLint zoffset, GLsizei width, GLsizei height,
+                      GLsizei depth, GLenum format, GLenum type,
+                      const void* data) {
+  if (level != 0) {
+    assert(false);
+    return;
   }
-  if ((mask & GL_DEPTH_BUFFER_BIT) && fb.depth_attachment) {
-    Texture& t = ctx->textures[fb.depth_attachment];
-    assert(t.internal_format == GL_DEPTH_COMPONENT16);
-    uint16_t depth = uint16_t(0xFFFF * ctx->cleardepth);
-    if (t.cleared() && clear_requires_scissor(t)) {
+  Texture& t = ctx->textures[texture];
+  assert(!t.locked);
+  if (width <= 0 || height <= 0 || depth <= 0) {
+    return;
+  }
+  assert(zoffset == 0 && depth == 1);
+  IntRect scissor = {xoffset, yoffset, xoffset + width, yoffset + height};
+  if (t.internal_format == GL_DEPTH_COMPONENT24) {
+    uint32_t value = 0xFFFFFF;
+    switch (format) {
+      case GL_DEPTH_COMPONENT:
+        switch (type) {
+          case GL_DOUBLE:
+            value = uint32_t(*(const GLdouble*)data * 0xFFFFFF);
+            break;
+          case GL_FLOAT:
+            value = uint32_t(*(const GLfloat*)data * 0xFFFFFF);
+            break;
+          default:
+            assert(false);
+            break;
+        }
+        break;
+      default:
+        assert(false);
+        break;
+    }
+    if (t.cleared() && !scissor.contains(t.offset_bounds())) {
       // If we need to scissor the clear and the depth buffer was already
       // initialized, then just fill runs for that scissor area.
-      t.fill_depth_runs(depth);
+      t.fill_depth_runs(value, scissor);
     } else {
       // Otherwise, the buffer is either uninitialized or the clear would
       // encompass the entire buffer. If uninitialized, we can safely fill
       // the entire buffer with any value and thus ignore any scissoring.
-      t.init_depth_runs(depth);
+      t.init_depth_runs(value);
     }
+    return;
   }
+
+  uint32_t color = 0xFF000000;
+  switch (type) {
+    case GL_FLOAT: {
+      const GLfloat* f = (const GLfloat*)data;
+      Float v = {0.0f, 0.0f, 0.0f, 1.0f};
+      switch (format) {
+        case GL_RGBA:
+          v.w = f[3];  // alpha
+          FALLTHROUGH;
+        case GL_RGB:
+          v.z = f[2];  // blue
+          FALLTHROUGH;
+        case GL_RG:
+          v.y = f[1];  // green
+          FALLTHROUGH;
+        case GL_RED:
+          v.x = f[0];  // red
+          break;
+        default:
+          assert(false);
+          break;
+      }
+      color = bit_cast<uint32_t>(CONVERT(round_pixel(v), U8));
+      break;
+    }
+    case GL_UNSIGNED_BYTE: {
+      const GLubyte* b = (const GLubyte*)data;
+      switch (format) {
+        case GL_RGBA:
+          color = (color & ~0xFF000000) | (uint32_t(b[3]) << 24);  // alpha
+          FALLTHROUGH;
+        case GL_RGB:
+          color = (color & ~0x00FF0000) | (uint32_t(b[2]) << 16);  // blue
+          FALLTHROUGH;
+        case GL_RG:
+          color = (color & ~0x0000FF00) | (uint32_t(b[1]) << 8);  // green
+          FALLTHROUGH;
+        case GL_RED:
+          color = (color & ~0x000000FF) | uint32_t(b[0]);  // red
+          break;
+        default:
+          assert(false);
+          break;
+      }
+      break;
+    }
+    default:
+      assert(false);
+      break;
+  }
+
+  switch (t.internal_format) {
+    case GL_RGBA8:
+      // Clear color needs to swizzle to BGRA.
+      request_clear<uint32_t>(t,
+                              (color & 0xFF00FF00) |
+                                  ((color << 16) & 0xFF0000) |
+                                  ((color >> 16) & 0xFF),
+                              scissor);
+      break;
+    case GL_R8:
+      request_clear<uint8_t>(t, uint8_t(color & 0xFF), scissor);
+      break;
+    case GL_RG8:
+      request_clear<uint16_t>(t, uint16_t(color & 0xFFFF), scissor);
+      break;
+    default:
+      assert(false);
+      break;
+  }
+}
+
+void ClearTexImage(GLuint texture, GLint level, GLenum format, GLenum type,
+                   const void* data) {
+  Texture& t = ctx->textures[texture];
+  IntRect scissor = t.offset_bounds();
+  ClearTexSubImage(texture, level, scissor.x0, scissor.y0, 0, scissor.width(),
+                   scissor.height(), 1, format, type, data);
+}
+
+void Clear(GLbitfield mask) {
+  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER, true);
+  if ((mask & GL_COLOR_BUFFER_BIT) && fb.color_attachment) {
+    Texture& t = ctx->textures[fb.color_attachment];
+    IntRect scissor = ctx->scissortest
+                          ? ctx->scissor.intersection(t.offset_bounds())
+                          : t.offset_bounds();
+    ClearTexSubImage(fb.color_attachment, 0, scissor.x0, scissor.y0, 0,
+                     scissor.width(), scissor.height(), 1, GL_RGBA, GL_FLOAT,
+                     ctx->clearcolor);
+  }
+  if ((mask & GL_DEPTH_BUFFER_BIT) && fb.depth_attachment) {
+    Texture& t = ctx->textures[fb.depth_attachment];
+    IntRect scissor = ctx->scissortest
+                          ? ctx->scissor.intersection(t.offset_bounds())
+                          : t.offset_bounds();
+    ClearTexSubImage(fb.depth_attachment, 0, scissor.x0, scissor.y0, 0,
+                     scissor.width(), scissor.height(), 1, GL_DEPTH_COMPONENT,
+                     GL_DOUBLE, &ctx->cleardepth);
+  }
+}
+
+void ClearColorRect(GLuint fbo, GLint xoffset, GLint yoffset, GLsizei width,
+                    GLsizei height, GLfloat r, GLfloat g, GLfloat b,
+                    GLfloat a) {
+  GLfloat color[] = {r, g, b, a};
+  Framebuffer& fb = ctx->framebuffers[fbo];
+  Texture& t = ctx->textures[fb.color_attachment];
+  IntRect scissor =
+      IntRect{xoffset, yoffset, xoffset + width, yoffset + height}.intersection(
+          t.offset_bounds());
+  ClearTexSubImage(fb.color_attachment, 0, scissor.x0, scissor.y0, 0,
+                   scissor.width(), scissor.height(), 1, GL_RGBA, GL_FLOAT,
+                   color);
 }
 
 void InvalidateFramebuffer(GLenum target, GLsizei num_attachments,
@@ -2694,8 +2558,7 @@ void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
     return;
   }
   convert_copy(format, t.internal_format, dest, destStride,
-               (const uint8_t*)t.sample_ptr(x, y, fb->layer), t.stride(), width,
-               height);
+               (const uint8_t*)t.sample_ptr(x, y), t.stride(), width, height);
 }
 
 void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
@@ -2704,6 +2567,7 @@ void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
                       GLint dstY, GLint dstZ, GLsizei srcWidth,
                       GLsizei srcHeight, GLsizei srcDepth) {
   assert(srcLevel == 0 && dstLevel == 0);
+  assert(srcZ == 0 && srcDepth == 1 && dstZ == 0);
   if (srcTarget == GL_RENDERBUFFER) {
     Renderbuffer& rb = ctx->renderbuffers[srcName];
     srcName = rb.texture;
@@ -2723,36 +2587,20 @@ void CopyImageSubData(GLuint srcName, GLenum srcTarget, UNUSED GLint srcLevel,
   assert(srctex.internal_format == dsttex.internal_format);
   assert(srcWidth >= 0);
   assert(srcHeight >= 0);
-  assert(srcDepth >= 0);
   assert(srcX + srcWidth <= srctex.width);
   assert(srcY + srcHeight <= srctex.height);
-  assert(srcZ + srcDepth <= max(srctex.depth, 1));
   assert(dstX + srcWidth <= dsttex.width);
   assert(dstY + srcHeight <= dsttex.height);
-  assert(dstZ + srcDepth <= max(dsttex.depth, 1));
   int bpp = srctex.bpp();
   int src_stride = srctex.stride();
   int dest_stride = dsttex.stride();
-  for (int z = 0; z < srcDepth; z++) {
-    char* dest = dsttex.sample_ptr(dstX, dstY, dstZ + z);
-    char* src = srctex.sample_ptr(srcX, srcY, srcZ + z);
-    for (int y = 0; y < srcHeight; y++) {
-      memcpy(dest, src, srcWidth * bpp);
-      dest += dest_stride;
-      src += src_stride;
-    }
+  char* dest = dsttex.sample_ptr(dstX, dstY);
+  char* src = srctex.sample_ptr(srcX, srcY);
+  for (int y = 0; y < srcHeight; y++) {
+    memcpy(dest, src, srcWidth * bpp);
+    dest += dest_stride;
+    src += src_stride;
   }
-}
-
-void CopyTexSubImage3D(GLenum target, UNUSED GLint level, GLint xoffset,
-                       GLint yoffset, GLint zoffset, GLint x, GLint y,
-                       GLsizei width, GLsizei height) {
-  assert(level == 0);
-  Framebuffer* fb = get_framebuffer(GL_READ_FRAMEBUFFER);
-  if (!fb) return;
-  CopyImageSubData(fb->color_attachment, GL_TEXTURE_3D, 0, x, y, fb->layer,
-                   ctx->get_binding(target), GL_TEXTURE_3D, 0, xoffset, yoffset,
-                   zoffset, width, height, 1);
 }
 
 void CopyTexSubImage2D(GLenum target, UNUSED GLint level, GLint xoffset,
@@ -2761,441 +2609,14 @@ void CopyTexSubImage2D(GLenum target, UNUSED GLint level, GLint xoffset,
   assert(level == 0);
   Framebuffer* fb = get_framebuffer(GL_READ_FRAMEBUFFER);
   if (!fb) return;
-  CopyImageSubData(fb->color_attachment, GL_TEXTURE_2D_ARRAY, 0, x, y,
-                   fb->layer, ctx->get_binding(target), GL_TEXTURE_2D_ARRAY, 0,
-                   xoffset, yoffset, 0, width, height, 1);
+  CopyImageSubData(fb->color_attachment, GL_TEXTURE_2D, 0, x, y, 0,
+                   ctx->get_binding(target), GL_TEXTURE_2D, 0, xoffset, yoffset,
+                   0, width, height, 1);
 }
 
 }  // extern "C"
 
-using ZMask = I32;
-
-static inline PackedRGBA8 convert_zmask(ZMask mask, uint32_t*) {
-  return bit_cast<PackedRGBA8>(mask);
-}
-
-static inline WideR8 convert_zmask(ZMask mask, uint8_t*) {
-  return CONVERT(mask, WideR8);
-}
-
-#if USE_SSE2
-#  define ZMASK_NONE_PASSED 0xFFFF
-#  define ZMASK_ALL_PASSED 0
-static inline uint32_t zmask_code(ZMask mask) {
-  return _mm_movemask_epi8(mask);
-}
-#else
-#  define ZMASK_NONE_PASSED 0xFFFFFFFFU
-#  define ZMASK_ALL_PASSED 0
-static inline uint32_t zmask_code(ZMask mask) {
-  return bit_cast<uint32_t>(CONVERT(mask, U8));
-}
-#endif
-
-// Interprets items in the depth buffer as sign-extended 32-bit depth values
-// instead of as runs. Returns a mask that signals which samples in the given
-// chunk passed or failed the depth test with given Z value.
-template <bool DISCARD, typename Z>
-static ALWAYS_INLINE bool check_depth(Z z, DepthRun* zbuf, ZMask& outmask,
-                                      int span = 4) {
-  // SSE2 does not support unsigned comparison. So ensure Z value is
-  // sign-extended to int32_t.
-  I32 src = I32(z);
-  I32 dest = unaligned_load<I32>(zbuf);
-  // Invert the depth test to check which pixels failed and should be discarded.
-  ZMask mask = ctx->depthfunc == GL_LEQUAL
-                   ?
-                   // GL_LEQUAL: Not(LessEqual) = Greater
-                   ZMask(src > dest)
-                   :
-                   // GL_LESS: Not(Less) = GreaterEqual
-                   ZMask(src >= dest);
-  // Mask off any unused lanes in the span.
-  mask |= ZMask(span) < ZMask{1, 2, 3, 4};
-  if (zmask_code(mask) == ZMASK_NONE_PASSED) {
-    return false;
-  }
-  if (!DISCARD && ctx->depthmask) {
-    unaligned_store(zbuf, (mask & dest) | (~mask & src));
-  }
-  outmask = mask;
-  return true;
-}
-
-static ALWAYS_INLINE I32 packDepth() {
-  return cast(fragment_shader->gl_FragCoord.z * 0xFFFF);
-}
-
-template <typename Z>
-static ALWAYS_INLINE void discard_depth(Z z, DepthRun* zbuf, I32 mask) {
-  if (ctx->depthmask) {
-    I32 src = I32(z);
-    I32 dest = unaligned_load<I32>(zbuf);
-    mask |= fragment_shader->swgl_IsPixelDiscarded;
-    unaligned_store(zbuf, (mask & dest) | (~mask & src));
-  }
-}
-
-static inline HalfRGBA8 packRGBA8(I32 a, I32 b) {
-#if USE_SSE2
-  return _mm_packs_epi32(a, b);
-#elif USE_NEON
-  return vcombine_u16(vqmovun_s32(a), vqmovun_s32(b));
-#else
-  return CONVERT(combine(a, b), HalfRGBA8);
-#endif
-}
-
-static inline WideRGBA8 pack_pixels_RGBA8(const vec4& v) {
-  ivec4 i = round_pixel(v);
-  HalfRGBA8 xz = packRGBA8(i.z, i.x);
-  HalfRGBA8 yw = packRGBA8(i.y, i.w);
-  HalfRGBA8 xyzwl = zipLow(xz, yw);
-  HalfRGBA8 xyzwh = zipHigh(xz, yw);
-  HalfRGBA8 lo = zip2Low(xyzwl, xyzwh);
-  HalfRGBA8 hi = zip2High(xyzwl, xyzwh);
-  return combine(lo, hi);
-}
-
-UNUSED static inline WideRGBA8 pack_pixels_RGBA8(const vec4_scalar& v) {
-  I32 i = round_pixel((Float){v.z, v.y, v.x, v.w});
-  HalfRGBA8 c = packRGBA8(i, i);
-  return combine(c, c);
-}
-
-static inline WideRGBA8 pack_pixels_RGBA8() {
-  return pack_pixels_RGBA8(fragment_shader->gl_FragColor);
-}
-
-// Load a partial span > 0 and < 4 pixels.
-template <typename V, typename P>
-static ALWAYS_INLINE V partial_load_span(const P* src, int span) {
-  return bit_cast<V>(
-      (span >= 2
-           ? combine(unaligned_load<V2<P>>(src),
-                     V2<P>{span > 2 ? unaligned_load<P>(src + 2) : P(0), 0})
-           : V4<P>{unaligned_load<P>(src), 0, 0, 0}));
-}
-
-// Store a partial span > 0 and < 4 pixels.
-template <typename V, typename P>
-static ALWAYS_INLINE void partial_store_span(P* dst, V src, int span) {
-  auto pixels = bit_cast<V4<P>>(src);
-  if (span >= 2) {
-    unaligned_store(dst, lowHalf(pixels));
-    if (span > 2) {
-      unaligned_store(dst + 2, pixels.z);
-    }
-  } else {
-    unaligned_store(dst, pixels.x);
-  }
-}
-
-// Dispatcher that chooses when to load a full or partial span
-template <typename V, typename P>
-static ALWAYS_INLINE V load_span(const P* src, int span) {
-  if (span >= 4) {
-    return unaligned_load<V, P>(src);
-  } else {
-    return partial_load_span<V, P>(src, span);
-  }
-}
-
-// Dispatcher that chooses when to store a full or partial span
-template <typename V, typename P>
-static ALWAYS_INLINE void store_span(P* dst, V src, int span) {
-  if (span >= 4) {
-    unaligned_store<V, P>(dst, src);
-  } else {
-    partial_store_span<V, P>(dst, src, span);
-  }
-}
-
-// (x*y + x) >> 8, cheap approximation of (x*y) / 255
-template <typename T>
-static inline T muldiv255(T x, T y) {
-  return (x * y + x) >> 8;
-}
-
-// Byte-wise addition for when x or y is a signed 8-bit value stored in the
-// low byte of a larger type T only with zeroed-out high bits, where T is
-// greater than 8 bits, i.e. uint16_t. This can result when muldiv255 is used
-// upon signed operands, using up all the precision in a 16 bit integer, and
-// potentially losing the sign bit in the last >> 8 shift. Due to the
-// properties of two's complement arithmetic, even though we've discarded the
-// sign bit, we can still represent a negative number under addition (without
-// requiring any extra sign bits), just that any negative number will behave
-// like a large unsigned number under addition, generating a single carry bit
-// on overflow that we need to discard. Thus, just doing a byte-wise add will
-// overflow without the troublesome carry, giving us only the remaining 8 low
-// bits we actually need while keeping the high bits at zero.
-template <typename T>
-static inline T addlow(T x, T y) {
-  typedef VectorType<uint8_t, sizeof(T)> bytes;
-  return bit_cast<T>(bit_cast<bytes>(x) + bit_cast<bytes>(y));
-}
-
-static inline WideRGBA8 alphas(WideRGBA8 c) {
-  return SHUFFLE(c, c, 3, 3, 3, 3, 7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15);
-}
-
-// A pointer into the color buffer for the start of the span.
-static void* swgl_SpanBuf = nullptr;
-// A pointer into the clip mask for the start of the span.
-static uint8_t* swgl_ClipMaskBuf = nullptr;
-
-static ALWAYS_INLINE WideR8 expand_clip_mask(uint8_t* buf, WideR8 mask) {
-  return mask;
-}
-static ALWAYS_INLINE WideRGBA8 expand_clip_mask(uint32_t* buf, WideR8 mask) {
-  WideRG8 maskRG = zip(mask, mask);
-  return zip(maskRG, maskRG);
-}
-
-// Loads a chunk of clip masks. The current pointer into the color buffer is
-// used to reconstruct the relative position within the span. From there, the
-// pointer into the clip mask can be generated from the start of the clip mask
-// span.
-template <typename P>
-static ALWAYS_INLINE auto load_clip_mask(P* buf, int span)
-    -> decltype(expand_clip_mask(buf, 0)) {
-  uint8_t* maskBuf = &swgl_ClipMaskBuf[buf - (P*)swgl_SpanBuf];
-  return expand_clip_mask(buf, unpack(load_span<PackedR8>(maskBuf, span)));
-}
-
-static inline WideRGBA8 blend_pixels(uint32_t* buf, PackedRGBA8 pdst,
-                                     WideRGBA8 src, int span = 4) {
-  WideRGBA8 dst = unpack(pdst);
-  const WideRGBA8 RGB_MASK = {0xFFFF, 0xFFFF, 0xFFFF, 0,      0xFFFF, 0xFFFF,
-                              0xFFFF, 0,      0xFFFF, 0xFFFF, 0xFFFF, 0,
-                              0xFFFF, 0xFFFF, 0xFFFF, 0};
-  const WideRGBA8 ALPHA_MASK = {0, 0, 0, 0xFFFF, 0, 0, 0, 0xFFFF,
-                                0, 0, 0, 0xFFFF, 0, 0, 0, 0xFFFF};
-  const WideRGBA8 ALPHA_OPAQUE = {0, 0, 0, 255, 0, 0, 0, 255,
-                                  0, 0, 0, 255, 0, 0, 0, 255};
-
-  // Each blend case is preceded by the MASK_ variant. The MASK_ case first
-  // loads the mask values and multiplies the source value by them. After, it
-  // falls through to the normal blending case using the masked source.
-#define BLEND_CASE_KEY(key)                                     \
-  MASK_##key : src = muldiv255(src, load_clip_mask(buf, span)); \
-  FALLTHROUGH;                                                  \
-  case key
-#define BLEND_CASE(...) BLEND_CASE_KEY(BLEND_KEY(__VA_ARGS__))
-
-  switch (blend_key) {
-    case BLEND_CASE(GL_ONE, GL_ZERO):
-      return src;
-    case BLEND_CASE(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE,
-                    GL_ONE_MINUS_SRC_ALPHA):
-      // dst + src.a*(src.rgb1 - dst)
-      // use addlow for signed overflow
-      return addlow(dst, muldiv255(alphas(src), (src | ALPHA_OPAQUE) - dst));
-    case BLEND_CASE(GL_ONE, GL_ONE_MINUS_SRC_ALPHA):
-      return src + dst - muldiv255(dst, alphas(src));
-    case BLEND_CASE(GL_ZERO, GL_ONE_MINUS_SRC_COLOR):
-      return dst - muldiv255(dst, src);
-    case BLEND_CASE(GL_ZERO, GL_ONE_MINUS_SRC_COLOR, GL_ZERO, GL_ONE):
-      return dst - (muldiv255(dst, src) & RGB_MASK);
-    case BLEND_CASE(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA):
-      return dst - muldiv255(dst, alphas(src));
-    case BLEND_CASE(GL_ZERO, GL_SRC_COLOR):
-      return muldiv255(src, dst);
-    case BLEND_CASE(GL_ONE, GL_ONE):
-      return src + dst;
-    case BLEND_CASE(GL_ONE, GL_ONE, GL_ONE, GL_ONE_MINUS_SRC_ALPHA):
-      return src + dst - (muldiv255(dst, src) & ALPHA_MASK);
-    case BLEND_CASE(GL_ONE_MINUS_DST_ALPHA, GL_ONE, GL_ZERO, GL_ONE):
-      // src*(1-dst.a) + dst*1 = src - src*dst.a + dst
-      return dst + ((src - muldiv255(src, alphas(dst))) & RGB_MASK);
-    case BLEND_CASE(GL_CONSTANT_COLOR, GL_ONE_MINUS_SRC_COLOR):
-      // src*k + (1-src)*dst = src*k + dst -
-      // src*dst = dst + src*(k - dst) use addlow
-      // for signed overflow
-      return addlow(
-          dst, muldiv255(src, combine(ctx->blendcolor, ctx->blendcolor) - dst));
-    case BLEND_KEY(GL_ONE, GL_ONE_MINUS_SRC1_COLOR): {
-      WideRGBA8 secondary =
-          pack_pixels_RGBA8(fragment_shader->gl_SecondaryFragColor);
-      return src + dst - muldiv255(dst, secondary);
-    }
-    case MASK_BLEND_KEY(GL_ONE, GL_ONE_MINUS_SRC1_COLOR): {
-      // We must explicitly handle the masked secondary blend case.
-      // The secondary color as well as the source must be multiplied by the
-      // mask.
-      WideRGBA8 mask = load_clip_mask(buf, span);
-      WideRGBA8 secondary =
-          pack_pixels_RGBA8(fragment_shader->gl_SecondaryFragColor);
-      return muldiv255(src, mask) + dst -
-             muldiv255(dst, muldiv255(secondary, mask));
-    }
-    default:
-      UNREACHABLE;
-      // return src;
-  }
-
-#undef BLEND_CASE
-#undef BLEND_CASE_KEY
-}
-
-template <bool DISCARD, int SPAN>
-static ALWAYS_INLINE void discard_output(uint32_t* buf, PackedRGBA8 mask) {
-  WideRGBA8 r = pack_pixels_RGBA8();
-  PackedRGBA8 dst = load_span<PackedRGBA8>(buf, SPAN);
-  if (blend_key) r = blend_pixels(buf, dst, r, SPAN);
-  if (DISCARD)
-    mask |= bit_cast<PackedRGBA8>(fragment_shader->swgl_IsPixelDiscarded);
-  store_span(buf, (mask & dst) | (~mask & pack(r)), SPAN);
-}
-
-template <bool DISCARD, int SPAN>
-static ALWAYS_INLINE void discard_output(uint32_t* buf) {
-  WideRGBA8 r = pack_pixels_RGBA8();
-  if (DISCARD) {
-    PackedRGBA8 dst = load_span<PackedRGBA8>(buf, SPAN);
-    if (blend_key) r = blend_pixels(buf, dst, r, SPAN);
-    PackedRGBA8 mask =
-        bit_cast<PackedRGBA8>(fragment_shader->swgl_IsPixelDiscarded);
-    store_span(buf, (mask & dst) | (~mask & pack(r)), SPAN);
-  } else {
-    if (blend_key)
-      r = blend_pixels(buf, load_span<PackedRGBA8>(buf, SPAN), r, SPAN);
-    store_span(buf, pack(r), SPAN);
-  }
-}
-
-static inline WideR8 packR8(I32 a) {
-#if USE_SSE2
-  return lowHalf(bit_cast<V8<uint16_t>>(_mm_packs_epi32(a, a)));
-#elif USE_NEON
-  return vqmovun_s32(a);
-#else
-  return CONVERT(a, WideR8);
-#endif
-}
-
-static inline WideR8 pack_pixels_R8(Float c) { return packR8(round_pixel(c)); }
-
-static inline WideR8 pack_pixels_R8() {
-  return pack_pixels_R8(fragment_shader->gl_FragColor.x);
-}
-
-static inline WideR8 blend_pixels(uint8_t* buf, WideR8 dst, WideR8 src,
-                                  int span = 4) {
-#define BLEND_CASE_KEY(key)                                     \
-  MASK_##key : src = muldiv255(src, load_clip_mask(buf, span)); \
-  FALLTHROUGH;                                                  \
-  case key
-#define BLEND_CASE(...) BLEND_CASE_KEY(BLEND_KEY(__VA_ARGS__))
-
-  switch (blend_key) {
-    case BLEND_CASE(GL_ONE, GL_ZERO):
-      return src;
-    case BLEND_CASE(GL_ZERO, GL_SRC_COLOR):
-      return muldiv255(src, dst);
-    case BLEND_CASE(GL_ONE, GL_ONE):
-      return src + dst;
-    default:
-      UNREACHABLE;
-      // return src;
-  }
-
-#undef BLEND_CASE
-#undef BLEND_CASE_KEY
-}
-
-template <bool DISCARD, int SPAN>
-static inline void discard_output(uint8_t* buf, WideR8 mask) {
-  WideR8 r = pack_pixels_R8();
-  WideR8 dst = unpack(load_span<PackedR8>(buf, SPAN));
-  if (blend_key) r = blend_pixels(buf, dst, r, SPAN);
-  if (DISCARD) mask |= packR8(fragment_shader->swgl_IsPixelDiscarded);
-  store_span(buf, pack((mask & dst) | (~mask & r)), SPAN);
-}
-
-template <bool DISCARD, int SPAN>
-static inline void discard_output(uint8_t* buf) {
-  WideR8 r = pack_pixels_R8();
-  if (DISCARD) {
-    WideR8 dst = unpack(load_span<PackedR8>(buf, SPAN));
-    if (blend_key) r = blend_pixels(buf, dst, r, SPAN);
-    WideR8 mask = packR8(fragment_shader->swgl_IsPixelDiscarded);
-    store_span(buf, pack((mask & dst) | (~mask & r)), SPAN);
-  } else {
-    if (blend_key)
-      r = blend_pixels(buf, unpack(load_span<PackedR8>(buf, SPAN)), r, SPAN);
-    store_span(buf, pack(r), SPAN);
-  }
-}
-
-template <bool DISCARD, bool W, typename P, typename M>
-static inline void commit_output(P* buf, M mask) {
-  fragment_shader->run<W>();
-  discard_output<DISCARD, 4>(buf, mask);
-}
-
-template <bool DISCARD, bool W, typename P, typename M>
-static inline void commit_output(P* buf, M mask, int span) {
-  fragment_shader->run<W>();
-  switch (span) {
-    case 1:
-      discard_output<DISCARD, 1>(buf, mask);
-      break;
-    case 2:
-      discard_output<DISCARD, 2>(buf, mask);
-      break;
-    default:
-      discard_output<DISCARD, 3>(buf, mask);
-      break;
-  }
-}
-
-template <bool DISCARD, bool W, typename P>
-static inline void commit_output(P* buf) {
-  fragment_shader->run<W>();
-  discard_output<DISCARD, 4>(buf);
-}
-
-template <bool DISCARD, bool W, typename P>
-static inline void commit_output(P* buf, int span) {
-  fragment_shader->run<W>();
-  switch (span) {
-    case 1:
-      discard_output<DISCARD, 1>(buf);
-      break;
-    case 2:
-      discard_output<DISCARD, 2>(buf);
-      break;
-    default:
-      discard_output<DISCARD, 3>(buf);
-      break;
-  }
-}
-
-template <bool DISCARD, bool W, typename P, typename Z>
-static inline void commit_output(P* buf, Z z, DepthRun* zbuf) {
-  ZMask zmask;
-  if (check_depth<DISCARD>(z, zbuf, zmask)) {
-    commit_output<DISCARD, W>(buf, convert_zmask(zmask, buf));
-    if (DISCARD) {
-      discard_depth(z, zbuf, zmask);
-    }
-  } else {
-    fragment_shader->skip<W>();
-  }
-}
-
-template <bool DISCARD, bool W, typename P, typename Z>
-static inline void commit_output(P* buf, Z z, DepthRun* zbuf, int span) {
-  ZMask zmask;
-  if (check_depth<DISCARD>(z, zbuf, zmask, span)) {
-    commit_output<DISCARD, W>(buf, convert_zmask(zmask, buf), span);
-    if (DISCARD) {
-      discard_depth(z, zbuf, zmask);
-    }
-  }
-}
-
+#include "blend.h"
 #include "composite.h"
 #include "swgl_ext.h"
 
@@ -3213,1032 +2634,7 @@ static inline void commit_output(P* buf, Z z, DepthRun* zbuf, int span) {
 #include "load_shader.h"
 #pragma GCC diagnostic pop
 
-typedef vec2_scalar Point2D;
-typedef vec4_scalar Point3D;
-
-struct ClipRect {
-  float x0;
-  float y0;
-  float x1;
-  float y1;
-
-  explicit ClipRect(const IntRect& i)
-      : x0(i.x0), y0(i.y0), x1(i.x1), y1(i.y1) {}
-  explicit ClipRect(const Texture& t) : ClipRect(ctx->apply_scissor(t)) {
-    // If blending is enabled, set blend_key to reflect the resolved blend
-    // state for the currently drawn primitive.
-    if (ctx->blend) {
-      blend_key = ctx->blend_key;
-      // If a clip mask is available, set up blending state to use the clip
-      // mask.
-      if (swgl_ClipMask) {
-        assert(swgl_ClipMask->format == TextureFormat::R8);
-        // Constrain the clip mask bounds to always fall within the clip mask.
-        swgl_ClipMaskBounds.intersect(IntRect{0, 0, int(swgl_ClipMask->width),
-                                              int(swgl_ClipMask->height)});
-        // The clip mask offset is relative to the viewport.
-        swgl_ClipMaskOffset += ctx->viewport.origin() - t.offset;
-        // The clip mask bounds are relative to the clip mask offset.
-        swgl_ClipMaskBounds.offset(swgl_ClipMaskOffset);
-        // Finally, constrain the clip rectangle by the clip mask bounds.
-        intersect(swgl_ClipMaskBounds);
-        // Modify the blend key so that it will use the clip mask while
-        // blending.
-        blend_key = BlendKey(MASK_BLEND_KEY_NONE + blend_key);
-      }
-    } else {
-      blend_key = BLEND_KEY_NONE;
-    }
-  }
-
-  void intersect(const IntRect& c) {
-    x0 = max(x0, float(c.x0));
-    y0 = max(y0, float(c.y0));
-    x1 = min(x1, float(c.x1));
-    y1 = min(y1, float(c.y1));
-  }
-
-  template <typename P>
-  void init_span(int x, int y, P* buf) const {
-    if (blend_key >= MASK_BLEND_KEY_NONE) {
-      swgl_SpanBuf = buf;
-      swgl_ClipMaskBuf = (uint8_t*)swgl_ClipMask->buf +
-                         (y - swgl_ClipMaskOffset.y) * swgl_ClipMask->stride +
-                         (x - swgl_ClipMaskOffset.x);
-    }
-  }
-
-  template <typename P>
-  bool overlaps(int nump, const P* p) const {
-    // Generate a mask of which side of the clip rect all of a polygon's points
-    // fall inside of. This is a cheap conservative estimate of whether the
-    // bounding box of the polygon might overlap the clip rect, rather than an
-    // exact test that would require multiple slower line intersections.
-    int sides = 0;
-    for (int i = 0; i < nump; i++) {
-      sides |= p[i].x < x1 ? (p[i].x > x0 ? 1 | 2 : 1) : 2;
-      sides |= p[i].y < y1 ? (p[i].y > y0 ? 4 | 8 : 4) : 8;
-    }
-    return sides == 0xF;
-  }
-};
-
-// Converts a run array into a flattened array of depth samples. This just
-// walks through every run and fills the samples with the depth value from
-// the run.
-static void flatten_depth_runs(DepthRun* runs, size_t width) {
-  if (runs->is_flat()) {
-    return;
-  }
-  while (width > 0) {
-    size_t n = runs->count;
-    fill_depth_run(runs, n, runs->depth);
-    runs += n;
-    width -= n;
-  }
-}
-
-// Helper function for drawing passed depth runs within the depth buffer.
-// Flattened depth (perspective or discard) is not supported.
-template <typename P>
-static ALWAYS_INLINE void draw_depth_span(uint16_t z, P* buf,
-                                          DepthCursor& cursor) {
-  for (;;) {
-    // Get the span that passes the depth test. Assume on entry that
-    // any failed runs have already been skipped.
-    int span = cursor.check_passed(z, ctx->depthfunc, ctx->depthmask);
-    // If nothing passed, since we already skipped passed failed runs
-    // previously, we must have hit the end of the row. Bail out.
-    if (span <= 0) {
-      break;
-    }
-    if (span >= 4) {
-      // If we have a draw specialization, try to process as many 4-pixel
-      // chunks as possible using it.
-      if (fragment_shader->has_draw_span(buf)) {
-        int len = span & ~3;
-        fragment_shader->draw_span(buf, len);
-        buf += len;
-        span &= 3;
-      } else {
-        // Otherwise, just process each chunk individually.
-        while (span >= 4) {
-          commit_output<false, false>(buf);
-          buf += 4;
-          span -= 4;
-        }
-      }
-    }
-    // If we have a partial chunk left over, we still have to process it as if
-    // it were a full chunk. Mask off only the part of the chunk we want to
-    // use.
-    if (span > 0) {
-      commit_output<false, false>(buf, span);
-      buf += span;
-    }
-    // Skip past any runs that fail the depth test.
-    int skip = cursor.skip_failed(z, ctx->depthfunc);
-    // If there aren't any, that means we won't encounter any more passing runs
-    // and so it's safe to bail out.
-    if (skip <= 0) {
-      break;
-    }
-    // Advance interpolants for the fragment shader past the skipped region.
-    // If we processed a partial chunk above, we actually advanced the
-    // interpolants a full chunk in the fragment shader's run function. Thus,
-    // we need to first subtract off that 4-pixel chunk and only partially
-    // advance them to that partial chunk before we can add on the rest of the
-    // skips. This is combined with the skip here for efficiency's sake.
-    fragment_shader->skip(skip - (span > 0 ? 4 - span : 0));
-    buf += skip;
-  }
-}
-
-// Draw a simple span in 4-pixel wide chunks, optionally using depth.
-template <bool DISCARD, bool W, typename P, typename Z>
-static ALWAYS_INLINE void draw_span(P* buf, DepthRun* depth, int span, Z z) {
-  if (depth) {
-    // Depth testing is enabled. If perspective is used, Z values will vary
-    // across the span, we use packDepth to generate 16-bit Z values suitable
-    // for depth testing based on current values from gl_FragCoord.z.
-    // Otherwise, for the no-perspective case, we just use the provided Z.
-    // Process 4-pixel chunks first.
-    for (; span >= 4; span -= 4, buf += 4, depth += 4) {
-      commit_output<DISCARD, W>(buf, z(), depth);
-    }
-    // If there are any remaining pixels, do a partial chunk.
-    if (span > 0) {
-      commit_output<DISCARD, W>(buf, z(), depth, span);
-    }
-  } else {
-    // Process 4-pixel chunks first.
-    for (; span >= 4; span -= 4, buf += 4) {
-      commit_output<DISCARD, W>(buf);
-    }
-    // If there are any remaining pixels, do a partial chunk.
-    if (span > 0) {
-      commit_output<DISCARD, W>(buf, span);
-    }
-  }
-}
-
-// Called during rasterization to forcefully clear a row on which delayed clear
-// has been enabled. If we know that we are going to completely overwrite a part
-// of the row, then we only need to clear the row outside of that part. However,
-// if blending or discard is enabled, the values of that underlying part of the
-// row may be used regardless to produce the final rasterization result, so we
-// have to then clear the entire underlying row to prepare it.
-template <typename P>
-static inline void prepare_row(Texture& colortex, int y, int startx, int endx,
-                               bool use_discard, DepthRun* depth,
-                               uint16_t z = 0, DepthCursor* cursor = nullptr) {
-  assert(colortex.delay_clear > 0);
-  // Delayed clear is enabled for the color buffer. Check if needs clear.
-  uint32_t& mask = colortex.cleared_rows[y / 32];
-  if ((mask & (1 << (y & 31))) == 0) {
-    mask |= 1 << (y & 31);
-    colortex.delay_clear--;
-    if (blend_key || use_discard) {
-      // If depth test, blending, or discard is used, old color values
-      // might be sampled, so we need to clear the entire row to fill it.
-      force_clear_row<P>(colortex, y);
-    } else if (depth) {
-      if (depth->is_flat() || !cursor) {
-        // If flat depth is used, we can't cheaply predict if which samples will
-        // pass.
-        force_clear_row<P>(colortex, y);
-      } else {
-        // Otherwise if depth runs are used, see how many samples initially pass
-        // the depth test and only fill the row outside those. The fragment
-        // shader will fill the row within the passed samples.
-        int passed =
-            DepthCursor(*cursor).check_passed<false>(z, ctx->depthfunc);
-        if (startx > 0 || startx + passed < colortex.width) {
-          force_clear_row<P>(colortex, y, startx, startx + passed);
-        }
-      }
-    } else if (startx > 0 || endx < colortex.width) {
-      // Otherwise, we only need to clear the row outside of the span.
-      // The fragment shader will fill the row within the span itself.
-      force_clear_row<P>(colortex, y, startx, endx);
-    }
-  }
-}
-
-// Draw spans for each row of a given quad (or triangle) with a constant Z
-// value. The quad is assumed convex. It is clipped to fall within the given
-// clip rect. In short, this function rasterizes a quad by first finding a
-// top most starting point and then from there tracing down the left and right
-// sides of this quad until it hits the bottom, outputting a span between the
-// current left and right positions at each row along the way. Points are
-// assumed to be ordered in either CW or CCW to support this, but currently
-// both orders (CW and CCW) are supported and equivalent.
-template <typename P>
-static inline void draw_quad_spans(int nump, Point2D p[4], uint16_t z,
-                                   Interpolants interp_outs[4],
-                                   Texture& colortex, int layer,
-                                   Texture& depthtex,
-                                   const ClipRect& clipRect) {
-  // Only triangles and convex quads supported.
-  assert(nump == 3 || nump == 4);
-  Point2D l0, r0, l1, r1;
-  int l0i, r0i, l1i, r1i;
-  {
-    // Find the index of the top-most (smallest Y) point from which
-    // rasterization can start.
-    int top = nump > 3 && p[3].y < p[2].y
-                  ? (p[0].y < p[1].y ? (p[0].y < p[3].y ? 0 : 3)
-                                     : (p[1].y < p[3].y ? 1 : 3))
-                  : (p[0].y < p[1].y ? (p[0].y < p[2].y ? 0 : 2)
-                                     : (p[1].y < p[2].y ? 1 : 2));
-    // Helper to find next index in the points array, walking forward.
-#define NEXT_POINT(idx)   \
-  ({                      \
-    int cur = (idx) + 1;  \
-    cur < nump ? cur : 0; \
-  })
-    // Helper to find the previous index in the points array, walking backward.
-#define PREV_POINT(idx)        \
-  ({                           \
-    int cur = (idx)-1;         \
-    cur >= 0 ? cur : nump - 1; \
-  })
-    // Start looking for "left"-side and "right"-side descending edges starting
-    // from the determined top point.
-    int next = NEXT_POINT(top);
-    int prev = PREV_POINT(top);
-    if (p[top].y == p[next].y) {
-      // If the next point is on the same row as the top, then advance one more
-      // time to the next point and use that as the "left" descending edge.
-      l0i = next;
-      l1i = NEXT_POINT(next);
-      // Assume top and prev form a descending "right" edge, as otherwise this
-      // will be a collapsed polygon and harmlessly bail out down below.
-      r0i = top;
-      r1i = prev;
-    } else if (p[top].y == p[prev].y) {
-      // If the prev point is on the same row as the top, then advance to the
-      // prev again and use that as the "right" descending edge.
-      // Assume top and next form a non-empty descending "left" edge.
-      l0i = top;
-      l1i = next;
-      r0i = prev;
-      r1i = PREV_POINT(prev);
-    } else {
-      // Both next and prev are on distinct rows from top, so both "left" and
-      // "right" edges are non-empty/descending.
-      l0i = r0i = top;
-      l1i = next;
-      r1i = prev;
-    }
-    // Load the points from the indices.
-    l0 = p[l0i];  // Start of left edge
-    r0 = p[r0i];  // End of left edge
-    l1 = p[l1i];  // Start of right edge
-    r1 = p[r1i];  // End of right edge
-    //    debugf("l0: %d(%f,%f), r0: %d(%f,%f) -> l1: %d(%f,%f), r1:
-    //    %d(%f,%f)\n", l0i, l0.x, l0.y, r0i, r0.x, r0.y, l1i, l1.x, l1.y, r1i,
-    //    r1.x, r1.y);
-  }
-
-  struct Edge {
-    float yScale;
-    float xSlope;
-    float x;
-    Interpolants interpSlope;
-    Interpolants interp;
-
-    Edge(float y, const Point2D& p0, const Point2D& p1, const Interpolants& i0,
-         const Interpolants& i1)
-        :  // Inverse Y scale for slope calculations. Avoid divide on 0-length
-           // edge. Later checks below ensure that Y <= p1.y, or otherwise we
-           // don't use this edge. We just need to guard against Y == p1.y ==
-           // p0.y. In that case, Y - p0.y == 0 and will cancel out the slopes
-           // below, except if yScale is Inf for some reason (or worse, NaN),
-           // which 1/(p1.y-p0.y) might produce if we don't bound it.
-          yScale(1.0f / max(p1.y - p0.y, 1.0f / 256)),
-          // Calculate dX/dY slope
-          xSlope((p1.x - p0.x) * yScale),
-          // Initialize current X based on Y and slope
-          x(p0.x + (y - p0.y) * xSlope),
-          // Calculate change in interpolants per change in Y
-          interpSlope((i1 - i0) * yScale),
-          // Initialize current interpolants based on Y and slope
-          interp(i0 + (y - p0.y) * interpSlope) {}
-
-    void nextRow() {
-      // step current X and interpolants to next row from slope
-      x += xSlope;
-      interp += interpSlope;
-    }
-  };
-
-  // Vertex selection above should result in equal left and right start rows
-  assert(l0.y == r0.y);
-  // Find the start y, clip to within the clip rect, and round to row center.
-  float y = floor(max(l0.y, clipRect.y0) + 0.5f) + 0.5f;
-  // Initialize left and right edges from end points and start Y
-  Edge left(y, l0, l1, interp_outs[l0i], interp_outs[l1i]);
-  Edge right(y, r0, r1, interp_outs[r0i], interp_outs[r1i]);
-  // Get pointer to color buffer and depth buffer at current Y
-  P* fbuf = (P*)colortex.sample_ptr(0, int(y), layer);
-  DepthRun* fdepth = (DepthRun*)depthtex.sample_ptr(0, int(y));
-  // Loop along advancing Ys, rasterizing spans at each row
-  float checkY = min(min(l1.y, r1.y), clipRect.y1);
-  for (;;) {
-    // Check if we maybe passed edge ends or outside clip rect...
-    if (y > checkY) {
-      // If we're outside the clip rect, we're done.
-      if (y > clipRect.y1) break;
-        // Helper to find the next non-duplicate vertex that doesn't loop back.
-#define STEP_EDGE(e0i, e0, e1i, e1, STEP_POINT, end)               \
-  for (;;) {                                                       \
-    /* Set new start of edge to be end of old edge */              \
-    e0i = e1i;                                                     \
-    e0 = e1;                                                       \
-    /* Set new end of edge to next point */                        \
-    e1i = STEP_POINT(e1i);                                         \
-    e1 = p[e1i];                                                   \
-    /* If the edge is descending, use it. */                       \
-    if (e1.y > e0.y) break;                                        \
-    /* If the edge is ascending or crossed the end, we're done. */ \
-    if (e1.y < e0.y || e0i == end) return;                         \
-    /* Otherwise, it's a duplicate, so keep searching. */          \
-  }
-      // Check if Y advanced past the end of the left edge
-      if (y > l1.y) {
-        // Step to next left edge past Y and reset edge interpolants.
-        do {
-          STEP_EDGE(l0i, l0, l1i, l1, NEXT_POINT, r1i);
-        } while (y > l1.y);
-        left = Edge(y, l0, l1, interp_outs[l0i], interp_outs[l1i]);
-      }
-      // Check if Y advanced past the end of the right edge
-      if (y > r1.y) {
-        // Step to next right edge past Y and reset edge interpolants.
-        do {
-          STEP_EDGE(r0i, r0, r1i, r1, PREV_POINT, l1i);
-        } while (y > r1.y);
-        right = Edge(y, r0, r1, interp_outs[r0i], interp_outs[r1i]);
-      }
-      // Reset check condition for next time around.
-      checkY = min(min(l1.y, r1.y), clipRect.y1);
-    }
-    // lx..rx form the bounds of the span. WR does not use backface culling,
-    // so we need to use min/max to support the span in either orientation.
-    // Clip the span to fall within the clip rect and then round to nearest
-    // column.
-    int startx = int(max(min(left.x, right.x), clipRect.x0) + 0.5f);
-    int endx = int(min(max(left.x, right.x), clipRect.x1) + 0.5f);
-    // Check if span is non-empty.
-    int span = endx - startx;
-    if (span > 0) {
-      ctx->shaded_rows++;
-      ctx->shaded_pixels += span;
-      // Advance color/depth buffer pointers to the start of the span.
-      P* buf = fbuf + startx;
-      // Check if the we will need to use depth-buffer or discard on this span.
-      DepthRun* depth =
-          depthtex.buf != nullptr && depthtex.cleared() ? fdepth : nullptr;
-      DepthCursor cursor;
-      bool use_discard = fragment_shader->use_discard();
-      if (use_discard) {
-        if (depth) {
-          // If we're using discard, we may have to unpredictably drop out some
-          // samples. Flatten the depth run array here to allow this.
-          if (!depth->is_flat()) {
-            flatten_depth_runs(depth, depthtex.width);
-          }
-          // Advance to the depth sample at the start of the span.
-          depth += startx;
-        }
-      } else if (depth) {
-        if (!depth->is_flat()) {
-          // We're not using discard and the depth row is still organized into
-          // runs. Skip past any runs that would fail the depth test so we
-          // don't have to do any extra work to process them with the rest of
-          // the span.
-          cursor = DepthCursor(depth, depthtex.width, startx, span);
-          int skipped = cursor.skip_failed(z, ctx->depthfunc);
-          // If we fell off the row, that means we couldn't find any passing
-          // runs. We can just skip the entire span.
-          if (skipped < 0) {
-            goto next_span;
-          }
-          buf += skipped;
-          startx += skipped;
-          span -= skipped;
-        } else {
-          // The row is already flattened, so just advance to the span start.
-          depth += startx;
-        }
-      }
-
-      if (colortex.delay_clear) {
-        // Delayed clear is enabled for the color buffer. Check if needs clear.
-        prepare_row<P>(colortex, int(y), startx, endx, use_discard, depth, z,
-                       &cursor);
-      }
-
-      // Initialize fragment shader interpolants to current span position.
-      fragment_shader->gl_FragCoord.x = init_interp(startx + 0.5f, 1);
-      fragment_shader->gl_FragCoord.y = y;
-      {
-        // Change in interpolants is difference between current right and left
-        // edges per the change in right and left X.
-        Interpolants step =
-            (right.interp - left.interp) * (1.0f / (right.x - left.x));
-        // Advance current interpolants to X at start of span.
-        Interpolants o = left.interp + step * (startx + 0.5f - left.x);
-        fragment_shader->init_span(&o, &step);
-      }
-      clipRect.init_span(startx, y, buf);
-      if (!use_discard) {
-        // Fast paths for the case where fragment discard is not used.
-        if (depth) {
-          // If depth is used, we want to process entire depth runs if depth is
-          // not flattened.
-          if (!depth->is_flat()) {
-            draw_depth_span(z, buf, cursor);
-            goto next_span;
-          }
-          // Otherwise, flattened depth must fall back to the slightly slower
-          // per-chunk depth test path in draw_span below.
-        } else {
-          // Check if the fragment shader has an optimized draw specialization.
-          if (span >= 4 && fragment_shader->has_draw_span(buf)) {
-            // Draw specialization expects 4-pixel chunks.
-            int len = span & ~3;
-            fragment_shader->draw_span(buf, len);
-            buf += len;
-            span &= 3;
-          }
-        }
-        draw_span<false, false>(buf, depth, span, [=] { return z; });
-      } else {
-        // If discard is used, then use slower fallbacks. This should be rare.
-        // Just needs to work, doesn't need to be too fast yet...
-        draw_span<true, false>(buf, depth, span, [=] { return z; });
-      }
-    }
-  next_span:
-    // Advance Y and edge interpolants to next row.
-    y++;
-    left.nextRow();
-    right.nextRow();
-    // Advance buffers to next row.
-    fbuf += colortex.stride() / sizeof(P);
-    fdepth += depthtex.stride() / sizeof(DepthRun);
-  }
-}
-
-// Draw perspective-correct spans for a convex quad that has been clipped to
-// the near and far Z planes, possibly producing a clipped convex polygon with
-// more than 4 sides. This assumes the Z value will vary across the spans and
-// requires interpolants to factor in W values. This tends to be slower than
-// the simpler 2D draw_quad_spans above, especially since we can't optimize the
-// depth test easily when Z values, and should be used only rarely if possible.
-template <typename P>
-static inline void draw_perspective_spans(int nump, Point3D* p,
-                                          Interpolants* interp_outs,
-                                          Texture& colortex, int layer,
-                                          Texture& depthtex,
-                                          const ClipRect& clipRect) {
-  Point3D l0, r0, l1, r1;
-  int l0i, r0i, l1i, r1i;
-  {
-    // Find the index of the top-most point (smallest Y) from which
-    // rasterization can start.
-    int top = 0;
-    for (int i = 1; i < nump; i++) {
-      if (p[i].y < p[top].y) {
-        top = i;
-      }
-    }
-    // Find left-most top point, the start of the left descending edge.
-    // Advance forward in the points array, searching at most nump points
-    // in case the polygon is flat.
-    l0i = top;
-    for (int i = top + 1; i < nump && p[i].y == p[top].y; i++) {
-      l0i = i;
-    }
-    if (l0i == nump - 1) {
-      for (int i = 0; i <= top && p[i].y == p[top].y; i++) {
-        l0i = i;
-      }
-    }
-    // Find right-most top point, the start of the right descending edge.
-    // Advance backward in the points array, searching at most nump points.
-    r0i = top;
-    for (int i = top - 1; i >= 0 && p[i].y == p[top].y; i--) {
-      r0i = i;
-    }
-    if (r0i == 0) {
-      for (int i = nump - 1; i >= top && p[i].y == p[top].y; i--) {
-        r0i = i;
-      }
-    }
-    // End of left edge is next point after left edge start.
-    l1i = NEXT_POINT(l0i);
-    // End of right edge is prev point after right edge start.
-    r1i = PREV_POINT(r0i);
-    l0 = p[l0i];  // Start of left edge
-    r0 = p[r0i];  // End of left edge
-    l1 = p[l1i];  // Start of right edge
-    r1 = p[r1i];  // End of right edge
-  }
-
-  struct Edge {
-    float yScale;
-    // Current coordinates for edge. Where in the 2D case of draw_quad_spans,
-    // it is enough to just track the X coordinate as we advance along the rows,
-    // for the perspective case we also need to keep track of Z and W. For
-    // simplicity, we just use the full 3D point to track all these coordinates.
-    Point3D pSlope;
-    Point3D p;
-    Interpolants interpSlope;
-    Interpolants interp;
-
-    Edge(float y, const Point3D& p0, const Point3D& p1, const Interpolants& i0,
-         const Interpolants& i1)
-        :  // Inverse Y scale for slope calculations. Avoid divide on 0-length
-           // edge.
-          yScale(1.0f / max(p1.y - p0.y, 1.0f / 256)),
-          // Calculate dX/dY slope
-          pSlope((p1 - p0) * yScale),
-          // Initialize current coords based on Y and slope
-          p(p0 + (y - p0.y) * pSlope),
-          // Crucially, these interpolants must be scaled by the point's 1/w
-          // value, which allows linear interpolation in a perspective-correct
-          // manner. This will be canceled out inside the fragment shader later.
-          // Calculate change in interpolants per change in Y
-          interpSlope((i1 * p1.w - i0 * p0.w) * yScale),
-          // Initialize current interpolants based on Y and slope
-          interp(i0 * p0.w + (y - p0.y) * interpSlope) {}
-
-    float x() const { return p.x; }
-    vec2_scalar zw() const { return {p.z, p.w}; }
-
-    void nextRow() {
-      // step current coords and interpolants to next row from slope
-      p += pSlope;
-      interp += interpSlope;
-    }
-  };
-
-  // Vertex selection above should result in equal left and right start rows
-  assert(l0.y == r0.y);
-  // Find the start y, clip to within the clip rect, and round to row center.
-  float y = floor(max(l0.y, clipRect.y0) + 0.5f) + 0.5f;
-  // Initialize left and right edges from end points and start Y
-  Edge left(y, l0, l1, interp_outs[l0i], interp_outs[l1i]);
-  Edge right(y, r0, r1, interp_outs[r0i], interp_outs[r1i]);
-  // Get pointer to color buffer and depth buffer at current Y
-  P* fbuf = (P*)colortex.sample_ptr(0, int(y), layer);
-  DepthRun* fdepth = (DepthRun*)depthtex.sample_ptr(0, int(y));
-  // Loop along advancing Ys, rasterizing spans at each row
-  float checkY = min(min(l1.y, r1.y), clipRect.y1);
-  for (;;) {
-    // Check if we maybe passed edge ends or outside clip rect...
-    if (y > checkY) {
-      // If we're outside the clip rect, we're done.
-      if (y > clipRect.y1) break;
-      // Check if Y advanced past the end of the left edge
-      if (y > l1.y) {
-        // Step to next left edge past Y and reset edge interpolants.
-        do {
-          STEP_EDGE(l0i, l0, l1i, l1, NEXT_POINT, r1i);
-        } while (y > l1.y);
-        left = Edge(y, l0, l1, interp_outs[l0i], interp_outs[l1i]);
-      }
-      // Check if Y advanced past the end of the right edge
-      if (y > r1.y) {
-        // Step to next right edge past Y and reset edge interpolants.
-        do {
-          STEP_EDGE(r0i, r0, r1i, r1, PREV_POINT, l1i);
-        } while (y > r1.y);
-        right = Edge(y, r0, r1, interp_outs[r0i], interp_outs[r1i]);
-      }
-      // Reset check condition for next time around.
-      checkY = min(min(l1.y, r1.y), clipRect.y1);
-    }
-    // lx..rx form the bounds of the span. WR does not use backface culling,
-    // so we need to use min/max to support the span in either orientation.
-    // Clip the span to fall within the clip rect and then round to nearest
-    // column.
-    int startx = int(max(min(left.x(), right.x()), clipRect.x0) + 0.5f);
-    int endx = int(min(max(left.x(), right.x()), clipRect.x1) + 0.5f);
-    // Check if span is non-empty.
-    int span = endx - startx;
-    if (span > 0) {
-      ctx->shaded_rows++;
-      ctx->shaded_pixels += span;
-      // Advance color/depth buffer pointers to the start of the span.
-      P* buf = fbuf + startx;
-      // Check if the we will need to use depth-buffer or discard on this span.
-      DepthRun* depth =
-          depthtex.buf != nullptr && depthtex.cleared() ? fdepth : nullptr;
-      bool use_discard = fragment_shader->use_discard();
-      if (depth) {
-        // Perspective may cause the depth value to vary on a per sample basis.
-        // Ensure the depth row is flattened to allow testing of individual
-        // samples
-        if (!depth->is_flat()) {
-          flatten_depth_runs(depth, depthtex.width);
-        }
-        // Advance to the depth sample at the start of the span.
-        depth += startx;
-      }
-      if (colortex.delay_clear) {
-        // Delayed clear is enabled for the color buffer. Check if needs clear.
-        prepare_row<P>(colortex, int(y), startx, endx, use_discard, depth);
-      }
-      // Initialize fragment shader interpolants to current span position.
-      fragment_shader->gl_FragCoord.x = init_interp(startx + 0.5f, 1);
-      fragment_shader->gl_FragCoord.y = y;
-      {
-        // Calculate the fragment Z and W change per change in fragment X step.
-        vec2_scalar stepZW =
-            (right.zw() - left.zw()) * (1.0f / (right.x() - left.x()));
-        // Calculate initial Z and W values for span start.
-        vec2_scalar zw = left.zw() + stepZW * (startx + 0.5f - left.x());
-        // Set fragment shader's Z and W values so that it can use them to
-        // cancel out the 1/w baked into the interpolants.
-        fragment_shader->gl_FragCoord.z = init_interp(zw.x, stepZW.x);
-        fragment_shader->gl_FragCoord.w = init_interp(zw.y, stepZW.y);
-        fragment_shader->swgl_StepZW = stepZW;
-        // Change in interpolants is difference between current right and left
-        // edges per the change in right and left X. The left and right
-        // interpolant values were previously multipled by 1/w, so the step and
-        // initial span values take this into account.
-        Interpolants step =
-            (right.interp - left.interp) * (1.0f / (right.x() - left.x()));
-        // Advance current interpolants to X at start of span.
-        Interpolants o = left.interp + step * (startx + 0.5f - left.x());
-        fragment_shader->init_span<true>(&o, &step);
-      }
-      clipRect.init_span(startx, y, buf);
-      if (!use_discard) {
-        // No discard is used. Common case.
-        draw_span<false, true>(buf, depth, span, packDepth);
-      } else {
-        // Discard is used. Rare.
-        draw_span<true, true>(buf, depth, span, packDepth);
-      }
-    }
-    // Advance Y and edge interpolants to next row.
-    y++;
-    left.nextRow();
-    right.nextRow();
-    // Advance buffers to next row.
-    fbuf += colortex.stride() / sizeof(P);
-    fdepth += depthtex.stride() / sizeof(DepthRun);
-  }
-}
-
-// Clip a primitive against both sides of a view-frustum axis, producing
-// intermediate vertexes with interpolated attributes that will no longer
-// intersect the selected axis planes. This assumes the primitive is convex
-// and should produce at most N+2 vertexes for each invocation (only in the
-// worst case where one point falls outside on each of the opposite sides
-// with the rest of the points inside).
-template <XYZW AXIS>
-static int clip_side(int nump, Point3D* p, Interpolants* interp, Point3D* outP,
-                     Interpolants* outInterp) {
-  // Potential mask bits of which side of a plane a coordinate falls on.
-  enum SIDE { POSITIVE = 1, NEGATIVE = 2 };
-  int numClip = 0;
-  Point3D prev = p[nump - 1];
-  Interpolants prevInterp = interp[nump - 1];
-  float prevCoord = prev.select(AXIS);
-  // Coordinate must satisfy -W <= C <= W. Determine if it is outside, and
-  // if so, remember which side it is outside of. In the special case that W is
-  // negative and |C| < |W|, both -W <= C and C <= W will be false, such that
-  // we must consider the coordinate as falling outside of both plane sides
-  // simultaneously. We test each condition separately and combine them to form
-  // a mask of which plane sides we exceeded. If we neglect to consider both
-  // sides simultaneously, points can erroneously oscillate from one plane side
-  // to the other and exceed the supported maximum number of clip outputs.
-  int prevMask = (prevCoord < -prev.w ? NEGATIVE : 0) |
-                 (prevCoord > prev.w ? POSITIVE : 0);
-  // Loop through points, finding edges that cross the planes by evaluating
-  // the side at each point.
-  for (int i = 0; i < nump; i++) {
-    Point3D cur = p[i];
-    Interpolants curInterp = interp[i];
-    float curCoord = cur.select(AXIS);
-    int curMask =
-        (curCoord < -cur.w ? NEGATIVE : 0) | (curCoord > cur.w ? POSITIVE : 0);
-    // Check if the previous and current end points are on different sides. If
-    // the masks of sides intersect, then we consider them to be on the same
-    // side. So in the case the masks do not intersect, we then consider them
-    // to fall on different sides.
-    if (!(curMask & prevMask)) {
-      // One of the edge's end points is outside the plane with the other
-      // inside the plane. Find the offset where it crosses the plane and
-      // adjust the point and interpolants to there.
-      if (prevMask) {
-        // Edge that was previously outside crosses inside.
-        // Evaluate plane equation for previous and current end-point
-        // based on previous side and calculate relative offset.
-        if (numClip >= nump + 2) {
-          // If for some reason we produced more vertexes than we support, just
-          // bail out.
-          assert(false);
-          return 0;
-        }
-        // The positive plane is assigned the sign 1, and the negative plane is
-        // assigned -1. If the point falls outside both planes, that means W is
-        // negative. To compensate for this, we must interpolate the coordinate
-        // till W=0, at which point we can choose a single plane side for the
-        // coordinate to fall on since W will no longer be negative. To compute
-        // the coordinate where W=0, we compute K = prev.w / (prev.w-cur.w) and
-        // interpolate C = prev.C + K*(cur.C - prev.C). The sign of C will be
-        // the side of the plane we need to consider. Substituting K into the
-        // comparison C < 0, we can then avoid the division in K with a
-        // cross-multiplication.
-        float prevSide =
-            (prevMask & NEGATIVE) && (!(prevMask & POSITIVE) ||
-                                      prevCoord * (cur.w - prev.w) <
-                                          prev.w * (curCoord - prevCoord))
-                ? -1
-                : 1;
-        float prevDist = prevCoord - prevSide * prev.w;
-        float curDist = curCoord - prevSide * cur.w;
-        // It may happen that after we interpolate by the weight k that due to
-        // floating point rounding we've underestimated the value necessary to
-        // push it over the clipping boundary. Just in case, nudge the mantissa
-        // by a single increment so that we essentially round it up and move it
-        // further inside the clipping boundary. We use nextafter to do this in
-        // a portable fashion.
-        float k = prevDist / (prevDist - curDist);
-        Point3D clipped = prev + (cur - prev) * k;
-        if (prevSide * clipped.select(AXIS) > clipped.w) {
-          k = nextafterf(k, 1.0f);
-          clipped = prev + (cur - prev) * k;
-        }
-        outP[numClip] = clipped;
-        outInterp[numClip] = prevInterp + (curInterp - prevInterp) * k;
-        numClip++;
-      }
-      if (curMask) {
-        // Edge that was previously inside crosses outside.
-        // Evaluate plane equation for previous and current end-point
-        // based on current side and calculate relative offset.
-        if (numClip >= nump + 2) {
-          assert(false);
-          return 0;
-        }
-        // In the case the coordinate falls on both plane sides, the computation
-        // here is much the same as for prevSide, but since we are going from a
-        // previous W that is positive to current W that is negative, then the
-        // sign of cur.w - prev.w will flip in the equation. The resulting sign
-        // is negated to compensate for this.
-        float curSide =
-            (curMask & POSITIVE) && (!(curMask & NEGATIVE) ||
-                                     prevCoord * (cur.w - prev.w) <
-                                         prev.w * (curCoord - prevCoord))
-                ? 1
-                : -1;
-        float prevDist = prevCoord - curSide * prev.w;
-        float curDist = curCoord - curSide * cur.w;
-        // Calculate interpolation weight k and the nudge it inside clipping
-        // boundary with nextafter. Note that since we were previously inside
-        // and now crossing outside, we have to flip the nudge direction for
-        // the weight towards 0 instead of 1.
-        float k = prevDist / (prevDist - curDist);
-        Point3D clipped = prev + (cur - prev) * k;
-        if (curSide * clipped.select(AXIS) > clipped.w) {
-          k = nextafterf(k, 0.0f);
-          clipped = prev + (cur - prev) * k;
-        }
-        outP[numClip] = clipped;
-        outInterp[numClip] = prevInterp + (curInterp - prevInterp) * k;
-        numClip++;
-      }
-    }
-    if (!curMask) {
-      // The current end point is inside the plane, so output point unmodified.
-      if (numClip >= nump + 2) {
-        assert(false);
-        return 0;
-      }
-      outP[numClip] = cur;
-      outInterp[numClip] = curInterp;
-      numClip++;
-    }
-    prev = cur;
-    prevInterp = curInterp;
-    prevCoord = curCoord;
-    prevMask = curMask;
-  }
-  return numClip;
-}
-
-// Helper function to dispatch to perspective span drawing with points that
-// have already been transformed and clipped.
-static inline void draw_perspective_clipped(int nump, Point3D* p_clip,
-                                            Interpolants* interp_clip,
-                                            Texture& colortex, int layer,
-                                            Texture& depthtex) {
-  // If polygon is ouside clip rect, nothing to draw.
-  ClipRect clipRect(colortex);
-  if (!clipRect.overlaps(nump, p_clip)) {
-    return;
-  }
-
-  // Finally draw perspective-correct spans for the polygon.
-  if (colortex.internal_format == GL_RGBA8) {
-    draw_perspective_spans<uint32_t>(nump, p_clip, interp_clip, colortex, layer,
-                                     depthtex, clipRect);
-  } else if (colortex.internal_format == GL_R8) {
-    draw_perspective_spans<uint8_t>(nump, p_clip, interp_clip, colortex, layer,
-                                    depthtex, clipRect);
-  } else {
-    assert(false);
-  }
-}
-
-// Draws a perspective-correct 3D primitive with varying Z value, as opposed
-// to a simple 2D planar primitive with a constant Z value that could be
-// trivially Z rejected. This requires clipping the primitive against the near
-// and far planes to ensure it stays within the valid Z-buffer range. The Z
-// and W of each fragment of the primitives are interpolated across the
-// generated spans and then depth-tested as appropriate.
-// Additionally, vertex attributes must be interpolated with perspective-
-// correction by dividing by W before interpolation, and then later multiplied
-// by W again to produce the final correct attribute value for each fragment.
-// This process is expensive and should be avoided if possible for primitive
-// batches that are known ahead of time to not need perspective-correction.
-static void draw_perspective(int nump, Interpolants interp_outs[4],
-                             Texture& colortex, int layer, Texture& depthtex) {
-  // Lines are not supported with perspective.
-  assert(nump >= 3);
-  // Convert output of vertex shader to screen space.
-  vec4 pos = vertex_shader->gl_Position;
-  vec3_scalar scale =
-      vec3_scalar(ctx->viewport.width(), ctx->viewport.height(), 1) * 0.5f;
-  vec3_scalar offset =
-      make_vec3(make_vec2(ctx->viewport.origin() - colortex.offset), 0.0f) +
-      scale;
-  if (test_none(pos.z <= -pos.w || pos.z >= pos.w)) {
-    // No points cross the near or far planes, so no clipping required.
-    // Just divide coords by W and convert to viewport. We assume the W
-    // coordinate is non-zero and the reciprocal is finite since it would
-    // otherwise fail the test_none condition.
-    Float w = 1.0f / pos.w;
-    vec3 screen = pos.sel(X, Y, Z) * w * scale + offset;
-    Point3D p[4] = {{screen.x.x, screen.y.x, screen.z.x, w.x},
-                    {screen.x.y, screen.y.y, screen.z.y, w.y},
-                    {screen.x.z, screen.y.z, screen.z.z, w.z},
-                    {screen.x.w, screen.y.w, screen.z.w, w.w}};
-    draw_perspective_clipped(nump, p, interp_outs, colortex, layer, depthtex);
-  } else {
-    // Points cross the near or far planes, so we need to clip.
-    // Start with the original 3 or 4 points...
-    Point3D p[4] = {{pos.x.x, pos.y.x, pos.z.x, pos.w.x},
-                    {pos.x.y, pos.y.y, pos.z.y, pos.w.y},
-                    {pos.x.z, pos.y.z, pos.z.z, pos.w.z},
-                    {pos.x.w, pos.y.w, pos.z.w, pos.w.w}};
-    // Clipping can expand the points by 1 for each of 6 view frustum planes.
-    Point3D p_clip[4 + 6];
-    Interpolants interp_clip[4 + 6];
-    // Clip against near and far Z planes.
-    nump = clip_side<Z>(nump, p, interp_outs, p_clip, interp_clip);
-    // If no points are left inside the view frustum, there's nothing to draw.
-    if (nump < 3) {
-      return;
-    }
-    // After clipping against only the near and far planes, we might still
-    // produce points where W = 0, exactly at the camera plane. OpenGL specifies
-    // that for clip coordinates, points must satisfy:
-    //   -W <= X <= W
-    //   -W <= Y <= W
-    //   -W <= Z <= W
-    // When Z = W = 0, this is trivially satisfied, but when we transform and
-    // divide by W below it will produce a divide by 0. Usually we want to only
-    // clip Z to avoid the extra work of clipping X and Y. We can still project
-    // points that fall outside the view frustum X and Y so long as Z is valid.
-    // The span drawing code will then ensure X and Y are clamped to viewport
-    // boundaries. However, in the Z = W = 0 case, sometimes clipping X and Y,
-    // will push W further inside the view frustum so that it is no longer 0,
-    // allowing us to finally proceed to projecting the points to the screen.
-    for (int i = 0; i < nump; i++) {
-      // Found an invalid W, so need to clip against X and Y...
-      if (p_clip[i].w <= 0.0f) {
-        // Ping-pong p_clip -> p_tmp -> p_clip.
-        Point3D p_tmp[4 + 6];
-        Interpolants interp_tmp[4 + 6];
-        nump = clip_side<X>(nump, p_clip, interp_clip, p_tmp, interp_tmp);
-        if (nump < 3) return;
-        nump = clip_side<Y>(nump, p_tmp, interp_tmp, p_clip, interp_clip);
-        if (nump < 3) return;
-        // After clipping against X and Y planes, there's still points left
-        // to draw, so proceed to trying projection now...
-        break;
-      }
-    }
-    // Divide coords by W and convert to viewport.
-    for (int i = 0; i < nump; i++) {
-      float w = 1.0f / p_clip[i].w;
-      // If the W coord is essentially zero, small enough that division would
-      // result in Inf/NaN, then just set the reciprocal itself to zero so that
-      // the coordinates becomes zeroed out, as the only valid point that
-      // satisfies -W <= X/Y/Z <= W is all zeroes.
-      if (!isfinite(w)) w = 0.0f;
-      p_clip[i] = Point3D(p_clip[i].sel(X, Y, Z) * w * scale + offset, w);
-    }
-    draw_perspective_clipped(nump, p_clip, interp_clip, colortex, layer,
-                             depthtex);
-  }
-}
-
-static void draw_quad(int nump, Texture& colortex, int layer,
-                      Texture& depthtex) {
-  // Run vertex shader once for the primitive's vertices.
-  // Reserve space for 6 sets of interpolants, in case we need to clip against
-  // near and far planes in the perspective case.
-  Interpolants interp_outs[4];
-  swgl_ClipMask = nullptr;
-  vertex_shader->run_primitive((char*)interp_outs, sizeof(Interpolants));
-  vec4 pos = vertex_shader->gl_Position;
-  // Check if any vertex W is different from another. If so, use perspective.
-  if (test_any(pos.w != pos.w.x)) {
-    draw_perspective(nump, interp_outs, colortex, layer, depthtex);
-    return;
-  }
-
-  // Convert output of vertex shader to screen space.
-  // Divide coords by W and convert to viewport.
-  float w = 1.0f / pos.w.x;
-  // If the W coord is essentially zero, small enough that division would
-  // result in Inf/NaN, then just set the reciprocal itself to zero so that
-  // the coordinates becomes zeroed out, as the only valid point that
-  // satisfies -W <= X/Y/Z <= W is all zeroes.
-  if (!isfinite(w)) w = 0.0f;
-  vec2 screen = (pos.sel(X, Y) * w + 1) * 0.5f *
-                    vec2_scalar(ctx->viewport.width(), ctx->viewport.height()) +
-                make_vec2(ctx->viewport.origin() - colortex.offset);
-  Point2D p[4] = {{screen.x.x, screen.y.x},
-                  {screen.x.y, screen.y.y},
-                  {screen.x.z, screen.y.z},
-                  {screen.x.w, screen.y.w}};
-
-  // If quad is ouside clip rect, nothing to draw.
-  ClipRect clipRect(colortex);
-  if (!clipRect.overlaps(nump, p)) {
-    return;
-  }
-
-  // Since the quad is assumed 2D, Z is constant across the quad.
-  float screenZ = (pos.z.x * w + 1) * 0.5f;
-  if (screenZ < 0 || screenZ > 1) {
-    // Z values would cross the near or far plane, so just bail.
-    return;
-  }
-  // Since Z doesn't need to be interpolated, just set the fragment shader's
-  // Z and W values here, once and for all fragment shader invocations.
-  uint16_t z = uint16_t(0xFFFF * screenZ);
-  fragment_shader->gl_FragCoord.z = screenZ;
-  fragment_shader->gl_FragCoord.w = w;
-
-  // If supplied a line, adjust it so that it is a quad at least 1 pixel thick.
-  // Assume that for a line that all 4 SIMD lanes were actually filled with
-  // vertexes 0, 1, 1, 0.
-  if (nump == 2) {
-    // Nudge Y height to span at least 1 pixel by advancing to next pixel
-    // boundary so that we step at least 1 row when drawing spans.
-    if (int(p[0].y + 0.5f) == int(p[1].y + 0.5f)) {
-      p[2].y = 1 + int(p[1].y + 0.5f);
-      p[3].y = p[2].y;
-      // Nudge X width to span at least 1 pixel so that rounded coords fall on
-      // separate pixels.
-      if (int(p[0].x + 0.5f) == int(p[1].x + 0.5f)) {
-        p[1].x += 1.0f;
-        p[2].x += 1.0f;
-      }
-    } else {
-      // If the line already spans at least 1 row, then assume line is vertical
-      // or diagonal and just needs to be dilated horizontally.
-      p[2].x += 1.0f;
-      p[3].x += 1.0f;
-    }
-    // Pretend that it's a quad now...
-    nump = 4;
-  }
-
-  // Finally draw 2D spans for the quad. Currently only supports drawing to
-  // RGBA8 and R8 color buffers.
-  if (colortex.internal_format == GL_RGBA8) {
-    draw_quad_spans<uint32_t>(nump, p, z, interp_outs, colortex, layer,
-                              depthtex, clipRect);
-  } else if (colortex.internal_format == GL_R8) {
-    draw_quad_spans<uint8_t>(nump, p, z, interp_outs, colortex, layer, depthtex,
-                             clipRect);
-  } else {
-    assert(false);
-  }
-}
+#include "rasterize.h"
 
 void VertexArray::validate() {
   int last_enabled = -1;
@@ -4257,54 +2653,6 @@ void VertexArray::validate() {
   max_attrib = last_enabled;
 }
 
-template <typename INDEX>
-static inline void draw_elements(GLsizei count, GLsizei instancecount,
-                                 size_t offset, VertexArray& v,
-                                 Texture& colortex, int layer,
-                                 Texture& depthtex) {
-  Buffer& indices_buf = ctx->buffers[v.element_array_buffer_binding];
-  if (!indices_buf.buf || offset >= indices_buf.size) {
-    return;
-  }
-  assert((offset & (sizeof(INDEX) - 1)) == 0);
-  INDEX* indices = (INDEX*)(indices_buf.buf + offset);
-  count = min(count, (GLsizei)((indices_buf.size - offset) / sizeof(INDEX)));
-  // Triangles must be indexed at offsets 0, 1, 2.
-  // Quads must be successive triangles indexed at offsets 0, 1, 2, 2, 1, 3.
-  if (count == 6 && indices[1] == indices[0] + 1 &&
-      indices[2] == indices[0] + 2 && indices[5] == indices[0] + 3) {
-    assert(indices[3] == indices[0] + 2 && indices[4] == indices[0] + 1);
-    // Fast path - since there is only a single quad, we only load per-vertex
-    // attribs once for all instances, as they won't change across instances
-    // or within an instance.
-    vertex_shader->load_attribs(v.attribs, indices[0], 0, 4);
-    draw_quad(4, colortex, layer, depthtex);
-    for (GLsizei instance = 1; instance < instancecount; instance++) {
-      vertex_shader->load_attribs(v.attribs, indices[0], instance, 0);
-      draw_quad(4, colortex, layer, depthtex);
-    }
-  } else {
-    for (GLsizei instance = 0; instance < instancecount; instance++) {
-      for (GLsizei i = 0; i + 3 <= count; i += 3) {
-        if (indices[i + 1] != indices[i] + 1 ||
-            indices[i + 2] != indices[i] + 2) {
-          continue;
-        }
-        if (i + 6 <= count && indices[i + 5] == indices[i] + 3) {
-          assert(indices[i + 3] == indices[i] + 2 &&
-                 indices[i + 4] == indices[i] + 1);
-          vertex_shader->load_attribs(v.attribs, indices[i], instance, 4);
-          draw_quad(4, colortex, layer, depthtex);
-          i += 3;
-        } else {
-          vertex_shader->load_attribs(v.attribs, indices[i], instance, 3);
-          draw_quad(3, colortex, layer, depthtex);
-        }
-      }
-    }
-  }
-}
-
 extern "C" {
 
 void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
@@ -4314,7 +2662,10 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
     return;
   }
 
-  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER);
+  Framebuffer& fb = *get_framebuffer(GL_DRAW_FRAMEBUFFER, true);
+  if (!fb.color_attachment) {
+    return;
+  }
   Texture& colortex = ctx->textures[fb.color_attachment];
   if (!colortex.buf) {
     return;
@@ -4324,7 +2675,7 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
          colortex.internal_format == GL_R8);
   Texture& depthtex = ctx->textures[ctx->depthtest ? fb.depth_attachment : 0];
   if (depthtex.buf) {
-    assert(depthtex.internal_format == GL_DEPTH_COMPONENT16);
+    assert(depthtex.internal_format == GL_DEPTH_COMPONENT24);
     assert(colortex.width == depthtex.width &&
            colortex.height == depthtex.height);
     assert(colortex.offset == depthtex.offset);
@@ -4351,12 +2702,12 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
     case GL_UNSIGNED_SHORT:
       assert(mode == GL_TRIANGLES);
       draw_elements<uint16_t>(count, instancecount, offset, v, colortex,
-                              fb.layer, depthtex);
+                              depthtex);
       break;
     case GL_UNSIGNED_INT:
       assert(mode == GL_TRIANGLES);
       draw_elements<uint32_t>(count, instancecount, offset, v, colortex,
-                              fb.layer, depthtex);
+                              depthtex);
       break;
     case GL_NONE:
       // Non-standard GL extension - if element type is GL_NONE, then we don't
@@ -4366,13 +2717,13 @@ void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
           case GL_LINES:
             for (GLsizei i = 0; i + 2 <= count; i += 2) {
               vertex_shader->load_attribs(v.attribs, offset + i, instance, 2);
-              draw_quad(2, colortex, fb.layer, depthtex);
+              draw_quad(2, colortex, depthtex);
             }
             break;
           case GL_TRIANGLES:
             for (GLsizei i = 0; i + 3 <= count; i += 3) {
               vertex_shader->load_attribs(v.attribs, offset + i, instance, 3);
-              draw_quad(3, colortex, fb.layer, depthtex);
+              draw_quad(3, colortex, depthtex);
             }
             break;
           default:
@@ -4442,4 +2793,15 @@ void DestroyContext(Context* c) {
   delete c;
 }
 
+size_t ReportMemory(Context *ctx, size_t (*size_of_op)(void*)) {
+  size_t size = 0;
+  if (ctx) {
+    for (auto& t : ctx->textures) {
+      if (t && t->should_free()) {
+        size += size_of_op(t->buf);
+      }
+    }
+  }
+  return size;
+}
 }  // extern "C"

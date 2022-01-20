@@ -19,10 +19,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 import operator
 import os
 
-from collections import (
-    Counter,
-    OrderedDict,
-)
+from collections import Counter, OrderedDict
 from mozbuild.util import (
     HierarchicalStringList,
     ImmutableStrictOrderingOnAppendList,
@@ -40,10 +37,7 @@ from mozbuild.util import (
 
 from .. import schedules
 
-from ..testing import (
-    read_manifestparser_manifest,
-    read_reftest_manifest,
-)
+from ..testing import read_manifestparser_manifest, read_reftest_manifest
 
 import mozpack.path as mozpath
 from types import FunctionType
@@ -427,13 +421,6 @@ class AsmFlags(BaseCompileFlags):
                     debug_flags += ["-F", "cv8"]
                 elif self._context.config.substs.get("OS_ARCH") != "Darwin":
                     debug_flags += ["-F", "dwarf"]
-            elif self._context.get("USE_YASM"):
-                if self._context.config.substs.get(
-                    "OS_ARCH"
-                ) == "WINNT" and not self._context.config.substs.get("GNU_CC"):
-                    debug_flags += ["-g", "cv8"]
-                elif self._context.config.substs.get("OS_ARCH") != "Darwin":
-                    debug_flags += ["-g", "dwarf2"]
             elif (
                 self._context.config.substs.get("OS_ARCH") == "WINNT"
                 and self._context.config.substs.get("CPU_ARCH") == "aarch64"
@@ -609,12 +596,6 @@ class CompileFlags(TargetCompileFlags):
                 ),
                 ("CXXFLAGS", "CFLAGS"),
             ),
-            ("DSO", context.config.substs.get("DSO_CFLAGS"), ("CXXFLAGS", "CFLAGS")),
-            (
-                "DSO_PIC",
-                context.config.substs.get("DSO_PIC_CFLAGS"),
-                ("CXXFLAGS", "CFLAGS"),
-            ),
             ("RTL", None, ("CXXFLAGS", "CFLAGS")),
             (
                 "OS_COMPILE_CFLAGS",
@@ -683,6 +664,11 @@ class CompileFlags(TargetCompileFlags):
                 context.config.substs.get("MOZ_NEW_PASS_MANAGER_FLAGS"),
                 ("CXXFLAGS", "CFLAGS"),
             ),
+            (
+                "FILE_PREFIX_MAP",
+                context.config.substs.get("MOZ_FILE_PREFIX_MAP_FLAGS"),
+                ("CXXFLAGS", "CFLAGS"),
+            ),
         )
 
         TargetCompileFlags.__init__(self, context)
@@ -725,41 +711,23 @@ class WasmFlags(TargetCompileFlags):
                 ),
                 ("WASM_CXXFLAGS", "WASM_CFLAGS"),
             ),
-            (
-                "DSO",
-                context.config.substs.get("DSO_CFLAGS"),
-                ("WASM_CXXFLAGS", "WASM_CFLAGS"),
-            ),
-            (
-                "DSO_PIC",
-                context.config.substs.get("DSO_PIC_CFLAGS"),
-                ("WASM_CXXFLAGS", "WASM_CFLAGS"),
-            ),
             ("RTL", None, ("WASM_CXXFLAGS", "WASM_CFLAGS")),
-            (
-                "DEBUG",
-                self._debug_flags(),
-                ("WASM_CFLAGS", "WASM_CXXFLAGS", "WASM_LDFLAGS"),
-            ),
+            ("DEBUG", self._debug_flags(), ("WASM_CFLAGS", "WASM_CXXFLAGS")),
             (
                 "CLANG_PLUGIN",
                 context.config.substs.get("CLANG_PLUGIN_FLAGS"),
-                ("WASM_CFLAGS", "WASM_CXXFLAGS", "WASM_LDFLAGS"),
+                ("WASM_CFLAGS", "WASM_CXXFLAGS"),
             ),
-            (
-                "OPTIMIZE",
-                self._optimize_flags(),
-                ("WASM_CFLAGS", "WASM_CXXFLAGS", "WASM_LDFLAGS"),
-            ),
+            ("OPTIMIZE", self._optimize_flags(), ("WASM_CFLAGS", "WASM_CXXFLAGS")),
             (
                 "FRAMEPTR",
                 context.config.substs.get("MOZ_FRAMEPTR_FLAGS"),
-                ("WASM_CFLAGS", "WASM_CXXFLAGS", "WASM_LDFLAGS"),
+                ("WASM_CFLAGS", "WASM_CXXFLAGS"),
             ),
             (
                 "WARNINGS_AS_ERRORS",
                 self._warnings_as_errors(),
-                ("WASM_CXXFLAGS", "WASM_CFLAGS", "WASM_LDFLAGS"),
+                ("WASM_CXXFLAGS", "WASM_CFLAGS"),
             ),
             ("MOZBUILD_CFLAGS", None, ("WASM_CFLAGS",)),
             ("MOZBUILD_CXXFLAGS", None, ("WASM_CXXFLAGS",)),
@@ -769,17 +737,17 @@ class WasmFlags(TargetCompileFlags):
                 context.config.substs.get("WASM_CXXFLAGS"),
                 ("WASM_CXXFLAGS",),
             ),
-            (
-                "WASM_LDFLAGS",
-                context.config.substs.get("WASM_LDFLAGS"),
-                ("WASM_LDFLAGS",),
-            ),
             ("WASM_DEFINES", None, ("WASM_CFLAGS", "WASM_CXXFLAGS")),
             ("MOZBUILD_WASM_CFLAGS", None, ("WASM_CFLAGS",)),
             ("MOZBUILD_WASM_CXXFLAGS", None, ("WASM_CXXFLAGS",)),
             (
                 "NEWPM",
                 context.config.substs.get("MOZ_NEW_PASS_MANAGER_FLAGS"),
+                ("WASM_CFLAGS", "WASM_CXXFLAGS"),
+            ),
+            (
+                "FILE_PREFIX_MAP",
+                context.config.substs.get("MOZ_FILE_PREFIX_MAP_FLAGS"),
                 ("WASM_CFLAGS", "WASM_CXXFLAGS"),
             ),
         )
@@ -1201,12 +1169,7 @@ SchedulingComponents = ContextDerivedTypedRecord(
 )
 
 GeneratedFilesList = StrictOrderingOnAppendListWithFlagsFactory(
-    {
-        "script": six.text_type,
-        "inputs": list,
-        "force": bool,
-        "flags": list,
-    }
+    {"script": six.text_type, "inputs": list, "force": bool, "flags": list}
 )
 
 
@@ -1407,9 +1370,7 @@ class Files(SubContext):
 # Arbitrary arguments can be passed to the class constructor. The first
 # argument is always the parent context. It is up to each class to perform
 # argument validation.
-SUBCONTEXTS = [
-    Files,
-]
+SUBCONTEXTS = [Files]
 
 for cls in SUBCONTEXTS:
     if not issubclass(cls, SubContext):
@@ -1468,17 +1429,6 @@ VARIABLES = {
         List,
         list,
         """Cargo features to activate for this library.
-
-        This variable should not be used directly; you should be using the
-        RustLibrary template instead.
-        """,
-    ),
-    "RUST_LIBRARY_TARGET_DIR": (
-        six.text_type,
-        six.text_type,
-        """Where CARGO_TARGET_DIR should point when compiling this library.  If
-        not set, it defaults to the current objdir.  It should be a relative path
-        to the current objdir; absolute paths should not be used.
 
         This variable should not be used directly; you should be using the
         RustLibrary template instead.
@@ -2526,17 +2476,6 @@ VARIABLES = {
            appear in the moz.build file.
         """,
     ),
-    "WASM_LDFLAGS": (
-        List,
-        list,
-        """Flags passed to the linker when linking wasm modules
-           declared in this directory.
-
-           Note that the ordering of flags matters here; these flags will be
-           added to the compiler's command line in the same order as they
-           appear in the moz.build file.
-        """,
-    ),
     "WASM_DEFINES": (
         InitializedDefines,
         dict,
@@ -2667,19 +2606,6 @@ VARIABLES = {
         this value to ``True`` will cause it to use nasm instead.
 
         If nasm is not available on this system, or does not support the
-        current target architecture, an error will be raised.
-        """,
-    ),
-    "USE_YASM": (
-        bool,
-        bool,
-        """Use the yasm assembler to assemble assembly files from SOURCES.
-
-        By default, the build will use the toolchain assembler, $(AS), to
-        assemble source files in assembly language (.s or .asm files). Setting
-        this value to ``True`` will cause it to use yasm instead.
-
-        If yasm is not available on this system, or does not support the
         current target architecture, an error will be raised.
         """,
     ),

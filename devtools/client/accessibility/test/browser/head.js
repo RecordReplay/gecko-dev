@@ -7,7 +7,7 @@
 
 /* global waitUntilState, gBrowser */
 /* exported addTestTab, checkTreeState, checkSidebarState, checkAuditState, selectRow,
-            toggleRow, toggleMenuItem, addA11yPanelTestsTask, reload, navigate,
+            toggleRow, toggleMenuItem, addA11yPanelTestsTask, navigate,
             openSimulationMenu, toggleSimulationOption, TREE_FILTERS_MENU_ID,
             PREFS_MENU_ID */
 
@@ -117,7 +117,7 @@ async function addTestTab(url) {
   const enableButton = doc.getElementById("accessibility-enable-button");
   // If enable button is not found, asume the tool is already enabled.
   if (enableButton) {
-    await EventUtils.sendMouseEvent({ type: "click" }, enableButton, win);
+    EventUtils.sendMouseEvent({ type: "click" }, enableButton, win);
   }
 
   await waitUntilState(
@@ -148,8 +148,9 @@ async function addTestTab(url) {
  * @return a promise that is resolved once the panel is open.
  */
 async function initAccessibilityPanel(tab = gBrowser.selectedTab) {
-  const target = await TargetFactory.forTab(tab);
-  const toolbox = await gDevTools.showToolbox(target, "accessibility");
+  const toolbox = await gDevTools.showToolboxForTab(tab, {
+    toolId: "accessibility",
+  });
   return toolbox.getCurrentPanel();
 }
 
@@ -517,7 +518,7 @@ async function selectProperty(doc, id) {
   let node;
 
   await focusAccessibleProperties(doc);
-  await BrowserTestUtils.waitForCondition(async () => {
+  await BrowserTestUtils.waitForCondition(() => {
     node = doc.getElementById(`${id}`);
     if (node) {
       if (selected) {
@@ -529,7 +530,7 @@ async function selectProperty(doc, id) {
         // keys.
         nonNegativeTabIndexRule: false,
       });
-      await EventUtils.sendMouseEvent({ type: "click" }, node, win);
+      EventUtils.sendMouseEvent({ type: "click" }, node, win);
       AccessibilityUtils.resetEnv();
       selected = true;
     } else {
@@ -548,13 +549,13 @@ async function selectProperty(doc, id) {
  * @param  {document} doc       panel documnent.
  * @param  {Number}   rowNumber number of the row/tree node to be selected.
  */
-async function selectRow(doc, rowNumber) {
+function selectRow(doc, rowNumber) {
   info(`Selecting row ${rowNumber}.`);
   AccessibilityUtils.setEnv({
     // Keyboard navigation is handled on the container level using arrow keys.
     nonNegativeTabIndexRule: false,
   });
-  await EventUtils.sendMouseEvent(
+  EventUtils.sendMouseEvent(
     { type: "click" },
     doc.querySelectorAll(".treeRow")[rowNumber],
     doc.defaultView
@@ -580,7 +581,7 @@ async function toggleRow(doc, rowNumber) {
     // TreeView component and handle keyboard navigation using the arrow keys.
     mustHaveAccessibleRule: false,
   });
-  await EventUtils.sendMouseEvent({ type: "click" }, twisty, win);
+  EventUtils.sendMouseEvent({ type: "click" }, twisty, win);
   AccessibilityUtils.resetEnv();
   await BrowserTestUtils.waitForCondition(
     () =>
@@ -801,11 +802,8 @@ function addA11yPanelTestsTask(tests, uri, msg, options) {
  *         Resolves when the toolbox and tab have been destroyed and closed.
  */
 async function closeTabToolboxAccessibility(tab = gBrowser.selectedTab) {
-  if (TargetFactory.isKnownTab(tab)) {
-    const target = await TargetFactory.forTab(tab);
-    if (target) {
-      await gDevTools.closeToolbox(target);
-    }
+  if (TabDescriptorFactory.isKnownTab(tab)) {
+    await gDevTools.closeToolboxForTab(tab);
   }
 
   await shutdownAccessibility(gBrowser.getBrowserForTab(tab));
@@ -829,14 +827,4 @@ function addA11YPanelTask(msg, uri, task, options = {}) {
     await task(env);
     await closeTabToolboxAccessibility(env.tab);
   });
-}
-
-/**
- * Reload panel target.
- * @param  {Object} target             Panel target.
- * @param  {String} waitForTargetEvent Event to wait for after reload.
- */
-function reload(target, waitForTargetEvent = "navigate") {
-  executeSoon(() => target.reload());
-  return once(target, waitForTargetEvent);
 }

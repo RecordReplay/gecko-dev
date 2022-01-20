@@ -17,6 +17,8 @@
 import expect from 'expect';
 import {
   getTestState,
+  describeFailsFirefox,
+  itFailsFirefox,
 } from './mocha-utils'; // eslint-disable-line import/extensions
 
 describe('ignoreHTTPSErrors', function () {

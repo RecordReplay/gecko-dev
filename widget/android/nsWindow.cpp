@@ -33,6 +33,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/Types.h"
+#include "mozilla/layers/LayersTypes.h"
 #include "mozilla/layers/RenderTrace.h"
 #include "mozilla/widget/AndroidVsync.h"
 #include <algorithm>
@@ -58,6 +59,7 @@ using mozilla::gfx::SurfaceFormat;
 #include "nsFocusManager.h"
 #include "nsUserIdleService.h"
 #include "nsLayoutUtils.h"
+#include "nsNetUtil.h"
 #include "nsViewManager.h"
 
 #include "WidgetUtils.h"
@@ -103,7 +105,7 @@ using mozilla::gfx::SurfaceFormat;
 #include "ScreenHelperAndroid.h"
 #include "TouchResampler.h"
 
-#include "GeckoProfiler.h"  // For AUTO_PROFILER_LABEL
+#include "mozilla/ProfilerLabels.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 
@@ -146,6 +148,8 @@ static const int32_t INPUT_RESULT_HANDLED_CONTENT =
     java::PanZoomController::INPUT_RESULT_HANDLED_CONTENT;
 static const int32_t INPUT_RESULT_IGNORED =
     java::PanZoomController::INPUT_RESULT_IGNORED;
+
+static const nsCString::size_type MAX_TOPLEVEL_DATA_URI_LEN = 2 * 1024 * 1024;
 
 namespace {
 template <class Instance, class Impl>
@@ -271,8 +275,7 @@ class NPZCSupport final
 
     // Use vsync for touch resampling on API level 19 and above.
     // See gfxAndroidPlatform::CreateHardwareVsyncSource() for comparison.
-    if (AndroidBridge::Bridge() &&
-        AndroidBridge::Bridge()->GetAPIVersion() >= 19) {
+    if (jni::GetAPIVersion() >= 19) {
       mAndroidVsync = AndroidVsync::GetInstance();
     }
   }
@@ -392,7 +395,7 @@ class NPZCSupport final
         WheelDeltaAdjustmentStrategy::eNone);
 
     APZEventResult result = controller->InputBridge()->ReceiveInputEvent(input);
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       return INPUT_RESULT_IGNORED;
     }
 
@@ -401,11 +404,11 @@ class NPZCSupport final
       window->ProcessUntransformedAPZEvent(&wheelEvent, result);
     });
 
-    switch (result.mStatus) {
+    switch (result.GetStatus()) {
       case nsEventStatus_eIgnore:
         return INPUT_RESULT_UNHANDLED;
       case nsEventStatus_eConsumeDoDefault:
-        return (result.mHandledResult == Some(APZHandledResult::HandledByRoot))
+        return result.GetHandledResult()->IsHandledByRoot()
                    ? INPUT_RESULT_HANDLED
                    : INPUT_RESULT_HANDLED_CONTENT;
       default:
@@ -457,20 +460,57 @@ class NPZCSupport final
     return result;
   }
 
-  static int32_t ConvertAPZHandledResult(APZHandledResult aHandledResult) {
-    switch (aHandledResult) {
-      case APZHandledResult::Unhandled:
+  static int32_t ConvertAPZHandledPlace(APZHandledPlace aHandledPlace) {
+    switch (aHandledPlace) {
+      case APZHandledPlace::Unhandled:
         return INPUT_RESULT_UNHANDLED;
-      case APZHandledResult::HandledByRoot:
+      case APZHandledPlace::HandledByRoot:
         return INPUT_RESULT_HANDLED;
-      case APZHandledResult::HandledByContent:
+      case APZHandledPlace::HandledByContent:
         return INPUT_RESULT_HANDLED_CONTENT;
-      case APZHandledResult::Invalid:
+      case APZHandledPlace::Invalid:
         MOZ_ASSERT_UNREACHABLE("The handled result should NOT be Invalid");
         return INPUT_RESULT_UNHANDLED;
     }
     MOZ_ASSERT_UNREACHABLE("Unknown handled result");
     return INPUT_RESULT_UNHANDLED;
+  }
+
+  static int32_t ConvertSideBits(SideBits aSideBits) {
+    int32_t ret = java::PanZoomController::SCROLLABLE_FLAG_NONE;
+    if (aSideBits & SideBits::eTop) {
+      ret |= java::PanZoomController::SCROLLABLE_FLAG_TOP;
+    }
+    if (aSideBits & SideBits::eRight) {
+      ret |= java::PanZoomController::SCROLLABLE_FLAG_RIGHT;
+    }
+    if (aSideBits & SideBits::eBottom) {
+      ret |= java::PanZoomController::SCROLLABLE_FLAG_BOTTOM;
+    }
+    if (aSideBits & SideBits::eLeft) {
+      ret |= java::PanZoomController::SCROLLABLE_FLAG_LEFT;
+    }
+    return ret;
+  }
+
+  static int32_t ConvertScrollDirections(
+      layers::ScrollDirections aScrollDirections) {
+    int32_t ret = java::PanZoomController::OVERSCROLL_FLAG_NONE;
+    if (aScrollDirections.contains(layers::HorizontalScrollDirection)) {
+      ret |= java::PanZoomController::OVERSCROLL_FLAG_HORIZONTAL;
+    }
+    if (aScrollDirections.contains(layers::VerticalScrollDirection)) {
+      ret |= java::PanZoomController::OVERSCROLL_FLAG_VERTICAL;
+    }
+    return ret;
+  }
+
+  static java::PanZoomController::InputResultDetail::LocalRef
+  ConvertAPZHandledResult(const APZHandledResult& aHandledResult) {
+    return java::PanZoomController::InputResultDetail::New(
+        ConvertAPZHandledPlace(aHandledResult.mPlace),
+        ConvertSideBits(aHandledResult.mScrollableDirections),
+        ConvertScrollDirections(aHandledResult.mOverscrollDirections));
   }
 
  public:
@@ -532,7 +572,7 @@ class NPZCSupport final
         nsWindow::GetEventTimeStamp(aTime), nsWindow::GetModifiers(aMetaState));
 
     APZEventResult result = controller->InputBridge()->ReceiveInputEvent(input);
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       return INPUT_RESULT_IGNORED;
     }
 
@@ -541,11 +581,11 @@ class NPZCSupport final
       window->ProcessUntransformedAPZEvent(&mouseEvent, result);
     });
 
-    switch (result.mStatus) {
+    switch (result.GetStatus()) {
       case nsEventStatus_eIgnore:
         return INPUT_RESULT_UNHANDLED;
       case nsEventStatus_eConsumeDoDefault:
-        return (result.mHandledResult == Some(APZHandledResult::HandledByRoot))
+        return result.GetHandledResult()->IsHandledByRoot()
                    ? INPUT_RESULT_HANDLED
                    : INPUT_RESULT_HANDLED_CONTENT;
       default:
@@ -783,25 +823,28 @@ class NPZCSupport final
 
     if (!controller) {
       if (aReturnResult) {
-        aReturnResult->Complete(
-            java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
+        aReturnResult->Complete(java::PanZoomController::InputResultDetail::New(
+            INPUT_RESULT_UNHANDLED,
+            java::PanZoomController::SCROLLABLE_FLAG_NONE,
+            java::PanZoomController::OVERSCROLL_FLAG_NONE));
       }
       return;
     }
 
     APZEventResult result =
         controller->InputBridge()->ReceiveInputEvent(aInput);
-    if (result.mStatus == nsEventStatus_eConsumeNoDefault) {
+    if (result.GetStatus() == nsEventStatus_eConsumeNoDefault) {
       if (aReturnResult) {
-        aReturnResult->Complete(
-            java::sdk::Integer::ValueOf(INPUT_RESULT_IGNORED));
+        aReturnResult->Complete(java::PanZoomController::InputResultDetail::New(
+            INPUT_RESULT_IGNORED, java::PanZoomController::SCROLLABLE_FLAG_NONE,
+            java::PanZoomController::OVERSCROLL_FLAG_NONE));
       }
       return;
     }
 
     // Dispatch APZ input event on Gecko thread.
     PostInputEvent([aInput, result](nsWindow* window) {
-      WidgetTouchEvent touchEvent = aInput.ToWidgetTouchEvent(window);
+      WidgetTouchEvent touchEvent = aInput.ToWidgetEvent(window);
       window->ProcessUntransformedAPZEvent(&touchEvent, result);
       window->DispatchHitTest(touchEvent);
     });
@@ -811,22 +854,28 @@ class NPZCSupport final
       return;
     }
 
-    if (result.mHandledResult != Nothing()) {
+    if (result.GetHandledResult() != Nothing()) {
       // We know conclusively that the root APZ handled this or not and
       // don't need to do any more work.
-      switch (result.mStatus) {
+      switch (result.GetStatus()) {
         case nsEventStatus_eIgnore:
           aReturnResult->Complete(
-              java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
+              java::PanZoomController::InputResultDetail::New(
+                  INPUT_RESULT_UNHANDLED,
+                  java::PanZoomController::SCROLLABLE_FLAG_NONE,
+                  java::PanZoomController::OVERSCROLL_FLAG_NONE));
           break;
         case nsEventStatus_eConsumeDoDefault:
-          aReturnResult->Complete(java::sdk::Integer::ValueOf(
-              ConvertAPZHandledResult(result.mHandledResult.value())));
+          aReturnResult->Complete(
+              ConvertAPZHandledResult(result.GetHandledResult().value()));
           break;
         default:
           MOZ_ASSERT_UNREACHABLE("Unexpected nsEventStatus");
           aReturnResult->Complete(
-              java::sdk::Integer::ValueOf(INPUT_RESULT_UNHANDLED));
+              java::PanZoomController::InputResultDetail::New(
+                  INPUT_RESULT_UNHANDLED,
+                  java::PanZoomController::SCROLLABLE_FLAG_NONE,
+                  java::PanZoomController::OVERSCROLL_FLAG_NONE));
           break;
       }
       return;
@@ -836,9 +885,8 @@ class NPZCSupport final
     controller->AddInputBlockCallback(
         result.mInputBlockId,
         [aReturnResult = java::GeckoResult::GlobalRef(aReturnResult)](
-            uint64_t aInputBlockId, APZHandledResult aHandledResult) {
-          aReturnResult->Complete(java::sdk::Integer::ValueOf(
-              ConvertAPZHandledResult(aHandledResult)));
+            uint64_t aInputBlockId, const APZHandledResult& aHandledResult) {
+          aReturnResult->Complete(ConvertAPZHandledResult(aHandledResult));
         });
   }
 };
@@ -1835,9 +1883,14 @@ RefPtr<MozPromise<bool, bool, false>> nsWindow::OnLoadRequest(
   if (!geckoViewSupport) {
     return MozPromise<bool, bool, false>::CreateAndResolve(false, __func__);
   }
+
   nsAutoCString spec, triggeringSpec;
   if (aUri) {
     aUri->GetDisplaySpec(spec);
+    if (aIsTopLevel && mozilla::net::SchemeIsData(aUri) &&
+        spec.Length() > MAX_TOPLEVEL_DATA_URI_LEN) {
+      return MozPromise<bool, bool, false>::CreateAndResolve(false, __func__);
+    }
   }
 
   bool isNullPrincipal = false;
@@ -2438,10 +2491,10 @@ nsresult nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
   return NS_OK;
 }
 
-nsresult nsWindow::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
-                                              uint32_t aNativeMessage,
-                                              uint32_t aModifierFlags,
-                                              nsIObserver* aObserver) {
+nsresult nsWindow::SynthesizeNativeMouseEvent(
+    LayoutDeviceIntPoint aPoint, NativeMouseMessage aNativeMessage,
+    MouseButton aButton, nsIWidget::Modifiers aModifierFlags,
+    nsIObserver* aObserver) {
   mozilla::widget::AutoObserverNotifier notifier(aObserver, "mouseevent");
 
   MOZ_ASSERT(mNPZCSupport.IsAttached());
@@ -2453,36 +2506,64 @@ nsresult nsWindow::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
   aPoint.x -= bounds.x;
   aPoint.y -= bounds.y;
 
+  int32_t nativeMessage;
+  switch (aNativeMessage) {
+    case NativeMouseMessage::ButtonDown:
+      nativeMessage = java::sdk::MotionEvent::ACTION_POINTER_DOWN;
+      break;
+    case NativeMouseMessage::ButtonUp:
+      nativeMessage = java::sdk::MotionEvent::ACTION_POINTER_UP;
+      break;
+    case NativeMouseMessage::Move:
+      nativeMessage = java::sdk::MotionEvent::ACTION_HOVER_MOVE;
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Non supported mouse event on Android");
+      return NS_ERROR_INVALID_ARG;
+  }
+  int32_t button = 0;
+  if (aNativeMessage != NativeMouseMessage::ButtonUp) {
+    switch (aButton) {
+      case MouseButton::ePrimary:
+        button = java::sdk::MotionEvent::BUTTON_PRIMARY;
+        break;
+      case MouseButton::eMiddle:
+        button = java::sdk::MotionEvent::BUTTON_TERTIARY;
+        break;
+      case MouseButton::eSecondary:
+        button = java::sdk::MotionEvent::BUTTON_SECONDARY;
+        break;
+      case MouseButton::eX1:
+        button = java::sdk::MotionEvent::BUTTON_BACK;
+        break;
+      case MouseButton::eX2:
+        button = java::sdk::MotionEvent::BUTTON_FORWARD;
+        break;
+      default:
+        if (aNativeMessage == NativeMouseMessage::ButtonDown) {
+          MOZ_ASSERT_UNREACHABLE("Non supported mouse button type on Android");
+          return NS_ERROR_INVALID_ARG;
+        }
+        break;
+    }
+  }
+
+  // TODO (bug 1693237): Handle aModifierFlags.
   DispatchToUiThread(
       "nsWindow::SynthesizeNativeMouseEvent",
       [npzc = java::PanZoomController::NativeProvider::GlobalRef(npzc),
-       aNativeMessage, aPoint] {
-        npzc->SynthesizeNativeMouseEvent(aNativeMessage, aPoint.x, aPoint.y);
+       nativeMessage, aPoint, button] {
+        npzc->SynthesizeNativeMouseEvent(nativeMessage, aPoint.x, aPoint.y,
+                                         button);
       });
   return NS_OK;
 }
 
 nsresult nsWindow::SynthesizeNativeMouseMove(LayoutDeviceIntPoint aPoint,
                                              nsIObserver* aObserver) {
-  mozilla::widget::AutoObserverNotifier notifier(aObserver, "mouseevent");
-
-  MOZ_ASSERT(mNPZCSupport.IsAttached());
-  auto npzcSup(mNPZCSupport.Access());
-  MOZ_ASSERT(!!npzcSup);
-
-  const auto& npzc = npzcSup->GetJavaNPZC();
-  const auto& bounds = FindTopLevel()->mBounds;
-  aPoint.x -= bounds.x;
-  aPoint.y -= bounds.y;
-
-  DispatchToUiThread(
-      "nsWindow::SynthesizeNativeMouseMove",
-      [npzc = java::PanZoomController::NativeProvider::GlobalRef(npzc),
-       aPoint] {
-        npzc->SynthesizeNativeMouseEvent(
-            java::sdk::MotionEvent::ACTION_HOVER_MOVE, aPoint.x, aPoint.y);
-      });
-  return NS_OK;
+  return SynthesizeNativeMouseEvent(
+      aPoint, NativeMouseMessage::Move, MouseButton::eNotPressed,
+      nsIWidget::Modifiers::NO_MODIFIERS, aObserver);
 }
 
 bool nsWindow::WidgetPaintsBackground() {

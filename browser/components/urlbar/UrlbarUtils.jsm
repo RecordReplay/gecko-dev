@@ -21,9 +21,9 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 XPCOMUtils.defineLazyModuleGetters(this, {
-  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   FormHistory: "resource://gre/modules/FormHistory.jsm",
+  KeywordUtils: "resource://gre/modules/KeywordUtils.jsm",
   Log: "resource://gre/modules/Log.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
@@ -40,17 +40,37 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 var UrlbarUtils = {
   // Extensions are allowed to add suggestions if they have registered a keyword
   // with the omnibox API. This is the maximum number of suggestions an extension
-  // is allowed to add for a given search string.
+  // is allowed to add for a given search string using the omnibox API.
   // This value includes the heuristic result.
-  MAXIMUM_ALLOWED_EXTENSION_MATCHES: 6,
+  MAX_OMNIBOX_RESULT_COUNT: 6,
 
-  // This is used by UnifiedComplete, the new implementation will use
-  // PROVIDER_TYPE and RESULT_TYPE
+  // Results are categorized into groups to help the muxer compose them.  See
+  // UrlbarUtils.getResultGroup.  Since result groups are stored in result
+  // buckets and result buckets are stored in prefs, additions and changes to
+  // result groups may require adding UI migrations to BrowserGlue.  Be careful
+  // about making trivial changes to existing groups, like renaming them,
+  // because we don't want to make downgrades unnecessarily hard.
   RESULT_GROUP: {
-    HEURISTIC: "heuristic",
+    ABOUT_PAGES: "aboutPages",
     GENERAL: "general",
-    SUGGESTION: "suggestion",
-    EXTENSION: "extension",
+    FORM_HISTORY: "formHistory",
+    HEURISTIC_AUTOFILL: "heuristicAutofill",
+    HEURISTIC_ENGINE_ALIAS: "heuristicEngineAlias",
+    HEURISTIC_EXTENSION: "heuristicExtension",
+    HEURISTIC_FALLBACK: "heuristicFallback",
+    HEURISTIC_BOOKMARK_KEYWORD: "heuristicBookmarkKeyword",
+    HEURISTIC_OMNIBOX: "heuristicOmnibox",
+    HEURISTIC_PRELOADED: "heuristicPreloaded",
+    HEURISTIC_SEARCH_TIP: "heuristicSearchTip",
+    HEURISTIC_TEST: "heuristicTest",
+    HEURISTIC_TOKEN_ALIAS_ENGINE: "heuristicTokenAliasEngine",
+    INPUT_HISTORY: "inputHistory",
+    OMNIBOX: "extension",
+    PRELOADED: "preloaded",
+    REMOTE_SUGGESTION: "remoteSuggestion",
+    REMOTE_TAB: "remoteTab",
+    SUGGESTED_INDEX: "suggestedIndex",
+    TAIL_SUGGESTION: "tailSuggestion",
   },
 
   // Defines provider types.
@@ -133,11 +153,10 @@ var UrlbarUtils = {
   // This defines icon locations that are commonly used in the UI.
   ICON: {
     // DEFAULT is defined lazily so it doesn't eagerly initialize PlacesUtils.
-    EXTENSION: "chrome://browser/content/extension.svg",
+    EXTENSION: "chrome://mozapps/skin/extensions/extension.svg",
     HISTORY: "chrome://browser/skin/history.svg",
-    SEARCH_GLASS: "chrome://browser/skin/search-glass.svg",
-    SEARCH_GLASS_INVERTED: "chrome://browser/skin/search-glass-inverted.svg",
-    TIP: "chrome://browser/skin/tip.svg",
+    SEARCH_GLASS: "chrome://global/skin/icons/search-glass.svg",
+    TIP: "chrome://global/skin/icons/lightbulb.svg",
   },
 
   // The number of results by which Page Up/Down move the selection.
@@ -163,39 +182,21 @@ var UrlbarUtils = {
     SUGGESTED: 2,
   },
 
-  // UnifiedComplete's autocomplete results store their titles and tags together
-  // in their comments.  This separator is used to separate them.  When we
-  // rewrite UnifiedComplete for quantumbar, we should stop using this old hack
-  // and store titles and tags separately.  It's important that this be a
-  // character that no title would ever have.  We use \x1F, the non-printable
-  // unit separator.
+  // UrlbarProviderPlaces's autocomplete results store their titles and tags
+  // together in their comments.  This separator is used to separate them.
+  // After bug 1717511, we should stop using this old hack and store titles and
+  // tags separately.  It's important that this be a character that no title
+  // would ever have.  We use \x1F, the non-printable unit separator.
   TITLE_TAGS_SEPARATOR: "\x1F",
 
   // Regex matching single word hosts with an optional port; no spaces, auth or
   // path-like chars are admitted.
   REGEXP_SINGLE_WORD: /^[^\s@:/?#]+(:\d+)?$/,
 
-  // Names of engines shipped in Firefox that search the web in general.  These
-  // are used to update the input placeholder when entering search mode.
-  // TODO (Bug 1658661): Don't hardcode this list; store search engine category
-  // information someplace better.
-  WEB_ENGINE_NAMES: new Set([
-    "百度", // Baidu
-    "百度搜索", // "Baidu Search", the name of Baidu's OpenSearch engine.
-    "Bing",
-    "DuckDuckGo",
-    "Ecosia",
-    "Google",
-    "Qwant",
-    "Yandex",
-    "Яндекс", // Yandex, non-EN
-  ]),
-
   // Valid entry points for search mode. If adding a value here, please update
   // telemetry documentation and Scalars.yaml.
   SEARCH_MODE_ENTRY: new Set([
     "bookmarkmenu",
-    "handoff",
     "keywordoffer",
     "oneoff",
     "other",
@@ -208,6 +209,16 @@ var UrlbarUtils = {
     "touchbar",
     "typed",
   ]),
+
+  // The favicon service stores icons for URLs with the following protocols.
+  PROTOCOLS_WITH_ICONS: [
+    "chrome:",
+    "moz-extension:",
+    "about:",
+    "http:",
+    "https:",
+    "ftp:",
+  ],
 
   // Search mode objects corresponding to the local shortcuts in the view, in
   // order they appear.  Pref names are relative to the `browser.urlbar` branch.
@@ -308,7 +319,7 @@ var UrlbarUtils = {
     }
 
     try {
-      [url, postData] = await BrowserUtils.parseUrlAndPostData(
+      [url, postData] = await KeywordUtils.parseUrlAndPostData(
         entry.url.href,
         entry.postData,
         param
@@ -475,6 +486,83 @@ var UrlbarUtils = {
   },
 
   /**
+   * Returns the group for a result.
+   *
+   * @param {UrlbarResult} result
+   *   The result.
+   * @returns {UrlbarUtils.RESULT_GROUP}
+   *   The reuslt's group.
+   */
+  getResultGroup(result) {
+    if (result.hasSuggestedIndex) {
+      return UrlbarUtils.RESULT_GROUP.SUGGESTED_INDEX;
+    }
+    if (result.heuristic) {
+      switch (result.providerName) {
+        case "AliasEngines":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_ENGINE_ALIAS;
+        case "Autofill":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_AUTOFILL;
+        case "BookmarkKeywords":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_BOOKMARK_KEYWORD;
+        case "HeuristicFallback":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_FALLBACK;
+        case "Omnibox":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_OMNIBOX;
+        case "PreloadedSites":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_PRELOADED;
+        case "TokenAliasEngines":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_TOKEN_ALIAS_ENGINE;
+        case "UrlbarProviderSearchTips":
+          return UrlbarUtils.RESULT_GROUP.HEURISTIC_SEARCH_TIP;
+        default:
+          if (result.providerName.startsWith("TestProvider")) {
+            return UrlbarUtils.RESULT_GROUP.HEURISTIC_TEST;
+          }
+          break;
+      }
+      if (result.providerType == UrlbarUtils.PROVIDER_TYPE.EXTENSION) {
+        return UrlbarUtils.RESULT_GROUP.HEURISTIC_EXTENSION;
+      }
+      Cu.reportError(
+        "Returning HEURISTIC_FALLBACK for unrecognized heuristic result: " +
+          result
+      );
+      return UrlbarUtils.RESULT_GROUP.HEURISTIC_FALLBACK;
+    }
+
+    switch (result.providerName) {
+      case "AboutPages":
+        return UrlbarUtils.RESULT_GROUP.ABOUT_PAGES;
+      case "InputHistory":
+        return UrlbarUtils.RESULT_GROUP.INPUT_HISTORY;
+      case "PreloadedSites":
+        return UrlbarUtils.RESULT_GROUP.PRELOADED;
+      default:
+        break;
+    }
+
+    switch (result.type) {
+      case UrlbarUtils.RESULT_TYPE.SEARCH:
+        if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
+          return UrlbarUtils.RESULT_GROUP.FORM_HISTORY;
+        }
+        if (result.payload.tail) {
+          return UrlbarUtils.RESULT_GROUP.TAIL_SUGGESTION;
+        }
+        if (result.payload.suggestion) {
+          return UrlbarUtils.RESULT_GROUP.REMOTE_SUGGESTION;
+        }
+        break;
+      case UrlbarUtils.RESULT_TYPE.OMNIBOX:
+        return UrlbarUtils.RESULT_GROUP.OMNIBOX;
+      case UrlbarUtils.RESULT_TYPE.REMOTE_TAB:
+        return UrlbarUtils.RESULT_GROUP.REMOTE_TAB;
+    }
+    return UrlbarUtils.RESULT_GROUP.GENERAL;
+  },
+
+  /**
    * Extracts an url from a result, if possible.
    * @param {UrlbarResult} result The result to extract from.
    * @returns {object} a {url, postData} object, or null if a url can't be built
@@ -567,6 +655,26 @@ var UrlbarUtils = {
   },
 
   /**
+   * Gets a default icon for a URL.
+   * @param {string} url
+   * @returns {string} A URI pointing to an icon for `url`.
+   */
+  getIconForUrl(url) {
+    if (typeof url == "string") {
+      return UrlbarUtils.PROTOCOLS_WITH_ICONS.some(p => url.startsWith(p))
+        ? "page-icon:" + url
+        : UrlbarUtils.ICON.DEFAULT;
+    }
+    if (
+      url instanceof URL &&
+      UrlbarUtils.PROTOCOLS_WITH_ICONS.includes(url.protocol)
+    ) {
+      return "page-icon:" + url.href;
+    }
+    return UrlbarUtils.ICON.DEFAULT;
+  },
+
+  /**
    * Returns a search mode object if a token should enter search mode when
    * typed. This does not handle engine aliases.
    *
@@ -653,6 +761,8 @@ var UrlbarUtils = {
    *        Whether to trim a trailing `?`.
    * @param {boolean} options.trimEmptyHash
    *        Whether to trim a trailing `#`.
+   * @param {boolean} options.trimTrailingDot
+   *        Whether to trim a trailing '.'.
    * @returns {array} [modified, prefix, suffix]
    *          modified: {string} The modified spec.
    *          prefix: {string} The parts stripped from the prefix, if any.
@@ -683,6 +793,10 @@ var UrlbarUtils = {
     if (options.trimSlash && spec.endsWith("/")) {
       spec = spec.slice(0, -1);
       suffix = "/" + suffix;
+    }
+    if (options.trimTrailingDot && spec.endsWith(".")) {
+      spec = spec.slice(0, -1);
+      suffix = "." + suffix;
     }
     return [spec, prefix, suffix];
   },
@@ -816,8 +930,7 @@ var UrlbarUtils = {
    * @returns {array} If `str` is a URL, then [prefix, remainder].  Otherwise, ["", str].
    */
   stripURLPrefix(str) {
-    const REGEXP_STRIP_PREFIX = /^[a-z]+:(?:\/){0,2}/i;
-    let match = REGEXP_STRIP_PREFIX.exec(str);
+    let match = UrlbarTokenizer.REGEXP_PREFIX.exec(str);
     if (!match) {
       return ["", str];
     }
@@ -851,7 +964,7 @@ var UrlbarUtils = {
         "usercontextid"
       ),
       allowSearchSuggestions: false,
-      providers: ["UnifiedComplete", "HeuristicFallback"],
+      providers: ["AliasEngines", "BookmarkKeywords", "HeuristicFallback"],
     };
     if (window.gURLBar.searchMode) {
       let searchMode = window.gURLBar.searchMode;
@@ -946,6 +1059,51 @@ var UrlbarUtils = {
         }
       );
     });
+  },
+
+  /**
+   * Return whether the candidate can autofill to the url.
+   *
+   * @param {string} url
+   * @param {string} candidate
+   * @param {string} checkFragmentOnly
+   *                 If want to check the fragment only, pass true.
+   *                 Otherwise, check whole url.
+   * @returns {boolean} true: can autofill
+   */
+  canAutofillURL(url, candidate, checkFragmentOnly = false) {
+    if (
+      !checkFragmentOnly &&
+      (url.length <= candidate.length ||
+        !url.toLocaleLowerCase().startsWith(candidate.toLocaleLowerCase()))
+    ) {
+      return false;
+    }
+
+    if (!UrlbarTokenizer.REGEXP_PREFIX.test(url)) {
+      url = "http://" + url;
+    }
+
+    if (!UrlbarTokenizer.REGEXP_PREFIX.test(candidate)) {
+      candidate = "http://" + candidate;
+    }
+
+    try {
+      url = new URL(url);
+      candidate = new URL(candidate);
+    } catch (e) {
+      return false;
+    }
+
+    if (
+      !checkFragmentOnly &&
+      candidate.href.endsWith("/") &&
+      (url.pathname.length > candidate.pathname.length || url.hash)
+    ) {
+      return false;
+    }
+
+    return url.hash.startsWith(candidate.hash);
   },
 
   /**
@@ -1062,6 +1220,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       isPrivateEngine: {
         type: "boolean",
       },
+      isGeneralPurposeEngine: {
+        type: "boolean",
+      },
       keyword: {
         type: "string",
       },
@@ -1104,6 +1265,15 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       displayUrl: {
         type: "string",
       },
+      helpL10nId: {
+        type: "string",
+      },
+      helpTitle: {
+        type: "string",
+      },
+      helpUrl: {
+        type: "string",
+      },
       icon: {
         type: "string",
       },
@@ -1113,8 +1283,29 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       isSponsored: {
         type: "boolean",
       },
+      qsSuggestion: {
+        type: "string",
+      },
       sendAttributionRequest: {
         type: "boolean",
+      },
+      sponsoredAdvertiser: {
+        type: "string",
+      },
+      sponsoredBlockId: {
+        type: "number",
+      },
+      sponsoredClickUrl: {
+        type: "string",
+      },
+      sponsoredImpressionUrl: {
+        type: "string",
+      },
+      sponsoredText: {
+        type: "string",
+      },
+      sponsoredTileId: {
+        type: "number",
       },
       tags: {
         type: "array",
@@ -1177,7 +1368,7 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
   },
   [UrlbarUtils.RESULT_TYPE.REMOTE_TAB]: {
     type: "object",
-    required: ["device", "url"],
+    required: ["device", "url", "lastUsed"],
     properties: {
       device: {
         type: "string",
@@ -1187,6 +1378,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       },
       icon: {
         type: "string",
+      },
+      lastUsed: {
+        type: "number",
       },
       title: {
         type: "string",
@@ -1565,11 +1759,44 @@ class UrlbarProvider {
   /**
    * Called when the user starts and ends an engagement with the urlbar.
    *
-   * @param {boolean} isPrivate True if the engagement is in a private context.
-   * @param {string} state The state of the engagement, one of: start,
-   *        engagement, abandonment, discard.
+   * @param {boolean} isPrivate
+   *   True if the engagement is in a private context.
+   * @param {string} state
+   *   The state of the engagement, one of the following strings:
+   *
+   *   * start
+   *       A new query has started in the urlbar.
+   *   * engagement
+   *       The user picked a result in the urlbar or used paste-and-go.
+   *   * abandonment
+   *       The urlbar was blurred (i.e., lost focus).
+   *   * discard
+   *       This doesn't correspond to a user action, but it means that the
+   *       urlbar has discarded the engagement for some reason, and the
+   *       `onEngagement` implementation should ignore it.
+   *
+   * @param {UrlbarQueryContext} queryContext
+   *   The engagement's query context.  This is *not* guaranteed to be defined
+   *   when `state` is "start".  It will always be defined for "engagement" and
+   *   "abandonment".
+   * @param {object} details
+   *   This is defined only when `state` is "engagement" or "abandonment", and
+   *   it describes the search string and picked result.  For "engagement", it
+   *   has the following properties:
+   *
+   *   * {string} searchString
+   *       The search string for the engagement's query.
+   *   * {number} selIndex
+   *       The index of the picked result.
+   *   * {string} selType
+   *       The type of the selected result.  See TelemetryEvent.record() in
+   *       UrlbarController.jsm.
+   *   * {string} provider
+   *       The name of the provider that produced the picked result.
+   *
+   *   For "abandonment", only `searchString` is defined.
    */
-  onEngagement(isPrivate, state) {}
+  onEngagement(isPrivate, state, queryContext, details) {}
 
   /**
    * Called when a result from the provider is selected. "Selected" refers to

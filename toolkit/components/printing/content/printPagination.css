@@ -68,7 +68,7 @@
   background-position: center center;
   background-size: 12px;
   -moz-context-properties: fill, fill-opacity;
-  fill: var(--lwt-toolbarbutton-icon-fill, currentColor);
+  fill: var(--toolbarbutton-icon-fill);
   fill-opacity: var(--toolbarbutton-icon-fill-opacity);
 }
 
@@ -87,18 +87,6 @@
 
 .toolbarButton:-moz-focusring {
   outline: 2px solid var(--border-active-shadow);
-}
-.toolbarButton.startItem:-moz-focusring,
-.toolbarButton.endItem:-moz-locale-dir(rtl):-moz-focusring {
-  -moz-outline-radius: 8px;
-  -moz-outline-radius-topright: 0;
-  -moz-outline-radius-bottomright: 0;
-}
-.toolbarButton.endItem:-moz-focusring,
-.toolbarButton.startItem:-moz-locale-dir(rtl):-moz-focusring {
-  -moz-outline-radius: 8px;
-  -moz-outline-radius-topleft: 0;
-  -moz-outline-radius-bottomleft: 0;
 }
 
 .toolbarCenter {
@@ -122,9 +110,12 @@
 }
 
 #navigatePrevious:-moz-locale-dir(rtl)::after,
-#navigateEnd:-moz-locale-dir(rtl)::after,
-#navigateHome:-moz-locale-dir(ltr)::after,
 #navigateNext:-moz-locale-dir(ltr)::after {
+  background-image: url("chrome://global/skin/icons/arrow-right.svg");
+}
+
+#navigateEnd:-moz-locale-dir(rtl)::after,
+#navigateHome:-moz-locale-dir(ltr)::after {
   transform: scaleX(-1);
 }
 

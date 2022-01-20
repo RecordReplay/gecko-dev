@@ -19,22 +19,28 @@ job-defaults:
         extra-options:
             - --setpref=toolkit.asyncshutdown.log=true
 
-    run-on-projects: built-projects
+    run-on-projects:
+        by-variant:
+            fission:
+                by-test-platform:
+                    (linux.*64|windows10-64)(-shippable)?(-qr)?/.*: ['trunk']
+                    linux.*64-asan-qr/opt: ['trunk']
+                    default: []
+            default: built-projects
     test-manifest-loader: null  # don't load tests in the taskgraph
-    tier: default
-    fission-run-on-projects:
+    tier:
+        by-variant:
+            fission: 2
+            default: default
+    variants:
         by-test-platform:
-            linux.*64/.*: ['autoland']
-            linux.*64-shippable/.*: ['mozilla-central']
-            windows10-64/.*: ['autoland']
-            windows10-64-shippable/.*: ['mozilla-central']
-            default: []
-    fission-tier: 2
-    variants: ["fission"]
+            .*-qr/debug: ['fission', 'webrender-sw']
+            default: ['fission']
     virtualization:
         by-test-platform:
             windows10-64.*: hardware
             default: virtual
+    python-3: true
 
 marionette:
     description: "Marionette unittest run"
@@ -42,21 +48,6 @@ marionette:
     max-run-time: 5400
     instance-size: default
     chunks: 1
-
-marionette-framescript:
-    description: "Marionette unittest run with its JSWindowActors disabled"
-    treeherder-symbol: MnFr
-    max-run-time: 5400
-    instance-size: default
-    tier: 2
-    run-on-projects:
-        # Platforms for which we release geckodriver
-        by-test-platform:
-            (linux|windows|macos)(?!.*shippable).*: built-projects
-            default: []
-    mozharness:
-        extra-options:
-            - --disable-actors
 
 marionette-headless:
     description: "Marionette headless unittest run"

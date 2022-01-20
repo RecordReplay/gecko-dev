@@ -6,6 +6,7 @@
 
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/Wrapper.h"
+#include "vm/WellKnownAtom.h"  // js_*_str
 
 #include "vm/JSObject-inl.h"
 
@@ -13,8 +14,8 @@ using namespace js;
 
 bool OpaqueCrossCompartmentWrapper::getOwnPropertyDescriptor(
     JSContext* cx, HandleObject wrapper, HandleId id,
-    MutableHandle<PropertyDescriptor> desc) const {
-  desc.object().set(nullptr);
+    MutableHandle<mozilla::Maybe<PropertyDescriptor>> desc) const {
+  desc.reset();
   return true;
 }
 

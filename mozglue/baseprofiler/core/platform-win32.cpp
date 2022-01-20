@@ -213,15 +213,20 @@ static unsigned int __stdcall ThreadEntry(void* aArg) {
 }
 
 SamplerThread::SamplerThread(PSLockRef aLock, uint32_t aActivityGeneration,
-                             double aIntervalMilliseconds)
+                             double aIntervalMilliseconds,
+                             bool aStackWalkEnabled,
+                             bool aNoTimerResolutionChange)
     : mSampler(aLock),
       mActivityGeneration(aActivityGeneration),
       mIntervalMicroseconds(
-          std::max(1, int(floor(aIntervalMilliseconds * 1000 + 0.5)))) {
-  // By default we'll not adjust the timer resolution which tends to be
-  // around 16ms. However, if the requested interval is sufficiently low
-  // we'll try to adjust the resolution to match.
-  if (mIntervalMicroseconds < 10 * 1000) {
+          std::max(1, int(floor(aIntervalMilliseconds * 1000 + 0.5)))),
+      mNoTimerResolutionChange(aNoTimerResolutionChange) {
+  if ((!aNoTimerResolutionChange) && (mIntervalMicroseconds < 10 * 1000)) {
+    // By default the timer resolution (which tends to be 1/64Hz, around 16ms)
+    // is not changed. However, if the requested interval is sufficiently low,
+    // the resolution will be adjusted to match. Note that this affects all
+    // timers in Firefox, and could therefore hide issues while profiling. This
+    // change may be prevented with the "notimerresolutionchange" feature.
     ::timeBeginPeriod(mIntervalMicroseconds / 1000);
   }
 
@@ -269,15 +274,15 @@ void SamplerThread::SleepMicro(uint32_t aMicroseconds) {
 }
 
 void SamplerThread::Stop(PSLockRef aLock) {
-  // Disable any timer resolution changes we've made. Do it now while
-  // gPSMutex is locked, i.e. before any other SamplerThread can be created
-  // and call ::timeBeginPeriod().
-  //
-  // It's safe to do this now even though this SamplerThread is still alive,
-  // because the next time the main loop of Run() iterates it won't get past
-  // the mActivityGeneration check, and so it won't make any more ::Sleep()
-  // calls.
-  if (mIntervalMicroseconds < 10 * 1000) {
+  if ((!mNoTimerResolutionChange) && (mIntervalMicroseconds < 10 * 1000)) {
+    // Disable any timer resolution changes we've made. Do it now while
+    // gPSMutex is locked, i.e. before any other SamplerThread can be created
+    // and call ::timeBeginPeriod().
+    //
+    // It's safe to do this now even though this SamplerThread is still alive,
+    // because the next time the main loop of Run() iterates it won't get past
+    // the mActivityGeneration check, and so it won't make any more ::Sleep()
+    // calls.
     ::timeEndPeriod(mIntervalMicroseconds / 1000);
   }
 

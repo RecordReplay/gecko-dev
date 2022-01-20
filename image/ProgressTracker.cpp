@@ -275,8 +275,8 @@ struct MOZ_STACK_CLASS ImageObserverNotifier<const ObserverTable*> {
 
   template <typename Lambda>
   void operator()(Lambda aFunc) {
-    for (auto iter = mObservers->ConstIter(); !iter.Done(); iter.Next()) {
-      RefPtr<IProgressObserver> observer = iter.Data().get();
+    for (const auto& weakObserver : mObservers->Values()) {
+      RefPtr<IProgressObserver> observer = weakObserver.get();
       if (observer && (mIgnoreDeferral || !observer->NotificationsDeferred())) {
         aFunc(observer);
       }
@@ -434,11 +434,11 @@ void ProgressTracker::AddObserver(IProgressObserver* aObserver) {
   }
 
   mObservers.Write([=](ObserverTable* aTable) {
-    MOZ_ASSERT(!aTable->Get(observer, nullptr),
+    MOZ_ASSERT(!aTable->Contains(observer),
                "Adding duplicate entry for image observer");
 
     WeakPtr<IProgressObserver> weakPtr = observer.get();
-    aTable->Put(observer, weakPtr);
+    aTable->InsertOrUpdate(observer, weakPtr);
   });
 
   MOZ_ASSERT(mObserversWithTargets <= ObserverCount());

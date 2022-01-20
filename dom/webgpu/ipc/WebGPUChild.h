@@ -23,7 +23,8 @@ struct WGPUClient;
 struct WGPUTextureViewDescriptor;
 }  // namespace ffi
 
-typedef MozPromise<RawId, Maybe<ipc::ResponseRejectReason>, true> RawIdPromise;
+typedef MozPromise<ipc::ByteBuf, Maybe<ipc::ResponseRejectReason>, true>
+    AdapterPromise;
 
 ffi::WGPUByteBuf* ToFFI(ipc::ByteBuf* x);
 
@@ -39,7 +40,7 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
 
   bool IsOpen() const { return mIPCOpen; }
 
-  RefPtr<RawIdPromise> InstanceRequestAdapter(
+  RefPtr<AdapterPromise> InstanceRequestAdapter(
       const dom::GPURequestAdapterOptions& aOptions);
   Maybe<RawId> AdapterRequestDevice(RawId aSelfId,
                                     const dom::GPUDeviceDescriptor& aDesc);
@@ -55,6 +56,9 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
       RawId aSelfId, const dom::GPUCommandEncoderDescriptor& aDesc);
   RawId CommandEncoderFinish(RawId aSelfId, RawId aDeviceId,
                              const dom::GPUCommandBufferDescriptor& aDesc);
+  RawId RenderBundleEncoderFinish(ffi::WGPURenderBundleEncoder& aEncoder,
+                                  RawId aDeviceId,
+                                  const dom::GPURenderBundleDescriptor& aDesc);
   RawId DeviceCreateBindGroupLayout(
       RawId aSelfId, const dom::GPUBindGroupLayoutDescriptor& aDesc);
   RawId DeviceCreatePipelineLayout(
@@ -65,9 +69,11 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
                                  const dom::GPUShaderModuleDescriptor& aDesc);
   RawId DeviceCreateComputePipeline(
       RawId aSelfId, const dom::GPUComputePipelineDescriptor& aDesc,
+      RawId* const aImplicitPipelineLayoutId,
       nsTArray<RawId>* const aImplicitBindGroupLayoutIds);
   RawId DeviceCreateRenderPipeline(
       RawId aSelfId, const dom::GPURenderPipelineDescriptor& aDesc,
+      RawId* const aImplicitPipelineLayoutId,
       nsTArray<RawId>* const aImplicitBindGroupLayoutIds);
 
   void DeviceCreateSwapChain(RawId aSelfId, const RGBDescriptor& aRgbDesc,
@@ -78,8 +84,13 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
   void RegisterDevice(RawId aId, Device* aDevice);
   void UnregisterDevice(RawId aId);
 
+  static void ConvertTextureFormatRef(const dom::GPUTextureFormat& aInput,
+                                      ffi::WGPUTextureFormat& aOutput);
+
  private:
   virtual ~WebGPUChild();
+
+  void JsWarning(nsIGlobalObject* aGlobal, const nsACString& aMessage);
 
   // AddIPDLReference and ReleaseIPDLReference are only to be called by
   // CompositorBridgeChild's AllocPWebGPUChild and DeallocPWebGPUChild methods
@@ -102,21 +113,9 @@ class WebGPUChild final : public PWebGPUChild, public SupportsWeakPtr {
   std::unordered_map<RawId, Device*> mDeviceMap;
 
  public:
-  ipc::IPCResult RecvError(RawId aDeviceId, const nsACString& aMessage);
+  ipc::IPCResult RecvDeviceUncapturedError(RawId aDeviceId,
+                                           const nsACString& aMessage);
   ipc::IPCResult RecvDropAction(const ipc::ByteBuf& aByteBuf);
-  ipc::IPCResult RecvFreeAdapter(RawId id);
-  ipc::IPCResult RecvFreeDevice(RawId id);
-  ipc::IPCResult RecvFreePipelineLayout(RawId id);
-  ipc::IPCResult RecvFreeShaderModule(RawId id);
-  ipc::IPCResult RecvFreeBindGroupLayout(RawId id);
-  ipc::IPCResult RecvFreeBindGroup(RawId id);
-  ipc::IPCResult RecvFreeCommandBuffer(RawId id);
-  ipc::IPCResult RecvFreeRenderPipeline(RawId id);
-  ipc::IPCResult RecvFreeComputePipeline(RawId id);
-  ipc::IPCResult RecvFreeBuffer(RawId id);
-  ipc::IPCResult RecvFreeTexture(RawId id);
-  ipc::IPCResult RecvFreeTextureView(RawId id);
-  ipc::IPCResult RecvFreeSampler(RawId id);
 };
 
 }  // namespace webgpu

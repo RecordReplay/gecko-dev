@@ -9,11 +9,12 @@ use block::{Block, ConcreteBlock};
 use cocoa_foundation::base::id;
 use cocoa_foundation::foundation::NSUInteger;
 use foreign_types::ForeignType;
-use objc::runtime::{Object, BOOL, NO, YES};
+use objc::runtime::{Object, NO, YES};
 
 use super::*;
 
 use std::ffi::CStr;
+use std::os::raw::c_char;
 use std::path::Path;
 use std::ptr;
 
@@ -52,6 +53,33 @@ pub enum MTLFeatureSet {
     macOS_GPUFamily1_v3 = 10003,
     macOS_GPUFamily1_v4 = 10004,
     macOS_GPUFamily2_v1 = 10005,
+}
+
+#[repr(i64)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MTLGPUFamily {
+    Common1 = 3001,
+    Common2 = 3002,
+    Common3 = 3003,
+    Apple1 = 1001,
+    Apple2 = 1002,
+    Apple3 = 1003,
+    Apple4 = 1004,
+    Apple5 = 1005,
+    Apple6 = 1006,
+    Mac1 = 2001,
+    Mac2 = 2002,
+    MacCatalyst1 = 4001,
+    MacCatalyst2 = 4002,
+}
+
+#[repr(u64)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MTLDeviceLocation {
+    BuiltIn = 0,
+    Slot = 1,
+    External = 2,
+    Unspecified = u64::MAX,
 }
 
 bitflags! {
@@ -506,6 +534,14 @@ impl MTLFeatureSet {
             OS::iOS => self.gpu_family() >= 5,
             OS::tvOS => false,
             OS::macOS => self.gpu_family() >= 2,
+        }
+    }
+
+    pub fn supports_binary_archive(&self) -> bool {
+        match self.os() {
+            OS::iOS => self.gpu_family() >= 3,
+            OS::tvOS => self.gpu_family() >= 3,
+            OS::macOS => self.gpu_family() >= 1,
         }
     }
 
@@ -1325,19 +1361,56 @@ impl MTLFeatureSet {
     }
 }
 
-#[allow(non_camel_case_types)]
 #[repr(u64)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum MTLArgumentBuffersTier {
-    tier1 = 0,
-    tier2 = 1,
+    Tier1 = 0,
+    Tier2 = 1,
+}
+
+#[repr(u64)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MTLReadWriteTextureTier {
+    TierNone = 0,
+    Tier1 = 1,
+    Tier2 = 2,
+}
+
+/// Only available on (macos(11.0), ios(14.0))
+#[repr(u64)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MTLCounterSamplingPoint {
+    AtStageBoundary = 0,
+    AtDrawBoundary = 1,
+    AtDispatchBoundary = 2,
+    AtTileDispatchBoundary = 3,
+    AtBlitBoundary = 4,
+}
+
+/// Only available on (macos(11.0), macCatalyst(14.0), ios(13.0))
+#[repr(u64)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MTLSparseTextureRegionAlignmentMode {
+    Outward = 0,
+    Inward = 1,
 }
 
 bitflags! {
     struct MTLPipelineOption: NSUInteger {
-        const ArgumentInfo   = 1 << 0;
-        const BufferTypeInfo = 1 << 1;
+        const None                      = 0;
+        const ArgumentInfo              = 1 << 0;
+        const BufferTypeInfo            = 1 << 1;
+        /// Only available on (macos(11.0), ios(14.0))
+        const FailOnBinaryArchiveMiss   = 1 << 2;
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(C)]
+pub struct MTLAccelerationStructureSizes {
+    pub acceleration_structure_size: NSUInteger,
+    pub build_scratch_buffer_size: NSUInteger,
+    pub refit_scratch_buffer_size: NSUInteger,
 }
 
 #[link(name = "Metal", kind = "framework")]
@@ -1350,7 +1423,7 @@ extern "C" {
 #[allow(non_camel_case_types)]
 type dispatch_data_t = id;
 #[allow(non_camel_case_types)]
-type dispatch_queue_t = id;
+pub type dispatch_queue_t = id;
 #[allow(non_camel_case_types)]
 type dispatch_block_t = *const Block<(), ()>;
 
@@ -1441,6 +1514,18 @@ impl DeviceRef {
         unsafe { msg_send![self, registryID] }
     }
 
+    pub fn location(&self) -> MTLDeviceLocation {
+        unsafe { msg_send![self, location] }
+    }
+
+    pub fn location_number(&self) -> NSUInteger {
+        unsafe { msg_send![self, locationNumber] }
+    }
+
+    pub fn max_threadgroup_memory_length(&self) -> NSUInteger {
+        unsafe { msg_send![self, maxThreadgroupMemoryLength] }
+    }
+
     pub fn max_threads_per_threadgroup(&self) -> MTLSize {
         unsafe { msg_send![self, maxThreadsPerThreadgroup] }
     }
@@ -1475,9 +1560,48 @@ impl DeviceRef {
         }
     }
 
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_raytracing(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsRaytracing] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn has_unified_memory(&self) -> bool {
+        unsafe {
+            match msg_send![self, hasUnifiedMemory] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn recommended_max_working_set_size(&self) -> u64 {
+        unsafe { msg_send![self, recommendedMaxWorkingSetSize] }
+    }
+
+    pub fn max_transfer_rate(&self) -> u64 {
+        unsafe { msg_send![self, maxTransferRate] }
+    }
+
     pub fn supports_feature_set(&self, feature: MTLFeatureSet) -> bool {
         unsafe {
             match msg_send![self, supportsFeatureSet: feature] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn supports_family(&self, family: MTLGPUFamily) -> bool {
+        unsafe {
+            match msg_send![self, supportsFamily: family] {
                 YES => true,
                 NO => false,
                 _ => unreachable!(),
@@ -1495,9 +1619,51 @@ impl DeviceRef {
         }
     }
 
-    pub fn supports_sample_count(&self, count: NSUInteger) -> bool {
+    pub fn supports_texture_sample_count(&self, count: NSUInteger) -> bool {
         unsafe {
             match msg_send![self, supportsTextureSampleCount: count] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn supports_shader_barycentric_coordinates(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsShaderBarycentricCoordinates] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn supports_function_pointers(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsFunctionPointers] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_dynamic_libraries(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsDynamicLibraries] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_counter_sampling(&self, sampling_point: MTLCounterSamplingPoint) -> bool {
+        unsafe {
+            match msg_send![self, supportsCounterSampling: sampling_point] {
                 YES => true,
                 NO => false,
                 _ => unreachable!(),
@@ -1513,6 +1679,10 @@ impl DeviceRef {
                 _ => unreachable!(),
             }
         }
+    }
+
+    pub fn new_fence(&self) -> Fence {
+        unsafe { msg_send![self, newFence] }
     }
 
     pub fn new_command_queue(&self) -> CommandQueue {
@@ -1547,10 +1717,9 @@ impl DeviceRef {
             let () = msg_send![source, release];
             if !err.is_null() {
                 let desc: *mut Object = msg_send![err, localizedDescription];
-                let compile_error: *const std::os::raw::c_char = msg_send![desc, UTF8String];
+                let compile_error: *const c_char = msg_send![desc, UTF8String];
                 let message = CStr::from_ptr(compile_error).to_string_lossy().into_owned();
                 if library.is_null() {
-                    let () = msg_send![err, release];
                     return Err(message);
                 } else {
                     warn!("Shader warnings: {}", message);
@@ -1598,6 +1767,63 @@ impl DeviceRef {
         }
     }
 
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn new_dynamic_library(&self, library: &LibraryRef) -> Result<DynamicLibrary, String> {
+        unsafe {
+            let mut err: *mut Object = ptr::null_mut();
+            let dynamic_library: *mut MTLDynamicLibrary = msg_send![self, newDynamicLibrary:library
+                                                                                      error:&mut err];
+            if !err.is_null() {
+                // FIXME: copy pasta
+                let desc: *mut Object = msg_send![err, localizedDescription];
+                let compile_error: *const c_char = msg_send![desc, UTF8String];
+                let message = CStr::from_ptr(compile_error).to_string_lossy().into_owned();
+                Err(message)
+            } else {
+                Ok(DynamicLibrary::from_ptr(dynamic_library))
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn new_dynamic_library_with_url(&self, url: &URLRef) -> Result<DynamicLibrary, String> {
+        unsafe {
+            let mut err: *mut Object = ptr::null_mut();
+            let dynamic_library: *mut MTLDynamicLibrary = msg_send![self, newDynamicLibraryWithURL:url
+                                                                                             error:&mut err];
+            if !err.is_null() {
+                // FIXME: copy pasta
+                let desc: *mut Object = msg_send![err, localizedDescription];
+                let compile_error: *const c_char = msg_send![desc, UTF8String];
+                let message = CStr::from_ptr(compile_error).to_string_lossy().into_owned();
+                Err(message)
+            } else {
+                Ok(DynamicLibrary::from_ptr(dynamic_library))
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn new_binary_archive_with_descriptor(
+        &self,
+        descriptor: &BinaryArchiveDescriptorRef,
+    ) -> Result<BinaryArchive, String> {
+        unsafe {
+            let mut err: *mut Object = ptr::null_mut();
+            let binary_archive: *mut MTLBinaryArchive = msg_send![self, newBinaryArchiveWithDescriptor:descriptor
+                                                     error:&mut err];
+            if !err.is_null() {
+                // TODO: copy pasta
+                let desc: *mut Object = msg_send![err, localizedDescription];
+                let c_msg: *const c_char = msg_send![desc, UTF8String];
+                let message = CStr::from_ptr(c_msg).to_string_lossy().into_owned();
+                Err(message)
+            } else {
+                Ok(BinaryArchive::from_ptr(binary_archive))
+            }
+        }
+    }
+
     pub fn new_render_pipeline_state_with_reflection(
         &self,
         descriptor: &RenderPipelineDescriptorRef,
@@ -1610,6 +1836,27 @@ impl DeviceRef {
             let pipeline_state: *mut MTLRenderPipelineState = try_objc! { err =>
                 msg_send![self, newRenderPipelineStateWithDescriptor:descriptor
                                                              options:reflection_options
+                                                          reflection:reflection
+                                                               error:&mut err]
+            };
+
+            Ok(RenderPipelineState::from_ptr(pipeline_state))
+        }
+    }
+
+    /// Useful for debugging binary archives.
+    pub fn new_render_pipeline_state_with_fail_on_binary_archive_miss(
+        &self,
+        descriptor: &RenderPipelineDescriptorRef,
+    ) -> Result<RenderPipelineState, String> {
+        unsafe {
+            let pipeline_options = MTLPipelineOption::FailOnBinaryArchiveMiss;
+
+            let reflection: *mut MTLRenderPipelineReflection = std::ptr::null_mut();
+
+            let pipeline_state: *mut MTLRenderPipelineState = try_objc! { err =>
+                msg_send![self, newRenderPipelineStateWithDescriptor:descriptor
+                                                             options:pipeline_options
                                                           reflection:reflection
                                                                error:&mut err]
             };
@@ -1695,14 +1942,75 @@ impl DeviceRef {
         unsafe { msg_send![self, newDepthStencilStateWithDescriptor: descriptor] }
     }
 
-    pub fn argument_buffers_support(&self) -> Option<MTLArgumentBuffersTier> {
+    pub fn argument_buffers_support(&self) -> MTLArgumentBuffersTier {
+        unsafe { msg_send![self, argumentBuffersSupport] }
+    }
+
+    pub fn read_write_texture_support(&self) -> MTLReadWriteTextureTier {
+        unsafe { msg_send![self, readWriteTextureSupport] }
+    }
+
+    pub fn raster_order_groups_supported(&self) -> bool {
         unsafe {
-            let has_arg_buffers: BOOL =
-                msg_send![self, respondsToSelector: sel!(argumentBuffersSupport)];
-            if has_arg_buffers == YES {
-                Some(msg_send![self, argumentBuffersSupport])
-            } else {
-                None
+            match msg_send![self, rasterOrderGroupsSupported] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_32bit_float_filtering(&self) -> bool {
+        unsafe {
+            match msg_send![self, supports32BitFloatFiltering] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_32bit_MSAA(&self) -> bool {
+        unsafe {
+            match msg_send![self, supports32BitMSAA] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_query_texture_LOD(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsQueryTextureLOD] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_BC_texture_compression(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsBCTextureCompression] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Only available on (macos(11.0), ios(14.0))
+    pub fn supports_pull_model_interpolation(&self) -> bool {
+        unsafe {
+            match msg_send![self, supportsPullModelInterpolation] {
+                YES => true,
+                NO => false,
+                _ => unreachable!(),
             }
         }
     }
@@ -1716,6 +2024,14 @@ impl DeviceRef {
 
     pub fn new_heap(&self, descriptor: &HeapDescriptorRef) -> Heap {
         unsafe { msg_send![self, newHeapWithDescriptor: descriptor] }
+    }
+
+    pub fn new_event(&self) -> Event {
+        unsafe { msg_send![self, newEvent] }
+    }
+
+    pub fn new_shared_event(&self) -> SharedEvent {
+        unsafe { msg_send![self, newSharedEvent] }
     }
 
     pub fn heap_buffer_size_and_align(
@@ -1749,5 +2065,14 @@ impl DeviceRef {
 
     pub fn max_argument_buffer_sampler_count(&self) -> NSUInteger {
         unsafe { msg_send![self, maxArgumentBufferSamplerCount] }
+    }
+
+    pub fn current_allocated_size(&self) -> NSUInteger {
+        unsafe { msg_send![self, currentAllocatedSize] }
+    }
+
+    /// Only available on (macos(10.14), ios(12.0), tvos(12.0))
+    pub fn max_buffer_length(&self) -> NSUInteger {
+        unsafe { msg_send![self, maxBufferLength] }
     }
 }

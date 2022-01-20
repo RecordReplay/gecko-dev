@@ -39,11 +39,13 @@ cd $GECKO_PATH
 
 patch_file1="$(pwd)/taskcluster/scripts/misc/mingw-winrt.patch"
 patch_file2="$(pwd)/taskcluster/scripts/misc/mingw-dwrite_3.patch"
+patch_file3="$(pwd)/taskcluster/scripts/misc/mingw-unknown.patch"
 
 prepare() {
   pushd $MOZ_FETCHES_DIR/mingw-w64
   patch -p1 <$patch_file1
   patch -p1 <$patch_file2
+  patch -p1 <$patch_file3
   popd
 }
 
@@ -306,6 +308,6 @@ popd
 mkdir -p $UPLOAD_DIR
 
 pushd $(dirname $INSTALL_DIR)
-tar c clang | $GECKO_PATH/taskcluster/scripts/misc/zstdpy > clangmingw.tar.zst
+tar caf clangmingw.tar.zst clang
 mv clangmingw.tar.zst $UPLOAD_DIR
 popd

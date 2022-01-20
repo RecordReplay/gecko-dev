@@ -123,6 +123,14 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
     mIdNamespace = aIdNamespace;
   }
 
+  bool MatchesNamespace(const wr::ImageKey& aImageKey) const {
+    return aImageKey.mNamespace == mIdNamespace;
+  }
+
+  bool MatchesNamespace(const wr::BlobImageKey& aBlobKey) const {
+    return MatchesNamespace(aBlobKey._0);
+  }
+
   wr::FontKey GetNextFontKey() {
     return wr::FontKey{GetNamespace(), GetNextResourceId()};
   }
@@ -174,7 +182,8 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
   void DeallocResourceShmem(RefCountedShmem& aShm);
 
   void Capture();
-  void ToggleCaptureSequence();
+  void StartCaptureSequence(const nsCString& path, uint32_t aFlags);
+  void StopCaptureSequence();
 
  private:
   friend class CompositorBridgeChild;
@@ -231,7 +240,7 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
 
   nsTArray<OpDestroy> mDestroyedActors;
   nsTArray<WebRenderParentCommand> mParentCommands;
-  nsDataHashtable<nsUint64HashKey, CompositableClient*> mCompositables;
+  nsTHashMap<nsUint64HashKey, CompositableClient*> mCompositables;
   bool mIsInTransaction;
   bool mIsInClearCachedResources;
   wr::IdNamespace mIdNamespace;
@@ -246,10 +255,10 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
   bool mSentDisplayList;
 
   uint32_t mFontKeysDeleted;
-  nsDataHashtable<UnscaledFontHashKey, wr::FontKey> mFontKeys;
+  nsTHashMap<UnscaledFontHashKey, wr::FontKey> mFontKeys;
 
   uint32_t mFontInstanceKeysDeleted;
-  nsDataHashtable<ScaledFontHashKey, wr::FontInstanceKey> mFontInstanceKeys;
+  nsTHashMap<ScaledFontHashKey, wr::FontInstanceKey> mFontInstanceKeys;
 
   UniquePtr<ActiveResourceTracker> mActiveResourceTracker;
 

@@ -6,16 +6,28 @@
 
 "use strict";
 
-ChromeUtils.import("resource://gre/modules/TelemetryController.jsm", this);
-ChromeUtils.import("resource://testing-common/ContentTaskUtils.jsm", this);
-ChromeUtils.import("resource://testing-common/MockRegistrar.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetrySession.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetrySend.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryStorage.jsm", this);
-ChromeUtils.import("resource://gre/modules/TelemetryUtils.jsm", this);
-ChromeUtils.import("resource://gre/modules/Services.jsm", this);
-ChromeUtils.import("resource://gre/modules/osfile.jsm", this);
-ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+const { TelemetryController } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryController.jsm"
+);
+const { ContentTaskUtils } = ChromeUtils.import(
+  "resource://testing-common/ContentTaskUtils.jsm"
+);
+const { MockRegistrar } = ChromeUtils.import(
+  "resource://testing-common/MockRegistrar.jsm"
+);
+const { TelemetrySession } = ChromeUtils.import(
+  "resource://gre/modules/TelemetrySession.jsm"
+);
+const { TelemetrySend } = ChromeUtils.import(
+  "resource://gre/modules/TelemetrySend.jsm"
+);
+const { TelemetryStorage } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryStorage.jsm"
+);
+const { TelemetryUtils } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryUtils.jsm"
+);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -104,7 +116,12 @@ add_task(async function test_setup() {
   do_get_profile(true);
 
   // Addon manager needs a profile directory.
-  loadAddonManager("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
+  await loadAddonManager(
+    "xpcshell@tests.mozilla.org",
+    "XPCShell",
+    "1",
+    "1.9.2"
+  );
   finishAddonManagerStartup();
   fakeIntlReady();
 
@@ -851,6 +868,12 @@ add_task(async function test_persistCurrentPingsOnShutdown() {
 
 add_task(async function test_sendCheckOverride() {
   const TEST_PING_TYPE = "test-sendCheckOverride";
+
+  // Disable "health" ping. It can sneak into the test.
+  Services.prefs.setBoolPref(
+    TelemetryUtils.Preferences.HealthPingEnabled,
+    false
+  );
 
   // Clear any pending pings.
   await TelemetryController.testShutdown();

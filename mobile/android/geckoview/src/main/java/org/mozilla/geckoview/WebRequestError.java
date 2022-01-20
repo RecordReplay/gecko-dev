@@ -45,7 +45,8 @@ public class WebRequestError extends Exception {
             ERROR_OFFLINE, ERROR_PORT_BLOCKED,
             ERROR_PROXY_CONNECTION_REFUSED, ERROR_FILE_NOT_FOUND,
             ERROR_FILE_ACCESS_DENIED, ERROR_INVALID_CONTENT_ENCODING,
-            ERROR_UNSAFE_CONTENT_TYPE, ERROR_CORRUPTED_CONTENT})
+            ERROR_UNSAFE_CONTENT_TYPE, ERROR_CORRUPTED_CONTENT,
+            ERROR_DATA_URI_TOO_LONG})
     /* package */ @interface Error {}
 
     /**
@@ -180,6 +181,11 @@ public class WebRequestError extends Exception {
      */
     public static final int ERROR_FILE_ACCESS_DENIED = 0x65;
 
+    /**
+     * A data:// URI is too long to load at the top level.
+     */
+    public static final int ERROR_DATA_URI_TOO_LONG = 0x75;
+
     // Proxy
     /**
      * The proxy server refused the connection.
@@ -273,14 +279,14 @@ public class WebRequestError extends Exception {
                                                         final int geckoErrorModule,
                                                         final int geckoErrorClass,
                                                         final byte[] certificateBytes) {
-        int code = convertGeckoError(geckoError, geckoErrorModule, geckoErrorClass);
-        int category = getErrorCategory(geckoErrorModule, code);
+        final int code = convertGeckoError(geckoError, geckoErrorModule, geckoErrorClass);
+        final int category = getErrorCategory(geckoErrorModule, code);
         X509Certificate certificate = null;
         if (certificateBytes != null) {
             try {
                 final CertificateFactory factory = CertificateFactory.getInstance("X.509");
                 certificate = (X509Certificate) factory.generateCertificate(new ByteArrayInputStream(certificateBytes));
-            } catch (CertificateException e) {
+            } catch (final CertificateException e) {
                 throw new IllegalArgumentException("Unable to parse DER certificate");
             }
         }

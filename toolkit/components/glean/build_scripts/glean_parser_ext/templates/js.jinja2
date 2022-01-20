@@ -14,6 +14,7 @@ Jinja2 template is not. Please file bugs! #}
 #include "mozilla/PerfectHash.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/glean/bindings/MetricTypes.h"
+#include "mozilla/glean/fog_ffi_generated.h"
 
 #define GLEAN_INDEX_BITS ({{index_bits}})
 #define GLEAN_ID_BITS ({{id_bits}})
@@ -39,17 +40,50 @@ static already_AddRefed<nsISupports> NewMetricFromId(uint32_t id) {
   uint32_t metricId = GLEAN_METRIC_ID(id);
 
   switch (typeId) {
-    {% for type, type_id in metric_type_ids.items() %}
-    {% if type|is_implemented_type %}
-    case {{ type_id }}: /* {{ type|Camelize }} */
+    {% for (type_name, subtype_name), (type_id, original_type) in metric_type_ids.items() %}
+    case {{ type_id }}: /* {{ original_type }} */
     {
-      return MakeAndAddRef<{{type | type_name}}>(metricId);
+      return MakeAndAddRef<{{type_name}}>(metricId{% if subtype_name|length > 0 %}, {{ type_id }}{% endif %});
     }
-    {% endif %}
     {% endfor %}
     default:
     MOZ_ASSERT_UNREACHABLE("Invalid type ID reached when trying to instantiate a new metric");
     return nullptr;
+  }
+}
+
+/**
+ * Create a submetric instance for a labeled metric of the provided type and id for the given label.
+ * Assigns or retrieves an id for the submetric from the SDK.
+ *
+ * @param aParentTypeId - The type of the parent labeled metric identified as a number generated during codegen.
+ *                        Only used to identify which X of LabeledX you are so that X can be created here.
+ * @param aParentMetricId - The metric id for the parent labeled metric.
+ * @param aLabel - The label for the submetric. Might not adhere to the SDK label format.
+ * @param aSubmetricId - **On Android:** a pointer to the id to assign to this submetric since we can't ask the SDK for one.
+ *                       **Elsewhere:** an outparam which is assigned the submetric's SDK-generated submetric id.
+ *                       Used only by GIFFT. Ideally will be removed as soon as either
+ *                       Android special handling goes away (bug 1670261), or GIFFT is removed.
+ */
+static already_AddRefed<nsISupports> NewSubMetricFromIds(uint32_t aParentTypeId, uint32_t aParentMetricId, const nsACString& aLabel, uint32_t* aSubmetricId) {
+  switch (aParentTypeId) {
+    {% for (type_name, subtype_name), (type_id, original_type) in metric_type_ids.items() %}
+    {% if subtype_name|length > 0 %}
+    case {{ type_id }}: { /* {{ original_type }} */
+#ifdef MOZ_GLEAN_ANDROID
+      auto id = *aSubmetricId;
+#else
+      auto id = impl::fog_{{original_type}}_get(aParentMetricId, &aLabel);
+      *aSubmetricId = id;
+#endif
+      return MakeAndAddRef<{{subtype_name}}>(id);
+    }
+    {% endif %}
+    {% endfor %}
+    default: {
+      MOZ_ASSERT_UNREACHABLE("Invalid type ID for submetric.");
+      return nullptr;
+    }
   }
 }
 

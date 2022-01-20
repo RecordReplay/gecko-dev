@@ -3,10 +3,10 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ---
 job-defaults:
-    worker-type: t-linux-talos
+    worker-type: t-linux-talos-1804
     fetches:
         toolchain:
-            - linux64-node-10
+            - linux64-node-12
             - linux64-geckodriver
         build:
             - artifact: target.mozinfo.json
@@ -14,9 +14,9 @@ job-defaults:
             - artifact: target.perftests.tests.tar.gz
             - artifact: target.xpcshell.tests.tar.gz
             - artifact: target.tar.bz2
-    platform: linux64-shippable/opt
+    platform: linux1804-64-shippable/opt
     require-build:
-        linux64-shippable/opt: build-linux64-shippable/opt
+        linux1804-64-shippable/opt: build-linux64-shippable/opt
     scopes:
         - secrets:get:project/releng/gecko/build/level-{level}/conditioned-profiles
 
@@ -94,7 +94,6 @@ http3:
             --xpcshell-nodejs ${MOZ_FETCHES_DIR}/node/bin/node
             --xpcshell-cycles 13
             --xpcshell-xre-path ${MOZ_FETCHES_DIR}/firefox
-            --verbose
 
 livesites:
     description: Live site performance testing
@@ -106,12 +105,14 @@ livesites:
         cron: true
     perftest:
         - [cloudflare, netwerk/test/perf/perftest_http3_cloudflareblog.js]
-        - [fb-scroll, netwerk/test/perf/perftest_http3_facebook_scroll.js]
+        # broken: bug 1678588
+        # - [fb-scroll, netwerk/test/perf/perftest_http3_facebook_scroll.js]
         - [g-image, netwerk/test/perf/perftest_http3_google_image.js]
         - [g-search, netwerk/test/perf/perftest_http3_google_search.js]
         - [lq-fetch, netwerk/test/perf/perftest_http3_lucasquicfetch.js]
-        - [ytw, netwerk/test/perf/perftest_http3_youtube_watch.js]
-        - [ytw-scroll, netwerk/test/perf/perftest_http3_youtube_watch_scroll.js]
+        # broken: bug 1695871
+        # - [ytw, netwerk/test/perf/perftest_http3_youtube_watch.js]
+        # - [ytw-scroll, netwerk/test/perf/perftest_http3_youtube_watch_scroll.js]
     perftest-metrics:
         by-perftest:
             cloudflare:
@@ -122,12 +123,14 @@ livesites:
                 navigationTiming: {}
                 pageTimings: {}
                 timeToContentfulPaint: {}
-            fb-scroll: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, requestsPerSecond]
+            # broken: bug 1678588
+            # fb-scroll: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, requestsPerSecond]
             g-image: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, imagesPerSecond, imageLoadTime]
             g-search: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint]
             lq-fetch: [navigationTiming, pageTimings, resources, timeToContentfulPaint, resourceLoadTime, imagesLoaded, imagesMissed]
-            ytw: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, droppedFrames, decodedFrames]
-            ytw-scroll: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, droppedFrames, decodedFrames]
+            # broken: bug 1695871
+            # ytw: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, droppedFrames, decodedFrames]
+            # ytw-scroll: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint, droppedFrames, decodedFrames]
             default: [navigationTiming, pageTimings, resources, firstPaint, timeToContentfulPaint]
     # Leave this here so people know this exists when looking
     # for examples
@@ -149,11 +152,12 @@ livesites:
                 - ["25s", browsertime.waitTime=25000]
                 - ["35s", browsertime.waitTime=35000]
                 - ["60s", browsertime.waitTime=60000]
-            fb-scroll:
-                - ["10s", browsertime.waitTime=10000]
-                - ["25s", browsertime.waitTime=25000]
-                - ["35s", browsertime.waitTime=35000]
-                - ["60s", browsertime.waitTime=60000]
+            # broken: bug 1678588
+            # fb-scroll:
+            #     - ["10s", browsertime.waitTime=10000]
+            #     - ["25s", browsertime.waitTime=25000]
+            #     - ["35s", browsertime.waitTime=35000]
+            #     - ["60s", browsertime.waitTime=60000]
             g-search:
                 - ["10s", browsertime.waitTime=10000]
                 - ["25s", browsertime.waitTime=25000]
@@ -161,10 +165,11 @@ livesites:
                 - ["60s", browsertime.waitTime=60000]
             lq-fetch:
                 - [null, "browsertime.waitTime=1000,browsertime.cycles=5"]
-            ytw:
-                - [null, browsertime.waitTime=20000]
-            ytw-scroll:
-                - [null, browsertime.waitTime=20000]
+            # broken: bug 1695871
+            # ytw:
+            #     - [null, browsertime.waitTime=20000]
+            # ytw-scroll:
+            #     - [null, browsertime.waitTime=20000]
             default:
                 - [null, browsertime.waitTime=1000]
     run:
@@ -191,7 +196,7 @@ controlled:
         max-run-time: 14400
     attributes:
         batch: false
-        cron: true
+        cron: false
     run:
         command: >-
             mkdir -p $MOZ_FETCHES_DIR/../artifacts &&
@@ -208,3 +213,47 @@ controlled:
             --perfherder-simplify-names
             --browsertime-geckodriver ${MOZ_FETCHES_DIR}/geckodriver
             --output $MOZ_FETCHES_DIR/../artifacts
+
+perfstats:
+    description: Run PerfStats pageload test
+    treeherder:
+        symbol: perftest(linux-perfstats)
+    attributes:
+        cron: false
+    run:
+        command: >-
+            mkdir -p $MOZ_FETCHES_DIR/../artifacts &&
+            cd $MOZ_FETCHES_DIR &&
+            python3.8 python/mozperftest/mozperftest/runner.py
+            --browsertime-binary ${MOZ_FETCHES_DIR}/firefox/firefox-bin
+            --flavor desktop-browser
+            --browsertime-geckodriver ${MOZ_FETCHES_DIR}/geckodriver
+            --output $MOZ_FETCHES_DIR/../artifacts
+            --perfherder
+            --perfherder-metrics name:HttpChannelCompletion,unit:ms name:HttpChannelCompletion_Cache,unit:ms name:HttpChannelCompletion_Network,unit:ms name:DisplayListBuilding,unit:ms name:Reflowing,unit:ms name:Styling,unit:ms
+            --browsertime-iterations 10
+            --hooks testing/performance/hooks_perfstats.py
+            testing/performance/perftest_perfstats.js
+
+record-websites:
+    description: Run mozperftest to record desktop websites
+    platform: linux1804-64/opt
+    require-build:
+        linux1804-64/opt: build-linux64/opt
+    treeherder:
+        symbol: perftest(rec)
+    attributes:
+        cron: false
+    run-on-projects: []
+    run:
+        command: >-
+            mkdir -p $MOZ_FETCHES_DIR/../artifacts &&
+            cd $MOZ_FETCHES_DIR &&
+            python3.8 python/mozperftest/mozperftest/runner.py
+            --flavor desktop-browser
+            --browsertime-binary ${MOZ_FETCHES_DIR}/firefox/firefox-bin
+            --browsertime-geckodriver ${MOZ_FETCHES_DIR}/geckodriver
+            --proxy
+            --output $MOZ_FETCHES_DIR/../artifacts
+            --hooks testing/performance/hooks_recording.py
+            testing/performance/perftest_record.js

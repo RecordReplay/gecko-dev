@@ -6,6 +6,7 @@
 
 #include "StorageIPC.h"
 
+#include "StorageCommon.h"
 #include "StorageUtils.h"
 #include "LocalStorageManager.h"
 #include "SessionStorageObserver.h"
@@ -33,10 +34,10 @@ typedef nsClassHashtable<nsCStringHashKey, nsTArray<LocalStorageCacheParent*>>
 
 StaticAutoPtr<LocalStorageCacheParentHashtable> gLocalStorageCacheParents;
 
-StorageDBChild* sStorageChild[2] = {nullptr, nullptr};
+StorageDBChild* sStorageChild[kPrivateBrowsingIdCount] = {nullptr, nullptr};
 
 // False until we shut the storage child down.
-bool sStorageChildDown[2] = {false, false};
+bool sStorageChildDown[kPrivateBrowsingIdCount] = {false, false};
 
 }  // namespace
 
@@ -119,6 +120,7 @@ class StorageDBChild::ShutdownObserver final : public nsIObserver {
   explicit ShutdownObserver(const uint32_t aPrivateBrowsingId)
       : mPrivateBrowsingId(aPrivateBrowsingId) {
     MOZ_ASSERT(NS_IsMainThread());
+    MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
   }
 
   NS_DECL_ISUPPORTS
@@ -146,7 +148,7 @@ StorageDBChild::StorageDBChild(LocalStorageManager* aManager,
       mPrivateBrowsingId(aPrivateBrowsingId),
       mStatus(NS_OK),
       mIPCOpen(false) {
-  MOZ_ASSERT(aPrivateBrowsingId <= 1);
+  MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
   MOZ_ASSERT(!NextGenLocalStorageEnabled());
 }
 
@@ -155,7 +157,7 @@ StorageDBChild::~StorageDBChild() = default;
 // static
 StorageDBChild* StorageDBChild::Get(const uint32_t aPrivateBrowsingId) {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aPrivateBrowsingId <= 1);
+  MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
   MOZ_ASSERT(!NextGenLocalStorageEnabled());
 
   return sStorageChild[aPrivateBrowsingId];
@@ -164,7 +166,7 @@ StorageDBChild* StorageDBChild::Get(const uint32_t aPrivateBrowsingId) {
 // static
 StorageDBChild* StorageDBChild::GetOrCreate(const uint32_t aPrivateBrowsingId) {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aPrivateBrowsingId <= 1);
+  MOZ_RELEASE_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
   MOZ_ASSERT(!NextGenLocalStorageEnabled());
 
   StorageDBChild*& storageChild = sStorageChild[aPrivateBrowsingId];
@@ -191,9 +193,9 @@ StorageDBChild* StorageDBChild::GetOrCreate(const uint32_t aPrivateBrowsingId) {
   return storageChild;
 }
 
-nsTHashtable<nsCStringHashKey>& StorageDBChild::OriginsHavingData() {
+nsTHashSet<nsCString>& StorageDBChild::OriginsHavingData() {
   if (!mOriginsHavingData) {
-    mOriginsHavingData = MakeUnique<nsTHashtable<nsCStringHashKey>>();
+    mOriginsHavingData = MakeUnique<nsTHashSet<nsCString>>();
   }
 
   return *mOriginsHavingData;
@@ -244,7 +246,7 @@ void StorageDBChild::AsyncPreload(LocalStorageCacheBridge* aCache,
   if (mIPCOpen) {
     // Adding ref to cache for the time of preload.  This ensures a reference to
     // to the cache and that all keys will load into this cache object.
-    mLoadingCaches.PutEntry(aCache);
+    mLoadingCaches.Insert(aCache);
     SendAsyncPreload(aCache->OriginSuffix(), aCache->OriginNoSuffix(),
                      aPriority);
   } else {
@@ -296,7 +298,7 @@ nsresult StorageDBChild::AsyncAddItem(LocalStorageCacheBridge* aCache,
 
   SendAsyncAddItem(aCache->OriginSuffix(), aCache->OriginNoSuffix(),
                    nsString(aKey), nsString(aValue));
-  OriginsHavingData().PutEntry(aCache->Origin());
+  OriginsHavingData().Insert(aCache->Origin());
   return NS_OK;
 }
 
@@ -309,7 +311,7 @@ nsresult StorageDBChild::AsyncUpdateItem(LocalStorageCacheBridge* aCache,
 
   SendAsyncUpdateItem(aCache->OriginSuffix(), aCache->OriginNoSuffix(),
                       nsString(aKey), nsString(aValue));
-  OriginsHavingData().PutEntry(aCache->Origin());
+  OriginsHavingData().Insert(aCache->Origin());
   return NS_OK;
 }
 
@@ -330,7 +332,7 @@ nsresult StorageDBChild::AsyncClear(LocalStorageCacheBridge* aCache) {
   }
 
   SendAsyncClear(aCache->OriginSuffix(), aCache->OriginNoSuffix());
-  OriginsHavingData().RemoveEntry(aCache->Origin());
+  OriginsHavingData().Remove(aCache->Origin());
   return NS_OK;
 }
 
@@ -360,7 +362,7 @@ mozilla::ipc::IPCResult StorageDBChild::RecvOriginsHavingData(
   }
 
   for (uint32_t i = 0; i < aOrigins.Length(); ++i) {
-    OriginsHavingData().PutEntry(aOrigins[i]);
+    OriginsHavingData().Insert(aOrigins[i]);
   }
 
   return IPC_OK();
@@ -387,7 +389,7 @@ mozilla::ipc::IPCResult StorageDBChild::RecvLoadDone(
     aCache->LoadDone(aRv);
 
     // Just drop reference to this cache now since the load is done.
-    mLoadingCaches.RemoveEntry(static_cast<LocalStorageCacheBridge*>(aCache));
+    mLoadingCaches.Remove(static_cast<LocalStorageCacheBridge*>(aCache));
   }
 
   return IPC_OK();
@@ -1347,8 +1349,7 @@ void SessionStorageCacheParent::ActorDestroy(ActorDestroyReason aWhy) {
 }
 
 mozilla::ipc::IPCResult SessionStorageCacheParent::RecvLoad(
-    nsTArray<SSSetItemInfo>* aDefaultData,
-    nsTArray<SSSetItemInfo>* aSessionData) {
+    nsTArray<SSSetItemInfo>* aData) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
   MOZ_ASSERT(mManagerActor);
 
@@ -1357,23 +1358,20 @@ mozilla::ipc::IPCResult SessionStorageCacheParent::RecvLoad(
   RefPtr<BackgroundSessionStorageManager> manager = mManagerActor->GetManager();
   MOZ_ASSERT(manager);
 
-  manager->CopyDataToContentProcess(mOriginAttrs, mOriginKey, *aDefaultData,
-                                    *aSessionData);
+  manager->CopyDataToContentProcess(mOriginAttrs, mOriginKey, *aData);
 
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult SessionStorageCacheParent::RecvCheckpoint(
-    nsTArray<SSWriteInfo>&& aDefaultWriteInfos,
-    nsTArray<SSWriteInfo>&& aSessionWriteInfos) {
+    nsTArray<SSWriteInfo>&& aWriteInfos) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
   MOZ_ASSERT(mManagerActor);
 
   RefPtr<BackgroundSessionStorageManager> manager = mManagerActor->GetManager();
   MOZ_ASSERT(manager);
 
-  manager->UpdateData(mOriginAttrs, mOriginKey, aDefaultWriteInfos,
-                      aSessionWriteInfos);
+  manager->UpdateData(mOriginAttrs, mOriginKey, aWriteInfos);
 
   return IPC_OK();
 }
@@ -1463,12 +1461,7 @@ mozilla::ipc::IPCResult RecvPBackgroundLocalStorageCacheConstructor(
     gLocalStorageCacheParents = new LocalStorageCacheParentHashtable();
   }
 
-  nsTArray<LocalStorageCacheParent*>* array;
-  if (!gLocalStorageCacheParents->Get(aOriginKey, &array)) {
-    array = new nsTArray<LocalStorageCacheParent*>();
-    gLocalStorageCacheParents->Put(aOriginKey, array);
-  }
-  array->AppendElement(actor);
+  gLocalStorageCacheParents->GetOrInsertNew(aOriginKey)->AppendElement(actor);
 
   // We are currently trusting the content process not to lie to us.  It is
   // future work to consult the ClientManager to determine whether this is a
@@ -1493,6 +1486,11 @@ PBackgroundStorageParent* AllocPBackgroundStorageParent(
     const nsString& aProfilePath, const uint32_t& aPrivateBrowsingId) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
 
+  if (NS_WARN_IF(NextGenLocalStorageEnabled()) ||
+      NS_WARN_IF(aPrivateBrowsingId >= kPrivateBrowsingIdCount)) {
+    return nullptr;
+  }
+
   return new StorageDBParent(aProfilePath, aPrivateBrowsingId);
 }
 
@@ -1501,6 +1499,8 @@ mozilla::ipc::IPCResult RecvPBackgroundStorageConstructor(
     const uint32_t& aPrivateBrowsingId) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
   MOZ_ASSERT(aActor);
+  MOZ_ASSERT(aPrivateBrowsingId < kPrivateBrowsingIdCount);
+  MOZ_ASSERT(!NextGenLocalStorageEnabled());
 
   auto* actor = static_cast<StorageDBParent*>(aActor);
   actor->Init();

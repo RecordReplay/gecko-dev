@@ -5,7 +5,7 @@
 #include shared,prim_shared
 
 flat varying vec4 v_color;
-flat varying vec2 v_mask_swizzle;
+flat varying vec3 v_mask_swizzle;
 // Normalized bounds of the source image in the texture.
 flat varying vec4 v_uv_bounds;
 
@@ -13,7 +13,7 @@ flat varying vec4 v_uv_bounds;
 varying vec2 v_uv;
 
 
-#ifdef WR_FEATURE_GLYPH_TRANSFORM
+#if defined(WR_FEATURE_GLYPH_TRANSFORM) && !defined(SWGL_CLIP_DIST)
 varying vec4 v_uv_clip;
 #endif
 
@@ -23,15 +23,15 @@ varying vec4 v_uv_clip;
 #define GLYPHS_PER_GPU_BLOCK        2U
 
 #ifdef WR_FEATURE_GLYPH_TRANSFORM
-RectWithSize transform_rect(RectWithSize rect, mat2 transform) {
-    vec2 center = transform * (rect.p0 + rect.size * 0.5);
-    vec2 radius = mat2(abs(transform[0]), abs(transform[1])) * (rect.size * 0.5);
-    return RectWithSize(center - radius, radius * 2.0);
+RectWithEndpoint transform_rect(RectWithEndpoint rect, mat2 transform) {
+    vec2 size = rect_size(rect);
+    vec2 center = transform * (rect.p0 + size * 0.5);
+    vec2 radius = mat2(abs(transform[0]), abs(transform[1])) * (size * 0.5);
+    return RectWithEndpoint(center - radius, center + radius);
 }
 
-bool rect_inside_rect(RectWithSize little, RectWithSize big) {
-    return all(lessThanEqual(vec4(big.p0, little.p0 + little.size),
-                             vec4(little.p0, big.p0 + big.size)));
+bool rect_inside_rect(RectWithEndpoint little, RectWithEndpoint big) {
+    return all(lessThanEqual(vec4(big.p0, little.p1), vec4(little.p0, big.p1)));
 }
 #endif //WR_FEATURE_GLYPH_TRANSFORM
 
@@ -47,24 +47,21 @@ Glyph fetch_glyph(int specific_prim_address,
                         int(uint(glyph_index) / GLYPHS_PER_GPU_BLOCK);
     vec4 data = fetch_from_gpu_cache_1(glyph_address);
     // Select XY or ZW based on glyph index.
-    // We use "!= 0" instead of "== 1" here in order to work around a driver
-    // bug with equality comparisons on integers.
     vec2 glyph = mix(data.xy, data.zw,
-                     bvec2(uint(glyph_index) % GLYPHS_PER_GPU_BLOCK != 0U));
+                     bvec2(uint(glyph_index) % GLYPHS_PER_GPU_BLOCK == 1U));
 
     return Glyph(glyph);
 }
 
 struct GlyphResource {
     vec4 uv_rect;
-    float layer;
     vec2 offset;
     float scale;
 };
 
 GlyphResource fetch_glyph_resource(int address) {
     vec4 data[2] = fetch_from_gpu_cache_2(address);
-    return GlyphResource(data[0], data[1].x, data[1].yz, data[1].w);
+    return GlyphResource(data[0], data[1].xy, data[1].z);
 }
 
 struct TextRun {
@@ -113,7 +110,7 @@ void main() {
     // Note that the reference frame relative offset is stored in the prim local
     // rect size during batching, instead of the actual size of the primitive.
     TextRun text = fetch_text_run(ph.specific_prim_address);
-    vec2 text_offset = ph.local_rect.size;
+    vec2 text_offset = ph.local_rect.p1;
 
     if (color_mode == COLOR_MODE_FROM_PASS) {
         color_mode = uMode;
@@ -154,21 +151,24 @@ void main() {
     // into account the translation from the transform for snapping purposes.
     vec2 raster_text_offset = floor(glyph_transform * text_offset + glyph_translation + 0.5) - glyph_translation;
 
+    vec2 glyph_origin = res.offset + raster_glyph_offset + raster_text_offset;
     // Compute the glyph rect in glyph space.
-    RectWithSize glyph_rect = RectWithSize(res.offset + raster_glyph_offset + raster_text_offset,
-                                           res.uv_rect.zw - res.uv_rect.xy);
+    RectWithEndpoint glyph_rect = RectWithEndpoint(
+        glyph_origin,
+        glyph_origin + res.uv_rect.zw - res.uv_rect.xy
+    );
 
     // The glyph rect is in glyph space, so transform it back to local space.
-    RectWithSize local_rect = transform_rect(glyph_rect, glyph_transform_inv);
+    RectWithEndpoint local_rect = transform_rect(glyph_rect, glyph_transform_inv);
 
     // Select the corner of the glyph's local space rect that we are processing.
-    vec2 local_pos = local_rect.p0 + local_rect.size * aPosition.xy;
+    vec2 local_pos = mix(local_rect.p0, local_rect.p1, aPosition.xy);
 
     // If the glyph's local rect would fit inside the local clip rect, then select a corner from
     // the device space glyph rect to reduce overdraw of clipped pixels in the fragment shader.
     // Otherwise, fall back to clamping the glyph's local rect to the local clip rect.
     if (rect_inside_rect(local_rect, ph.local_clip_rect)) {
-        local_pos = glyph_transform_inv * (glyph_rect.p0 + glyph_rect.size * aPosition.xy);
+        local_pos = glyph_transform_inv * mix(glyph_rect.p0, glyph_rect.p1, aPosition.xy);
     }
 #else
     float raster_scale = float(ph.user_data.x) / 65535.0;
@@ -200,11 +200,14 @@ void main() {
     // The transform may be animated, so we don't want to do any snapping here for the
     // text offset to avoid glyphs wiggling. The text offset should have been snapped
     // already for axis aligned transforms excluding any animations during frame building.
-    RectWithSize glyph_rect = RectWithSize(glyph_scale_inv * (res.offset + raster_glyph_offset) + text_offset,
-                                           glyph_scale_inv * (res.uv_rect.zw - res.uv_rect.xy));
+    vec2 glyph_origin = glyph_scale_inv * (res.offset + raster_glyph_offset) + text_offset;
+    RectWithEndpoint glyph_rect = RectWithEndpoint(
+        glyph_origin,
+        glyph_origin + glyph_scale_inv * (res.uv_rect.zw - res.uv_rect.xy)
+    );
 
     // Select the corner of the glyph rect that we are processing.
-    vec2 local_pos = glyph_rect.p0 + glyph_rect.size * aPosition.xy;
+    vec2 local_pos = mix(glyph_rect.p0, glyph_rect.p1, aPosition.xy);
 #endif
 
     VertexInfo vi = write_vertex(
@@ -216,41 +219,66 @@ void main() {
     );
 
 #ifdef WR_FEATURE_GLYPH_TRANSFORM
-    vec2 f = (glyph_transform * vi.local_pos - glyph_rect.p0) / glyph_rect.size;
-    v_uv_clip = vec4(f, 1.0 - f);
+    vec2 f = (glyph_transform * vi.local_pos - glyph_rect.p0) / rect_size(glyph_rect);
+    #ifdef SWGL_CLIP_DIST
+        gl_ClipDistance[0] = f.x;
+        gl_ClipDistance[1] = f.y;
+        gl_ClipDistance[2] = 1.0 - f.x;
+        gl_ClipDistance[3] = 1.0 - f.y;
+    #else
+        v_uv_clip = vec4(f, 1.0 - f);
+    #endif
 #else
-    vec2 f = (vi.local_pos - glyph_rect.p0) / glyph_rect.size;
+    vec2 f = (vi.local_pos - glyph_rect.p0) / rect_size(glyph_rect);
 #endif
 
     write_clip(vi.world_pos, clip_area, task);
 
     switch (color_mode) {
         case COLOR_MODE_ALPHA:
-        case COLOR_MODE_BITMAP:
-            v_mask_swizzle = vec2(0.0, 1.0);
+            v_mask_swizzle = vec3(0.0, 1.0, 1.0);
             v_color = text.color;
             break;
+        case COLOR_MODE_BITMAP_SHADOW:
+            #ifdef SWGL_BLEND
+                swgl_blendDropShadow(text.color);
+                v_mask_swizzle = vec3(1.0, 0.0, 0.0);
+                v_color = vec4(1.0);
+            #else
+                v_mask_swizzle = vec3(0.0, 1.0, 0.0);
+                v_color = text.color;
+            #endif
+            break;
         case COLOR_MODE_SUBPX_BG_PASS2:
-        case COLOR_MODE_SUBPX_DUAL_SOURCE:
-            v_mask_swizzle = vec2(1.0, 0.0);
+            v_mask_swizzle = vec3(1.0, 0.0, 0.0);
             v_color = text.color;
             break;
         case COLOR_MODE_SUBPX_CONST_COLOR:
         case COLOR_MODE_SUBPX_BG_PASS0:
         case COLOR_MODE_COLOR_BITMAP:
-            v_mask_swizzle = vec2(1.0, 0.0);
+            v_mask_swizzle = vec3(1.0, 0.0, 0.0);
             v_color = vec4(text.color.a);
             break;
         case COLOR_MODE_SUBPX_BG_PASS1:
-            v_mask_swizzle = vec2(-1.0, 1.0);
+            v_mask_swizzle = vec3(-1.0, 1.0, 0.0);
             v_color = vec4(text.color.a) * text.bg_color;
             break;
+        case COLOR_MODE_SUBPX_DUAL_SOURCE:
+            #ifdef SWGL_BLEND
+                swgl_blendSubpixelText(text.color);
+                v_mask_swizzle = vec3(1.0, 0.0, 0.0);
+                v_color = vec4(1.0);
+            #else
+                v_mask_swizzle = vec3(text.color.a, 0.0, 0.0);
+                v_color = text.color;
+            #endif
+            break;
         default:
-            v_mask_swizzle = vec2(0.0);
+            v_mask_swizzle = vec3(0.0, 0.0, 0.0);
             v_color = vec4(1.0);
     }
 
-    vec2 texture_size = vec2(textureSize(sColor0, 0));
+    vec2 texture_size = vec2(TEX_SIZE(sColor0));
     vec2 st0 = res.uv_rect.xy / texture_size;
     vec2 st1 = res.uv_rect.zw / texture_size;
 
@@ -267,16 +295,21 @@ Fragment text_fs(void) {
 
     vec2 tc = clamp(v_uv, v_uv_bounds.xy, v_uv_bounds.zw);
     vec4 mask = texture(sColor0, tc);
-    mask.rgb = mask.rgb * v_mask_swizzle.x + mask.aaa * v_mask_swizzle.y;
+    // v_mask_swizzle.z != 0 means we are using an R8 texture as alpha,
+    // and therefore must swizzle from the r channel to all channels.
+    mask = mix(mask, mask.rrrr, bvec4(v_mask_swizzle.z != 0.0));
+    #ifndef WR_FEATURE_DUAL_SOURCE_BLENDING
+        mask.rgb = mask.rgb * v_mask_swizzle.x + mask.aaa * v_mask_swizzle.y;
+    #endif
 
-    #ifdef WR_FEATURE_GLYPH_TRANSFORM
+    #if defined(WR_FEATURE_GLYPH_TRANSFORM) && !defined(SWGL_CLIP_DIST)
         mask *= float(all(greaterThanEqual(v_uv_clip, vec4(0.0))));
     #endif
 
     frag.color = v_color * mask;
 
-    #ifdef WR_FEATURE_DUAL_SOURCE_BLENDING
-        frag.blend = v_color.a * mask;
+    #if defined(WR_FEATURE_DUAL_SOURCE_BLENDING) && !defined(SWGL_BLEND)
+        frag.blend = mask * v_mask_swizzle.x + mask.aaaa * v_mask_swizzle.y;
     #endif
 
     return frag;
@@ -291,12 +324,32 @@ void main() {
 
     #if defined(WR_FEATURE_DEBUG_OVERDRAW)
         oFragColor = WR_DEBUG_OVERDRAW_COLOR;
-    #elif defined(WR_FEATURE_DUAL_SOURCE_BLENDING)
+    #elif defined(WR_FEATURE_DUAL_SOURCE_BLENDING) && !defined(SWGL_BLEND)
         oFragColor = frag.color;
         oFragBlend = frag.blend * clip_mask;
     #else
         write_output(frag.color);
     #endif
 }
+
+#if defined(SWGL_DRAW_SPAN) && defined(SWGL_BLEND) && defined(SWGL_CLIP_DIST)
+void swgl_drawSpanRGBA8() {
+    // Only support simple swizzles for now. More complex swizzles must either
+    // be handled by blend overrides or the slow path.
+    if (v_mask_swizzle.x != 0.0 && v_mask_swizzle.x != 1.0) {
+        return;
+    }
+
+    #ifdef WR_FEATURE_DUAL_SOURCE_BLENDING
+        swgl_commitTextureLinearRGBA8(sColor0, v_uv, v_uv_bounds);
+    #else
+        if (swgl_isTextureR8(sColor0)) {
+            swgl_commitTextureLinearColorR8ToRGBA8(sColor0, v_uv, v_uv_bounds, v_color);
+        } else {
+            swgl_commitTextureLinearColorRGBA8(sColor0, v_uv, v_uv_bounds, v_color);
+        }
+    #endif
+}
+#endif
 
 #endif // WR_FRAGMENT_SHADER

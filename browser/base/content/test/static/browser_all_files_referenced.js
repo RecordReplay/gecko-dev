@@ -19,7 +19,6 @@ var gExceptionPaths = [
   "resource://app/defaults/settings/blocklists/",
   "resource://app/defaults/settings/security-state/",
   "resource://app/defaults/settings/main/",
-  "resource://app/defaults/settings/pinning/",
   "resource://app/defaults/preferences/",
   "resource://gre/modules/commonjs/",
   "resource://gre/defaults/pref/",
@@ -27,18 +26,23 @@ var gExceptionPaths = [
   // These resources are referenced using relative paths from html files.
   "resource://payments/",
 
+  // These chrome resources are referenced using relative paths from JS files.
+  "chrome://global/content/certviewer/components/",
+
   // https://github.com/mozilla/activity-stream/issues/3053
   "chrome://activity-stream/content/data/content/tippytop/images/",
   "chrome://activity-stream/content/data/content/tippytop/favicons/",
   // These resources are referenced by messages delivered through Remote Settings
   "chrome://activity-stream/content/data/content/assets/remote/",
+  "chrome://browser/content/assets/moz-vpn.svg",
+  "chrome://browser/content/assets/vpn-logo.svg",
 
   // toolkit/components/pdfjs/content/build/pdf.js
   "resource://pdf.js/web/images/",
 
-  // Exclude all the metadata paths under the country metadata folder because these
-  // paths will be concatenated in FormAutofillUtils.jsm based on different country/region.
-  "resource://formautofill/addressmetadata/",
+  // Exclude the form autofill path that has been moved out of the extensions to
+  // toolkit, see bug 1691821.
+  "resource://gre-resources/autofill/",
 
   // Exclude all search-extensions because they aren't referenced by filename
   "resource://search-extensions/",
@@ -46,6 +50,10 @@ var gExceptionPaths = [
   // Exclude all services-automation because they are used through webdriver
   "resource://gre/modules/services-automation/",
   "resource://services-automation/ServicesAutomation.jsm",
+
+  // Paths from this folder are constructed in NetErrorParent.jsm based on
+  // the type of cert or net error the user is encountering.
+  "chrome://browser/content/certerror/supportpages/",
 ];
 
 // These are not part of the omni.ja file, so we find them only when running
@@ -53,6 +61,25 @@ var gExceptionPaths = [
 if (AppConstants.platform == "macosx") {
   gExceptionPaths.push("resource://gre/res/cursors/");
   gExceptionPaths.push("resource://gre/res/touchbar/");
+}
+
+if (AppConstants.MOZ_BACKGROUNDTASKS) {
+  // These preferences are active only when we're in background task mode.
+  gExceptionPaths.push("resource://gre/defaults/backgroundtasks/");
+  // `BackgroundTask_id.jsm` is loaded at runtime by `app --backgroundtask id ...`.
+  gExceptionPaths.push("resource://gre/modules/backgroundtasks/");
+}
+
+// Bug 1710546 https://bugzilla.mozilla.org/show_bug.cgi?id=1710546
+if (AppConstants.NIGHTLY_BUILD) {
+  gExceptionPaths.push("resource://builtin-addons/translations/");
+}
+
+if (AppConstants.NIGHTLY_BUILD) {
+  // This is nightly-only debug tool.
+  gExceptionPaths.push(
+    "chrome://browser/content/places/interactionsViewer.html"
+  );
 }
 
 // Each whitelist entry should have a comment indicating which file is
@@ -150,8 +177,6 @@ var whitelist = [
   },
 
   // Files from upstream library
-  { file: "resource://pdf.js/build/pdf.sandbox.external.js" },
-  { file: "resource://pdf.js/build/pdf.scripting.js" },
   { file: "resource://pdf.js/web/debugger.js" },
 
   // resource://app/modules/translation/TranslationContentHandler.jsm
@@ -171,10 +196,10 @@ var whitelist = [
     platforms: ["linux", "macosx"],
   },
   // Bug 1344267
-  { file: "chrome://marionette/content/test.xhtml" },
-  { file: "chrome://marionette/content/test_dialog.properties" },
-  { file: "chrome://marionette/content/test_dialog.xhtml" },
-  { file: "chrome://marionette/content/test_menupopup.xhtml" },
+  { file: "chrome://remote/content/marionette/test.xhtml" },
+  { file: "chrome://remote/content/marionette/test_dialog.properties" },
+  { file: "chrome://remote/content/marionette/test_dialog.xhtml" },
+  { file: "chrome://remote/content/marionette/test_menupopup.xhtml" },
   // Bug 1348559
   { file: "chrome://pippki/content/resetpassword.xhtml" },
   // Bug 1337345
@@ -211,14 +236,25 @@ var whitelist = [
   // Bug 1559554
   { file: "chrome://browser/content/aboutlogins/aboutLoginsUtils.js" },
 
-  // Referenced from the screenshots webextension
-  { file: "resource://app/localization/en-US/browser/screenshots.ftl" },
-
-  // services/fxaccounts/RustFxAccount.js
-  { file: "resource://gre/modules/RustFxAccount.js" },
+  // Bug 1559554
+  {
+    file:
+      "chrome://browser/content/aboutlogins/components/import-details-row.js",
+  },
 
   // dom/media/mediacontrol/MediaControlService.cpp
   { file: "resource://gre/localization/en-US/dom/media.ftl" },
+
+  // tookit/mozapps/update/BackgroundUpdate.jsm
+  {
+    file:
+      "resource://gre/localization/en-US/toolkit/updates/backgroundupdate.ftl",
+  },
+  // Bug 1713242 - referenced by aboutThirdParty.html which is only for Windows
+  {
+    file: "resource://gre/localization/en-US/toolkit/about/aboutThirdParty.ftl",
+    platforms: ["linux", "macosx"],
+  },
 ];
 
 if (AppConstants.NIGHTLY_BUILD && AppConstants.platform != "win") {
@@ -234,6 +270,20 @@ if (AppConstants.platform == "android") {
   // Referenced by aboutGlean.html
   whitelist.push({
     file: "resource://gre/localization/en-US/toolkit/about/aboutGlean.ftl",
+  });
+}
+
+if (AppConstants.MOZ_BACKGROUNDTASKS && !AppConstants.MOZ_UPDATE_AGENT) {
+  // These utilities are for background tasks, not regular headed browsing.
+  whitelist.push({
+    file: "resource://gre/modules/BackgroundTasksUtils.jsm",
+  });
+}
+
+if (AppConstants.MOZ_UPDATE_AGENT && !AppConstants.MOZ_BACKGROUNDTASKS) {
+  // Task scheduling is only used for background updates right now.
+  whitelist.push({
+    file: "resource://gre/modules/TaskScheduler.jsm",
   });
 }
 
@@ -283,13 +333,13 @@ if (!isDevtools) {
   }
   // resource://devtools/shared/worker/loader.js,
   // resource://devtools/shared/builtin-modules.js
-  if (!AppConstants.ENABLE_REMOTE_AGENT) {
+  if (!AppConstants.ENABLE_WEBDRIVER) {
     whitelist.add("resource://gre/modules/jsdebugger.jsm");
   }
 }
 
 if (AppConstants.MOZ_CODE_COVERAGE) {
-  whitelist.add("chrome://marionette/content/PerTestCoverageUtils.jsm");
+  whitelist.add("chrome://remote/content/marionette/PerTestCoverageUtils.jsm");
 }
 
 const gInterestingCategories = new Set([
@@ -344,7 +394,7 @@ function trackChromeUri(uri) {
 // formautofill registers resource://formautofill/ and
 // chrome://formautofill/content/ dynamically at runtime.
 // Bug 1480276 is about addressing this without this hard-coding.
-trackResourcePrefix("formautofill");
+trackResourcePrefix("autofill");
 trackChromeUri("chrome://formautofill/content/");
 
 function parseManifest(manifestUri) {
@@ -356,11 +406,8 @@ function parseManifest(manifestUri) {
         // The webcompat reporter's locale directory may not exist if
         // the addon is preffed-off, and since it's a hack until we
         // get bz1425104 landed, we'll just skip it for now.
-        // Same issue with fxmonitor, which is also pref'd off.
         if (chromeUri === "chrome://report-site-issue/locale/") {
           gChromeMap.set("chrome://report-site-issue/locale/", true);
-        } else if (chromeUri === "chrome://fxmonitor/locale/") {
-          gChromeMap.set("chrome://fxmonitor/locale/", true);
         } else {
           trackChromeUri(chromeUri);
         }

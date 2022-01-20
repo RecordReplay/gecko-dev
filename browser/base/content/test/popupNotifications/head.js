@@ -15,11 +15,11 @@ ChromeUtils.defineModuleGetter(
 async function waitForWindowReadyForPopupNotifications(win) {
   // These are the same checks that PopupNotifications.jsm makes before it
   // allows a notification to open.
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => win.gBrowser.selectedBrowser.docShellIsActive,
     "The browser should be active"
   );
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => Services.focus.activeWindow == win,
     "The window should be active"
   );
@@ -207,13 +207,18 @@ function checkPopup(popup, notifyObj) {
   if (!notification) {
     return;
   }
-  let icon = notification.querySelector(".popup-notification-icon");
-  if (notifyObj.id == "geolocation") {
-    isnot(icon.getBoundingClientRect().width, 0, "icon for geo displayed");
-    ok(
-      popup.anchorNode.classList.contains("notification-anchor-icon"),
-      "notification anchored to icon"
-    );
+
+  // PopupNotifications are not expected to show icons
+  // unless popupIconURL or popupIconClass is passed in the options object.
+  if (notifyObj.options.popupIconURL || notifyObj.options.popupIconClass) {
+    let icon = notification.querySelector(".popup-notification-icon");
+    if (notifyObj.id == "geolocation") {
+      isnot(icon.getBoundingClientRect().width, 0, "icon for geo displayed");
+      ok(
+        popup.anchorNode.classList.contains("notification-anchor-icon"),
+        "notification anchored to icon"
+      );
+    }
   }
 
   let description = notifyObj.message.split("<>");

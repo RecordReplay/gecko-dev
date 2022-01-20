@@ -10,13 +10,13 @@ import org.mozilla.gecko.AndroidGamepadManager;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.InputMethods;
 import org.mozilla.gecko.SurfaceViewWrapper;
-import org.mozilla.gecko.util.ActivityUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -35,6 +35,7 @@ import androidx.annotation.UiThread;
 import androidx.core.view.ViewCompat;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.util.SparseArray;
 import android.util.TypedValue;
 import android.view.DisplayCutout;
@@ -213,6 +214,17 @@ public class GeckoView extends FrameLayout {
         init();
     }
 
+    private static Activity getActivityFromContext(final Context outerContext) {
+        Context context = outerContext;
+        while (context instanceof ContextWrapper) {
+            if (context instanceof Activity) {
+                return (Activity) context;
+            }
+            context = ((ContextWrapper) context).getBaseContext();
+        }
+        return null;
+    }
+
     private void init() {
         setFocusable(true);
         setFocusableInTouchMode(true);
@@ -235,7 +247,7 @@ public class GeckoView extends FrameLayout {
 
         mSurfaceWrapper.setListener(mDisplay);
 
-        final Activity activity = ActivityUtils.getActivityFromContext(getContext());
+        final Activity activity = getActivityFromContext(getContext());
         if (activity != null) {
             mSelectionActionDelegate = new BasicSelectionActionDelegate(activity);
         }
@@ -392,7 +404,7 @@ public class GeckoView extends FrameLayout {
             return null;
         }
 
-        GeckoSession session = mSession;
+        final GeckoSession session = mSession;
         mSession.releaseDisplay(mDisplay.release());
         mSession.getOverscrollEdgeEffect().setInvalidationCallback(null);
         mSession.getCompositorController().setFirstPaintCallback(null);
@@ -733,20 +745,23 @@ public class GeckoView extends FrameLayout {
      * a lot of allocations and unnecessary GC pressure.
      *
      * @param event A {@link MotionEvent}
-     * @return One of the {@link PanZoomController#INPUT_RESULT_UNHANDLED INPUT_RESULT_*}) indicating how the event was handled.
+     * @return A GeckoResult resolving to {@link PanZoomController.InputResultDetail}.
      */
-    public @NonNull GeckoResult<Integer> onTouchEventForResult(final @NonNull MotionEvent event) {
+    public @NonNull GeckoResult<PanZoomController.InputResultDetail> onTouchEventForDetailResult(final @NonNull MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
             requestFocus();
         }
 
         if (mSession == null) {
-            return GeckoResult.fromValue(PanZoomController.INPUT_RESULT_UNHANDLED);
+            return GeckoResult.fromValue(
+                new PanZoomController.InputResultDetail(PanZoomController.INPUT_RESULT_UNHANDLED,
+                                                        PanZoomController.SCROLLABLE_FLAG_NONE,
+                                                        PanZoomController.OVERSCROLL_FLAG_NONE));
         }
 
         // NOTE: Treat mouse events as "touch" rather than as "mouse", so mouse can be
         // used to pan/zoom. Call onMouseEvent() instead for behavior similar to desktop.
-        return mSession.getPanZoomController().onTouchEventForResult(event);
+        return mSession.getPanZoomController().onTouchEventForDetailResult(event);
     }
 
     @Override
@@ -875,29 +890,33 @@ public class GeckoView extends FrameLayout {
                 return;
             }
 
-            switch (notification) {
-                case Autofill.Notify.SESSION_STARTED:
-                    // This line seems necessary for auto-fill to work on the initial page.
-                case Autofill.Notify.SESSION_CANCELED:
-                    manager.cancel();
-                    break;
-                case Autofill.Notify.SESSION_COMMITTED:
-                    manager.commit();
-                    break;
-                case Autofill.Notify.NODE_FOCUSED:
-                    manager.notifyViewEntered(
-                        GeckoView.this, node.getId(),
-                        displayRectForId(session, node));
-                    break;
-                case Autofill.Notify.NODE_BLURRED:
-                    manager.notifyViewExited(GeckoView.this, node.getId());
-                    break;
-                case Autofill.Notify.NODE_UPDATED:
-                    manager.notifyValueChanged(
-                            GeckoView.this,
-                            node.getId(),
-                            AutofillValue.forText(node.getValue()));
-                    break;
+            try {
+                switch (notification) {
+                    case Autofill.Notify.SESSION_STARTED:
+                        // This line seems necessary for auto-fill to work on the initial page.
+                    case Autofill.Notify.SESSION_CANCELED:
+                        manager.cancel();
+                        break;
+                    case Autofill.Notify.SESSION_COMMITTED:
+                        manager.commit();
+                        break;
+                    case Autofill.Notify.NODE_FOCUSED:
+                        manager.notifyViewEntered(
+                                GeckoView.this, node.getId(),
+                                displayRectForId(session, node));
+                        break;
+                    case Autofill.Notify.NODE_BLURRED:
+                        manager.notifyViewExited(GeckoView.this, node.getId());
+                        break;
+                    case Autofill.Notify.NODE_UPDATED:
+                        manager.notifyValueChanged(
+                                GeckoView.this,
+                                node.getId(),
+                                AutofillValue.forText(node.getValue()));
+                        break;
+                }
+            } catch (final SecurityException e) {
+                Log.e(LOGTAG, "Failed to call Autofill Manager API: ", e);
             }
         }
     }

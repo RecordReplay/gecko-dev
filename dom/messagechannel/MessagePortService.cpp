@@ -104,11 +104,14 @@ bool MessagePortService::RequestEntangling(MessagePortParent* aParent,
       return false;
     }
 
-    data = new MessagePortServiceData(aParent->ID());
-    mPorts.Put(aDestinationUUID, data);
+    mPorts.InsertOrUpdate(aDestinationUUID,
+                          MakeUnique<MessagePortServiceData>(aParent->ID()));
 
-    data = new MessagePortServiceData(aDestinationUUID);
-    mPorts.Put(aParent->ID(), data);
+    data = mPorts
+               .InsertOrUpdate(
+                   aParent->ID(),
+                   MakeUnique<MessagePortServiceData>(aDestinationUUID))
+               .get();
   }
 
   // This is a security check.
@@ -305,11 +308,7 @@ void MessagePortService::CloseAll(const nsID& aUUID, bool aForced) {
     return;
   }
 
-#ifdef DEBUG
-  for (auto iter = mPorts.Iter(); !iter.Done(); iter.Next()) {
-    MOZ_ASSERT(!aUUID.Equals(iter.Key()));
-  }
-#endif
+  MOZ_ASSERT(!mPorts.Contains(aUUID));
 
   MaybeShutdown();
 }

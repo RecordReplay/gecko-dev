@@ -13,6 +13,151 @@ exclude: true
 
 ⚠️  breaking change and deprecation notices
 
+## v91
+- Extended [`Autocomplete`][78.7] API to support addresses.
+  ([bug 1699794]({{bugzilla}}1699794)).
+- Added [`clearDataFromBaseDomain`][91.1] to [`StorageController`][90.2] for
+  clearing site data by base domain. This includes data of associated subdomains
+  and data partitioned via [`State Partitioning`][91.3].
+- Removed deprecated `MediaElement` API.
+
+[91.1]: {{javadoc_uri}}/StorageController.html#clearDataFromBaseDomain-java.lang.String-long-
+[91.2]: {{javadoc_uri}}/StorageController.html
+[91.3]: https://developer.mozilla.org/en-US/docs/Web/Privacy/State_Partitioning
+
+## v90
+- Added [`WebNotification.silent`][90.1] and [`WebNotification.vibrate`][90.2]
+  support. See also [Web/API/Notification/silent][90.3] and
+  [Web/API/Notification/vibrate][90.4].
+  ([bug 1696145]({{bugzilla}}1696145))
+- ⚠️ Deprecated [`GeckoRuntime.getProfileDir`][90.5], the API is being kept for
+  compatibility but it always returns null.
+- Added [`forceEnableAccessibility`][90.6] runtime setting to enable
+  accessibility during testing.
+  ([bug 1701269]({{bugzilla}}1701269))
+- Removed deprecated [`GeckoView.onTouchEventForResult`][88.4].
+  ([bug 1706403]({{bugzilla}}1706403))
+- ⚠️ Updated [`onContentPermissionRequest`][90.7] to use [`ContentPermission`][90.8]; added
+  [`setPermission`][90.9] to [`StorageController`][90.10] for modifying existing permissions, and
+  allowed Gecko to handle persisting permissions.
+- ⚠️ Added a deprecation schedule to most existing content blocking exception functionality;
+  other than [`addException`][90.11], content blocking exceptions should be treated as content
+  permissions going forward.
+
+[90.1]: {{javadoc_uri}}/WebNotification.html#silent
+[90.2]: {{javadoc_uri}}/WebNotification.html#vibrate
+[90.3]: https://developer.mozilla.org/en-US/docs/Web/API/Notification/silent
+[90.4]: https://developer.mozilla.org/en-US/docs/Web/API/Notification/vibrate
+[90.5]: {{javadoc_uri}}/GeckoRuntime.html#getProfileDir--
+[90.6]: {{javadoc_uri}}/GeckoRuntimeSettings.html#setForceEnableAccessibility-boolean-
+[90.7]: {{javadoc_uri}}/GeckoSession.PermissionDelegate.html#onContentPermissionRequest-org.mozilla.geckoview.GeckoSession-org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission-
+[90.8]: {{javadoc_uri}}/GeckoSession.PermissionDelegate.ContentPermission.html
+[90.9]: {{javadoc_uri}}/StorageController.html#setPermission-org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission-int-
+[90.10]: {{javadoc_uri}}/StorageController.html
+[90.11]: {{javadoc_uri}}/ContentBlockingController.html#addException-org.mozilla.geckoview.GeckoSession-
+
+## v89
+- Added [`ContentPermission`][89.1], which is used to report what permissions content
+  is loaded with in `onLocationChange`.
+- Added [`StorageController.getPermissions`][89.2] and [`StorageController.getAllPermissions`][89.3],
+  allowing inspection of what permissions have been set for a given URI and for all URIs.
+- ⚠️ Deprecated [`NavigationDelegate.onLocationChange`][89.4], to be removed in v92. The
+  new `onLocationChange` callback simply adds permissions information, migration of existing
+  functionality should only require updating the function signature.
+- Added [`GeckoRuntimeSettings.setEnterpriseRootsEnabled`][89.5] which allows
+  GeckoView to add third party certificate roots from the Android OS CA store.
+  ([bug 1678191]({{bugzilla}}1678191)).
+- ⚠️ [`GeckoSession.load`][89.6] now throws `IllegalArgumentException` if the
+  session has no [`GeckoSession.NavigationDelegate`][89.7] and the request's `data` URI is too long.
+  If a `GeckoSession` *does* have a `GeckoSession.NavigationDelegate` and `GeckoSession.load` is called
+  with a top-level `data` URI that is too long, [`NavigationDelgate.onLoadError`][89.8] will be called
+  with a [`WebRequestError`][89.9] containing error code [`WebRequestError.ERROR_DATA_URI_TOO_LONG`][89.10].
+  ([bug 1668952]({{bugzilla}}1668952))
+- Extended [`Autocomplete`][78.7] API to support credit cards.
+  ([bug 1691819]({{bugzilla}}1691819)).
+- ⚠️  Deprecated ['Autocomplete.LoginStorageDelegate'][78.8] with the intention
+  of removing it in GeckoView v93. Please use
+  [`Autocomplete.StorageDelegate`][89.11] instead.
+  ([bug 1691819]({{bugzilla}}1691819)).
+- Added [`ALLOWED_TRACKING_CONTENT`][89.12] to content blocking API to indicate
+  when unsafe content is allowed by a shim.
+  ([bug 1661330]({{bugzilla}}1661330))
+- ⚠️ Added [`setCookieBehaviorPrivateMode`][89.13] to control cookie behavior for private browsing
+  mode independently of normal browsing mode. To maintain current behavior, set this to the same
+  value as [`setCookieBehavior`][89.14] is set to.
+
+[89.1]: {{javadoc_uri}}/GeckoSession.PermissionDelegate.ContentPermission.html
+[89.2]: {{javadoc_uri}}/StorageController.html#getPermissions-java.lang.String-
+[89.3]: {{javadoc_uri}}/StorageController.html#getAllPermissions--
+[89.4]: {{javadoc_uri}}/GeckoSession.NavigationDelegate.html#onLocationChange-org.mozilla.geckoview.GeckoSession-java.lang.String-
+[89.5]: {{javadoc_uri}}/GeckoRuntimeSettings.html#setEnterpriseRootsEnabled-boolean-
+[89.6]: {{javadoc_uri}}/GeckoSession.html#load-org.mozilla.geckoview.GeckoSession.Loader-
+[89.7]: {{javadoc_uri}}/GeckoSession.NavigationDelegate.html
+[89.8]: {{javadoc_uri}}/GeckoSession.NavigationDelegate.html#onLoadError-org.mozilla.geckoview.GeckoSession-java.lang.String-org.mozilla.geckoview.WebRequestError-
+[89.9]: {{javadoc_uri}}/WebRequestError.html
+[89.10]: {{javadoc_uri}}/WebRequestError.html#ERROR_DATA_URI_TOO_LONG
+[89.11]: {{javadoc_uri}}/Autocomplete.StorageDelegate.html
+[89.12]: {{javadoc_uri}}/ContentBlockingController.Event.html#ALLOWED_TRACKING_CONTENT
+[89.13]: {{javadoc_uri}}/ContentBlocking.Settings.html#setCookieBehaviorPrivateMode-int-
+[89.14]: {{javadoc_uri}}/ContentBlocking.Settings.html#setCookieBehavior-int-
+
+## v88
+- Added [`WebExtension.Download#update`][88.1] that can be used to
+  implement the WebExtension `downloads` API. This method is used to communicate
+  updates in the download status to the Web Extension
+- Added [`PanZoomController.onTouchEventForDetailResult`][88.2] and
+  [`GeckoView.onTouchEventForDetailResult`][88.3] to tell information
+  that the website doesn't expect browser apps to react the event,
+  also and deprecated [`PanZoomController.onTouchEventForResult`][88.4]
+  and [`GeckoView.onTouchEventForResult`][88.5]. With these new methods
+  browser apps can differentiate cases where the browser can do something
+  the browser's specific behavior in response to the event (e.g.
+  pull-to-refresh) and cases where the browser should not react to the event
+  because the event was consumed in the web site (e.g. in canvas like
+  web apps).
+  ([bug 1678505]({{bugzilla}}1678505)).
+- ⚠️ Deprecate the [`MediaElement`][65.11] API to be removed in v91.
+  Please use [`MediaSession`][81.6] for media events and control.
+  ([bug 1693584]({{bugzilla}}1693584)).
+- ⚠️ Deprecate [`GeckoResult.ALLOW`][89.6] and [`GeckoResult.DENY`][89.7] in
+  favor of [`GeckoResult.allow`][89.8] and [`GeckoResult.deny`][89.9].
+  ([bug 1697270]({{bugzilla}}1697270)).
+- ⚠️ Update [`SessionState`][88.10] to handle null states/strings more gracefully.
+  ([bug 1685486]({{bugzilla}}1685486)).
+
+[88.1]: {{javadoc_uri}}/WebExtension.Download.html#update-org.mozilla.geckoview.WebExtension.Download.Info-
+[88.2]: {{javadoc_uri}}/PanZoomController.html#onTouchEventForDetailResult
+[88.3]: {{javadoc_uri}}/GeckoView.html#onTouchEventForDetailResult
+[88.4]: {{javadoc_uri}}/PanZoomController.html#onTouchEventForResult
+[88.5]: {{javadoc_uri}}/GeckoView.html#onTouchEventForResult
+[88.6]: {{javadoc_uri}}/GeckoResult.html#ALLOW
+[88.7]: {{javadoc_uri}}/GeckoResult.html#DENY
+[88.8]: {{javadoc_uri}}/GeckoResult.html#allow--
+[88.9]: {{javadoc_uri}}/GeckoResult.html#deny--
+[88.10]: {{javadoc_uri}}/GeckoSession.SessionState.html
+
+## v87
+- ⚠ Added [`WebExtension.DownloadInitData`][87.1] class that can be used to
+  implement the WebExtension `downloads` API. This class represents initial state of a download.
+- Added [`WebExtension.Download.Info`][87.2] interface that can be used to
+  implement the WebExtension `downloads` API. This interface allows communicating
+  download's state to Web Extension.
+- [`Image#getBitmap`][87.3] now throws [`ImageProcessingException`][87.4] if
+  the image cannot be processed.
+  ([bug 1689745]({{bugzilla}}1689745))
+- Added support for HTTPS-only mode to [`GeckoRuntimeSettings`][87.5] via
+  [`setAllowInsecureConnections`][87.6].
+- Removed [`JSONException`] throws from [`SessionState.fromString`][87.7], fixed annotations,
+  and clarified null-handling a bit.
+  
+[87.1]: {{javadoc_uri}}/WebExtension.DownloadInitData.html
+[87.2]: {{javadoc_uri}}/WebExtension.Download.Info.html
+[87.3]: {{javadoc_uri}}/Image.html#getBitmap-int-
+[87.4]: {{javadoc_uri}}/Image.ImageProcessingException.html
+[87.5]: {{javadoc_uri}}/GeckoRuntimeSettings.html
+[87.6]: {{javadoc_uri}}/GeckoRuntimeSettings.html#setAllowInsecureConnections-int-
+[87.7]: {{javadoc_uri}}/GeckoSession.SessionState.html#fromString-java.lang.String-
+
 ## v86
 - Removed deprecated [`ContentDelegate#onExternalResponse(GeckoSession, WebResponseInfo)`].
   Use [`ContentDelegate#onExternalResponse(GeckoSession, WebResponse)`][82.2] instead.
@@ -877,4 +1022,4 @@ to allow adding gecko profiler markers.
 [65.24]: {{javadoc_uri}}/CrashReporter.html#sendCrashReport-android.content.Context-android.os.Bundle-java.lang.String-
 [65.25]: {{javadoc_uri}}/GeckoResult.html
 
-[api-version]: 437ce82f72ccd40f18d7b7e6f5c0f7e1f6645c02
+[api-version]: 05c7e21b7ea40cd9978b319a9acfac1b256e700f

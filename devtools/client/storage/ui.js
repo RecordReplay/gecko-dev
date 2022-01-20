@@ -3,7 +3,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
-
 const EventEmitter = require("devtools/shared/event-emitter");
 const { LocalizationHelper, ELLIPSIS } = require("devtools/shared/l10n");
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
@@ -109,14 +108,16 @@ const NON_ORIGINAL_L10N_IDS = new Map([
  *
  * @param {Window} panelWin
  *        Window of the toolbox panel to populate UI in.
+ * @param {Object} commands
+ *        The commands object with all interfaces defined from devtools/shared/commands/
  */
 class StorageUI {
-  constructor(panelWin, toolbox) {
+  constructor(panelWin, toolbox, commands) {
     EventEmitter.decorate(this);
     this._window = panelWin;
     this._panelDoc = panelWin.document;
     this._toolbox = toolbox;
-    this.storageTypes = null;
+    this._commands = commands;
     this.sidebarToggledOpen = null;
     this.shouldLoadMoreItems = true;
 
@@ -262,44 +263,41 @@ class StorageUI {
   }
 
   get currentTarget() {
-    return this._toolbox.targetList.targetFront;
+    return this._commands.targetCommand.targetFront;
   }
 
   async init() {
-    const { targetList } = this._toolbox;
+    // This is a distionarry of arrays, keyed by storage key
+    // - Keys are storage keys, available on each storage resource, via ${resource.resourceKey}
+    //   and are typically "Cache", "cookies", "indexedDB", "localStorage", ...
+    // - Values are arrays of storage fronts. This isn't the deprecated global storage front (target.getFront(storage), only used by legacy listener),
+    //   but rather the storage specific front, i.e. a storage resource. Storage resources are fronts.
+    this.storageResources = {};
+
     this._onTargetAvailable = this._onTargetAvailable.bind(this);
     this._onTargetDestroyed = this._onTargetDestroyed.bind(this);
-    await targetList.watchTargets(
-      [targetList.TYPES.FRAME],
+    await this._commands.targetCommand.watchTargets(
+      [this._commands.targetCommand.TYPES.FRAME],
       this._onTargetAvailable,
       this._onTargetDestroyed
     );
 
-    this.storageTypes = {};
-
     this._onResourceListAvailable = this._onResourceListAvailable.bind(this);
-    this._onResourceUpdated = this._onResourceUpdated.bind(this);
-    this._onResourceListUpdated = this._onResourceListUpdated.bind(this);
-    this._onResourceDestroyed = this._onResourceDestroyed.bind(this);
-    this._onResourceListDestroyed = this._onResourceListDestroyed.bind(this);
 
-    const { resourceWatcher } = this._toolbox;
-
-    await this._toolbox.resourceWatcher.watchResources(
+    const { resourceCommand } = this._toolbox;
+    await this._toolbox.resourceCommand.watchResources(
       [
         // The first item in this list will be the first selected storage item
         // Tests assume Cookie -- moving cookie will break tests
-        resourceWatcher.TYPES.COOKIE,
-        resourceWatcher.TYPES.CACHE_STORAGE,
-        resourceWatcher.TYPES.EXTENSION_STORAGE,
-        resourceWatcher.TYPES.INDEXED_DB,
-        resourceWatcher.TYPES.LOCAL_STORAGE,
-        resourceWatcher.TYPES.SESSION_STORAGE,
+        resourceCommand.TYPES.COOKIE,
+        resourceCommand.TYPES.CACHE_STORAGE,
+        resourceCommand.TYPES.EXTENSION_STORAGE,
+        resourceCommand.TYPES.INDEXED_DB,
+        resourceCommand.TYPES.LOCAL_STORAGE,
+        resourceCommand.TYPES.SESSION_STORAGE,
       ],
       {
         onAvailable: this._onResourceListAvailable,
-        onUpdated: this._onResourceListUpdated,
-        onDestroyed: this._onResourceListDestroyed,
       }
     );
   }
@@ -315,20 +313,29 @@ class StorageUI {
   }
 
   async _onResourceListAvailable(resources) {
-    const storages = {};
-
     for (const resource of resources) {
       const { resourceKey } = resource;
+
       // NOTE: We might be getting more than 1 resource per storage type when
-      //       we have remote frames, so we need an array to store these.
-      if (!storages[resourceKey]) {
-        storages[resourceKey] = [];
+      //       we have remote frames in content process resources, so we need
+      //       an array to store these.
+      if (!this.storageResources[resourceKey]) {
+        this.storageResources[resourceKey] = [];
       }
-      storages[resourceKey].push(resource);
+      this.storageResources[resourceKey].push(resource);
+
+      resource.on(
+        "single-store-update",
+        this._onStoreUpdate.bind(this, resource)
+      );
+      resource.on(
+        "single-store-cleared",
+        this._onStoreCleared.bind(this, resource)
+      );
     }
 
     try {
-      await this.populateStorageTree(storages);
+      await this.populateStorageTree();
     } catch (e) {
       if (!this._toolbox || this._toolbox._destroyer) {
         // The toolbox is in the process of being destroyed... in this case throwing here
@@ -342,12 +349,25 @@ class StorageUI {
   }
 
   _onTargetDestroyed({ targetFront }) {
+    // Remove all storages related to this target
+    for (const type in this.storageResources) {
+      this.storageResources[type] = this.storageResources[type].filter(
+        storage => {
+          // Note that the storage front may already be destroyed,
+          // and have a null targetFront attribute. So also remove all already
+          // destroyed fronts.
+          return !storage.isDestroyed() && storage.targetFront != targetFront;
+        }
+      );
+    }
+
     // Only support top level target and navigation to new processes.
     // i.e. ignore additional targets created for remote <iframes>
     if (!targetFront.isTopLevel) {
       return;
     }
 
+    this.storageResources = {};
     this.table.clear();
     this.hideSidebar();
     this.tree.clear();
@@ -358,20 +378,18 @@ class StorageUI {
   }
 
   destroy() {
-    const { resourceWatcher } = this._toolbox;
-    resourceWatcher.unwatchResources(
+    const { resourceCommand } = this._toolbox;
+    resourceCommand.unwatchResources(
       [
-        resourceWatcher.TYPES.COOKIE,
-        resourceWatcher.TYPES.CACHE_STORAGE,
-        resourceWatcher.TYPES.EXTENSION_STORAGE,
-        resourceWatcher.TYPES.INDEXED_DB,
-        resourceWatcher.TYPES.LOCAL_STORAGE,
-        resourceWatcher.TYPES.SESSION_STORAGE,
+        resourceCommand.TYPES.COOKIE,
+        resourceCommand.TYPES.CACHE_STORAGE,
+        resourceCommand.TYPES.EXTENSION_STORAGE,
+        resourceCommand.TYPES.INDEXED_DB,
+        resourceCommand.TYPES.LOCAL_STORAGE,
+        resourceCommand.TYPES.SESSION_STORAGE,
       ],
       {
         onAvailable: this._onResourceListAvailable,
-        onUpdated: this._onResourceListUpdated,
-        onDestroyed: this._onResourceListDestroyed,
       }
     );
 
@@ -474,7 +492,7 @@ class StorageUI {
   }
 
   _getStorage(type, host) {
-    const storageType = this.storageTypes[type];
+    const storageType = this.storageResources[type];
     return storageType.find(x => host in x.hosts);
   }
 
@@ -493,6 +511,10 @@ class StorageUI {
   }
 
   editItem(data) {
+    const selectedItem = this.tree.selectedItem;
+    if (!selectedItem) {
+      return;
+    }
     const front = this.getCurrentFront();
 
     front.editItem(data);
@@ -516,12 +538,6 @@ class StorageUI {
     await this.updateObjectSidebar();
   }
 
-  async _onResourceListDestroyed(clearedList) {
-    for (const cleared of clearedList) {
-      await this._onResourceDestroyed(cleared);
-    }
-  }
-
   /**
    * Event handler for "stores-cleared" event coming from the storage actor.
    *
@@ -529,7 +545,8 @@ class StorageUI {
    *        An object containing which hosts/paths are cleared from a
    *        storage
    */
-  _onResourceDestroyed({ resourceKey, clearedHostsOrPaths }) {
+  _onStoreCleared(resource, { clearedHostsOrPaths }) {
+    const { resourceKey } = resource;
     function* enumPaths() {
       if (Array.isArray(clearedHostsOrPaths)) {
         // Handle the legacy response with array of hosts
@@ -573,12 +590,6 @@ class StorageUI {
     }
   }
 
-  async _onResourceListUpdated(updates) {
-    for (const update of updates) {
-      await this._onResourceUpdated(update.update);
-    }
-  }
-
   /**
    * Event handler for "stores-update" event coming from the storage actor.
    *
@@ -602,7 +613,8 @@ class StorageUI {
    *        of the changed store objects. This array is empty for deleted object
    *        if the host was completely removed.
    */
-  async _onResourceUpdated({ changed, added, deleted }) {
+  async _onStoreUpdate(resource, update) {
+    const { changed, added, deleted } = update;
     if (added) {
       await this.handleAddedItems(added);
     }
@@ -888,12 +900,8 @@ class StorageUI {
   /**
    * Populates the storage tree which displays the list of storages present for
    * the page.
-   *
-   * @param {object} storageTypes
-   *        List of storages and their corresponding hosts returned by the
-   *        StorageFront.listStores call.
    */
-  async populateStorageTree(storageTypes) {
+  async populateStorageTree() {
     const populateTreeFromResource = (type, resource) => {
       for (const host in resource.hosts) {
         const label = this.getReadableLabelFromHostname(host);
@@ -928,12 +936,7 @@ class StorageUI {
     // see comment above.
     const initialSelectedItem = this.tree.selectedItem;
 
-    for (const type in storageTypes) {
-      // Ignore `from` field, which is just a protocol.js implementation
-      // artifact.
-      if (type === "from") {
-        continue;
-      }
+    for (const [type, resources] of Object.entries(this.storageResources)) {
       let typeLabel = type;
       try {
         typeLabel = L10N.getStr("tree.labels." + type);
@@ -943,13 +946,9 @@ class StorageUI {
 
       this.tree.add([{ id: type, label: typeLabel, type: "store" }]);
 
-      const resourcesWithHosts = storageTypes[type].filter(x => x.hosts);
-      for (const resource of resourcesWithHosts) {
-        if (!this.storageTypes[type]) {
-          this.storageTypes[type] = [];
-        }
-        this.storageTypes[type].push(resource);
-
+      // storageResources values are arrays, with storage resources.
+      // we may have many storage resources per type if we get remote iframes.
+      for (const resource of resources) {
         populateTreeFromResource(type, resource);
       }
     }
@@ -969,7 +968,7 @@ class StorageUI {
     let value;
 
     // Get the string value (async action) and the update the UI synchronously.
-    if (item?.name && item?.valueActor) {
+    if ((item?.name || item?.name === "") && item?.valueActor) {
       value = await item.valueActor.string();
     }
 

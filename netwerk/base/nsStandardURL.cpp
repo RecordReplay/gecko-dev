@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "IPCMessageUtils.h"
+#include "ipc/IPCMessageUtils.h"
 
 #include "nsASCIIMask.h"
 #include "nsStandardURL.h"
@@ -54,10 +54,8 @@ static NS_DEFINE_CID(kStandardURLCID, NS_STANDARDURL_CID);
 // can be safely used on other threads.
 StaticRefPtr<nsIIDNService> nsStandardURL::gIDN;
 
-// This value will only be updated on the main thread once. Worker threads
-// may race when reading this values, but that's OK because in the worst
-// case we will just dispatch a noop runnable to the main thread.
-bool nsStandardURL::gInitialized = false;
+// This value will only be updated on the main thread once.
+static Atomic<bool, Relaxed> gInitialized{false};
 
 const char nsStandardURL::gHostLimitDigits[] = {'/', '\\', '?', '#', 0};
 
@@ -207,10 +205,7 @@ static LinkedList<nsStandardURL> gAllURLs;
 #endif
 
 nsStandardURL::nsStandardURL(bool aSupportsFileURL, bool aTrackURL)
-    : mDefaultPort(-1),
-      mPort(-1),
-      mDisplayHost(nullptr),
-      mURLType(URLTYPE_STANDARD),
+    : mURLType(URLTYPE_STANDARD),
       mSupportsFileURL(aSupportsFileURL),
       mCheckedIfHostA(false) {
   LOG(("Creating nsStandardURL @%p\n", this));
@@ -231,13 +226,64 @@ nsStandardURL::nsStandardURL(bool aSupportsFileURL, bool aTrackURL)
 #endif
 }
 
-// static
-void nsStandardURL::SanityCheck(const URLSegment& aSeg,
-                                const nsCString& aSpec) {
-  MOZ_RELEASE_ASSERT(aSeg.mLen >= -1);
-  MOZ_RELEASE_ASSERT(aSeg.mLen < 0 ||
-                     (aSeg.mPos + aSeg.mLen <= aSpec.Length() &&
-                      aSeg.mPos + aSeg.mLen >= aSeg.mPos));
+bool nsStandardURL::IsValid() {
+  auto checkSegment = [&](const nsStandardURL::URLSegment& aSeg) {
+    // Bad value
+    if (NS_WARN_IF(aSeg.mLen < -1)) {
+      return false;
+    }
+    if (aSeg.mLen == -1) {
+      return true;
+    }
+
+    // Points out of string
+    if (NS_WARN_IF(aSeg.mPos + aSeg.mLen > mSpec.Length())) {
+      return false;
+    }
+
+    // Overflow
+    if (NS_WARN_IF(aSeg.mPos + aSeg.mLen < aSeg.mPos)) {
+      return false;
+    }
+
+    return true;
+  };
+
+  bool allSegmentsValid = checkSegment(mScheme) && checkSegment(mAuthority) &&
+                          checkSegment(mUsername) && checkSegment(mPassword) &&
+                          checkSegment(mHost) && checkSegment(mPath) &&
+                          checkSegment(mFilepath) && checkSegment(mDirectory) &&
+                          checkSegment(mBasename) && checkSegment(mExtension) &&
+                          checkSegment(mQuery) && checkSegment(mRef);
+  if (!allSegmentsValid) {
+    return false;
+  }
+
+  if (mScheme.mPos != 0) {
+    return false;
+  }
+
+  return true;
+}
+
+void nsStandardURL::SanityCheck() {
+  if (!IsValid()) {
+    nsPrintfCString msg(
+        "mLen:%X, mScheme (%X,%X), mAuthority (%X,%X), mUsername (%X,%X), "
+        "mPassword (%X,%X), mHost (%X,%X), mPath (%X,%X), mFilepath (%X,%X), "
+        "mDirectory (%X,%X), mBasename (%X,%X), mExtension (%X,%X), mQuery "
+        "(%X,%X), mRef (%X,%X)",
+        mSpec.Length(), mScheme.mPos, mScheme.mLen, mAuthority.mPos,
+        mAuthority.mLen, mUsername.mPos, mUsername.mLen, mPassword.mPos,
+        mPassword.mLen, mHost.mPos, mHost.mLen, mPath.mPos, mPath.mLen,
+        mFilepath.mPos, mFilepath.mLen, mDirectory.mPos, mDirectory.mLen,
+        mBasename.mPos, mBasename.mLen, mExtension.mPos, mExtension.mLen,
+        mQuery.mPos, mQuery.mLen, mRef.mPos, mRef.mLen);
+    CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::URLSegments,
+                                       msg);
+
+    MOZ_CRASH("nsStandardURL::SanityCheck failed");
+  }
 }
 
 nsStandardURL::~nsStandardURL() {
@@ -252,18 +298,7 @@ nsStandardURL::~nsStandardURL() {
   }
 #endif
 
-  SanityCheck(mScheme, mSpec);
-  SanityCheck(mAuthority, mSpec);
-  SanityCheck(mUsername, mSpec);
-  SanityCheck(mPassword, mSpec);
-  SanityCheck(mHost, mSpec);
-  SanityCheck(mPath, mSpec);
-  SanityCheck(mFilepath, mSpec);
-  SanityCheck(mDirectory, mSpec);
-  SanityCheck(mBasename, mSpec);
-  SanityCheck(mExtension, mSpec);
-  SanityCheck(mQuery, mSpec);
-  SanityCheck(mRef, mSpec);
+  SanityCheck();
 }
 
 #ifdef DEBUG_DUMP_URLS_AT_SHUTDOWN
@@ -563,43 +598,51 @@ nsresult nsStandardURL::NormalizeIPv4(const nsACString& host,
   return NS_OK;
 }
 
-nsresult nsStandardURL::NormalizeIDN(const nsACString& host,
-                                     nsCString& result) {
-  // If host is ACE, then convert to UTF-8.  Else, if host is already UTF-8,
-  // then make sure it is normalized per IDN.
-
-  // this function returns true if normalization succeeds.
-
+nsresult nsStandardURL::NormalizeIDN(const nsCString& host, nsCString& result) {
   result.Truncate();
+  mDisplayHost.Truncate();
   nsresult rv;
 
   if (!gIDN) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  bool isAscii;
-  nsAutoCString normalized;
-  rv = gIDN->ConvertToDisplayIDN(host, &isAscii, normalized);
+  // If the input is ASCII, and not ACE encoded, then there's no processing
+  // needed. This is needed because we want to allow ascii labels longer than
+  // 64 characters for some schemes.
+  bool isACE = false;
+  if (IsAscii(host) && NS_SUCCEEDED(gIDN->IsACE(host, &isACE)) && !isACE) {
+    mCheckedIfHostA = true;
+    result = host;
+    return NS_OK;
+  }
+
+  // Even if it's already ACE, we must still call ConvertUTF8toACE in order
+  // for the input normalization to take place.
+  rv = gIDN->ConvertUTF8toACE(host, result);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
-  // The result is ASCII. No need to convert to ACE.
-  if (isAscii) {
-    result = normalized;
+  // If the ASCII representation doesn't contain the xn-- token then we don't
+  // need to call ConvertToDisplayIDN as that would not change anything.
+  if (!StringBeginsWith(result, "xn--"_ns) &&
+      result.Find(".xn--"_ns) == kNotFound) {
     mCheckedIfHostA = true;
-    mDisplayHost.Truncate();
     return NS_OK;
   }
 
-  rv = gIDN->ConvertUTF8toACE(normalized, result);
+  bool isAscii = true;
+  nsAutoCString displayHost;
+  rv = gIDN->ConvertToDisplayIDN(result, &isAscii, displayHost);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
   mCheckedIfHostA = true;
-  mDisplayHost = normalized;
-
+  if (!isAscii) {
+    mDisplayHost = displayHost;
+  }
   return NS_OK;
 }
 
@@ -1007,7 +1050,7 @@ bool nsStandardURL::SegmentIs(const URLSegment& seg, const char* val,
   // if the first |seg.mLen| chars of |val| match, then |val| must
   // also be null terminated at |seg.mLen|.
   if (ignoreCase) {
-    return !PL_strncasecmp(mSpec.get() + seg.mPos, val, seg.mLen) &&
+    return !nsCRT::strncasecmp(mSpec.get() + seg.mPos, val, seg.mLen) &&
            (val[seg.mLen] == '\0');
   }
 
@@ -1027,7 +1070,7 @@ bool nsStandardURL::SegmentIs(const char* spec, const URLSegment& seg,
   // if the first |seg.mLen| chars of |val| match, then |val| must
   // also be null terminated at |seg.mLen|.
   if (ignoreCase) {
-    return !PL_strncasecmp(spec + seg.mPos, val, seg.mLen) &&
+    return !nsCRT::strncasecmp(spec + seg.mPos, val, seg.mLen) &&
            (val[seg.mLen] == '\0');
   }
 
@@ -1046,7 +1089,8 @@ bool nsStandardURL::SegmentIs(const URLSegment& seg1, const char* val,
     return false;
   }
   if (ignoreCase) {
-    return !PL_strncasecmp(mSpec.get() + seg1.mPos, val + seg2.mPos, seg1.mLen);
+    return !nsCRT::strncasecmp(mSpec.get() + seg1.mPos, val + seg2.mPos,
+                               seg1.mLen);
   }
 
   return !strncmp(mSpec.get() + seg1.mPos, val + seg2.mPos, seg1.mLen);
@@ -1605,6 +1649,7 @@ nsresult nsStandardURL::SetSpecWithEncoding(const nsACString& input,
     LOG((" ref       = (%u,%d)\n", mRef.mPos, mRef.mLen));
   }
 
+  SanityCheck();
   return rv;
 }
 
@@ -1631,6 +1676,8 @@ nsresult nsStandardURL::SetScheme(const nsACString& input) {
       StaticPrefs::network_standard_url_max_length()) {
     return NS_ERROR_MALFORMED_URI;
   }
+
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   InvalidateCache();
 
@@ -1671,6 +1718,7 @@ nsresult nsStandardURL::SetUserPass(const nsACString& input) {
     return NS_ERROR_MALFORMED_URI;
   }
 
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
   InvalidateCache();
 
   NS_ASSERTION(mHost.mLen >= 0, "uninitialized");
@@ -1770,6 +1818,8 @@ nsresult nsStandardURL::SetUsername(const nsACString& input) {
     return NS_ERROR_MALFORMED_URI;
   }
 
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
+
   InvalidateCache();
 
   // escape username if necessary
@@ -1822,6 +1872,8 @@ nsresult nsStandardURL::SetPassword(const nsACString& input) {
     }
     Unused << this;  // silence compiler -Wunused-lambda-capture
   });
+
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   LOG(("nsStandardURL::SetPassword [password=%s]\n", password.get()));
 
@@ -1941,6 +1993,8 @@ nsresult nsStandardURL::SetHostPort(const nsACString& aValue) {
     }
   }
 
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
+
   nsresult rv = SetHost(Substring(start, iter));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -2012,6 +2066,7 @@ nsresult nsStandardURL::SetHost(const nsACString& input) {
     return NS_ERROR_MALFORMED_URI;
   }
 
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
   InvalidateCache();
 
   uint32_t len;
@@ -2092,6 +2147,8 @@ nsresult nsStandardURL::SetPort(int32_t port) {
     return NS_ERROR_UNEXPECTED;
   }
 
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
+
   InvalidateCache();
   if (port == mDefaultPort) {
     port = -1;
@@ -2115,6 +2172,8 @@ void nsStandardURL::ReplacePortInSpec(int32_t aNewPort) {
   NS_ASSERTION(aNewPort != mDefaultPort || mDefaultPort == -1,
                "Caller should check its passed-in value and pass -1 instead of "
                "mDefaultPort, to avoid encoding default port into mSpec");
+
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   // Create the (possibly empty) string that we're planning to replace:
   nsAutoCString buf;
@@ -2146,6 +2205,7 @@ void nsStandardURL::ReplacePortInSpec(int32_t aNewPort) {
 nsresult nsStandardURL::SetPathQueryRef(const nsACString& input) {
   const nsPromiseFlatCString& path = PromiseFlatCString(input);
   LOG(("nsStandardURL::SetPathQueryRef [path=%s]\n", path.get()));
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   InvalidateCache();
 
@@ -2337,6 +2397,8 @@ nsresult nsStandardURL::CloneInternal(
 nsresult nsStandardURL::CopyMembers(
     nsStandardURL* source, nsStandardURL::RefHandlingEnum refHandlingMode,
     const nsACString& newRef, bool copyCached) {
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
+
   mSpec = source->mSpec;
   mDefaultPort = source->mDefaultPort;
   mPort = source->mPort;
@@ -2760,6 +2822,7 @@ nsresult nsStandardURL::SetFilePath(const nsACString& input) {
   const char* filepath = flat.get();
 
   LOG(("nsStandardURL::SetFilePath [filepath=%s]\n", filepath));
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   // if there isn't a filepath, then there can't be anything
   // after the path either.  this url is likely uninitialized.
@@ -2852,6 +2915,7 @@ nsresult nsStandardURL::SetQueryWithEncoding(const nsACString& input,
   const char* query = flat.get();
 
   LOG(("nsStandardURL::SetQuery [query=%s]\n", query));
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   if (IsUTFEncoding(encoding)) {
     encoding = nullptr;
@@ -2933,6 +2997,7 @@ nsresult nsStandardURL::SetRef(const nsACString& input) {
   const char* ref = flat.get();
 
   LOG(("nsStandardURL::SetRef [ref=%s]\n", ref));
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   if (mPath.mLen < 0) {
     return SetPathQueryRef(flat);
@@ -2999,6 +3064,7 @@ nsresult nsStandardURL::SetFileNameInternal(const nsACString& input) {
   const char* filename = flat.get();
 
   LOG(("nsStandardURL::SetFileNameInternal [filename=%s]\n", filename));
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
 
   if (mPath.mLen < 0) {
     return SetPathQueryRef(flat);
@@ -3091,6 +3157,7 @@ nsresult nsStandardURL::SetFileNameInternal(const nsACString& input) {
 }
 
 nsresult nsStandardURL::SetFileBaseNameInternal(const nsACString& input) {
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
   nsAutoCString extension;
   nsresult rv = GetFileExtension(extension);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -3106,6 +3173,7 @@ nsresult nsStandardURL::SetFileBaseNameInternal(const nsACString& input) {
 }
 
 nsresult nsStandardURL::SetFileExtensionInternal(const nsACString& input) {
+  auto onExitGuard = MakeScopeExit([&] { SanityCheck(); });
   nsAutoCString newFileName;
   nsresult rv = GetFileBaseName(newFileName);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -3293,6 +3361,10 @@ nsStandardURL::Read(nsIObjectInputStream* stream) {
 nsresult nsStandardURL::ReadPrivate(nsIObjectInputStream* stream) {
   MOZ_ASSERT(mDisplayHost.IsEmpty(), "Shouldn't have cached unicode host");
 
+  // If we exit early, make sure to clear the URL so we don't fail the sanity
+  // check in the destructor
+  auto clearOnExit = MakeScopeExit([&] { Clear(); });
+
   nsresult rv;
 
   uint32_t urlType;
@@ -3434,6 +3506,12 @@ nsresult nsStandardURL::ReadPrivate(nsIObjectInputStream* stream) {
   if (NS_FAILED(rv)) {
     return rv;
   }
+
+  if (!IsValid()) {
+    return NS_ERROR_MALFORMED_URI;
+  }
+
+  clearOnExit.release();
 
   return NS_OK;
 }
@@ -3626,6 +3704,10 @@ bool nsStandardURL::Deserialize(const URIParams& aParams) {
     return false;
   }
 
+  // If we exit early, make sure to clear the URL so we don't fail the sanity
+  // check in the destructor
+  auto clearOnExit = MakeScopeExit([&] { Clear(); });
+
   const StandardURLParams& params = aParams.get_StandardURLParams();
 
   mURLType = params.urlType();
@@ -3686,6 +3768,12 @@ bool nsStandardURL::Deserialize(const URIParams& aParams) {
   NS_ENSURE_TRUE(
       mRef.mLen == -1 || (mRef.mPos > 0 && mSpec.CharAt(mRef.mPos - 1) == '#'),
       false);
+
+  if (!IsValid()) {
+    return false;
+  }
+
+  clearOnExit.release();
 
   return true;
 }

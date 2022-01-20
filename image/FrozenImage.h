@@ -33,6 +33,8 @@ class FrozenImage : public ImageWrapper {
   virtual void IncrementAnimationConsumers() override;
   virtual void DecrementAnimationConsumers() override;
 
+  bool IsNonAnimated() const;
+
   NS_IMETHOD GetAnimated(bool* aAnimated) override;
   NS_IMETHOD_(already_AddRefed<SourceSurface>)
   GetFrame(uint32_t aWhichFrame, uint32_t aFlags) override;
@@ -52,7 +54,7 @@ class FrozenImage : public ImageWrapper {
   GetImageContainerAtSize(layers::LayerManager* aManager,
                           const gfx::IntSize& aSize,
                           const Maybe<SVGImageContext>& aSVGContext,
-                          uint32_t aFlags,
+                          const Maybe<ImageIntRegion>& aRegion, uint32_t aFlags,
                           layers::ImageContainer** aOutContainer) override;
   NS_IMETHOD_(ImgDrawResult)
   Draw(gfxContext* aContext, const nsIntSize& aSize, const ImageRegion& aRegion,

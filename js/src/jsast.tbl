@@ -65,8 +65,10 @@ ASTDEF(AST_DEBUGGER_STMT,         "DebuggerStatement",              "debuggerSta
 ASTDEF(AST_LET_STMT,              "LetStatement",                   "letStatement")
 ASTDEF(AST_IMPORT_DECL,           "ImportDeclaration",              "importDeclaration")
 ASTDEF(AST_IMPORT_SPEC,           "ImportSpecifier",                "importSpecifier")
+ASTDEF(AST_IMPORT_NAMESPACE_SPEC, "ImportNamespaceSpecifier",       "importNamespaceSpecifier")
 ASTDEF(AST_EXPORT_DECL,           "ExportDeclaration",              "exportDeclaration")
 ASTDEF(AST_EXPORT_SPEC,           "ExportSpecifier",                "exportSpecifier")
+ASTDEF(AST_EXPORT_NAMESPACE_SPEC, "ExportNamespaceSpecifier",       "exportNamespaceSpecifier")
 ASTDEF(AST_EXPORT_BATCH_SPEC,     "ExportBatchSpecifier",           "exportBatchSpecifier")
 
 ASTDEF(AST_CASE,                  "SwitchCase",                     "switchCase")
@@ -83,4 +85,5 @@ ASTDEF(AST_COMPUTED_NAME,         "ComputedName",                   "computedNam
 ASTDEF(AST_CLASS_STMT,            "ClassStatement",                 "classStatement")
 ASTDEF(AST_CLASS_METHOD,          "ClassMethod",                    "classMethod")
 ASTDEF(AST_CLASS_FIELD,           "ClassField",                     "classField")
+ASTDEF(AST_STATIC_CLASS_BLOCK,    "StaticClassBlock",               "staticClassBlock")
 /* AST_LIMIT = last + 1 */

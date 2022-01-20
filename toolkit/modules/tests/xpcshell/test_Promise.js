@@ -3,7 +3,6 @@
 "use strict";
 
 const { Promise } = ChromeUtils.import("resource://gre/modules/Promise.jsm");
-const { Task } = ChromeUtils.import("resource://testing-common/Task.jsm");
 const { PromiseTestUtils } = ChromeUtils.import(
   "resource://testing-common/PromiseTestUtils.jsm"
 );
@@ -589,19 +588,6 @@ tests.push(
   })
 );
 
-// Test that Promise.resolve throws when its argument is an async function.
-tests.push(
-  make_promise_test(function test_promise_resolve_throws_with_async_function(
-    test
-  ) {
-    Assert.throws(
-      () => Promise.resolve(Task.async(function*() {})), // eslint-disable-line mozilla/no-task
-      /Cannot resolve a promise with an async function/
-    );
-    return Promise.resolve();
-  })
-);
-
 // Test that the code after "then" is always executed before the callbacks
 tests.push(
   make_promise_test(function then_returns_before_callbacks(test) {
@@ -982,7 +968,10 @@ tests.push(
     let shouldExitNestedEventLoop = false;
 
     function event_loop() {
-      Services.tm.spinEventLoopUntil(() => shouldExitNestedEventLoop);
+      Services.tm.spinEventLoopUntil(
+        "Test(test_Promise.js:make_promise_test)",
+        () => shouldExitNestedEventLoop
+      );
     }
 
     // I wish there was a way to cancel xpcshell do_timeout()s

@@ -59,6 +59,20 @@ const watcherSpecPrototype = {
         breakpointList: RetVal("breakpoint-list"),
       },
     },
+
+    getTargetConfigurationActor: {
+      request: {},
+      response: {
+        configuration: RetVal("target-configuration"),
+      },
+    },
+
+    getThreadConfigurationActor: {
+      request: {},
+      response: {
+        configuration: RetVal("thread-configuration"),
+      },
+    },
   },
 
   events: {

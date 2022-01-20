@@ -13,7 +13,7 @@ use std::ptr::NonNull;
 use unic_langid::LanguageIdentifier;
 
 pub struct NumberFormat {
-    raw: NonNull<ffi::RawNumberFormatter>,
+    raw: Option<NonNull<ffi::RawNumberFormatter>>,
 }
 
 /**
@@ -28,7 +28,7 @@ impl NumberFormat {
         let loc: String = locale.to_string();
         Self {
             raw: unsafe {
-                NonNull::new_unchecked(ffi::FluentBuiltInNumberFormatterCreate(
+                NonNull::new(ffi::FluentBuiltInNumberFormatterCreate(
                     &loc.into(),
                     &options.into(),
                 ))
@@ -37,21 +37,32 @@ impl NumberFormat {
     }
 
     pub fn format(&self, input: f64) -> String {
-        unsafe {
-            let mut byte_count = 0;
-            let buffer =
-                ffi::FluentBuiltInNumberFormatterFormat(self.raw.as_ptr(), input, &mut byte_count);
-            if buffer.is_null() {
-                return String::new();
+        if let Some(raw) = self.raw {
+            unsafe {
+                let mut byte_count = 0;
+                let mut capacity = 0;
+                let buffer = ffi::FluentBuiltInNumberFormatterFormat(
+                    raw.as_ptr(),
+                    input,
+                    &mut byte_count,
+                    &mut capacity,
+                );
+                if buffer.is_null() {
+                    return String::new();
+                }
+                String::from_raw_parts(buffer, byte_count, capacity)
             }
-            String::from_raw_parts(buffer, byte_count as usize, byte_count as usize)
+        } else {
+            String::new()
         }
     }
 }
 
 impl Drop for NumberFormat {
     fn drop(&mut self) {
-        unsafe { ffi::FluentBuiltInNumberFormatterDestroy(self.raw.as_ptr()) };
+        if let Some(raw) = self.raw {
+            unsafe { ffi::FluentBuiltInNumberFormatterDestroy(raw.as_ptr()) };
+        }
     }
 }
 
@@ -412,7 +423,7 @@ impl FluentDateTime {
 }
 
 pub struct DateTimeFormat {
-    raw: NonNull<ffi::RawDateTimeFormatter>,
+    raw: Option<NonNull<ffi::RawDateTimeFormatter>>,
 }
 
 /**
@@ -428,7 +439,7 @@ impl DateTimeFormat {
         let loc: nsCString = locale.to_string().into();
         Self {
             raw: unsafe {
-                NonNull::new_unchecked(ffi::FluentBuiltInDateTimeFormatterCreate(
+                NonNull::new(ffi::FluentBuiltInDateTimeFormatterCreate(
                     &loc,
                     &(&options).into(),
                 ))
@@ -437,24 +448,27 @@ impl DateTimeFormat {
     }
 
     pub fn format(&self, input: f64) -> String {
-        unsafe {
-            let mut byte_count = 0;
-            let buffer = ffi::FluentBuiltInDateTimeFormatterFormat(
-                self.raw.as_ptr(),
-                input,
-                &mut byte_count,
-            );
-            if buffer.is_null() {
-                return String::new();
+        if let Some(raw) = self.raw {
+            unsafe {
+                let mut byte_count = 0;
+                let buffer =
+                    ffi::FluentBuiltInDateTimeFormatterFormat(raw.as_ptr(), input, &mut byte_count);
+                if buffer.is_null() {
+                    return String::new();
+                }
+                String::from_raw_parts(buffer, byte_count as usize, byte_count as usize)
             }
-            String::from_raw_parts(buffer, byte_count as usize, byte_count as usize)
+        } else {
+            String::new()
         }
     }
 }
 
 impl Drop for DateTimeFormat {
     fn drop(&mut self) {
-        unsafe { ffi::FluentBuiltInDateTimeFormatterDestroy(self.raw.as_ptr()) };
+        if let Some(raw) = self.raw {
+            unsafe { ffi::FluentBuiltInDateTimeFormatterDestroy(raw.as_ptr()) };
+        }
     }
 }
 

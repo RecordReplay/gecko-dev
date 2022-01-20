@@ -626,7 +626,7 @@ sndio_enumerate_devices(cubeb *context, cubeb_device_type type,
   device->preferred = CUBEB_DEVICE_PREF_ALL;
   device->format = CUBEB_DEVICE_FMT_S16NE;
   device->default_format = CUBEB_DEVICE_FMT_S16NE;
-  device->max_channels = 16;
+  device->max_channels = (type == CUBEB_DEVICE_TYPE_INPUT) ? 2 : 8;
   device->default_rate = 48000;
   device->min_rate = 4000;
   device->max_rate = 192000;
@@ -658,7 +658,6 @@ static struct cubeb_ops const sndio_ops = {
   .stream_destroy = sndio_stream_destroy,
   .stream_start = sndio_stream_start,
   .stream_stop = sndio_stream_stop,
-  .stream_reset_default_device = NULL,
   .stream_get_position = sndio_stream_get_position,
   .stream_get_latency = sndio_stream_get_latency,
   .stream_set_volume = sndio_stream_set_volume,

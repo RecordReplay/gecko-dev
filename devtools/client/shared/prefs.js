@@ -127,10 +127,19 @@ function map(
     );
   }
   if (prefType == "Json") {
-    map(self, cache, accessorName, "Char", prefsRoot, prefName, fallbackValue, {
-      in: JSON.parse,
-      out: JSON.stringify,
-    });
+    map(
+      self,
+      cache,
+      accessorName,
+      "String",
+      prefsRoot,
+      prefName,
+      fallbackValue,
+      {
+        in: JSON.parse,
+        out: JSON.stringify,
+      }
+    );
     return;
   }
   if (prefType == "Float") {
@@ -144,7 +153,9 @@ function map(
   Object.defineProperty(self, accessorName, {
     get: () =>
       serializer.in(get(cache, prefType, prefsRoot, prefName, fallbackValue)),
-    set: e => set(cache, prefType, prefsRoot, prefName, serializer.out(e)),
+    set: e => {
+      set(cache, prefType, prefsRoot, prefName, serializer.out(e));
+    },
   });
 }
 

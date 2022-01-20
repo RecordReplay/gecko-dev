@@ -14,6 +14,7 @@
 #include "mozilla/dom/cache/FileUtils.h"
 #include "mozilla/dom/cache/Manager.h"
 #include "mozilla/dom/cache/ManagerId.h"
+#include "mozilla/dom/quota/DirectoryLock.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozIStorageConnection.h"
 #include "nsIPrincipal.h"
@@ -230,14 +231,16 @@ void Context::QuotaInitRunnable::OpenDirectory() {
                         mState == STATE_OPEN_DIRECTORY);
   MOZ_DIAGNOSTIC_ASSERT(QuotaManager::Get());
 
-  // QuotaManager::OpenDirectory() will hold a reference to us as
-  // a listener.  We will then get DirectoryLockAcquired() on the owning
-  // thread when it is safe to access our storage directory.
+  RefPtr<DirectoryLock> directoryLock =
+      QuotaManager::Get()->CreateDirectoryLock(
+          PERSISTENCE_TYPE_DEFAULT, mQuotaInfo, quota::Client::DOMCACHE,
+          /* aExclusive */ false);
+
+  // DirectoryLock::Acquire() will hold a reference to us as a listener. We will
+  // then get DirectoryLockAcquired() on the owning thread when it is safe to
+  // access our storage directory.
   mState = STATE_WAIT_FOR_DIRECTORY_LOCK;
-  RefPtr<DirectoryLock> pendingDirectoryLock =
-      QuotaManager::Get()->OpenDirectory(PERSISTENCE_TYPE_DEFAULT, mQuotaInfo,
-                                         quota::Client::DOMCACHE,
-                                         /* aExclusive */ false, this);
+  directoryLock->Acquire(this);
 }
 
 void Context::QuotaInitRunnable::DirectoryLockAcquired(DirectoryLock* aLock) {
@@ -339,30 +342,31 @@ Context::QuotaInitRunnable::Run() {
     case STATE_GET_INFO: {
       MOZ_ASSERT(NS_IsMainThread());
 
-      if (mCanceled) {
-        resolver->Resolve(NS_ERROR_ABORT);
-        break;
+      auto res = [this]() -> Result<Ok, nsresult> {
+        if (mCanceled) {
+          return Err(NS_ERROR_ABORT);
+        }
+
+        nsCOMPtr<nsIPrincipal> principal = mManager->GetManagerId().Principal();
+
+        QM_TRY_UNWRAP(auto principalMetadata,
+                      QuotaManager::GetInfoFromPrincipal(principal));
+
+        static_cast<quota::OriginMetadata&>(mQuotaInfo) = {
+            std::move(principalMetadata), PERSISTENCE_TYPE_DEFAULT};
+
+        mState = STATE_CREATE_QUOTA_MANAGER;
+
+        MOZ_ALWAYS_SUCCEEDS(
+            mInitiatingEventTarget->Dispatch(this, nsIThread::DISPATCH_NORMAL));
+
+        return Ok{};
+      }();
+
+      if (res.isErr()) {
+        resolver->Resolve(res.inspectErr());
       }
 
-      nsCOMPtr<nsIPrincipal> principal = mManager->GetManagerId().Principal();
-      DebugOnly res =
-          QuotaManager::GetInfoFromPrincipal(principal)
-              .andThen([&self = *this](quota::QuotaInfo&& quotaInfo) {
-                static_cast<quota::QuotaInfo&>(self.mQuotaInfo) =
-                    std::move(quotaInfo);
-
-                self.mState = STATE_CREATE_QUOTA_MANAGER;
-                MOZ_ALWAYS_SUCCEEDS(self.mInitiatingEventTarget->Dispatch(
-                    &self, nsIThread::DISPATCH_NORMAL));
-
-                return Result<Ok, nsresult>{Ok{}};
-              })
-              .orElse([&resolver](const auto& res) {
-                resolver->Resolve(res);
-
-                return Result<Ok, nsresult>{Ok{}};
-              });
-      MOZ_ASSERT(res.inspect().isOk());
       break;
     }
     // ----------------------------------
@@ -407,15 +411,15 @@ Context::QuotaInitRunnable::Run() {
         QuotaManager* quotaManager = QuotaManager::Get();
         MOZ_DIAGNOSTIC_ASSERT(quotaManager);
 
-        CACHE_TRY(quotaManager->EnsureStorageIsInitialized());
+        QM_TRY(quotaManager->EnsureStorageIsInitialized());
 
-        CACHE_TRY(quotaManager->EnsureTemporaryStorageIsInitialized());
+        QM_TRY(quotaManager->EnsureTemporaryStorageIsInitialized());
 
-        CACHE_TRY_UNWRAP(mQuotaInfo.mDir,
-                         quotaManager
-                             ->EnsureTemporaryOriginIsInitialized(
-                                 PERSISTENCE_TYPE_DEFAULT, mQuotaInfo)
-                             .map([](const auto& res) { return res.first; }));
+        QM_TRY_UNWRAP(mQuotaInfo.mDir,
+                      quotaManager
+                          ->EnsureTemporaryOriginIsInitialized(
+                              PERSISTENCE_TYPE_DEFAULT, mQuotaInfo)
+                          .map([](const auto& res) { return res.first; }));
 
         mState = STATE_RUN_ON_TARGET;
 

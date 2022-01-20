@@ -34,11 +34,27 @@ def runtests(setup_test_harness, binary, parser, request):
               (relative to the `files` dir). At least one is required. The opts are
               used to override the default mochitest options, they are optional.
     """
-    setup_test_harness(*setup_args)
+    flavor = "plain"
+    if "flavor" in request.fixturenames:
+        flavor = request.getfixturevalue("flavor")
+
+    runFailures = ""
+    if "runFailures" in request.fixturenames:
+        runFailures = request.getfixturevalue("runFailures")
+
+    setup_test_harness(*setup_args, flavor=flavor)
+
     runtests = pytest.importorskip("runtests")
 
     mochitest_root = runtests.SCRIPT_DIR
-    test_root = os.path.join(mochitest_root, "tests", "selftests")
+    if flavor == "plain":
+        test_root = os.path.join(mochitest_root, "tests", "selftests")
+        manifest_name = "mochitest.ini"
+    elif flavor == "browser-chrome":
+        test_root = os.path.join(mochitest_root, "browser", "tests", "selftests")
+        manifest_name = "browser.ini"
+    else:
+        raise Exception(f"Invalid flavor {flavor}!")
 
     # pylint --py3k: W1648
     buf = six.StringIO()
@@ -46,10 +62,17 @@ def runtests(setup_test_harness, binary, parser, request):
     options.update(
         {
             "app": binary,
+            "flavor": flavor,
+            "runFailures": runFailures,
             "keep_open": False,
             "log_raw": [buf],
         }
     )
+
+    if runFailures == "selftest":
+        options["crashAsPass"] = True
+        options["timeoutAsPass"] = True
+        runtests.mozinfo.update({"selftest": True})
 
     if not os.path.isdir(runtests.build_obj.bindir):
         package_root = os.path.dirname(mochitest_root)
@@ -71,8 +94,9 @@ def runtests(setup_test_harness, binary, parser, request):
             "relpath": test,
             "path": os.path.join(test_root, test),
             # add a dummy manifest file because mochitest expects it
-            "manifest": os.path.join(test_root, "mochitest.ini"),
-            "manifest_relpath": "mochitest.ini",
+            "manifest": os.path.join(test_root, manifest_name),
+            "manifest_relpath": manifest_name,
+            "skip-if": runFailures,
         }
 
     def inner(*tests, **opts):

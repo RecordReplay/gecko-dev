@@ -11,6 +11,7 @@
 #include "mozilla/DefineEnum.h"
 #include "mozilla/EnumSet.h"
 #include "mozilla/EnumTypeTraits.h"
+#include "mozilla/dom/DecoderDoctorNotificationBinding.h"
 #include "nsString.h"
 
 namespace mozilla {
@@ -83,7 +84,7 @@ class DecoderDoctorDiagnostics {
   // Methods to record diagnostic information:
 
   MOZ_DEFINE_ENUM_CLASS_AT_CLASS_SCOPE(
-      Flags, (CanPlay, WMFFailedToLoad, FFmpegFailedToLoad,
+      Flags, (CanPlay, WMFFailedToLoad, FFmpegNotFound, LibAVCodecUnsupported,
               GMPPDMFailedToStartup, VideoNotSupported, AudioNotSupported));
   using FlagsSet = mozilla::EnumSet<Flags>;
 
@@ -96,9 +97,14 @@ class DecoderDoctorDiagnostics {
     return mFlags.contains(Flags::WMFFailedToLoad);
   }
 
-  void SetFFmpegFailedToLoad() { mFlags += Flags::FFmpegFailedToLoad; }
-  bool DidFFmpegFailToLoad() const {
-    return mFlags.contains(Flags::FFmpegFailedToLoad);
+  void SetFFmpegNotFound() { mFlags += Flags::FFmpegNotFound; }
+  bool DidFFmpegNotFound() const {
+    return mFlags.contains(Flags::FFmpegNotFound);
+  }
+
+  void SetLibAVCodecUnsupported() { mFlags += Flags::LibAVCodecUnsupported; }
+  bool IsLibAVCodecUnsupported() const {
+    return mFlags.contains(Flags::LibAVCodecUnsupported);
   }
 
   void SetGMPPDMFailedToStartup() { mFlags += Flags::GMPPDMFailedToStartup; }
@@ -124,6 +130,9 @@ class DecoderDoctorDiagnostics {
 
   const MediaResult& DecodeIssue() const { return mDecodeIssue; }
   const nsString& DecodeIssueMediaSrc() const { return mDecodeIssueMediaSrc; }
+
+  // This method is only used for testing.
+  void SetDecoderDoctorReportType(const dom::DecoderDoctorReportType& aType);
 
  private:
   // Currently-known type of diagnostics. Set from one of the 'Store...'

@@ -10,7 +10,7 @@
   <script type="application/javascript" src="popup_shared.js"></script>
 
 <tooltip id="thetooltip">
-  <label id="label" value="This is a tooltip"/>
+  <label id="label" class="tooltip-label" value="This is a tooltip"/>
 </tooltip>
 
 <box id="parent" tooltiptext="Box Tooltip" style="margin: 10px">
@@ -21,8 +21,6 @@
        specific sizing differences -->
   <button id="withtooltip" label="Tooltip Element" tooltip="thetooltip"
           class="plain" style="-moz-appearance: none; padding: 0;"/>
-  <iframe id="childframe" type="content" width="10" height="10"
-          src="http://sectest2.example.org:80/chrome/toolkit/content/tests/chrome/popup_childframe_node.xhtml"/>
 </box>
 
 <script class="testbody" type="application/javascript">
@@ -105,15 +103,6 @@ var popupTests = [
     var tooltip = document.getElementById("thetooltip");
     gExpectedTriggerNode = null;
     is(tooltip.triggerNode, gButton, testname + " triggerNode");
-    is(document.popupNode, null, testname + " document.popupNode");
-    is(document.tooltipNode, gButton, testname + " document.tooltipNode");
-
-    var child = $("childframe").contentDocument; 
-    var evt = child.createEvent("Event");
-    evt.initEvent("click", true, true);
-    child.documentElement.dispatchEvent(evt);
-    is(child.documentElement.getAttribute("data"), "xundefined",
-       "cannot get tooltipNode from other document");
 
     var buttonrect = document.getElementById("withtooltip").getBoundingClientRect();
     var rect = tooltip.getBoundingClientRect();
@@ -145,8 +134,6 @@ var popupTests = [
   result(testname) {
     var tooltip = document.getElementById("thetooltip");
     is(tooltip.triggerNode, null, testname + " triggerNode");
-    is(document.popupNode, null, testname + " document.popupNode");
-    is(document.tooltipNode, null, testname + " document.tooltipNode");
   }
 },
 {
@@ -312,6 +299,33 @@ var popupTests = [
   test() {
     document.getElementById("thetooltip").hidePopup();
   },
+},
+{
+  testname: "hover tooltip with long unbreakable text",
+  events: [ "popupshowing thetooltip", "popupshown thetooltip" ],
+  autohide: "thetooltip",
+  test() {
+    var label = document.getElementById("label");
+    label.removeAttribute("value");
+    label.textContent = "This_tooltip_contains_no_whitespace_and_is_longer_than_the_maximum_tooltip_width_It_should_wrap_onto_a_second_line_instead_of_being_truncated";
+    gButton = document.getElementById("withtooltip");
+    disableNonTestMouse(true);
+    synthesizeMouse(gButton, 2, 2, { type: "mouseover" });
+    synthesizeMouse(gButton, 4, 4, { type: "mousemove" });
+    synthesizeMouse(gButton, 6, 6, { type: "mousemove" });
+    disableNonTestMouse(false);
+  },
+  result(testname) {
+    var rect = document.getElementById("thetooltip").getBoundingClientRect();
+
+    var labelrect = document.getElementById("label").getBoundingClientRect();
+    ok(labelrect.right < rect.right, testname + " tooltip width");
+    ok(labelrect.bottom < rect.bottom, testname + " tooltip height");
+
+    // make sure that the tooltip contains more than one line of text, by checking
+    // that the original height has increased by at least 10 pixels
+    ok(gOriginalHeight + 10 < rect.bottom - rect.top, testname + " tooltip is wrapped");
+  }
 }
 ];
 

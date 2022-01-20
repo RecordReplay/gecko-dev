@@ -308,9 +308,7 @@ void LocalStorageCache::GetKeys(const LocalStorage* aStorage,
     return;
   }
 
-  for (auto iter = DataSet(aStorage).mKeys.Iter(); !iter.Done(); iter.Next()) {
-    aKeys.AppendElement(iter.Key());
-  }
+  AppendToArray(aKeys, DataSet(aStorage).mKeys.Keys());
 }
 
 nsresult LocalStorageCache::GetItem(const LocalStorage* aStorage,
@@ -366,7 +364,7 @@ nsresult LocalStorageCache::SetItem(const LocalStorage* aStorage,
     return NS_SUCCESS_DOM_NO_OPERATION;
   }
 
-  data.mKeys.Put(aKey, aValue);
+  data.mKeys.InsertOrUpdate(aKey, aValue);
 
   if (aSource != ContentMutation) {
     return NS_OK;
@@ -541,12 +539,10 @@ bool LocalStorageCache::LoadItem(const nsAString& aKey,
   }
 
   Data& data = mData[kDefaultSet];
-  if (data.mKeys.Get(aKey, nullptr)) {
-    return true;  // don't stop, just don't override
-  }
-
-  data.mKeys.Put(aKey, aValue);
-  data.mOriginQuotaUsage += aKey.Length() + aValue.Length();
+  data.mKeys.LookupOrInsertWith(aKey, [&] {
+    data.mOriginQuotaUsage += aKey.Length() + aValue.Length();
+    return aValue;
+  });
   return true;
 }
 

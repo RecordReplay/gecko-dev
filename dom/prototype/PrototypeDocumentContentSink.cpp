@@ -38,6 +38,7 @@
 #include "nsMimeTypes.h"
 #include "nsHtml5SVGLoadDispatcher.h"
 #include "nsTextNode.h"
+#include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/CDATASection.h"
 #include "mozilla/dom/Comment.h"
 #include "mozilla/dom/DocumentType.h"
@@ -48,8 +49,8 @@
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ProfilerLabels.h"
 
-#include "GeckoProfiler.h"
 #include "nsXULPrototypeCache.h"
 #include "nsXULElement.h"
 #include "mozilla/CycleCollectedJSContext.h"
@@ -120,7 +121,8 @@ nsresult PrototypeDocumentContentSink::Init(Document* aDoc, nsIURI* aURI,
 }
 
 NS_IMPL_CYCLE_COLLECTION(PrototypeDocumentContentSink, mParser, mDocumentURI,
-                         mDocument, mScriptLoader, mCurrentPrototype)
+                         mDocument, mScriptLoader, mContextStack,
+                         mCurrentPrototype)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(PrototypeDocumentContentSink)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIContentSink)
@@ -186,13 +188,27 @@ void PrototypeDocumentContentSink::ContinueInterruptedParsingAsync() {
 PrototypeDocumentContentSink::ContextStack::ContextStack()
     : mTop(nullptr), mDepth(0) {}
 
-PrototypeDocumentContentSink::ContextStack::~ContextStack() {
+PrototypeDocumentContentSink::ContextStack::~ContextStack() { Clear(); }
+
+void PrototypeDocumentContentSink::ContextStack::Traverse(
+    nsCycleCollectionTraversalCallback& aCallback, const char* aName,
+    uint32_t aFlags) {
+  aFlags |= CycleCollectionEdgeNameArrayFlag;
+  Entry* current = mTop;
+  while (current) {
+    CycleCollectionNoteChild(aCallback, current->mElement, aName, aFlags);
+    current = current->mNext;
+  }
+}
+
+void PrototypeDocumentContentSink::ContextStack::Clear() {
   while (mTop) {
     Entry* doomed = mTop;
     mTop = mTop->mNext;
     NS_IF_RELEASE(doomed->mElement);
     delete doomed;
   }
+  mDepth = 0;
 }
 
 nsresult PrototypeDocumentContentSink::ContextStack::Push(
@@ -308,8 +324,11 @@ nsresult PrototypeDocumentContentSink::PrepareToWalk() {
   rv = CreateElementFromPrototype(proto, getter_AddRefs(root), nullptr);
   if (NS_FAILED(rv)) return rv;
 
-  rv = mDocument->AppendChildTo(root, false);
-  if (NS_FAILED(rv)) return rv;
+  ErrorResult error;
+  mDocument->AppendChildTo(root, false, error);
+  if (error.Failed()) {
+    return error.StealNSResult();
+  }
 
   // TODO(emilio): Should this really notify? We don't notify of appends anyhow,
   // and we just appended the root so no styles can possibly depend on it.
@@ -349,9 +368,11 @@ nsresult PrototypeDocumentContentSink::CreateAndInsertPI(
     rv = InsertXMLStylesheetPI(aProtoPI, aParent, aBeforeThis, pi);
   } else {
     // No special processing, just add the PI to the document.
-    rv = aParent->InsertChildBefore(
-        node->AsContent(), aBeforeThis ? aBeforeThis->AsContent() : nullptr,
-        false);
+    ErrorResult error;
+    aParent->InsertChildBefore(node->AsContent(),
+                               aBeforeThis ? aBeforeThis->AsContent() : nullptr,
+                               false, error);
+    rv = error.StealNSResult();
   }
 
   return rv;
@@ -360,16 +381,17 @@ nsresult PrototypeDocumentContentSink::CreateAndInsertPI(
 nsresult PrototypeDocumentContentSink::InsertXMLStylesheetPI(
     const nsXULPrototypePI* aProtoPI, nsINode* aParent, nsINode* aBeforeThis,
     XMLStylesheetProcessingInstruction* aPINode) {
-  nsresult rv;
-
   // We want to be notified when the style sheet finishes loading, so
   // disable style sheet loading for now.
   aPINode->SetEnableUpdates(false);
   aPINode->OverrideBaseURI(mCurrentPrototype->GetURI());
 
-  rv = aParent->InsertChildBefore(
-      aPINode, aBeforeThis ? aBeforeThis->AsContent() : nullptr, false);
-  if (NS_FAILED(rv)) return rv;
+  ErrorResult rv;
+  aParent->InsertChildBefore(
+      aPINode, aBeforeThis ? aBeforeThis->AsContent() : nullptr, false, rv);
+  if (rv.Failed()) {
+    return rv.StealNSResult();
+  }
 
   aPINode->SetEnableUpdates(true);
 
@@ -507,8 +529,11 @@ nsresult PrototypeDocumentContentSink::ResumeWalkInternal() {
           if (NS_FAILED(rv)) return rv;
 
           // ...and append it to the content model.
-          rv = nodeToPushTo->AppendChildTo(child, false);
-          if (NS_FAILED(rv)) return rv;
+          ErrorResult error;
+          nodeToPushTo->AppendChildTo(child, false, error);
+          if (error.Failed()) {
+            return error.StealNSResult();
+          }
 
           if (nsIContent::RequiresDoneCreatingElement(
                   protoele->mNodeInfo->NamespaceID(),
@@ -556,8 +581,11 @@ nsresult PrototypeDocumentContentSink::ResumeWalkInternal() {
           auto* textproto = static_cast<nsXULPrototypeText*>(childproto);
           text->SetText(textproto->mValue, false);
 
-          rv = nodeToPushTo->AppendChildTo(text, false);
-          NS_ENSURE_SUCCESS(rv, rv);
+          ErrorResult error;
+          nodeToPushTo->AppendChildTo(text, false, error);
+          if (error.Failed()) {
+            return error.StealNSResult();
+          }
         } break;
 
         case nsXULPrototypeNode::eType_PI: {
@@ -853,6 +881,12 @@ PrototypeDocumentContentSink::OnStreamComplete(nsIStreamLoader* aLoader,
 NS_IMETHODIMP
 PrototypeDocumentContentSink::OnScriptCompileComplete(JSScript* aScript,
                                                       nsresult aStatus) {
+  // The mCurrentScriptProto may have been cleared out by another
+  // PrototypeDocumentContentSink.
+  if (!mCurrentScriptProto) {
+    return NS_OK;
+  }
+
   // When compiling off thread the script will not have been attached to the
   // script proto yet.
   if (aScript && !mCurrentScriptProto->HasScriptObject())
@@ -1071,7 +1105,7 @@ nsresult PrototypeDocumentContentSink::CreateElementFromPrototype(
 
   // FIXME(bug 1627474): Is this right if this is inside an <html:template>?
   if (result->HasAttr(kNameSpaceID_None, nsGkAtoms::datal10nid)) {
-    mDocument->mL10nProtoElements.Put(result, RefPtr{aPrototype});
+    mDocument->mL10nProtoElements.InsertOrUpdate(result, RefPtr{aPrototype});
     result->SetElementCreatedFromPrototypeAndHasUnmodifiedL10n();
   }
   result.forget(aResult);

@@ -9,7 +9,6 @@
 #include "builtin/streams/ReadableStreamOperations.h"
 
 #include "mozilla/Assertions.h"  // MOZ_ASSERT{,_IF}
-#include "mozilla/Attributes.h"  // MOZ_MUST_USE
 
 #include "builtin/Array.h"                // js::NewDenseFullyAllocatedArray
 #include "builtin/Promise.h"              // js::RejectPromiseWithPendingError
@@ -77,7 +76,7 @@ using JS::Value;
  * arguments: sourceAlgorithms, underlyingSource, pullMethod, cancelMethod.
  * See the comment on SetUpReadableStreamDefaultController.
  */
-static MOZ_MUST_USE ReadableStream* CreateReadableStream(
+[[nodiscard]] static ReadableStream* CreateReadableStream(
     JSContext* cx, SourceAlgorithms sourceAlgorithms,
     Handle<Value> underlyingSource,
     Handle<Value> pullMethod = UndefinedHandleValue,
@@ -125,7 +124,7 @@ static MOZ_MUST_USE ReadableStream* CreateReadableStream(
 /**
  * Streams spec, 3.4.5. InitializeReadableStream ( stream )
  */
-/* static */ MOZ_MUST_USE ReadableStream* ReadableStream::create(
+/* static */ [[nodiscard]] ReadableStream* ReadableStream::create(
     JSContext* cx, void* nsISupportsObject_alreadyAddreffed /* = nullptr */,
     Handle<JSObject*> proto /* = nullptr */) {
   // In the spec, InitializeReadableStream is always passed a newly created
@@ -214,13 +213,13 @@ static bool TeeReaderReadHandler(JSContext* cx, unsigned argc, Value* vp) {
     done = doneVal.toBoolean();
   }
 
-  // Step 12.c.v: If done is true,
   if (done) {
-    // Step 12.c.v.1: If canceled1 is false,
+    // Step 12.3 close steps
+
+    // Step 1: Set reading to false (done unconditionally above).
+    // Step 2: If canceled1 is false, perform
+    //         ! ReadableStreamDefaultControllerClose(branch1.[[controller]]).
     if (!unwrappedTeeState->canceled1()) {
-      // Step 12.c.v.1.a: Perform
-      //                  ! ReadableStreamDefaultControllerClose(
-      //                        branch1.[[readableStreamController]]).
       Rooted<ReadableStreamDefaultController*> unwrappedBranch1(
           cx, unwrappedTeeState->branch1());
       if (!ReadableStreamDefaultControllerClose(cx, unwrappedBranch1)) {
@@ -228,14 +227,24 @@ static bool TeeReaderReadHandler(JSContext* cx, unsigned argc, Value* vp) {
       }
     }
 
-    // Step 12.c.v.2: If canceled2 is false,
+    // Step 3: If canceled2 is false, perform
+    //         ! ReadableStreamDefaultControllerClose(branch2.[[controller]]).
     if (!unwrappedTeeState->canceled2()) {
-      // Step 12.c.v.2.a: Perform
-      //                  ! ReadableStreamDefaultControllerClose(
-      //                        branch2.[[readableStreamController]]).
       Rooted<ReadableStreamDefaultController*> unwrappedBranch2(
           cx, unwrappedTeeState->branch2());
       if (!ReadableStreamDefaultControllerClose(cx, unwrappedBranch2)) {
+        return false;
+      }
+    }
+
+    // Step 4: If canceled1 is false or canceled2 is false,
+    //         resolve cancelPromise with undefined.
+    if (!unwrappedTeeState->canceled1() || !unwrappedTeeState->canceled2()) {
+      Rooted<PromiseObject*> unwrappedCancelPromise(
+          cx, unwrappedTeeState->cancelPromise());
+      MOZ_ASSERT(unwrappedCancelPromise != nullptr);
+
+      if (!ResolveUnwrappedPromiseWithUndefined(cx, unwrappedCancelPromise)) {
         return false;
       }
     }
@@ -296,7 +305,7 @@ static bool TeeReaderReadHandler(JSContext* cx, unsigned argc, Value* vp) {
  * Streams spec, 3.4.10. ReadableStreamTee step 12, "Let pullAlgorithm be the
  * following steps:"
  */
-MOZ_MUST_USE PromiseObject* js::ReadableStreamTee_Pull(
+[[nodiscard]] PromiseObject* js::ReadableStreamTee_Pull(
     JSContext* cx, JS::Handle<TeeState*> unwrappedTeeState) {
   // Combine step 12.a/12.e far below, and handle steps 12.b-12.d after
   // inverting step 12.a's "If reading is true" condition.
@@ -378,7 +387,7 @@ MOZ_MUST_USE PromiseObject* js::ReadableStreamTee_Pull(
  * cancel1Algorithm/cancel2Algorithm be the following steps, taking a reason
  * argument:"
  */
-MOZ_MUST_USE JSObject* js::ReadableStreamTee_Cancel(
+[[nodiscard]] JSObject* js::ReadableStreamTee_Cancel(
     JSContext* cx, JS::Handle<TeeState*> unwrappedTeeState,
     JS::Handle<ReadableStreamDefaultController*> unwrappedBranch,
     JS::Handle<Value> reason) {
@@ -470,9 +479,11 @@ MOZ_MUST_USE JSObject* js::ReadableStreamTee_Cancel(
   return cancelPromise;
 }
 
-/**
- * Streams spec, 3.4.10. step 18:
- * Upon rejection of reader.[[closedPromise]] with reason r,
+/*
+ * https://streams.spec.whatwg.org/#readable-stream-tee
+ * ReadableStreamTee(stream, cloneForBranch2)
+ *
+ * Step 18: Upon rejection of reader.[[closedPromise]] with reason r,
  */
 static bool TeeReaderErroredHandler(JSContext* cx, unsigned argc,
                                     JS::Value* vp) {
@@ -483,20 +494,32 @@ static bool TeeReaderErroredHandler(JSContext* cx, unsigned argc,
 
   Rooted<ReadableStreamDefaultController*> unwrappedBranchController(cx);
 
-  // Step 18.a.i: Perform
+  // Step 18.1: Perform
   //               ! ReadableStreamDefaultControllerError(
-  //                   branch1.[[readableStreamController]], r).
+  //                   branch1.[[controller]], r).
   unwrappedBranchController = teeState->branch1();
   if (!ReadableStreamControllerError(cx, unwrappedBranchController, reason)) {
     return false;
   }
 
-  // Step a.ii: Perform
+  // Step 18.2: Perform
   //            ! ReadableStreamDefaultControllerError(
-  //                branch2.[[readableStreamController]], r).
+  //                branch2.[[controller]], r).
   unwrappedBranchController = teeState->branch2();
   if (!ReadableStreamControllerError(cx, unwrappedBranchController, reason)) {
     return false;
+  }
+
+  // Step 18.3: If canceled1 is false or canceled2 is false,
+  //            resolve cancelPromise with undefined.
+  if (!teeState->canceled1() || !teeState->canceled2()) {
+    Rooted<PromiseObject*> unwrappedCancelPromise(cx,
+                                                  teeState->cancelPromise());
+    MOZ_ASSERT(unwrappedCancelPromise != nullptr);
+
+    if (!ResolveUnwrappedPromiseWithUndefined(cx, unwrappedCancelPromise)) {
+      return false;
+    }
   }
 
   args.rval().setUndefined();
@@ -506,7 +529,7 @@ static bool TeeReaderErroredHandler(JSContext* cx, unsigned argc,
 /**
  * Streams spec, 3.4.10. ReadableStreamTee ( stream, cloneForBranch2 )
  */
-MOZ_MUST_USE bool js::ReadableStreamTee(
+[[nodiscard]] bool js::ReadableStreamTee(
     JSContext* cx, JS::Handle<ReadableStream*> unwrappedStream,
     bool cloneForBranch2, JS::MutableHandle<ReadableStream*> branch1Stream,
     JS::MutableHandle<ReadableStream*> branch2Stream) {

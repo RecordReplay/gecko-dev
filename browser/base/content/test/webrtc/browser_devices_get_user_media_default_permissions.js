@@ -43,11 +43,7 @@ var gTests = [
         "webRTC-shareMicrophone-notification-icon",
         "anchored to mic icon"
       );
-      checkDeviceSelectors(true);
-      let iconclass = PopupNotifications.panel.firstElementChild.getAttribute(
-        "iconclass"
-      );
-      ok(iconclass.includes("microphone-icon"), "panel using microphone icon");
+      checkDeviceSelectors(["microphone"]);
 
       let indicator = promiseIndicatorWindow();
       let observerPromise1 = expectObserverCalled(
@@ -98,7 +94,9 @@ var gTests = [
 
       await Promise.all(promises);
       await indicator;
-      await checkSharingUI({ video: true });
+      await checkSharingUI({ video: true }, undefined, undefined, {
+        video: { scope: SitePermissions.SCOPE_PERSISTENT },
+      });
       await closeStream();
 
       PermissionTestUtils.remove(browser.currentURI, "camera");
@@ -139,11 +137,7 @@ var gTests = [
         "webRTC-shareDevices-notification-icon",
         "anchored to device icon"
       );
-      checkDeviceSelectors(false, true);
-      let iconclass = PopupNotifications.panel.firstElementChild.getAttribute(
-        "iconclass"
-      );
-      ok(iconclass.includes("camera-icon"), "panel using devices icon");
+      checkDeviceSelectors(["camera"]);
 
       let indicator = promiseIndicatorWindow();
       let observerPromise1 = expectObserverCalled(
@@ -193,7 +187,9 @@ var gTests = [
 
       await Promise.all(promises);
       await indicator;
-      await checkSharingUI({ audio: true });
+      await checkSharingUI({ audio: true }, undefined, undefined, {
+        audio: { scope: SitePermissions.SCOPE_PERSISTENT },
+      });
       await closeStream();
 
       PermissionTestUtils.remove(browser.currentURI, "microphone");

@@ -8,7 +8,6 @@
 #define jit_VMFunctions_h
 
 #include "mozilla/Assertions.h"
-#include "mozilla/Attributes.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -30,8 +29,8 @@ class AbstractGeneratorObject;
 class GlobalObject;
 class InterpreterFrame;
 class LexicalScope;
+class ClassBodyScope;
 class NativeObject;
-class ObjectGroup;
 class PropertyName;
 class Shape;
 class TypedArrayObject;
@@ -392,8 +391,7 @@ JSString* StringFromCodePoint(JSContext* cx, int32_t codePoint);
 
 [[nodiscard]] bool InterruptCheck(JSContext* cx);
 
-JSObject* NewCallObject(JSContext* cx, HandleShape shape,
-                        HandleObjectGroup group);
+JSObject* NewCallObject(JSContext* cx, HandleShape shape);
 JSObject* NewStringObject(JSContext* cx, HandleString str);
 
 bool OperatorIn(JSContext* cx, HandleValue key, HandleObject obj, bool* out);
@@ -464,7 +462,7 @@ JSObject* CopyLexicalEnvironmentObject(JSContext* cx, HandleObject env,
                                        bool copySlots);
 
 JSObject* InitRestParameter(JSContext* cx, uint32_t length, Value* rest,
-                            HandleObject templateObj, HandleObject res);
+                            HandleObject res);
 
 [[nodiscard]] bool HandleDebugTrap(JSContext* cx, BaselineFrame* frame,
                                    uint8_t* retAddr);
@@ -477,6 +475,8 @@ JSObject* InitRestParameter(JSContext* cx, uint32_t length, Value* rest,
 
 [[nodiscard]] bool PushLexicalEnv(JSContext* cx, BaselineFrame* frame,
                                   Handle<LexicalScope*> scope);
+[[nodiscard]] bool PushClassBodyEnv(JSContext* cx, BaselineFrame* frame,
+                                    Handle<ClassBodyScope*> scope);
 [[nodiscard]] bool PopLexicalEnv(JSContext* cx, BaselineFrame* frame);
 [[nodiscard]] bool DebugLeaveThenPopLexicalEnv(JSContext* cx,
                                                BaselineFrame* frame,
@@ -512,11 +512,10 @@ void AssertValidStringPtr(JSContext* cx, JSString* str);
 void AssertValidSymbolPtr(JSContext* cx, JS::Symbol* sym);
 void AssertValidValue(JSContext* cx, Value* v);
 
-void MarkValueFromJit(JSRuntime* rt, Value* vp);
-void MarkStringFromJit(JSRuntime* rt, JSString** stringp);
-void MarkObjectFromJit(JSRuntime* rt, JSObject** objp);
-void MarkShapeFromJit(JSRuntime* rt, Shape** shapep);
-void MarkObjectGroupFromJit(JSRuntime* rt, ObjectGroup** groupp);
+void JitValuePreWriteBarrier(JSRuntime* rt, Value* vp);
+void JitStringPreWriteBarrier(JSRuntime* rt, JSString** stringp);
+void JitObjectPreWriteBarrier(JSRuntime* rt, JSObject** objp);
+void JitShapePreWriteBarrier(JSRuntime* rt, Shape** shapep);
 
 bool ObjectIsCallable(JSObject* obj);
 bool ObjectIsConstructor(JSObject* obj);
@@ -564,7 +563,8 @@ bool HasNativeElementPure(JSContext* cx, NativeObject* obj, int32_t index,
 bool SetNativeDataPropertyPure(JSContext* cx, JSObject* obj, PropertyName* name,
                                Value* val);
 
-bool ObjectHasGetterSetterPure(JSContext* cx, JSObject* obj, Shape* propShape);
+bool ObjectHasGetterSetterPure(JSContext* cx, JSObject* objArg, jsid id,
+                               GetterSetter* getterSetter);
 
 JSString* TypeOfObject(JSObject* obj, JSRuntime* rt);
 
@@ -628,10 +628,10 @@ bool StringBigIntCompare(JSContext* cx, HandleString x, HandleBigInt y,
 BigInt* BigIntAsIntN(JSContext* cx, HandleBigInt x, int32_t bits);
 BigInt* BigIntAsUintN(JSContext* cx, HandleBigInt x, int32_t bits);
 
-using AtomicsCompareExchangeFn = int32_t (*)(TypedArrayObject*, int32_t,
-                                             int32_t, int32_t);
+using AtomicsCompareExchangeFn = int32_t (*)(TypedArrayObject*, size_t, int32_t,
+                                             int32_t);
 
-using AtomicsReadWriteModifyFn = int32_t (*)(TypedArrayObject*, int32_t,
+using AtomicsReadWriteModifyFn = int32_t (*)(TypedArrayObject*, size_t,
                                              int32_t);
 
 AtomicsCompareExchangeFn AtomicsCompareExchange(Scalar::Type elementType);
@@ -641,6 +641,29 @@ AtomicsReadWriteModifyFn AtomicsSub(Scalar::Type elementType);
 AtomicsReadWriteModifyFn AtomicsAnd(Scalar::Type elementType);
 AtomicsReadWriteModifyFn AtomicsOr(Scalar::Type elementType);
 AtomicsReadWriteModifyFn AtomicsXor(Scalar::Type elementType);
+
+BigInt* AtomicsLoad64(JSContext* cx, TypedArrayObject* typedArray,
+                      size_t index);
+
+void AtomicsStore64(TypedArrayObject* typedArray, size_t index, BigInt* value);
+
+BigInt* AtomicsCompareExchange64(JSContext* cx, TypedArrayObject* typedArray,
+                                 size_t index, BigInt* expected,
+                                 BigInt* replacement);
+
+BigInt* AtomicsExchange64(JSContext* cx, TypedArrayObject* typedArray,
+                          size_t index, BigInt* value);
+
+BigInt* AtomicsAdd64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
+                     BigInt* value);
+BigInt* AtomicsAnd64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
+                     BigInt* value);
+BigInt* AtomicsOr64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
+                    BigInt* value);
+BigInt* AtomicsSub64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
+                     BigInt* value);
+BigInt* AtomicsXor64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
+                     BigInt* value);
 
 // Functions used when JS_MASM_VERBOSE is enabled.
 void AssumeUnreachable(const char* output);

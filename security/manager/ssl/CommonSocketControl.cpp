@@ -14,6 +14,7 @@
 #include "sslt.h"
 #include "ssl.h"
 #include "mozilla/net/SSLTokensCache.h"
+#include "nsICertOverrideService.h"
 
 using namespace mozilla;
 
@@ -122,6 +123,20 @@ CommonSocketControl::IsAcceptableForHost(const nsACString& hostname,
     return NS_OK;
   }
 
+  // Security checks can only be skipped when running xpcshell tests.
+  if (PR_GetEnv("XPCSHELL_TEST_PROFILE_DIR")) {
+    nsCOMPtr<nsICertOverrideService> overrideService =
+        do_GetService(NS_CERTOVERRIDE_CONTRACTID);
+    if (overrideService) {
+      bool securityCheckDisabled = false;
+      overrideService->GetSecurityCheckDisabled(&securityCheckDisabled);
+      if (securityCheckDisabled) {
+        *_retval = true;
+        return NS_OK;
+      }
+    }
+  }
+
   // If the cert has error bits (e.g. it is untrusted) then do not join.
   // The value of mHaveCertErrorBits is only reliable because we know that
   // the handshake completed.
@@ -187,34 +202,26 @@ CommonSocketControl::IsAcceptableForHost(const nsACString& hostname,
     return NS_OK;
   }
 
-  mozilla::psm::CertVerifier::PinningMode pinningMode =
-      mozilla::psm::PublicSSLState()->PinningMode();
-  if (pinningMode != mozilla::psm::CertVerifier::pinningDisabled) {
-    bool chainHasValidPins;
-    bool enforceTestMode =
-        (pinningMode == mozilla::psm::CertVerifier::pinningEnforceTestMode);
-
-    nsTArray<nsTArray<uint8_t>> rawDerCertList;
-    nsTArray<Span<const uint8_t>> derCertSpanList;
-    for (const auto& cert : mSucceededCertChain) {
-      rawDerCertList.EmplaceBack();
-      nsresult nsrv = cert->GetRawDER(rawDerCertList.LastElement());
-      if (NS_FAILED(nsrv)) {
-        return nsrv;
-      }
-      derCertSpanList.EmplaceBack(rawDerCertList.LastElement());
-    }
-
-    nsresult nsrv = mozilla::psm::PublicKeyPinningService::ChainHasValidPins(
-        derCertSpanList, PromiseFlatCString(hostname).BeginReading(), Now(),
-        enforceTestMode, GetOriginAttributes(lock), chainHasValidPins, nullptr);
+  nsTArray<nsTArray<uint8_t>> rawDerCertList;
+  nsTArray<Span<const uint8_t>> derCertSpanList;
+  for (const auto& cert : mSucceededCertChain) {
+    rawDerCertList.EmplaceBack();
+    nsresult nsrv = cert->GetRawDER(rawDerCertList.LastElement());
     if (NS_FAILED(nsrv)) {
-      return NS_OK;
+      return nsrv;
     }
+    derCertSpanList.EmplaceBack(rawDerCertList.LastElement());
+  }
+  bool chainHasValidPins;
+  nsresult nsrv = mozilla::psm::PublicKeyPinningService::ChainHasValidPins(
+      derCertSpanList, PromiseFlatCString(hostname).BeginReading(), Now(),
+      mIsBuiltCertChainRootBuiltInRoot, chainHasValidPins, nullptr);
+  if (NS_FAILED(nsrv)) {
+    return NS_OK;
+  }
 
-    if (!chainHasValidPins) {
-      return NS_OK;
-    }
+  if (!chainHasValidPins) {
+    return NS_OK;
   }
 
   // All tests pass

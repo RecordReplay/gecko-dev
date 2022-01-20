@@ -7,7 +7,10 @@
 #ifndef MOZILLA_GFX_RENDERCOMPOSITOR_NATIVE_H
 #define MOZILLA_GFX_RENDERCOMPOSITOR_NATIVE_H
 
+#include <unordered_map>
+
 #include "GLTypes.h"
+#include "mozilla/HashFunctions.h"
 #include "mozilla/layers/ScreenshotGrabber.h"
 #include "mozilla/webrender/RenderCompositor.h"
 #include "mozilla/TimeStamp.h"
@@ -41,7 +44,8 @@ class RenderCompositorNative : public RenderCompositor {
   LayoutDeviceIntSize GetBufferSize() override;
 
   bool ShouldUseNativeCompositor() override;
-  uint32_t GetMaxUpdateRects() override;
+
+  bool SurfaceOriginIsTopLeft() override { return true; }
 
   // Does the readback for the ShouldUseNativeCompositor() case.
   bool MaybeReadback(const gfx::IntSize& aReadbackSize,
@@ -67,7 +71,6 @@ class RenderCompositorNative : public RenderCompositor {
                   const wr::CompositorSurfaceTransform& aTransform,
                   wr::DeviceIntRect aClipRect,
                   wr::ImageRendering aImageRendering) override;
-  CompositorCapabilities GetCompositorCapabilities() override;
 
   struct TileKey {
     TileKey(int32_t aX, int32_t aY) : mX(aX), mY(aY) {}
@@ -77,8 +80,9 @@ class RenderCompositorNative : public RenderCompositor {
   };
 
  protected:
-  explicit RenderCompositorNative(RefPtr<widget::CompositorWidget>&& aWidget,
-                                  gl::GLContext* aGL = nullptr);
+  explicit RenderCompositorNative(
+      const RefPtr<widget::CompositorWidget>& aWidget,
+      gl::GLContext* aGL = nullptr);
 
   virtual bool InitDefaultFramebuffer(const gfx::IntRect& aBounds) = 0;
   virtual void DoSwap() = 0;
@@ -145,9 +149,9 @@ static inline bool operator==(const RenderCompositorNative::TileKey& a0,
 class RenderCompositorNativeOGL : public RenderCompositorNative {
  public:
   static UniquePtr<RenderCompositor> Create(
-      RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError);
+      const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError);
 
-  RenderCompositorNativeOGL(RefPtr<widget::CompositorWidget>&& aWidget,
+  RenderCompositorNativeOGL(const RefPtr<widget::CompositorWidget>& aWidget,
                             RefPtr<gl::GLContext>&& aGL);
   virtual ~RenderCompositorNativeOGL();
 
@@ -179,9 +183,9 @@ class RenderCompositorNativeOGL : public RenderCompositorNative {
 class RenderCompositorNativeSWGL : public RenderCompositorNative {
  public:
   static UniquePtr<RenderCompositor> Create(
-      RefPtr<widget::CompositorWidget>&& aWidget, nsACString& aError);
+      const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError);
 
-  RenderCompositorNativeSWGL(RefPtr<widget::CompositorWidget>&& aWidget,
+  RenderCompositorNativeSWGL(const RefPtr<widget::CompositorWidget>& aWidget,
                              void* aContext);
   virtual ~RenderCompositorNativeSWGL();
 

@@ -11,7 +11,7 @@
 #include "mozilla/dom/MediaMetadata.h"
 #include "mozilla/dom/MediaSessionBinding.h"
 #include "mozilla/Maybe.h"
-#include "nsDataHashtable.h"
+#include "nsTHashMap.h"
 #include "nsISupportsImpl.h"
 
 namespace mozilla {
@@ -212,6 +212,8 @@ class MediaStatusManager : public IMediaInfoUpdater {
   // media session and owns the audio focus within a tab.
   Maybe<uint64_t> mActiveMediaSessionContextId;
 
+  void ClearActiveMediaSessionContextIdIfNeeded();
+
  private:
   nsString GetDefaultFaviconURL() const;
   nsString GetDefaultTitle() const;
@@ -221,7 +223,6 @@ class MediaStatusManager : public IMediaInfoUpdater {
 
   bool IsSessionOwningAudioFocus(uint64_t aBrowsingContextId) const;
   void SetActiveMediaSessionContextId(uint64_t aBrowsingContextId);
-  void ClearActiveMediaSessionContextIdIfNeeded();
   void HandleAudioFocusOwnerChanged(Maybe<uint64_t>& aBrowsingContextId);
 
   void NotifySupportedKeysChangedIfNeeded(uint64_t aBrowsingContextId);
@@ -262,7 +263,7 @@ class MediaStatusManager : public IMediaInfoUpdater {
   MediaSessionPlaybackState mActualPlaybackState =
       MediaSessionPlaybackState::None;
 
-  nsDataHashtable<nsUint64HashKey, MediaSessionInfo> mMediaSessionInfoMap;
+  nsTHashMap<nsUint64HashKey, MediaSessionInfo> mMediaSessionInfoMap;
   MediaEventProducer<MediaMetadataBase> mMetadataChangedEvent;
   MediaEventProducer<nsTArray<MediaSessionAction>>
       mSupportedActionsChangedEvent;

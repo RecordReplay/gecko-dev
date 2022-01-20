@@ -2,7 +2,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-
 ## The title and aria-label attributes are used by screen readers to describe
 ## the Downloads Panel.
 
@@ -16,8 +15,8 @@ downloads-panel =
 # The style attribute has the width of the Downloads Panel expressed using
 # a CSS unit. The longest labels that should fit are usually those of
 # in-progress and blocked downloads.
-downloads-panel-list =
-  .style = width: 70ch
+downloads-panel-items =
+  .style = width: 35em
 
 downloads-cmd-pause =
     .label = Pause
@@ -66,7 +65,7 @@ downloads-cmd-show-description =
   }
 
 downloads-cmd-show-downloads =
-    .label = Show Downloads Folder
+    .label = Show downloads folder
 downloads-cmd-retry =
     .tooltiptext = Retry
 downloads-cmd-retry-panel =
@@ -127,6 +126,22 @@ downloads-show-more-information =
 downloads-open-file =
     .value = Open File
 
+## Displayed when the user clicked on a download in process. Indicates that the
+## downloading file will be opened after certain amount of time using an app
+## available in the system.
+## Variables:
+##   $hours (number) - Amount of hours left till the file opens.
+##   $seconds (number) - Amount of seconds left till the file opens.
+##   $minutes (number) - Amount of minutes till the file opens.
+
+downloading-file-opens-in-hours-and-minutes = Opening in { $hours }h { $minutes }m…
+downloading-file-opens-in-minutes = Opening in { $minutes }m…
+downloading-file-opens-in-minutes-and-seconds = Opening in { $minutes }m { $seconds }s…
+downloading-file-opens-in-seconds = Opening in { $seconds }s…
+downloading-file-opens-in-some-time = Opening when completed…
+
+##
+
 # Displayed when hovering a download which is able to be retried by users,
 # indicates that it's possible to download this file again.
 downloads-retry-download =
@@ -141,7 +156,7 @@ downloads-cancel-download =
 # downloads fit in the available space, or when there are no downloads in
 # the panel at all.
 downloads-history =
-    .label = Show All Downloads
+    .label = Show all downloads
     .accesskey = S
 
 # This string is shown at the top of the Download Details Panel, to indicate

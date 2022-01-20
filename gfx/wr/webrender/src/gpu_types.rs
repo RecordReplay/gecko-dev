@@ -2,8 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{AlphaType, PremultipliedColorF, YuvFormat, YuvColorSpace};
+use api::{AlphaType, PremultipliedColorF, YuvFormat, YuvRangedColorSpace};
 use api::units::*;
+use crate::composite::CompositeFeatures;
 use crate::segment::EdgeAaSegmentMask;
 use crate::spatial_tree::{SpatialTree, ROOT_SPATIAL_NODE_INDEX, SpatialNodeIndex};
 use crate::gpu_cache::{GpuCacheAddress, GpuDataRequest};
@@ -14,7 +15,7 @@ use crate::renderer::ShaderColorMode;
 use std::i32;
 use crate::util::{TransformedRectKind, MatrixHelpers};
 use crate::glyph_rasterizer::SubpixelDirection;
-use crate::util::pack_as_float;
+use crate::util::{ScaleOffset, pack_as_float};
 
 // Contains type that must exactly match the same structures declared in GLSL.
 
@@ -99,8 +100,7 @@ pub struct BlurInstance {
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct ScalingInstance {
     pub target_rect: DeviceRect,
-    pub source_rect: DeviceIntRect,
-    pub source_layer: i32,
+    pub source_rect: DeviceRect,
 }
 
 #[derive(Clone, Debug)]
@@ -231,15 +231,52 @@ pub struct PrimitiveInstanceData {
     data: [i32; 4],
 }
 
+/// Specifies that an RGB CompositeInstance's UV coordinates are normalized.
+const UV_TYPE_NORMALIZED: u32 = 0;
+/// Specifies that an RGB CompositeInstance's UV coordinates are not normalized.
+const UV_TYPE_UNNORMALIZED: u32 = 1;
+
+/// A GPU-friendly representation of the `ScaleOffset` type
+#[derive(Clone, Debug)]
+#[repr(C)]
+pub struct CompositorTransform {
+    pub sx: f32,
+    pub sy: f32,
+    pub tx: f32,
+    pub ty: f32,
+}
+
+impl CompositorTransform {
+    pub fn identity() -> Self {
+        CompositorTransform {
+            sx: 1.0,
+            sy: 1.0,
+            tx: 0.0,
+            ty: 0.0,
+        }
+    }
+}
+
+impl From<ScaleOffset> for CompositorTransform {
+    fn from(scale_offset: ScaleOffset) -> Self {
+        CompositorTransform {
+            sx: scale_offset.scale.x,
+            sy: scale_offset.scale.y,
+            tx: scale_offset.offset.x,
+            ty: scale_offset.offset.y,
+        }
+    }
+}
+
 /// Vertex format for picture cache composite shader.
 /// When editing the members, update desc::COMPOSITE
 /// so its list of instance_attributes matches:
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub struct CompositeInstance {
-    // Device space rectangle of surface
-    rect: DeviceRect,
-    // Device space clip rect for this surface
+    // Picture space destination rectangle of surface
+    rect: PictureRect,
+    // Device space destination clip rect for this surface
     clip_rect: DeviceRect,
     // Color for solid color tiles, white otherwise
     color: PremultipliedColorF,
@@ -249,22 +286,22 @@ pub struct CompositeInstance {
     color_space_or_uv_type: f32, // YuvColorSpace for YUV;
                                  // UV coordinate space for RGB
     yuv_format: f32,            // YuvFormat
-    yuv_rescale: f32,
+    yuv_channel_bit_depth: f32,
 
     // UV rectangles (pixel space) for color / yuv texture planes
     uv_rects: [TexelRect; 3],
 
-    // Texture array layers for color / yuv texture planes
-    texture_layers: [f32; 3],
+    // A 2d scale + offset transform for the rect
+    transform: CompositorTransform,
 }
 
 impl CompositeInstance {
     pub fn new(
-        rect: DeviceRect,
+        rect: PictureRect,
         clip_rect: DeviceRect,
         color: PremultipliedColorF,
-        layer: f32,
         z_id: ZBufferId,
+        transform: CompositorTransform,
     ) -> Self {
         let uv = TexelRect::new(0.0, 0.0, 1.0, 1.0);
         CompositeInstance {
@@ -272,44 +309,44 @@ impl CompositeInstance {
             clip_rect,
             color,
             z_id: z_id.0 as f32,
-            color_space_or_uv_type: pack_as_float(0u32),
+            color_space_or_uv_type: pack_as_float(UV_TYPE_NORMALIZED),
             yuv_format: 0.0,
-            yuv_rescale: 0.0,
-            texture_layers: [layer, 0.0, 0.0],
+            yuv_channel_bit_depth: 0.0,
             uv_rects: [uv, uv, uv],
+            transform,
         }
     }
 
     pub fn new_rgb(
-        rect: DeviceRect,
+        rect: PictureRect,
         clip_rect: DeviceRect,
         color: PremultipliedColorF,
-        layer: f32,
         z_id: ZBufferId,
         uv_rect: TexelRect,
+        transform: CompositorTransform,
     ) -> Self {
         CompositeInstance {
             rect,
             clip_rect,
             color,
             z_id: z_id.0 as f32,
-            color_space_or_uv_type: pack_as_float(1u32),
+            color_space_or_uv_type: pack_as_float(UV_TYPE_UNNORMALIZED),
             yuv_format: 0.0,
-            yuv_rescale: 0.0,
-            texture_layers: [layer, 0.0, 0.0],
+            yuv_channel_bit_depth: 0.0,
             uv_rects: [uv_rect, uv_rect, uv_rect],
+            transform,
         }
     }
 
     pub fn new_yuv(
-        rect: DeviceRect,
+        rect: PictureRect,
         clip_rect: DeviceRect,
         z_id: ZBufferId,
-        yuv_color_space: YuvColorSpace,
+        yuv_color_space: YuvRangedColorSpace,
         yuv_format: YuvFormat,
-        yuv_rescale: f32,
-        texture_layers: [f32; 3],
+        yuv_channel_bit_depth: u32,
         uv_rects: [TexelRect; 3],
+        transform: CompositorTransform,
     ) -> Self {
         CompositeInstance {
             rect,
@@ -318,10 +355,30 @@ impl CompositeInstance {
             z_id: z_id.0 as f32,
             color_space_or_uv_type: pack_as_float(yuv_color_space as u32),
             yuv_format: pack_as_float(yuv_format as u32),
-            yuv_rescale,
-            texture_layers,
+            yuv_channel_bit_depth: pack_as_float(yuv_channel_bit_depth),
             uv_rects,
+            transform,
         }
+    }
+
+    // Returns the CompositeFeatures that can be used to composite
+    // this RGB instance.
+    pub fn get_rgb_features(&self) -> CompositeFeatures {
+        let mut features = CompositeFeatures::empty();
+
+        // If the UV rect covers the entire texture then we can avoid UV clamping.
+        // We should try harder to determine this for unnormalized UVs too.
+        if self.color_space_or_uv_type == pack_as_float(UV_TYPE_NORMALIZED)
+            && self.uv_rects[0] == TexelRect::new(0.0, 0.0, 1.0, 1.0)
+        {
+            features |= CompositeFeatures::NO_UV_CLAMP;
+        }
+
+        if self.color == PremultipliedColorF::WHITE {
+            features |= CompositeFeatures::NO_COLOR_MODULATION
+        }
+
+        features
     }
 }
 
@@ -575,6 +632,14 @@ impl TransformPaletteId {
             TransformedRectKind::Complex
         }
     }
+
+    /// Override the kind of transform stored in this id. This can be useful in
+    /// cases where we don't want shaders to consider certain transforms axis-
+    /// aligned (i.e. perspective warp) even though we may still want to for the
+    /// general case.
+    pub fn override_transform_kind(&self, kind: TransformedRectKind) -> Self {
+        TransformPaletteId((self.0 & 0xFFFFFFu32) | ((kind as u32) << 24))
+    }
 }
 
 /// The GPU data payload for a transform palette entry.
@@ -750,8 +815,11 @@ pub enum UvRectKind {
 pub struct ImageSource {
     pub p0: DevicePoint,
     pub p1: DevicePoint,
-    pub texture_layer: f32,
-    pub user_data: [f32; 3],
+    // TODO: It appears that only glyphs make use of user_data (to store glyph offset
+    // and scale).
+    // Perhaps we should separate the two so we don't have to push an empty unused vec4
+    // for all image sources.
+    pub user_data: [f32; 4],
     pub uv_rect_kind: UvRectKind,
 }
 
@@ -765,12 +833,7 @@ impl ImageSource {
             self.p1.x,
             self.p1.y,
         ]);
-        request.push([
-            self.texture_layer,
-            self.user_data[0],
-            self.user_data[1],
-            self.user_data[2],
-        ]);
+        request.push(self.user_data);
 
         // If this is a polygon uv kind, then upload the four vertices.
         if let UvRectKind::Quad { top_left, top_right, bottom_left, bottom_right } = self.uv_rect_kind {

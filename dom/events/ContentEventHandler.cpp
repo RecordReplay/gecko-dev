@@ -29,7 +29,6 @@
 #include "nsFontMetrics.h"
 #include "nsFrameSelection.h"
 #include "nsIFrame.h"
-#include "nsIObjectFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsQueryObject.h"
@@ -925,15 +924,19 @@ nsresult ContentEventHandler::GenerateFlatFontRanges(
       if (aFontRanges.IsEmpty()) {
         MOZ_ASSERT(baseOffset == 0);
         FontRange* fontRange = AppendFontRange(aFontRanges, baseOffset);
-        nsIFrame* frame = content->GetPrimaryFrame();
-        if (frame) {
+        if (nsIFrame* frame = content->GetPrimaryFrame()) {
           const nsFont& font = frame->GetParent()->StyleFont()->mFont;
-          const FontFamilyList& fontList = font.fontlist;
-          const FontFamilyName& fontName =
-              fontList.IsEmpty() ? FontFamilyName(fontList.GetDefaultFontType())
-                                 : fontList.GetFontlist()->mNames[0];
+          const StyleFontFamilyList& fontList = font.family.families;
+          MOZ_ASSERT(!fontList.list.IsEmpty(), "Empty font family?");
+          const StyleSingleFontFamily* fontName =
+              fontList.list.IsEmpty() ? nullptr : &fontList.list.AsSpan()[0];
           nsAutoCString name;
-          fontName.AppendToString(name, false);
+          if (fontName) {
+            fontName->AppendToString(name, false);
+          } else if (fontList.fallback != StyleGenericFontFamily::None) {
+            StyleSingleFontFamily::Generic(fontList.fallback)
+                .AppendToString(name, false);
+          }
           AppendUTF8toUTF16(name, fontRange->mFontName);
           fontRange->mFontSize = frame->PresContext()->CSSPixelsToDevPixels(
               font.size.ToCSSPixels() *
@@ -967,9 +970,7 @@ nsresult ContentEventHandler::ExpandToClusterBoundary(nsIContent* aContent,
   nsIFrame* frame = nsFrameSelection::GetFrameForNodeOffset(
       aContent, int32_t(*aXPOffset), hint, &offsetInFrame);
   if (frame) {
-    int32_t startOffset, endOffset;
-    nsresult rv = frame->GetOffsets(startOffset, endOffset);
-    NS_ENSURE_SUCCESS(rv, rv);
+    auto [startOffset, endOffset] = frame->GetOffsets();
     if (*aXPOffset == static_cast<uint32_t>(startOffset) ||
         *aXPOffset == static_cast<uint32_t>(endOffset)) {
       return NS_OK;
@@ -1629,10 +1630,7 @@ ContentEventHandler::GetLastFrameInRangeForTextRect(const RawRange& aRawRange) {
         *nodePosition.Offset(NodePosition::OffsetFilter::kValidOffsets));
   }
 
-  int32_t start, end;
-  if (NS_WARN_IF(NS_FAILED(lastFrame->GetOffsets(start, end)))) {
-    return FrameAndNodeOffset();
-  }
+  int32_t start = lastFrame->GetOffsets().first;
 
   // If the start offset in the node is same as the computed offset in the
   // node and it's not 0, the frame shouldn't be added to the text rect.  So,

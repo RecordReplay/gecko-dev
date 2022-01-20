@@ -127,8 +127,6 @@
       }
 
       sendMessageToBrowser("FormAutofill:PreviewProfile");
-
-      return val;
     }
 
     get selected() {
@@ -268,7 +266,7 @@
     _onCollapse() {
       if (this.showWarningText) {
         let { FormAutofillParent } = ChromeUtils.import(
-          "resource://formautofill/FormAutofillParent.jsm"
+          "resource://autofill/FormAutofillParent.jsm"
         );
         FormAutofillParent.removeMessageObserver(this);
       }
@@ -310,7 +308,7 @@
 
       if (this.showWarningText) {
         let { FormAutofillParent } = ChromeUtils.import(
-          "resource://formautofill/FormAutofillParent.jsm"
+          "resource://autofill/FormAutofillParent.jsm"
         );
         FormAutofillParent.addMessageObserver(this);
         this.updateWarningNote();
@@ -346,8 +344,7 @@
     }
 
     set selected(val) {
-      // Make this item unselectable since we see this item as a pure message.
-      return false;
+      // This item is unselectable since we see this item as a pure message.
     }
 
     get selected() {

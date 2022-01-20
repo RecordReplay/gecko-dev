@@ -7,6 +7,7 @@
 include "mozilla/dom/DocShellMessageUtils.h";
 include "mozilla/dom/FeaturePolicyUtils.h";
 include "mozilla/dom/PermissionMessageUtils.h";
+include "mozilla/dom/SessionStoreMessageUtils.h";
 include "mozilla/ipc/TransportSecurityInfoUtils.h";
 include "mozilla/ipc/URIUtils.h";
 
@@ -17,21 +18,23 @@ include protocol PBrowserBridge;
 include DOMTypes;
 include ClientIPCTypes;
 include NeckoChannelParams;
+include SessionStoreTypes;
 
 include "mozilla/layers/LayersMessageUtils.h";
 
 using JSActorMessageKind from "mozilla/dom/JSActor.h";
 using mozilla::gfx::IntRect from "mozilla/gfx/Rect.h";
-using moveonly mozilla::gfx::PaintFragment from "mozilla/gfx/CrossProcessPaint.h";
+[MoveOnly] using mozilla::gfx::PaintFragment from "mozilla/gfx/CrossProcessPaint.h";
 using nscolor from "nsColor.h";
-using refcounted class nsDocShellLoadState from "nsDocShellLoadState.h";
+[RefCounted] using class nsDocShellLoadState from "nsDocShellLoadState.h";
 using mozilla::dom::XPCOMPermitUnloadAction from "nsIContentViewer.h";
 using mozilla::dom::TabId from "mozilla/dom/ipc/IdType.h";
 using mozilla::layers::LayersId from "mozilla/layers/LayersTypes.h";
-using refcounted class nsITransportSecurityInfo from "nsITransportSecurityInfo.h";
+[RefCounted] using class nsITransportSecurityInfo from "nsITransportSecurityInfo.h";
 using mozilla::UseCounters from "mozilla/UseCounter.h";
 using mozilla::dom::MaybeDiscardedWindowContext from "mozilla/dom/WindowContext.h";
-using refcounted mozilla::dom::FeaturePolicy from "mozilla/dom/FeaturePolicy.h";
+[RefCounted] using mozilla::dom::FeaturePolicy from "mozilla/dom/FeaturePolicy.h";
+[RefCounted] using mozilla::dom::SessionStoreRestoreData from "mozilla/dom/SessionStoreRestoreData.h";
 
 namespace mozilla {
 namespace dom {
@@ -90,6 +93,11 @@ child:
 
   async SetContainerFeaturePolicy(FeaturePolicy aContainerFeaturePolicy);
 
+  async RestoreDocShellState(DocShellRestoreState aState)
+    returns (bool success);
+
+  async RestoreTabContent(SessionStoreRestoreData aData) returns (bool success);
+
 both:
   async RawMessage(JSActorMessageMeta aMetadata, ClonedMessageData? aData,
                    ClonedMessageData? aStack);
@@ -110,7 +118,8 @@ parent:
   // principals collected. In order to be compatible with that API, we need to
   // update the document's principal. This is only allowed if the principals are
   // `equals` to each other.
-  async UpdateDocumentPrincipal(nsIPrincipal aPrincipal);
+  async UpdateDocumentPrincipal(nsIPrincipal aPrincipal,
+                                nsIPrincipal aStoragePrincipal);
 
   // Update document's `documentHasLoaded` bit in this WindowGlobal.
   async UpdateDocumentHasLoaded(bool aDocumentHasLoaded);
@@ -147,33 +156,6 @@ parent:
   // Send the ClientInfo associated with a top-level document load.
   async SetClientInfo(IPCClientInfo aClientInfo);
 
-  /**
-   * Inform the parent that the document will preload a resource if the
-   * network.preload pref is enabled.
-   */
-  async UpdateDocumentWouldPreloadResources();
-
-  /**
-   * Submit load event telemetry affiliated with whether or not the document
-   * tree preloaded any resources.
-   */
-  async SubmitLoadEventPreloadTelemetry(TimeStamp aNavigationStart,
-                                        TimeStamp aLoadStart,
-                                        TimeStamp aLoadEnd);
-
-
-  /**
-   * Submit Time-to-First-Interaction telemetry correlated with whether or not
-   * the document tree preloaded any resources.
-   */
-  async SubmitTimeToFirstInteractionPreloadTelemetry(uint32_t aMillis);
-
-  /**
-   * Submit Load Input Event Response time telemetry correlated with whether
-   * or not the document tree preloaded any resources.
-   */
-  async SubmitLoadInputEventResponsePreloadTelemetry(uint32_t aMillis);
-
   // Checks whether any "beforeunload" event listener in the document subtree
   // wants to block unload, and prompts the user to allow if any does (depending
   // on the action specified, using nsIContentViewer::PermitUnloadAction
@@ -195,6 +177,30 @@ parent:
    * the document previously passed into the ExpectPageUseCounters call.
    */
   async AccumulatePageUseCounters(UseCounters aUseCounters);
+
+  async RequestRestoreTabContent();
+
+  async UpdateSessionStore(FormData? aFormData, nsPoint? aScrollPosition,
+                           uint32_t aEpoch);
+
+  async ResetSessionStore(uint32_t aEpoch);
+
+  // Add the flags in aOnFlags to the current BFCache status and remove the
+  // flags in aOffFlags from the current BFCache status. See the BFCacheStatus
+  // enum for the valid flags.
+  async UpdateBFCacheStatus(uint16_t aOnFlags, uint16_t aOffFlags);
+
+  /**
+   * Used to notify the parent when there's a change in the number of requests
+   * in the loadgroup. If there are no requests this will be set to Nothing().
+   * If there is one request this will be set to the ID of that request, if it
+   * implements nsIIdentChannel. If there are more than one requests this will
+   * be set to 0.
+   * Note that some requests are ignored (eg. favicon loads).
+   */
+  async SetSingleChannelId(uint64_t? singleChannelId);
+
+  async SetDocumentDomain(nsIURI aDomain);
 
   async Destroy();
 };

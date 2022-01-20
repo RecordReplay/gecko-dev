@@ -471,6 +471,12 @@ interface nsILoadInfo : nsISupports
   const unsigned long HTTPS_ONLY_DO_NOT_LOG_TO_CONSOLE = (1 << 5);
 
   /**
+   * This flag indicates that the request should not be logged to the
+   * console.
+   */
+  const unsigned long HTTPS_ONLY_UPGRADED_HTTPS_FIRST = (1 << 6);
+
+  /**
    * Upgrade state of HTTPS-Only Mode. The flag HTTPS_ONLY_EXEMPT can get
    * set on requests that should be excempt from an upgrade.
    */
@@ -540,6 +546,11 @@ interface nsILoadInfo : nsISupports
    * be set during opening the channel.
    */
   [infallible] attribute boolean hasStoragePermission;
+
+  /**
+   * True if the load was triggered by a meta refresh.
+   */
+  [infallible] attribute boolean isMetaRefresh;
 
   /**
    * If forceInheritPrincipal is true, the data coming from the channel should
@@ -712,11 +723,6 @@ interface nsILoadInfo : nsISupports
    * If true, insecure redirects to a data: URI are allowed.
    */
   [infallible] attribute boolean allowInsecureRedirectToDataURI;
-
-   /**
-   * If true, CORS checks will be skipped.
-   */
-  [infallible] attribute boolean bypassCORSChecks;
 
   /**
    * If true, the content policy security check is excluded from web requests.
@@ -1247,6 +1253,12 @@ interface nsILoadInfo : nsISupports
   [infallible] attribute boolean allowListFutureDocumentsCreatedFromThisRedirectChain;
 
   /**
+   * Indicates that we need to check if we should apply the anti-tracking
+   * heuristic after the channel has been classified.
+   */
+  [infallible] attribute boolean needForCheckingAntiTrackingHeuristic;
+
+  /**
    * A snapshot of the nonce at load start time which is used for CSP
    * checks and only set for:
    *  * TYPE_SCRIPT and
@@ -1348,4 +1360,28 @@ interface nsILoadInfo : nsISupports
    */
   [infallible] attribute nsILoadInfo_CrossOriginEmbedderPolicy
         loadingEmbedderPolicy;
+
+  /**
+   * This attribute will be true if this is a load triggered by a media
+   * element.
+   */
+  [infallible] attribute boolean isMediaRequest;
+
+  /**
+   * This attribute will be true if this is a load triggered by a media
+   * element and it's an initial request.
+   */
+  [infallible] attribute boolean isMediaInitialRequest;
+
+  /**
+   * This attribute will be true if the fetch request is from object or embed
+   * elements
+   */
+  [infallible] attribute boolean isFromObjectOrEmbed;
+  
+  /**
+   * If this is non-null, this property holds the URI as it was before query
+   * stripping was performed.
+   */
+  attribute nsIURI unstrippedURI;
 };

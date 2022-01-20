@@ -150,7 +150,8 @@ nsresult WebrtcTCPSocket::Open(
     const nsCString& aHost, const int& aPort, const nsCString& aLocalAddress,
     const int& aLocalPort, bool aUseTls,
     const Maybe<net::WebrtcProxyConfig>& aProxyConfig) {
-  LOG(("WebrtcTCPSocket::Open %p\n", this));
+  LOG(("WebrtcTCPSocket::Open %p remote-host=%s local-addr=%s local-port=%d",
+       this, aHost.BeginReading(), aLocalAddress.BeginReading(), aLocalPort));
   MOZ_ASSERT(NS_IsMainThread());
 
   if (NS_WARN_IF(mOpened)) {
@@ -161,7 +162,16 @@ nsresult WebrtcTCPSocket::Open(
 
   mOpened = true;
   nsCString schemePrefix = aUseTls ? "https://"_ns : "http://"_ns;
-  nsCString spec = schemePrefix + aHost;
+  nsCString spec = schemePrefix;
+
+  bool ipv6Literal = aHost.Find(":") != kNotFound;
+  if (ipv6Literal) {
+    spec += "[";
+    spec += aHost;
+    spec += "]";
+  } else {
+    spec += aHost;
+  }
 
   nsresult rv = NS_MutateURI(NS_STANDARDURLMUTATOR_CONTRACTID)
                     .SetSpec(spec)
@@ -301,7 +311,7 @@ void WebrtcTCPSocket::OpenWithoutHttpProxy(nsIProxyInfo* aSocksProxyInfo) {
 
   nsCOMPtr<nsISocketTransportService> sts =
       do_GetService("@mozilla.org/network/socket-transport-service;1");
-  rv = sts->CreateTransport(socketTypes, host, port, aSocksProxyInfo,
+  rv = sts->CreateTransport(socketTypes, host, port, aSocksProxyInfo, nullptr,
                             getter_AddRefs(mTransport));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     CloseWithReason(rv);
@@ -329,6 +339,19 @@ void WebrtcTCPSocket::OpenWithoutHttpProxy(nsIProxyInfo* aSocksProxyInfo) {
     CloseWithReason(rv);
     return;
   }
+
+  // Binding to a V4 address is not sufficient to cause this socket to use
+  // V4, and the same goes for V6. So, we disable as needed here.
+  uint32_t flags = 0;
+  if (addr.raw.family == AF_INET) {
+    flags |= nsISocketTransport::DISABLE_IPV6;
+  } else if (addr.raw.family == AF_INET6) {
+    flags |= nsISocketTransport::DISABLE_IPV4;
+  } else {
+    MOZ_CRASH();
+  }
+
+  mTransport->SetConnectionFlags(flags);
 
   nsCOMPtr<nsIInputStream> socketIn;
   rv = mTransport->OpenInputStream(0, 0, 0, getter_AddRefs(socketIn));

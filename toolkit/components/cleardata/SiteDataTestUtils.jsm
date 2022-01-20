@@ -79,27 +79,45 @@ var SiteDataTestUtils = {
   },
 
   /**
-   * Adds a new cookie for the specified origin, with the specified contents.
-   * The cookie will be valid for one day.
-   *
-   * @param {String} origin - the origin of the site to add test data for
-   * @param {String} name [optional] - the cookie name
-   * @param {String} value [optional] - the cookie value
+   * Adds a new cookie for the specified origin or host + path + oa, with the
+   * specified contents. The cookie will be valid for one day.
+   * @param {object} options
+   * @param {String} [options.origin] - Origin of the site to add test data for.
+   * If set, overrides host, path and originAttributes args.
+   * @param {String} [options.host] - Host of the site to add test data for.
+   * @param {String} [options.path] - Path to set cookie for.
+   * @param {Object} [options.originAttributes] - Object of origin attributes to
+   * set cookie for.
+   * @param {String} [options.name] - Cookie name
+   * @param {String} [options.value] - Cookie value
    */
-  addToCookies(origin, name = "foo", value = "bar") {
-    let principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
-      origin
-    );
+  addToCookies({
+    origin,
+    host,
+    path = "path",
+    originAttributes = {},
+    name = "foo",
+    value = "bar",
+  }) {
+    if (origin) {
+      let principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
+        origin
+      );
+      host = principal.host;
+      path = principal.URI.pathQueryRef;
+      originAttributes = principal.originAttributes;
+    }
+
     Services.cookies.add(
-      principal.host,
-      principal.URI.pathQueryRef,
+      host,
+      path,
       name,
       value,
       false,
       false,
       false,
-      Date.now() + 24000 * 60 * 60,
-      principal.originAttributes,
+      Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+      originAttributes,
       Ci.nsICookie.SAMESITE_NONE,
       Ci.nsICookie.SCHEME_UNSET
     );
@@ -243,11 +261,9 @@ var SiteDataTestUtils = {
   _getCacheStorage(where, lci) {
     switch (where) {
       case "disk":
-        return Services.cache2.diskCacheStorage(lci, false);
+        return Services.cache2.diskCacheStorage(lci);
       case "memory":
         return Services.cache2.memoryCacheStorage(lci);
-      case "appcache":
-        return Services.cache2.appCacheStorage(lci, null);
       case "pin":
         return Services.cache2.pinningCacheStorage(lci);
     }
@@ -265,11 +281,11 @@ var SiteDataTestUtils = {
       CacheListener.prototype = {
         QueryInterface: ChromeUtils.generateQI(["nsICacheEntryOpenCallback"]),
 
-        onCacheEntryCheck(entry, appCache) {
+        onCacheEntryCheck(entry) {
           return Ci.nsICacheEntryOpenCallback.ENTRY_WANTED;
         },
 
-        onCacheEntryAvailable(entry, isnew, appCache, status) {
+        onCacheEntryAvailable(entry, isnew, status) {
           resolve();
         },
       };

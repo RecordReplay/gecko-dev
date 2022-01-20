@@ -22,7 +22,7 @@ option(env="CBINDGEN", nargs=1, when=cbindgen_is_needed, help="Path to cbindgen"
 def check_cbindgen_version(cbindgen, fatal=False):
     log.debug("trying cbindgen: %s" % cbindgen)
 
-    cbindgen_min_version = Version("0.16.0")
+    cbindgen_min_version = Version("0.19.0")
 
     # cbindgen x.y.z
     version = Version(check_cmd_output(cbindgen, "--version").strip().split(" ")[1])
@@ -47,9 +47,16 @@ def check_cbindgen_version(cbindgen, fatal=False):
     )
 
 
+# Similar behavior to what check_prog does.
+has_cbindgen_input = depends("CBINDGEN", when=cbindgen_is_needed)(lambda x: x)
+bootstrap_cbindgen = depends(cbindgen_is_needed, has_cbindgen_input)(
+    lambda n, i: n and not i
+)
+
+
 @depends_if(
     "CBINDGEN",
-    bootstrap_search_path("cbindgen"),
+    bootstrap_search_path("cbindgen", when=bootstrap_cbindgen),
     rust_search_path,
     when=cbindgen_is_needed,
 )
@@ -114,11 +121,11 @@ option(
     cxx_compiler,
     clang_search_path,
     target,
-    macos_sdk,
+    target_sysroot_flags,
 )
 @checking("for clang for bindgen", lambda x: x.path if x else "not found")
 def bindgen_clang_compiler(
-    clang_path, c_compiler, cxx_compiler, clang_search_path, target, macos_sdk
+    clang_path, c_compiler, cxx_compiler, clang_search_path, target, sysroot_flags
 ):
     # When the target compiler is clang, use that, including flags.
     if cxx_compiler.type == "clang":
@@ -155,7 +162,7 @@ def bindgen_clang_compiler(
     # Hack before bug 1617793: if the compiler is clang-cl, hack the target
     if cxx_compiler.type == "clang-cl":
         target = split_triplet("%s-pc-windows-msvc" % target.raw_cpu, allow_msvc=True)
-    flags = prepare_flags(target, macos_sdk)
+    flags = list(sysroot_flags or ())
     info = check_compiler([clang_path] + flags, "C++", target)
     return namespace(
         path=clang_path,

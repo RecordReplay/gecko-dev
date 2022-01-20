@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include shared,ellipse
+#include shared,rect,ellipse
 
 // For edges, the colors are the same. For corners, these
 // are the colors of each edge making up the corner.
@@ -158,8 +158,9 @@ void main(void) {
     int style1 = (aFlags >> 16) & 0xff;
     int clip_mode = (aFlags >> 24) & 0x0f;
 
+    vec2 size = aRect.zw - aRect.xy;
     vec2 outer_scale = get_outer_corner_scale(segment);
-    vec2 outer = outer_scale * aRect.zw;
+    vec2 outer = outer_scale * size;
     vec2 clip_sign = 1.0 - 2.0 * outer_scale;
 
     // Set some flags used by the FS to determine the
@@ -202,7 +203,7 @@ void main(void) {
         clip_mode
     );
     vPartialWidths = vec4(aWidths / 3.0, aWidths / 2.0);
-    vPos = aRect.zw * aPosition.xy;
+    vPos = size * aPosition.xy;
 
     vec4[2] color0 = get_colors_for_side(aColor0, style0);
     vColor00 = color0[0];
@@ -228,7 +229,7 @@ void main(void) {
             radius += 2.0;
 
         vPos = vClipParams1.xy + radius * (2.0 * aPosition.xy - 1.0);
-        vPos = clamp(vPos, vec2(0.0), aRect.zw);
+        vPos = clamp(vPos, vec2(0.0), size);
     } else if (clip_mode == CLIP_DASH_CORNER) {
         vec2 center = (aClipParams1.xy + aClipParams2.xy) * 0.5;
         // This is a gross approximation which works out because dashes don't have

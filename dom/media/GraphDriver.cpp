@@ -516,11 +516,6 @@ AudioCallbackDriver::AudioCallbackDriver(
   mInitShutdownThread->SetIdleThreadTimeout(
       PR_MillisecondsToInterval(kIdleThreadTimeoutMs));
 
-#if defined(XP_WIN)
-  if (XRE_IsContentProcess()) {
-    audio::AudioNotificationReceiver::Register(this);
-  }
-#endif
   if (aAudioInputType == AudioInputType::Voice) {
     LOG(LogLevel::Debug, ("VOICE."));
     mInputDevicePreference = CUBEB_DEVICE_PREF_VOICE;
@@ -533,11 +528,6 @@ AudioCallbackDriver::AudioCallbackDriver(
 }
 
 AudioCallbackDriver::~AudioCallbackDriver() {
-#if defined(XP_WIN)
-  if (XRE_IsContentProcess()) {
-    audio::AudioNotificationReceiver::Unregister(this);
-  }
-#endif
   if (mInputDevicePreference == CUBEB_DEVICE_PREF_VOICE) {
     CubebUtils::SetInCommunication(false);
   }
@@ -779,6 +769,7 @@ bool AudioCallbackDriver::StartStream() {
 void AudioCallbackDriver::Stop() {
   TRACE();
   MOZ_ASSERT(OnCubebOperationThread());
+  cubeb_stream_register_device_changed_callback(mAudioStream, nullptr);
   if (cubeb_stream_stop(mAudioStream) != CUBEB_OK) {
     NS_WARNING("Could not stop cubeb stream for MTG.");
   }
@@ -801,19 +792,11 @@ void AudioCallbackDriver::Shutdown() {
   LOG(LogLevel::Debug,
       ("%p: Releasing audio driver off main thread (GraphDriver::Shutdown).",
        Graph()));
+
   RefPtr<AsyncCubebTask> releaseEvent =
       new AsyncCubebTask(this, AsyncCubebOperation::SHUTDOWN);
   releaseEvent->Dispatch(NS_DISPATCH_SYNC);
 }
-
-#if defined(XP_WIN)
-void AudioCallbackDriver::ResetDefaultDevice() {
-  TRACE();
-  if (cubeb_stream_reset_default_device(mAudioStream) != CUBEB_OK) {
-    NS_WARNING("Could not reset cubeb stream to default output device.");
-  }
-}
-#endif
 
 /* static */
 long AudioCallbackDriver::DataCallback_s(cubeb_stream* aStream, void* aUser,

@@ -13,6 +13,7 @@
 #include "SVGCircleElement.h"
 #include "SVGEllipseElement.h"
 #include "SVGGeometryProperty.h"
+#include "SVGPathElement.h"
 #include "SVGRectElement.h"
 #include "mozilla/dom/DOMPointBinding.h"
 #include "mozilla/dom/SVGLengthBinding.h"
@@ -63,8 +64,8 @@ bool SVGGeometryElement::AttributeDefinesGeometry(const nsAtom* aName) {
 
   // Check for SVGAnimatedLength attribute
   LengthAttributesInfo info = GetLengthInfo();
-  for (uint32_t i = 0; i < info.mLengthCount; i++) {
-    if (aName == info.mLengthInfo[i].mName) {
+  for (uint32_t i = 0; i < info.mCount; i++) {
+    if (aName == info.mInfos[i].mName) {
       return true;
     }
   }
@@ -76,8 +77,8 @@ bool SVGGeometryElement::GeometryDependsOnCoordCtx() {
   // Check the SVGAnimatedLength attribute
   LengthAttributesInfo info =
       const_cast<SVGGeometryElement*>(this)->GetLengthInfo();
-  for (uint32_t i = 0; i < info.mLengthCount; i++) {
-    if (info.mLengths[i].GetSpecifiedUnitType() ==
+  for (uint32_t i = 0; i < info.mCount; i++) {
+    if (info.mValues[i].GetSpecifiedUnitType() ==
         SVGLength_Binding::SVG_LENGTHTYPE_PERCENTAGE) {
       return true;
     }
@@ -142,6 +143,10 @@ bool SVGGeometryElement::IsGeometryChangedViaCSS(
   }
   if (name == nsGkAtoms::ellipse) {
     return SVGEllipseElement::IsLengthChangedViaCSS(aNewStyle, aOldStyle);
+  }
+  if (name == nsGkAtoms::path) {
+    return StaticPrefs::layout_css_d_property_enabled() &&
+           SVGPathElement::IsDPropertyChangedViaCSS(aNewStyle, aOldStyle);
   }
   return false;
 }

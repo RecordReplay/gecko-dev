@@ -145,7 +145,9 @@ flatpak build-finish build                                      \
         --socket=pcsc                                           \
         --require-version=0.11.1                                \
         --persist=.mozilla                                      \
+        --filesystem=xdg-run/pipewire-0                         \
         --filesystem=xdg-download:rw                            \
+        --filesystem=/etc/firefox/policies                      \
         --device=all                                            \
         --talk-name=org.freedesktop.FileManager1                \
         --system-talk-name=org.freedesktop.NetworkManager       \
@@ -155,6 +157,7 @@ flatpak build-finish build                                      \
         --talk-name="org.gtk.vfs.*"                             \
         --talk-name=org.freedesktop.Notifications               \
         --own-name="org.mpris.MediaPlayer2.firefox.*"           \
+        --own-name="org.mozilla.firefox.*"                      \
         --command=firefox
 
 flatpak build-export --disable-sandbox --no-update-summary --exclude='/share/runtime/langpack/*/*' repo build "$FLATPAK_BRANCH"

@@ -12,7 +12,7 @@ PER_INSTANCE in float aDevicePixelScale;
 PER_INSTANCE in ivec2 aTransformIds;
 
 struct ClipMaskInstanceCommon {
-    RectWithSize sub_rect;
+    RectWithEndpoint sub_rect;
     vec2 task_origin;
     vec2 screen_origin;
     float device_pixel_scale;
@@ -23,7 +23,7 @@ struct ClipMaskInstanceCommon {
 ClipMaskInstanceCommon fetch_clip_item_common() {
     ClipMaskInstanceCommon cmi;
 
-    cmi.sub_rect = RectWithSize(aClipDeviceArea.xy, aClipDeviceArea.zw);
+    cmi.sub_rect = RectWithEndpoint(aClipDeviceArea.xy, aClipDeviceArea.zw);
     cmi.task_origin = aClipOrigins.xy;
     cmi.screen_origin = aClipOrigins.zw;
     cmi.device_pixel_scale = aDevicePixelScale;
@@ -35,25 +35,19 @@ ClipMaskInstanceCommon fetch_clip_item_common() {
 
 struct ClipVertexInfo {
     vec4 local_pos;
-    RectWithSize clipped_local_rect;
+    RectWithEndpoint clipped_local_rect;
 };
-
-RectWithSize intersect_rect(RectWithSize a, RectWithSize b) {
-    vec4 p = clamp(vec4(a.p0, a.p0 + a.size), b.p0.xyxy, b.p0.xyxy + b.size.xyxy);
-    return RectWithSize(p.xy, max(vec2(0.0), p.zw - p.xy));
-}
-
 
 // The transformed vertex function that always covers the whole clip area,
 // which is the intersection of all clip instances of a given primitive
-ClipVertexInfo write_clip_tile_vertex(RectWithSize local_clip_rect,
+ClipVertexInfo write_clip_tile_vertex(RectWithEndpoint local_clip_rect,
                                       Transform prim_transform,
                                       Transform clip_transform,
-                                      RectWithSize sub_rect,
+                                      RectWithEndpoint sub_rect,
                                       vec2 task_origin,
                                       vec2 screen_origin,
                                       float device_pixel_scale) {
-    vec2 device_pos = screen_origin + sub_rect.p0 + aPosition.xy * sub_rect.size;
+    vec2 device_pos = screen_origin + mix(sub_rect.p0, sub_rect.p1, aPosition.xy);
     vec2 world_pos = device_pos / device_pixel_scale;
 
     vec4 pos = prim_transform.m * vec4(world_pos, 0.0, 1.0);
@@ -70,14 +64,14 @@ ClipVertexInfo write_clip_tile_vertex(RectWithSize local_clip_rect,
     // We can therefore simplify this when the clip construction is rewritten
     // to only affect the areas touched by a clip.
     vec4 vertex_pos = vec4(
-        task_origin + sub_rect.p0 + aPosition.xy * sub_rect.size,
+        task_origin + mix(sub_rect.p0, sub_rect.p1, aPosition.xy),
         0.0,
         1.0
     );
 
     gl_Position = uTransform * vertex_pos;
 
-    init_transform_vs(vec4(local_clip_rect.p0, local_clip_rect.p0 + local_clip_rect.size));
+    init_transform_vs(vec4(local_clip_rect.p0, local_clip_rect.p1));
 
     ClipVertexInfo vi = ClipVertexInfo(local_pos, local_clip_rect);
     return vi;

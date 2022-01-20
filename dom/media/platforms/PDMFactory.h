@@ -9,6 +9,7 @@
 
 #  include <utility>
 #  include "DecoderDoctorDiagnostics.h"
+#  include "PlatformDecoderModule.h"
 #  include "mozilla/AlreadyAddRefed.h"
 #  include "mozilla/EnumSet.h"
 #  include "mozilla/MozPromise.h"
@@ -23,20 +24,14 @@ namespace mozilla {
 class CDMProxy;
 class MediaDataDecoder;
 class MediaResult;
-class PDMFactoryImpl;
-class PlatformDecoderModule;
 template <typename T>
 struct MaxEnumValue;
-template <class T>
-class StaticAutoPtr;
 struct CreateDecoderParams;
 struct CreateDecoderParamsForAsync;
 struct SupportDecoderParams;
 enum class RemoteDecodeIn;
 
-using PDMCreateDecoderPromise =
-    MozPromise<RefPtr<MediaDataDecoder>, MediaResult,
-               /* IsExclusive = */ true>;
+using PDMCreateDecoderPromise = PlatformDecoderModule::CreateDecoderPromise;
 
 class PDMFactory final {
  public:
@@ -49,8 +44,7 @@ class PDMFactory final {
   RefPtr<PDMCreateDecoderPromise> CreateDecoder(
       const CreateDecoderParams& aParams);
 
-  bool SupportsMimeType(const nsACString& aMimeType,
-                        DecoderDoctorDiagnostics* aDiagnostics) const;
+  bool SupportsMimeType(const nsACString& aMimeType) const;
   bool Supports(const SupportDecoderParams& aParams,
                 DecoderDoctorDiagnostics* aDiagnostics) const;
 
@@ -91,6 +85,8 @@ class PDMFactory final {
   static bool SupportsMimeType(const nsACString& aMimeType,
                                const MediaCodecsSupported& aSupported);
 
+  static bool AllDecodersAreRemote();
+
  private:
   virtual ~PDMFactory();
 
@@ -117,7 +113,8 @@ class PDMFactory final {
   RefPtr<PDMCreateDecoderPromise> CreateDecoderWithPDM(
       PlatformDecoderModule* aPDM, const CreateDecoderParams& aParams);
   RefPtr<PDMCreateDecoderPromise> CheckAndMaybeCreateDecoder(
-      CreateDecoderParamsForAsync&& aParams, uint32_t aIndex);
+      CreateDecoderParamsForAsync&& aParams, uint32_t aIndex,
+      Maybe<MediaResult> aEarlierError = Nothing());
 
   nsTArray<RefPtr<PlatformDecoderModule>> mCurrentPDMs;
   RefPtr<PlatformDecoderModule> mEMEPDM;
@@ -127,10 +124,6 @@ class PDMFactory final {
 
   friend class RemoteVideoDecoderParent;
   static void EnsureInit();
-  template <class T>
-  friend class StaticAutoPtr;
-  static StaticAutoPtr<PDMFactoryImpl> sInstance;
-  static StaticMutex sMonitor;
 };
 
 // Used for IPDL serialization.
