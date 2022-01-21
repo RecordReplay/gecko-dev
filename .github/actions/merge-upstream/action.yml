@@ -1,0 +1,6 @@
+name: "Merge Upstream"
+description: "Merge from upstream branch"
+
+runs:
+  using: "node12"
+  main: "./main.js"
