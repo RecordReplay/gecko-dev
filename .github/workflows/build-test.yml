@@ -1,6 +1,11 @@
 name: Build/Test
 on:
   workflow_dispatch:
+    inputs:
+      clobber:
+        description: "Whether to build the browser from scratch"
+        type: boolean
+        required: false
   push:
     branches:
       - webreplay-release
@@ -27,3 +32,4 @@ jobs:
           BUILD_TEST_HOSTNAME: build-server.replay.prod
           BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
+          INPUT_CLOBBER: ${{ github.event.inputs.clobber }}
