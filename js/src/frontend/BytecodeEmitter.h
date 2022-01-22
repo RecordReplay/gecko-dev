@@ -1051,7 +1051,9 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   }
 
   [[nodiscard]] bool emitInstrumentation(InstrumentationKind kind) {
-    if (shouldEmitInstrumentation()) {
+    if (shouldEmitInstrumentation() &&
+        mozilla::recordreplay::IsReplaying() &&
+        !gDisableInstrumentationOpcodes) {
       return emitInstrumentationSlow(kind, std::function<bool(uint32_t)>());
     }
     return true;

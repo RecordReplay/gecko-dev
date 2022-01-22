@@ -1192,6 +1192,9 @@ extern bool gRecordDataBuffers;
 extern bool gForceEmitExecutionProgress;
 extern bool gForceEmitRecordReplayAsserts;
 
+// Set to disable emitting record/replay instrumentation opcodes.
+extern bool gDisableInstrumentationOpcodes;
+
 // Current value of the record/replay progress counter.
 extern uint64_t* ExecutionProgressCounter();
 extern void AdvanceExecutionProgressCounter();

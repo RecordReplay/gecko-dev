@@ -253,6 +253,9 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
   if (getenv("RECORD_REPLAY_FORCE_RECORD_JS_ASSERTS")) {
     gForceEmitRecordReplayAsserts = true;
   }
+  if (getenv("RECORD_REPLAY_DISABLE_INSTRUMENTATION_OPCODES")) {
+    gDisableInstrumentationOpcodes = true;
+  }
   if (mozilla::recordreplay::IsReplaying()) {
     mozilla::recordreplay::SetExecutionProgressCallback(SetExecutionProgressTargetCallback);
   }

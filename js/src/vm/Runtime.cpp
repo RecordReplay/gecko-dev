@@ -914,6 +914,7 @@ void JSRuntime::ensureRealmIsRecordingAllocations(
 
 bool js::gForceEmitExecutionProgress;
 bool js::gForceEmitRecordReplayAsserts;
+bool js::gDisableInstrumentationOpcodes;
 
 uint64_t* js::ExecutionProgressCounter() {
   static uint64_t dummyCounter;
