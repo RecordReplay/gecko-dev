@@ -77,6 +77,7 @@ static void (*gAttach)(const char* dispatch, const char* buildId);
 static void (*gSetApiKey)(const char* apiKey);
 static void (*gProfileExecution)(const char* path);
 static void (*gAddProfilerEvent)(const char* event, const char* json);
+static void (*gLabelExecutableCode)(const void* aCode, size_t aSize, const char* aKind);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
 static void (*gRecordReplayBytes)(const char* why, void* buf, size_t size);
@@ -369,6 +370,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplaySetApiKey", gSetApiKey);
   LoadSymbol("RecordReplayProfileExecution", gProfileExecution);
   LoadSymbol("RecordReplayAddProfilerEvent", gAddProfilerEvent);
+  LoadSymbol("RecordReplayLabelExecutableCode", gLabelExecutableCode);
   LoadSymbol("RecordReplayRecordCommandLineArguments",
              gRecordCommandLineArguments);
   LoadSymbol("RecordReplayValue", gRecordReplayValue);
@@ -722,8 +724,14 @@ MOZ_EXPORT void RecordReplayInterface_InternalPopCrashNote() {
 }
 
 MOZ_EXPORT void RecordReplayInterface_AddProfilerEvent(const char* aEvent, const char* aJSON) {
-  if (gIsProfiling) {
+  if (gIsRecordingOrReplaying || gIsProfiling) {
     gAddProfilerEvent(aEvent, aJSON);
+  }
+}
+
+MOZ_EXPORT void RecordReplayInterface_LabelExecutableCode(const void* aCode, size_t aSize, const char* aKind) {
+  if (gIsRecordingOrReplaying || gIsProfiling) {
+    gLabelExecutableCode(aCode, aSize, aKind);
   }
 }
 

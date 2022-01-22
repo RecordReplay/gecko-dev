@@ -325,6 +325,9 @@ MFBT_API void ReportUnsupportedFeature(const char* aFeature, int aIssueNumber);
 // is generating.
 MFBT_API void AddProfilerEvent(const char* aEvent, const char* aJSON);
 
+// Label executable code with a kind. Used while profiling.
+MFBT_API void LabelExecutableCode(const void* aCode, size_t aSize, const char* aKind);
+
 ///////////////////////////////////////////////////////////////////////////////
 // Gecko interface
 ///////////////////////////////////////////////////////////////////////////////
