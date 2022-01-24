@@ -203,27 +203,29 @@ StackingContext.prototype = {
     }
     clipBounds = Object.assign({}, clipBounds);
     const elem = new StackingContextElement(node, parentElem, offset, style, clipBounds);
-    if (style.getPropertyValue("overflow-x") != "visible") {
-      const clipBounds2 = elem.getFormattingContextElement().raw.getBoundingClientRect();
-      elem.clipBounds.left =
-        clipBounds.left !== undefined
-          ? Math.max(clipBounds2.left, clipBounds.left)
-          : clipBounds2.left;
-      elem.clipBounds.right =
-        clipBounds.right !== undefined
-          ? Math.min(clipBounds2.right, clipBounds.right)
-          : clipBounds2.right;
-    }
-    if (style.getPropertyValue("overflow-y") != "visible") {
-      const clipBounds2 = elem.getFormattingContextElement().raw.getBoundingClientRect();
-      elem.clipBounds.top =
-        clipBounds.top !== undefined
-          ? Math.max(clipBounds2.top, clipBounds.top)
-          : clipBounds2.top;
-      elem.clipBounds.bottom =
-        clipBounds.bottom !== undefined
-          ? Math.min(clipBounds2.bottom, clipBounds.bottom)
-          : clipBounds2.bottom;
+    if (!["HTML", "BODY"].includes(elem.raw.tagName)) {
+      if (style.getPropertyValue("overflow-x") != "visible") {
+        const clipBounds2 = elem.getFormattingContextElement().raw.getBoundingClientRect();
+        elem.clipBounds.left =
+          clipBounds.left !== undefined
+            ? Math.max(clipBounds2.left, clipBounds.left)
+            : clipBounds2.left;
+        elem.clipBounds.right =
+          clipBounds.right !== undefined
+            ? Math.min(clipBounds2.right, clipBounds.right)
+            : clipBounds2.right;
+      }
+      if (style.getPropertyValue("overflow-y") != "visible") {
+        const clipBounds2 = elem.getFormattingContextElement().raw.getBoundingClientRect();
+        elem.clipBounds.top =
+          clipBounds.top !== undefined
+            ? Math.max(clipBounds2.top, clipBounds.top)
+            : clipBounds2.top;
+        elem.clipBounds.bottom =
+          clipBounds.bottom !== undefined
+            ? Math.min(clipBounds2.bottom, clipBounds.bottom)
+            : clipBounds2.bottom;
+      }
     }
 
     // Create a new stacking context for any iframes.
