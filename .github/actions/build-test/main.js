@@ -7,6 +7,10 @@ const {
   newTask,
 } = require("../utils");
 
+const clobberInput = process.env.INPUT_CLOBBER;
+console.log("Clobber", clobberInput);
+const clobber = clobberInput == "true";
+
 const replayRevision = getLatestReplayRevision();
 const unmergedPlaywrightRevision = getLatestPlaywrightRevision();
 
@@ -39,6 +43,7 @@ function platformTasks(platform) {
       kind: "BuildRuntime",
       runtime: "gecko",
       revision: replayRevision,
+      clobber,
     },
     platform
   );
@@ -64,6 +69,7 @@ function platformTasks(platform) {
         kind: "BuildRuntime",
         runtime: "geckoPlaywright",
         revision: "",
+        clobber,
       },
       platform,
       [mergePlaywrightTask]
