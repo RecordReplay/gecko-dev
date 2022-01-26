@@ -8,15 +8,15 @@ const {
 const branchName = getBranchName(process.env.GITHUB_REF);
 console.log("BranchName", branchName);
 
-if (branchName.includes("webreplay-release")) {
-  console.error("Use build/test action for release branch");
-  process.exit(1);
-}
-
 const replayRevision = getLatestReplayRevision();
 
 const driverRevision = process.env.INPUT_DRIVER_REVISION;
 console.log("DriverRevision", driverRevision);
+
+if (branchName.includes("webreplay-release") && !driverRevision) {
+  console.error("Use build/test action for release branch");
+  process.exit(1);
+}
 
 const clobberInput = process.env.INPUT_CLOBBER;
 console.log("Clobber", clobberInput);
