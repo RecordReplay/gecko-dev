@@ -140,15 +140,6 @@ static inline void RecordReplayBytes(const char* aWhy, void* aData, size_t aSize
 // see 'Unrecordable Executions' in the URL above.
 static inline void InvalidateRecording(const char* aWhy);
 
-// Prevent a JS object from ever being collected while recording or replaying.
-// GC behavior is non-deterministic when recording/replaying, and preventing
-// an object from being collected ensures that finalizers which might interact
-// with the recording will not execute. "aJSObj" must be a JSObject* pointer,
-// but we can't include JSObject's header here and we can't forward-declare it
-// due to some peculiarities with the compiler's visibility attributes.
-// See https://bugzilla.mozilla.org/show_bug.cgi?id=1426865
-static inline void HoldJSObject(void* aJSObj);
-
 // Some devtools operations which execute in a replaying process can cause code
 // to run which did not run while recording. For example, the JS debugger can
 // run arbitrary JS while paused at a breakpoint, by doing an eval(). In such
@@ -268,7 +259,7 @@ MFBT_API bool ShouldUpdateProgressCounter(const char* aURL);
 // Define a RecordReplayControl object on the specified global object, with
 // methods specialized to the current recording/replaying process
 // kind. "aCx" must be a JSContext* pointer, and "aObj" must be a JSObject*
-// pointer, as with HoldJSObject above.
+// pointer.
 MFBT_API bool DefineRecordReplayControlObject(void* aCx, void* aObj);
 
 // Notify the infrastructure that some URL which contains JavaScript or CSS is
@@ -411,7 +402,6 @@ MOZ_MAKE_RECORD_REPLAY_WRAPPER(HasDivergedFromRecording, bool, false, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER(IsUnhandledDivergenceAllowed, bool, true, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(InvalidateRecording, (const char* aWhy),
                                     (aWhy))
-MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(HoldJSObject, (void* aJSObj), (aJSObj))
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(RecordReplayAssertBytes,
                                     (const void* aData, size_t aSize),
                                     (aData, aSize))

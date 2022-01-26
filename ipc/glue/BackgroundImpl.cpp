@@ -628,12 +628,7 @@ class ChildImpl::SendInitBackgroundRunnable final : public DiscardableRunnable {
         mMutex("SendInitBackgroundRunnable::mMutex"),
         mSentInitBackground(false),
         mSendInitfunc(std::move(aFunc)),
-        mThreadLocalIndex(aThreadLocalIndex) {
-    // Avoid problematic calls in the destructor.
-    if (recordreplay::IsRecordingOrReplaying()) {
-      AddRef();
-    }
-  }
+        mThreadLocalIndex(aThreadLocalIndex) {}
 
   ~SendInitBackgroundRunnable() = default;
 

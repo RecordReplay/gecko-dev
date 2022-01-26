@@ -103,11 +103,6 @@ HttpChannelChild::HttpChannelChild()
   // We require that the parent cookie service actor exists while
   // processing HTTP responses.
   RefPtr<CookieServiceChild> cookieService = CookieServiceChild::GetSingleton();
-
-  if (recordreplay::IsRecordingOrReplaying()) {
-    // Leak this to avoid non-deterministic behavior in destructor.
-    AddRef();
-  }
 }
 
 HttpChannelChild::~HttpChannelChild() {
@@ -158,13 +153,8 @@ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
     return;
   }
 
-  if (recordreplay::IsRecordingOrReplaying()) {
-    // Leak reference to avoid non-deterministic dtor call.
-    (void)mRedirectChannelChild.forget().take();
-  } else {
-    NS_ReleaseOnMainThread("HttpChannelChild::mRedirectChannelChild",
-                           mRedirectChannelChild.forget());
-  }
+  NS_ReleaseOnMainThread("HttpChannelChild::mRedirectChannelChild",
+                         mRedirectChannelChild.forget());
 }
 //-----------------------------------------------------------------------------
 // HttpChannelChild::nsISupports

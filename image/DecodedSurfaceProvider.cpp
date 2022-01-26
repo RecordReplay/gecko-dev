@@ -27,12 +27,6 @@ DecodedSurfaceProvider::DecodedSurfaceProvider(NotNull<RasterImage*> aImage,
              "Use MetadataDecodingTask for metadata decodes");
   MOZ_ASSERT(mDecoder->IsFirstFrameDecode(),
              "Use AnimationSurfaceProvider for animation decodes");
-
-  // Leak when recording/replaying to avoid non-deterministic behavior
-  // in destructor.
-  if (recordreplay::IsRecordingOrReplaying()) {
-    AddRef();
-  }
 }
 
 DecodedSurfaceProvider::~DecodedSurfaceProvider() { DropImageReference(); }

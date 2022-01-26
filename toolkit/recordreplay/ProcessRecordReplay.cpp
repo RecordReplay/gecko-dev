@@ -538,14 +538,6 @@ MOZ_EXPORT void* RecordReplayInterface_InternalIndexThing(size_t aId) {
   return gIdPointer(aId);
 }
 
-MOZ_EXPORT void RecordReplayInterface_InternalHoldJSObject(void* aJSObj) {
-  if (aJSObj) {
-    JSContext* cx = dom::danger::GetJSContext();
-    JS::PersistentRootedObject* root = new JS::PersistentRootedObject(cx);
-    *root = static_cast<JSObject*>(aJSObj);
-  }
-}
-
 MOZ_EXPORT void RecordReplayInterface_InternalAssertScriptedCaller(const char* aWhy) {
   JS::AutoFilename filename;
   unsigned lineno;

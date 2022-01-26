@@ -1520,12 +1520,7 @@ class nsHtml5RequestStopper : public Runnable {
 
  public:
   explicit nsHtml5RequestStopper(nsHtml5StreamParser* aStreamParser)
-      : Runnable("nsHtml5RequestStopper"), mStreamParser(aStreamParser) {
-    if (recordreplay::IsRecordingOrReplaying()) {
-      // Leak to avoid non-deterministic behavior in destructor.
-      AddRef();
-    }
-  }
+      : Runnable("nsHtml5RequestStopper"), mStreamParser(aStreamParser) {}
 
   NS_IMETHOD Run() override {
     mozilla::MutexAutoLock autoLock(mStreamParser->mTokenizerMutex);

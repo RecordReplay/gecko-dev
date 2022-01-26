@@ -52,13 +52,6 @@ WorkerRunnable::WorkerRunnable(WorkerPrivate* aWorkerPrivate,
       mCanceled(0),
       mCallingCancelWithinRun(false) {
   MOZ_ASSERT(aWorkerPrivate);
-
-  // An assortment of worker runnables have destructors that can perform
-  // recorded events at non-deterministic points. Leak these runnables to
-  // avoid these.
-  if (recordreplay::IsRecordingOrReplaying()) {
-    AddRef();
-  }
 }
 
 bool WorkerRunnable::IsDebuggerRunnable() const { return false; }
