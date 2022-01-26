@@ -22,11 +22,23 @@ const clobberInput = process.env.INPUT_CLOBBER;
 console.log("Clobber", clobberInput);
 const clobber = clobberInput == "true";
 
+const slotInput = process.env.INPUT_SLOT;
+console.log("Slot", slotInput);
+const slot = slotInput ? +slotInput : undefined;
+
 const buildOnly = !!process.env.BUILD_ONLY;
 console.log("BuildOnly", buildOnly);
 
+let requestName = `Gecko Build/Test Branch ${branchName} ${replayRevision}`;
+if (driverRevision) {
+  requestName += ` driver ${driverRevision}`;
+}
+if (slot) {
+  requestName += ` slot ${slot}`;
+}
+
 sendBuildTestRequest({
-  name: `Gecko Build/Test Branch ${branchName} ${replayRevision}${driverRevision ? " driver " + driverRevision : ""}`,
+  name: requestName,
   tasks: [
     ...platformTasks("macOS"),
     ...platformTasks("linux"),
@@ -42,6 +54,7 @@ function platformTasks(platform) {
       runtime: "gecko",
       revision: replayRevision,
       branch: branchName,
+      branchSlot: slot,
       driverRevision,
       clobber,
     },
