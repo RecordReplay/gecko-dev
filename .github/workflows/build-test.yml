@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       clobber:
-        description: "Whether to build the browser from scratch"
+        description: "Build the browser from scratch"
         type: boolean
         required: false
   push:
