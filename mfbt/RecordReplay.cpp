@@ -93,7 +93,9 @@ namespace recordreplay {
   Macro(ExecutionProgressReached, (), ())                                      \
   Macro(InternalAssertScriptedCaller, (const char* aWhy), (aWhy))              \
   Macro(InternalNotifyActivity, (), ())                                        \
-  Macro(AddProfilerEvent, (const char* aEvent, const char* aJSON), (aEvent, aJSON))
+  Macro(AddProfilerEvent, (const char* aEvent, const char* aJSON), (aEvent, aJSON)) \
+  Macro(LabelExecutableCode, (const void* aCode, size_t aSize, const char* aKind), \
+        (aCode, aSize, aKind))
 // clang-format on
 
 #define DECLARE_SYMBOL(aName, aReturnType, aFormals, _) \

@@ -74,6 +74,25 @@ void* ExecutablePool::alloc(size_t n, CodeKind kind) {
   void* result = m_freePtr;
   m_freePtr += n;
 
+  if (mozilla::recordreplay::IsRecordingOrReplaying() || mozilla::recordreplay::IsProfiling()) {
+    const char* kindStr = nullptr;
+    switch (kind) {
+      case CodeKind::Ion:
+        kindStr = "SpiderMonkey:Ion";
+        break;
+      case CodeKind::Baseline:
+        kindStr = "SpiderMonkey:Baseline";
+        break;
+      case CodeKind::RegExp:
+        kindStr = "SpiderMonkey:RegExp";
+        break;
+      default:
+        kindStr = "SpiderMonkey";
+        break;
+    }
+    mozilla::recordreplay::LabelExecutableCode(result, n, kindStr);
+  }
+
   m_codeBytes[kind] += n;
 
   MOZ_MAKE_MEM_UNDEFINED(result, n);
