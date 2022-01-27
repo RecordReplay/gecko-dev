@@ -299,13 +299,7 @@ const gRecordingCreateWaiters = [];
 
 function isLoggedIn() {
   const token = ReplayAuth.getReplayUserToken();
-  if (token) {
-    const expiration = ReplayAuth.tokenExpiration(token);
-
-    return expiration && expiration > Date.now();
-  }
-
-  return !!ReplayAuth.hasOriginalApiKey();
+  return token ? true : !!ReplayAuth.hasOriginalApiKey();
 }
 
 async function saveRecordingToken(token) {
@@ -339,42 +333,17 @@ if (ReplayAuth.hasOriginalApiKey()) {
       return;
     }
 
-    const payload = ReplayAuth.tokenInfo(token);
-    const expiration = ReplayAuth.tokenExpiration(token);
-    if (typeof expiration !== "number") {
-      ChromeUtils.recordReplayLog(`InvalidJWTExpiration`);
-      clearUserToken();
-      return;
-    }
-
-    const timeToExpiration = expiration - Date.now();
-    if (timeToExpiration <= 0) {
-      pingTelemetry("browser", "auth-expired", {
-        expiration,
-        authId: payload.payload.sub,
-      });
-      clearUserToken();
-      return;
-    }
-
+    // refresh hourly
     gExpirationTimer = setTimeout(
-      () => {
-        pingTelemetry("browser", "auth-expired", {
-          expiration,
-          authId: payload.payload.sub,
-        });
-        clearUserToken();
-      },
-      timeToExpiration
+      () => ReplayAuth.refreshUserToken(),
+      60 * 60 * 1000
     );
-
-    setAccessToken(token);
   }
 
   Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
     ensureAccessTokenStateSynchronized();
   });
-  ensureAccessTokenStateSynchronized();
+  ReplayAuth.refreshUserToken();
 }
 
 const SEEN_MANAGERS = new WeakSet();

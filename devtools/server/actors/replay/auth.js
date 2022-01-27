@@ -8,11 +8,9 @@
 var EXPORTED_SYMBOLS = [
   "hasOriginalApiKey",
   "getOriginalApiKey",
-  "setReplayRefreshToken",
   "setReplayUserToken",
   "getReplayUserToken",
-  "tokenInfo",
-  "tokenExpiration",
+  "refreshUserToken",
   "openSigninPage"
 ];
 
@@ -67,11 +65,6 @@ function getOriginalApiKey() {
   return gOriginalApiKey;
 }
 
-function setReplayRefreshToken(token) {
-  Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
-  refresh();
-}
-
 function setReplayUserToken(token) {
   if (token) {
     deferredAccessToken.resolve(token);
@@ -84,36 +77,30 @@ function getReplayUserToken() {
   return Services.prefs.getStringPref("devtools.recordreplay.user-token");
 }
 
-function tokenInfo(token) {
-  const [_header, encPayload, _cypher] = token.split(".", 3);
-  if (typeof encPayload !== "string") {
-    return null;
-  }
+async function refreshUserToken() {
+  const token = getReplayUserToken();
 
-  let payload;
-  try {
-    const decPayload = ChromeUtils.base64URLDecode(encPayload, {
-      padding: "reject"
+  if (token) {
+    const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
+    const url = `${viewHost}/api/browser/refresh`;
+
+    const resp = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({
+        token
+      })
     });
-    payload = JSON.parse(new TextDecoder().decode(decPayload));
-  } catch (err) {
-    return null;
+
+    const json = await resp.json();
+
+    if (json.token) {
+      setReplayUserToken(json.token);
+
+      return true;
+    }
   }
 
-  if (typeof payload !== "object") {
-    return null;
-  }
-
-  return { payload };
-}
-
-function tokenExpiration(token) {
-  const userInfo = tokenInfo(token);
-  if (!userInfo) {
-    return null;
-  }
-  const exp = userInfo.payload?.exp;
-  return typeof exp === "number" ? exp * 1000 : null;
+  return false;
 }
 
 let authChannel;
@@ -131,9 +118,6 @@ function handleAuthChannelMessage(_id, message, target) {
       }
     })
   } else if ('token' in message) {
-    if (!message.token) {
-      setReplayRefreshToken(null);
-    }
     setReplayUserToken(message.token);
   }
 }
@@ -152,53 +136,6 @@ function initializeRecordingWebChannel() {
     authChannel = new WebChannel("record-replay-token", urlForWebChannel);
 
     authChannel.listen(handleAuthChannelMessage);
-  }
-}
-
-async function refresh() {
-  const refreshToken = Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
-  if (!refreshToken) {
-    return;
-  }
-
-  try {
-    const resp = await fetch("https://webreplay.us.auth0.com/oauth/token", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        audience: "https://api.replay.io",
-        scope: "openid profile offline_access",
-        grant_type: "refresh_token",
-        client_id: "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo",
-        refresh_token: refreshToken,
-      })
-    });
-
-    const json = await resp.json();
-
-    if (json.error) {
-      pingTelemetry("browser", "auth-request-failed", {
-        message: json.error
-      });
-      setReplayRefreshToken("");
-      setReplayUserToken("");
-      return;
-    }
-
-    if (json.access_token) {
-      Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
-      setReplayUserToken(json.access_token);
-
-      setTimeout(refresh, json.expires_in * 1000);
-    } else {
-      pingTelemetry("browser", "auth-request-failed", {
-        message: "no-access-token"
-      });
-    }
-  } catch (e) {
-    pingTelemetry("browser", "auth-request-failed", {
-      message: String(e)
-    });
   }
 }
 
@@ -237,7 +174,7 @@ function openSigninPage() {
           retries++;
           await new Promise(resolve => setTimeout(resolve, 3000));
         } else {
-          setReplayRefreshToken(resp.data.closeAuthRequest.token);
+          setReplayUserToken(resp.data.closeAuthRequest.token);
           resolve();
           break;
         }
@@ -254,5 +191,6 @@ function openSigninPage() {
 // Init
 (() => {
   initializeRecordingWebChannel();
-  refresh();
+  
+  // TODO: validate token is still okay
 })();
