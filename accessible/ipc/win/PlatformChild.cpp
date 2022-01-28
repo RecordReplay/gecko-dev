@@ -81,6 +81,9 @@ PlatformChild::PlatformChild()
   // IA2 needs to be registered in both the main thread's STA as well as the MTA
   UniquePtr<mozilla::mscom::RegisteredProxy> ia2ProxyMTA;
   mozilla::mscom::EnsureMTA([&ia2ProxyMTA]() -> void {
+    // https://github.com/RecordReplay/backend/issues/4393
+    mozilla::recordreplay::RecordReplayAssert("PlatformChild::PlatformChild RegisterProxyCallback");
+
     ia2ProxyMTA = mozilla::mscom::RegisterProxy(L"ia2marshal.dll");
   });
   mIA2ProxyMTA = std::move(ia2ProxyMTA);
