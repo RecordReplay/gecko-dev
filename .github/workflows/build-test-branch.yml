@@ -32,4 +32,4 @@ jobs:
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
           INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
           INPUT_CLOBBER: ${{ github.event.inputs.clobber }}
-          INPUT_SLOT: ${{ github.events.inputs.slot }}
+          INPUT_SLOT: ${{ github.event.inputs.slot }}
