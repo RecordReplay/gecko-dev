@@ -194,20 +194,30 @@ UniquePtr<RegisteredProxy> RegisterProxy() {
 
 UniquePtr<RegisteredProxy> RegisterProxy(const wchar_t* aLeafName,
                                          RegistrationFlags aFlags) {
+  // https://github.com/RecordReplay/backend/issues/4393
+  mozilla::recordreplay::RecordReplayAssert("RegisterProxy Start");
+
   wchar_t modulePathBuf[MAX_PATH + 1] = {0};
   if (!BuildLibPath(aFlags, modulePathBuf, ArrayLength(modulePathBuf),
                     aLeafName)) {
+    // https://github.com/RecordReplay/backend/issues/4393
+    mozilla::recordreplay::RecordReplayAssert("RegisterProxy #1");
     return nullptr;
   }
 
   nsModuleHandle proxyDll(LoadLibrary(modulePathBuf));
   if (!proxyDll.get()) {
+    // https://github.com/RecordReplay/backend/issues/4393
+    mozilla::recordreplay::RecordReplayAssert("RegisterProxy #2");
     return nullptr;
   }
 
   // Instantiate an activation context so that CoGetClassObject will use any
   // COM metadata embedded in proxyDll's manifest to resolve CLSIDs.
   ActivationContextRegion actCtxRgn(proxyDll.get());
+
+  // https://github.com/RecordReplay/backend/issues/4393
+  mozilla::recordreplay::RecordReplayAssert("RegisterProxy #3");
 
   auto GetProxyDllInfoFn = reinterpret_cast<decltype(&GetProxyDllInfo)>(
       GetProcAddress(proxyDll, "GetProxyDllInfo"));
