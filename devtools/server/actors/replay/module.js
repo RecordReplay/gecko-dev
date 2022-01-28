@@ -1282,6 +1282,8 @@ if (isRecordingOrReplaying) {
   }
 
   function notifyRequestEvent(channelId, kind, data) {
+    // https://github.com/RecordReplay/backend/issues/4397
+    RecordReplayControl.recordReplayAssert(`notifyRequestEvent ${kind}`);
     gCurrentRequestEvent = {
       kind,
       data,
