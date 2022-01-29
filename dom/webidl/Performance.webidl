@@ -20,7 +20,11 @@ typedef sequence <PerformanceEntry> PerformanceEntryList;
 // https://w3c.github.io/hr-time/#sec-performance
 [Exposed=(Window,Worker)]
 interface Performance : EventTarget {
-  [DependsOn=DeviceState, Affects=Nothing]
+  // Disallow code transformations related to performance.now() calls. This is needed
+  // to ensure these calls occur at consistent points when recording/replaying, and
+  // it also ensures that developers using performance.now() will be able to measure
+  // the timing for the things they think they are measuring.
+  //[DependsOn=DeviceState, Affects=Nothing]
   DOMHighResTimeStamp now();
 
   [Constant]
