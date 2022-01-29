@@ -863,6 +863,9 @@ PresShell::PresShell(Document* aDocument)
   mReflowCountMgr->SetPresShell(this);
 #endif
   mLastOSWake = mLoadBegin = TimeStamp::Now();
+
+  // https://github.com/RecordReplay/backend/issues/4028
+  recordreplay::RegisterThing(this);
 }
 
 NS_INTERFACE_TABLE_HEAD(PresShell)
@@ -909,6 +912,9 @@ PresShell::~PresShell() {
   mFrameConstructor = nullptr;
 
   mCurrentEventContent = nullptr;
+
+  // https://github.com/RecordReplay/backend/issues/4028
+  recordreplay::UnregisterThing(this);
 }
 
 /**
@@ -5810,6 +5816,15 @@ void PresShell::ProcessSynthMouseMoveEvent(bool aFromScroll) {
   }
 }
 
+// https://github.com/RecordReplay/backend/issues/4028
+static nsAutoCString RecordReplayVisibleFramesInfo(const nsTHashSet<nsIFrame*>& aFrames) {
+  nsAutoCString rv;
+  for (nsIFrame* frame : aFrames) {
+    rv.AppendPrintf(" %zu", recordreplay::ThingIndex(frame));
+  }
+  return rv;
+}
+
 /* static */
 void PresShell::MarkFramesInListApproximatelyVisible(
     const nsDisplayList& aList) {
@@ -5831,15 +5846,17 @@ void PresShell::MarkFramesInListApproximatelyVisible(
     PresShell* presShell = frame->PresShell();
     MOZ_ASSERT(!presShell->AssumeAllFramesVisible());
 
-    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-    mozilla::recordreplay::RecordReplayAssert("PresShell::MarkFramesInListApproximatelyVisible #5 %zu",
-                                              recordreplay::ThingIndex(frame));
-
     if (presShell->mApproximatelyVisibleFrames.EnsureInserted(frame)) {
       // The frame was added to mApproximatelyVisibleFrames, so increment its
       // visible count.
       frame->IncApproximateVisibleCount();
     }
+
+    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+    mozilla::recordreplay::RecordReplayAssert("PresShell::MarkFramesInListApproximatelyVisible #5 %zu %zu %s",
+                                              recordreplay::ThingIndex(presShell),
+                                              recordreplay::ThingIndex(frame),
+                                              RecordReplayVisibleFramesInfo(presShell->mApproximatelyVisibleFrames).get());
   }
 }
 
@@ -5847,6 +5864,10 @@ void PresShell::MarkFramesInListApproximatelyVisible(
 void PresShell::DecApproximateVisibleCount(
     VisibleFrames& aFrames, const Maybe<OnNonvisible>& aNonvisibleAction
     /* = Nothing() */) {
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  mozilla::recordreplay::RecordReplayAssert("PresShell::DecApproximateVisibleCount %s",
+                                            RecordReplayVisibleFramesInfo(aFrames).get());
+
   for (nsIFrame* frame : aFrames) {
     // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
     recordreplay::RecordReplayAssert("PresShell::DecApproximateVisibleCount #1 %zu",
@@ -5870,6 +5891,11 @@ void PresShell::RebuildApproximateFrameVisibilityDisplayList(
   // them in oldApproxVisibleFrames.
   VisibleFrames oldApproximatelyVisibleFrames =
       std::move(mApproximatelyVisibleFrames);
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  mozilla::recordreplay::RecordReplayAssert("PresShell::RebuildApproximateFrameVisibilityDisplayList %zu %s",
+                                            recordreplay::ThingIndex(this),
+                                            RecordReplayVisibleFramesInfo(oldApproximatelyVisibleFrames).get());
 
   MarkFramesInListApproximatelyVisible(aList);
 
@@ -5896,7 +5922,9 @@ void PresShell::ClearApproximatelyVisibleFramesList(
     const Maybe<OnNonvisible>& aNonvisibleAction
     /* = Nothing() */) {
   // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  mozilla::recordreplay::RecordReplayAssert("PresShell::ClearApproximatelyVisibleFramesList");
+  mozilla::recordreplay::RecordReplayAssert("PresShell::ClearApproximatelyVisibleFramesList %zu %s",
+                                            recordreplay::ThingIndex(this),
+                                            RecordReplayVisibleFramesInfo(mApproximatelyVisibleFrames).get());
   DecApproximateVisibleCount(mApproximatelyVisibleFrames, aNonvisibleAction);
   mApproximatelyVisibleFrames.Clear();
 }
@@ -5910,15 +5938,17 @@ void PresShell::MarkFramesInSubtreeApproximatelyVisible(
        aFrame->GetVisibility() == Visibility::ApproximatelyVisible)) {
     MOZ_ASSERT(!AssumeAllFramesVisible());
 
-    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-    mozilla::recordreplay::RecordReplayAssert("PresShell::MarkFramesInSubtreeApproximatelyVisible #2 %zu",
-                                              recordreplay::ThingIndex(aFrame));
-
     if (mApproximatelyVisibleFrames.EnsureInserted(aFrame)) {
       // The frame was added to mApproximatelyVisibleFrames, so increment its
       // visible count.
       aFrame->IncApproximateVisibleCount();
     }
+
+    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+    mozilla::recordreplay::RecordReplayAssert("PresShell::MarkFramesInSubtreeApproximatelyVisible #2 %zu %zu %s",
+                                              recordreplay::ThingIndex(this),
+                                              recordreplay::ThingIndex(aFrame),
+                                              RecordReplayVisibleFramesInfo(mApproximatelyVisibleFrames).get());
   }
 
   nsSubDocumentFrame* subdocFrame = do_QueryFrame(aFrame);
@@ -6029,6 +6059,11 @@ void PresShell::RebuildApproximateFrameVisibility(
   // them in oldApproximatelyVisibleFrames.
   VisibleFrames oldApproximatelyVisibleFrames =
       std::move(mApproximatelyVisibleFrames);
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  mozilla::recordreplay::RecordReplayAssert("PresShell::RebuildApproximateFrameVisibility %zu %s",
+                                            recordreplay::ThingIndex(this),
+                                            RecordReplayVisibleFramesInfo(oldApproximatelyVisibleFrames).get());
 
   nsRect vis(nsPoint(0, 0), rootFrame->GetSize());
   if (aRect) {
@@ -6206,14 +6241,16 @@ void PresShell::EnsureFrameInApproximatelyVisibleList(nsIFrame* aFrame) {
   }
 #endif
 
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  mozilla::recordreplay::RecordReplayAssert("PresShell::EnsureFrameInApproximatelyVisibleList #5 %zu",
-                                            recordreplay::ThingIndex(aFrame));
-
   if (mApproximatelyVisibleFrames.EnsureInserted(aFrame)) {
     // We inserted a new entry.
     aFrame->IncApproximateVisibleCount();
   }
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  mozilla::recordreplay::RecordReplayAssert("PresShell::EnsureFrameInApproximatelyVisibleList #5 %zu %zu %s",
+                                            recordreplay::ThingIndex(this),
+                                            recordreplay::ThingIndex(aFrame),
+                                            RecordReplayVisibleFramesInfo(mApproximatelyVisibleFrames).get());
 }
 
 void PresShell::RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame) {
@@ -6232,16 +6269,18 @@ void PresShell::RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame) {
     return;
   }
 
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  mozilla::recordreplay::RecordReplayAssert("PresShell::RemoveFrameFromApproximatelyVisibleList #5 %zu",
-                                            recordreplay::ThingIndex(aFrame));
-
   if (mApproximatelyVisibleFrames.EnsureRemoved(aFrame) &&
       aFrame->TrackingVisibility()) {
     // aFrame was in the hashtable, and we're still tracking its visibility,
     // so we need to decrement its visible count.
     aFrame->DecApproximateVisibleCount();
   }
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  mozilla::recordreplay::RecordReplayAssert("PresShell::RemoveFrameFromApproximatelyVisibleList #5 %zu %zu %s",
+                                            recordreplay::ThingIndex(this),
+                                            recordreplay::ThingIndex(aFrame),
+                                            RecordReplayVisibleFramesInfo(mApproximatelyVisibleFrames).get());
 }
 
 class nsAutoNotifyDidPaint {
