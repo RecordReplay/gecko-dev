@@ -5868,7 +5868,22 @@ void PresShell::DecApproximateVisibleCount(
   mozilla::recordreplay::RecordReplayAssert("PresShell::DecApproximateVisibleCount %s",
                                             RecordReplayVisibleFramesInfo(aFrames).get());
 
+  // When recording/replaying the iteration order in the set of frames should be
+  // consistent because it is based on a PLDHashTable, which ensure a stable
+  // iteration order. For some reason this isn't the case, however, so we sort
+  // the frames by their pointer ID before iterating over them.
+  nsTArray<nsIFrame*> framesArray;
   for (nsIFrame* frame : aFrames) {
+    framesArray.AppendElement(frame);
+  }
+  if (recordreplay::IsRecordingOrReplaying()) {
+    std::sort(framesArray.begin(), framesArray.end(),
+              [](nsIFrame* a, nsIFrame* b) {
+                return recordreplay::ThingIndex(a) < recordreplay::ThingIndex(b);
+              });
+  }
+
+  for (nsIFrame* frame : framesArray) {
     // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
     recordreplay::RecordReplayAssert("PresShell::DecApproximateVisibleCount #1 %zu",
                                      recordreplay::ThingIndex(frame));
