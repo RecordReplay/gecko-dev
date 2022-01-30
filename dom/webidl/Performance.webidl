@@ -24,6 +24,8 @@ interface Performance : EventTarget {
   // to ensure these calls occur at consistent points when recording/replaying, and
   // it also ensures that developers using performance.now() will be able to measure
   // the timing for the things they think they are measuring.
+  //
+  // See https://github.com/RecordReplay/backend/issues/4405
   //[DependsOn=DeviceState, Affects=Nothing]
   DOMHighResTimeStamp now();
 
