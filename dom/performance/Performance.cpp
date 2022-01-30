@@ -98,9 +98,6 @@ DOMHighResTimeStamp Performance::TimeStampToDOMHighResForRendering(
 }
 
 DOMHighResTimeStamp Performance::Now() {
-  // https://github.com/RecordReplay/backend/issues/4405
-  mozilla::recordreplay::AssertScriptedCaller("Performance::Now");
-
   DOMHighResTimeStamp rawTime = NowUnclamped();
 
   // XXX: Remove this would cause functions in pkcs11f.h to fail.
