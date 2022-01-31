@@ -45,6 +45,8 @@ namespace image {
   extern void RecordReplayInitializeSurfaceCacheMutex();
 }
 
+extern void RecordReplayInitializeTimerThreadWrapperMutex();
+
 namespace recordreplay {
 
 MOZ_NEVER_INLINE void BusyWait() {
@@ -160,8 +162,14 @@ static void ConfigureGecko() {
   // Don't create a stylo thread pool when recording or replaying.
   putenv((char*)"STYLO_THREADS=1");
 
-  // This mutex needs to be initialized on a consistent thread.
+  // StaticMutex objects initialize their underlying mutex the first time they
+  // are locked. If two threads are racing to do this initialization then it
+  // can happen at different points when recording vs. replaying, and we get
+  // mismatches that cause replaying failures. To work around this we
+  // initialize these mutexes explicitly here so that it happens at a
+  // consistent point in time.
   image::RecordReplayInitializeSurfaceCacheMutex();
+  RecordReplayInitializeTimerThreadWrapperMutex();
 
   // Order statically allocated mutex in intl code.
   RecordReplayOrderDefaultTimeZoneMutex();

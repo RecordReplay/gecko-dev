@@ -5831,10 +5831,6 @@ void PresShell::MarkFramesInListApproximatelyVisible(
     PresShell* presShell = frame->PresShell();
     MOZ_ASSERT(!presShell->AssumeAllFramesVisible());
 
-    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-    mozilla::recordreplay::RecordReplayAssert("PresShell::MarkFramesInListApproximatelyVisible #5 %zu",
-                                              recordreplay::ThingIndex(frame));
-
     if (presShell->mApproximatelyVisibleFrames.EnsureInserted(frame)) {
       // The frame was added to mApproximatelyVisibleFrames, so increment its
       // visible count.
@@ -5847,11 +5843,22 @@ void PresShell::MarkFramesInListApproximatelyVisible(
 void PresShell::DecApproximateVisibleCount(
     VisibleFrames& aFrames, const Maybe<OnNonvisible>& aNonvisibleAction
     /* = Nothing() */) {
+  // When recording/replaying the iteration order in the set of frames should be
+  // consistent because it is based on a PLDHashTable, which ensure a stable
+  // iteration order. For some reason this isn't the case, however, so as a workaround
+  // we sort the frames by their pointer ID before iterating over them.
+  nsTArray<nsIFrame*> framesArray;
   for (nsIFrame* frame : aFrames) {
-    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-    recordreplay::RecordReplayAssert("PresShell::DecApproximateVisibleCount #1 %zu",
-                                     recordreplay::ThingIndex(frame));
+    framesArray.AppendElement(frame);
+  }
+  if (recordreplay::IsRecordingOrReplaying()) {
+    std::sort(framesArray.begin(), framesArray.end(),
+              [](nsIFrame* a, nsIFrame* b) {
+                return recordreplay::ThingIndex(a) < recordreplay::ThingIndex(b);
+              });
+  }
 
+  for (nsIFrame* frame : framesArray) {
     // Decrement the frame's visible count if we're still tracking its
     // visibility. (We may not be, if the frame disabled visibility tracking
     // after we added it to the visible frames list.)
@@ -5895,8 +5902,6 @@ void PresShell::ClearApproximateFrameVisibilityVisited(nsView* aView,
 void PresShell::ClearApproximatelyVisibleFramesList(
     const Maybe<OnNonvisible>& aNonvisibleAction
     /* = Nothing() */) {
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  mozilla::recordreplay::RecordReplayAssert("PresShell::ClearApproximatelyVisibleFramesList");
   DecApproximateVisibleCount(mApproximatelyVisibleFrames, aNonvisibleAction);
   mApproximatelyVisibleFrames.Clear();
 }
@@ -5909,10 +5914,6 @@ void PresShell::MarkFramesInSubtreeApproximatelyVisible(
       (!aRemoveOnly ||
        aFrame->GetVisibility() == Visibility::ApproximatelyVisible)) {
     MOZ_ASSERT(!AssumeAllFramesVisible());
-
-    // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-    mozilla::recordreplay::RecordReplayAssert("PresShell::MarkFramesInSubtreeApproximatelyVisible #2 %zu",
-                                              recordreplay::ThingIndex(aFrame));
 
     if (mApproximatelyVisibleFrames.EnsureInserted(aFrame)) {
       // The frame was added to mApproximatelyVisibleFrames, so increment its
@@ -6206,10 +6207,6 @@ void PresShell::EnsureFrameInApproximatelyVisibleList(nsIFrame* aFrame) {
   }
 #endif
 
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  mozilla::recordreplay::RecordReplayAssert("PresShell::EnsureFrameInApproximatelyVisibleList #5 %zu",
-                                            recordreplay::ThingIndex(aFrame));
-
   if (mApproximatelyVisibleFrames.EnsureInserted(aFrame)) {
     // We inserted a new entry.
     aFrame->IncApproximateVisibleCount();
@@ -6231,10 +6228,6 @@ void PresShell::RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame) {
                "Shouldn't have any frames in the table");
     return;
   }
-
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  mozilla::recordreplay::RecordReplayAssert("PresShell::RemoveFrameFromApproximatelyVisibleList #5 %zu",
-                                            recordreplay::ThingIndex(aFrame));
 
   if (mApproximatelyVisibleFrames.EnsureRemoved(aFrame) &&
       aFrame->TrackingVisibility()) {

@@ -55,12 +55,27 @@ class TimerThreadWrapper {
                                              uint32_t aSearchBound);
   uint32_t AllowedEarlyFiringMicroseconds();
 
+  static void InitializeMutex();
+
  private:
   static mozilla::OrderedStaticMutex sMutex;
   TimerThread* mThread;
 };
 
 mozilla::OrderedStaticMutex TimerThreadWrapper::sMutex;
+
+/* static */ void TimerThreadWrapper::InitializeMutex() {
+  mozilla::OrderedStaticMutexAutoLock lock(sMutex);
+}
+
+namespace mozilla {
+
+// We need to initialize the mutex at a consistent point when recording/replaying.
+void RecordReplayInitializeTimerThreadWrapperMutex() {
+  TimerThreadWrapper::InitializeMutex();
+}
+
+} // namespace mozilla
 
 nsresult TimerThreadWrapper::Init() {
   nsresult rv;
