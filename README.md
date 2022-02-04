@@ -9,7 +9,7 @@ the Record Replay gecko based browser.
 2. `cp mozconfig.macsample mozconfig`
 3. Download `MacOSX11.1.sdk.tar.xz` from https://github.com/phracker/MacOSX-SDKs/releases
 4. untar `MacOSX11.1.sdk.tar.xz` in the repo root to create a `MacOSX11.1.sdk` directory
-5. run `./mach bootstrap` and select (2) Firefox Desktop
+5. clone the latest mozilla-central and run `./mach bootstrap` within it and select (2) Firefox Desktop. Come back to this repo.
 6. run `node build`
    * On Apple Silicon, you many need to run `RUSTC_BOOTSTRAP=qcms node build` to build successfully.
 7. run `./mach run`
