@@ -2309,6 +2309,7 @@ bool Debugger::fireNativeCall(JSContext* cx, const CallArgs& args,
 
 bool Debugger::fireNewScript(JSContext* cx,
                              Handle<DebuggerScriptReferent> scriptReferent) {
+  mozilla::recordreplay::RecordReplayAssert("Debugger::fireNewScript");
   RootedObject hook(cx, getHook(OnNewScript));
   MOZ_ASSERT(hook);
   MOZ_ASSERT(hook->isCallable());

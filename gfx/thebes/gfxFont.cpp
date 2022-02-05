@@ -39,6 +39,7 @@
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "gfxMathTable.h"
@@ -2848,6 +2849,7 @@ bool gfxFont::ShapeText(DrawTarget* aDrawTarget, const char16_t* aText,
                         uint32_t aOffset, uint32_t aLength, Script aScript,
                         nsAtom* aLanguage, bool aVertical,
                         RoundingFlags aRounding, gfxShapedText* aShapedText) {
+  recordreplay::RecordReplayAssert("gfxFont::ShapeText");
   // XXX Currently, we do all vertical shaping through harfbuzz.
   // Vertical graphite support may be wanted as a future enhancement.
   if (FontCanSupportGraphite() && !aVertical) {

@@ -641,6 +641,7 @@ void HttpChannelChild::OnTransportAndData(const nsresult& aChannelStatus,
                                           const uint64_t& aOffset,
                                           const uint32_t& aCount,
                                           const nsCString& aData) {
+  recordreplay::RecordReplayAssert("HttpChannelChild::OnTransportAndData start");
   LOG(("HttpChannelChild::OnTransportAndData [this=%p]\n", this));
 
   if (!mCanceled && NS_SUCCEEDED(mStatus)) {
@@ -729,6 +730,7 @@ void HttpChannelChild::OnTransportAndData(const nsresult& aChannelStatus,
       mUnreportBytesRead = 0;
     }
   }
+    recordreplay::RecordReplayAssert("HttpChannelChild::OnTransportAndData done");
 }
 
 bool HttpChannelChild::NeedToReportBytesRead() {
