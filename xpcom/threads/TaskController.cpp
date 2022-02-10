@@ -478,6 +478,19 @@ class RunnableTask : public Task {
     MOZ_ASSERT(NS_IsMainThread());
     // If we're on the main thread, we want to record our current
     // runnable's name in a static so that BHR can record it.
+
+    {
+      // [Replay-Diagnostic]
+      // Narrow down divergence when running microtasks.
+      // Crash: https://github.com/RecordReplay/backend/issues/4467
+      nsCString runnableName;
+      this->GetName(runnableName);
+      mozilla::recordreplay::RecordReplayAssert(
+        "PlatformChild::PlatformChild PostRunnable: %s",
+        runnableName.get()
+      );
+    }
+
     Array<char, nsThread::kRunnableNameBufSize> restoreRunnableName;
     restoreRunnableName[0] = '\0';
     auto clear = MakeScopeExit([&] {

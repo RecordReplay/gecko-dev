@@ -35,6 +35,7 @@
 #include "mozilla/BaseProfilerMarkers.h"
 #include "mozilla/ProfilerMarkersDetail.h"
 #include "mozilla/ProfilerLabels.h"
+#include "mozilla/RecordReplay.h"
 #include "nsJSUtils.h"  // for nsJSUtils::GetCurrentlyRunningCodeInnerWindowID
 
 class nsIDocShell;
@@ -210,6 +211,13 @@ class MOZ_RAII AutoProfilerTextMarker {
   }
 
   ~AutoProfilerTextMarker() {
+    // [Replay-Disagnostic]
+    // Diagnostic for crash under nsRefreshDriver::Tick
+    // https://github.com/RecordReplay/backend/issues/4467
+    mozilla::recordreplay::RecordReplayAssert(
+      "AutoProfilerTextMarker::~AutoProfilerTextMarker(): name=%s",
+      mMarkerName
+    );
     AUTO_PROFILER_LABEL("TextMarker", PROFILER);
     mOptions.TimingRef().SetIntervalEnd();
     AUTO_PROFILER_STATS(AUTO_PROFILER_MARKER_TEXT);
