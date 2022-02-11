@@ -860,6 +860,11 @@ bool MessageChannel::OpenOnSameThread(MessageChannel* aTargetChan,
 }
 
 bool MessageChannel::Send(UniquePtr<Message> aMsg) {
+  // [RecordReplay-Diagnostic]
+  // Mismatch: SendMessage with PDocAccessibleChild::SendShowEvent
+  // https://github.com/RecordReplay/backend/issues/4522
+  recordreplay::RecordReplayAssert("MessageChannel::Send(): length=%d", aMsg->size());
+
   if (aMsg->size() >= kMinTelemetryMessageSize) {
     Telemetry::Accumulate(Telemetry::IPC_MESSAGE_SIZE2, aMsg->size());
   }
