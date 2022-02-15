@@ -77,6 +77,17 @@ UniquePtr<RegisteredProxy> RegisterTypelib(
     const wchar_t* aLeafName,
     RegistrationFlags aFlags = RegistrationFlags::eUseBinDirectory);
 
+// We avoid registering COM proxies while replaying. Changing internal COM state
+// while replaying isn't necessary as COM call behavior is replayed from the recording,
+// and it's unclear what registering proxies even does as it depends on a method
+// GetProxyDllInfo for which little documentation is available. Note that we can't
+// check whether we are replaying within RegisterProxy, as it can be called from
+// non-Mozilla processes apparently (see scary comment in Registration.cpp).
+UniquePtr<RegisteredProxy> RegisterProxyIfNotReplaying();
+UniquePtr<RegisteredProxy> RegisterProxyIfNotReplaying(
+    const wchar_t* aLeafName,
+    RegistrationFlags aFlags = RegistrationFlags::eUseBinDirectory);
+
 #if defined(MOZILLA_INTERNAL_API)
 
 /**

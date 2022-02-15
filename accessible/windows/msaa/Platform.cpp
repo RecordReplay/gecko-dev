@@ -46,9 +46,9 @@ void a11y::PlatformInit() {
   ia2AccessibleText::InitTextChangeData();
 
   mscom::InterceptorLog::Init();
-  UniquePtr<RegisteredProxy> regCustomProxy(mscom::RegisterProxy());
+  UniquePtr<RegisteredProxy> regCustomProxy(mscom::RegisterProxyIfNotReplaying());
   gRegCustomProxy = regCustomProxy.release();
-  UniquePtr<RegisteredProxy> regProxy(mscom::RegisterProxy(L"ia2marshal.dll"));
+  UniquePtr<RegisteredProxy> regProxy(mscom::RegisterProxyIfNotReplaying(L"ia2marshal.dll"));
   gRegProxy = regProxy.release();
   UniquePtr<RegisteredProxy> regAccTlb(mscom::RegisterTypelib(
       L"oleacc.dll", RegistrationFlags::eUseSystemDirectory));
