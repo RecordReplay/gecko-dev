@@ -14,6 +14,7 @@
 
 #include "AccessibleEventId.h"
 #include "AccessibleHandler.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/RefPtr.h"
 
 namespace mozilla {
@@ -108,8 +109,8 @@ AccessibleHandlerControl::Create(AccessibleHandlerControl** aOutObject) {
 AccessibleHandlerControl::AccessibleHandlerControl()
     : mIsRegistered(false),
       mCacheGen(0),
-      mIA2Proxy(mscom::RegisterProxyIfNotReplaying(L"ia2marshal.dll")),
-      mHandlerProxy(mscom::RegisterProxyIfNotReplaying()) {
+      mIA2Proxy(mscom::RegisterProxy(L"ia2marshal.dll")),
+      mHandlerProxy(mscom::RegisterProxy()) {
   MOZ_ASSERT(mIA2Proxy);
 }
 
