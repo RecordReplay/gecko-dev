@@ -108,8 +108,8 @@ AccessibleHandlerControl::Create(AccessibleHandlerControl** aOutObject) {
 AccessibleHandlerControl::AccessibleHandlerControl()
     : mIsRegistered(false),
       mCacheGen(0),
-      mIA2Proxy(mscom::RegisterProxy(L"ia2marshal.dll")),
-      mHandlerProxy(mscom::RegisterProxy()) {
+      mIA2Proxy(mscom::RegisterProxyIfNotReplaying(L"ia2marshal.dll")),
+      mHandlerProxy(mscom::RegisterProxyIfNotReplaying()) {
   MOZ_ASSERT(mIA2Proxy);
 }
 

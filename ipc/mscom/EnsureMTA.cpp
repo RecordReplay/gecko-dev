@@ -235,9 +235,6 @@ void EnsureMTA::SyncDispatchToPersistentThread(nsIRunnable* aRunnable) {
     ::SetEvent(eventHandle);
   };
 
-  // https://github.com/RecordReplay/backend/issues/4393
-  mozilla::recordreplay::RecordReplayAssert("EnsureMTA::SyncDispatchToPersistentThread PostRunnable");
-
   nsresult rv = thread->Dispatch(
       NS_NewRunnableFunction("mscom::EnsureMTA::SyncDispatchToPersistentThread",
                              std::move(eventSetter)),
@@ -258,9 +255,6 @@ void EnsureMTA::SyncDispatchToPersistentThread(nsIRunnable* aRunnable) {
          WAIT_IO_COMPLETION) {
   }
   MOZ_ASSERT(waitResult == WAIT_OBJECT_0);
-
-  // https://github.com/RecordReplay/backend/issues/4393
-  mozilla::recordreplay::RecordReplayAssert("EnsureMTA::SyncDispatchToPersistentThread Done");
 }
 
 /**
