@@ -2108,11 +2108,11 @@ function nodeContents(node) {
   }
 
   let childNodes;
-  if (node.childNodes.length) {
-    childNodes = [...node.childNodes].map((n) => getObjectIdRaw(n));
-  } else if (node.nodeName == "IFRAME") {
+  if (node.nodeName == "IFRAME") {
     // Treat an iframe's content document as one of its child nodes.
     childNodes = [getObjectIdRaw(node.contentDocument)];
+  } else if (node.childNodes.length) {
+    childNodes = [...node.childNodes].map((n) => getObjectIdRaw(n));
   }
 
   let documentURL;
