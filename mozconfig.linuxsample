@@ -10,3 +10,6 @@ ac_add_options --with-app-basename=Replay
 ac_add_options --enable-replace-malloc
 ac_add_options --disable-sandbox
 ac_add_options --enable-default-toolkit=cairo-gtk3-wayland
+
+# Needed for building in an ubuntu:bionic container
+ac_add_options --disable-av1
