@@ -36,6 +36,12 @@ RefPtr<CompositorWidget> CompositorWidget::CreateLocal(
   // do it after the static_cast.
   nsBaseWidget* widget = static_cast<nsBaseWidget*>(aWidget);
   MOZ_RELEASE_ASSERT(widget);
+  if (aInitData.type() ==
+      CompositorWidgetInitData::THeadlessCompositorWidgetInitData) {
+    return new HeadlessCompositorWidget(
+        aInitData.get_HeadlessCompositorWidgetInitData(), aOptions,
+        static_cast<HeadlessWidget*>(aWidget));
+  }
 #  ifdef MOZ_WIDGET_ANDROID
   return new AndroidCompositorWidget(aOptions, widget);
 #  else

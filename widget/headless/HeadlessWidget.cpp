@@ -513,15 +513,6 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPoint(
   return NS_OK;
 }
 
-void HeadlessWidget::SetSnapshotListener(SnapshotListener&& listener) {
-  if (!mCompositorWidget) {
-    if (listener)
-      fprintf(stderr, "Trying to set SnapshotListener without compositor widget\n");
-    return;
-  }
-  mCompositorWidget->SetSnapshotListener(std::move(listener));
-}
-
 nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
     TouchpadPinchPhase aEventPhase, float aScale, LayoutDeviceIntPoint aPoint,
     int32_t aModifierFlags) {
@@ -575,6 +566,16 @@ nsresult HeadlessWidget::SynthesizeNativeTouchPadPinch(
   mLastPinchSpan = aScale;
   DispatchPinchGestureInput(inputToDispatch);
   return NS_OK;
+}
+
+void HeadlessWidget::SetSnapshotListener(SnapshotListener&& listener) {
+  if (!mCompositorWidget) {
+    if (listener)
+      fprintf(stderr,
+              "Trying to set SnapshotListener without compositor widget\n");
+    return;
+  }
+  mCompositorWidget->SetSnapshotListener(std::move(listener));
 }
 
 }  // namespace widget

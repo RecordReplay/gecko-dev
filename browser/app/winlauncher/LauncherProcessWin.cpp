@@ -334,15 +334,9 @@ Maybe<int> LauncherMain(int& argc, wchar_t* argv[],
       mozilla::CheckArg(argc, argv, L"juggler-pipe",
                         static_cast<const wchar_t**>(nullptr),
                         mozilla::CheckArgFlag::None) == mozilla::ARG_FOUND;
-  if (hasJugglerPipe && !mozilla::EnvHasValue("PW_PIPE_READ")) {
+  if (hasJugglerPipe) {
     intptr_t stdio3 = _get_osfhandle(3);
     intptr_t stdio4 = _get_osfhandle(4);
-    CHAR stdio3str[20];
-    CHAR stdio4str[20];
-    itoa(stdio3, stdio3str, 10);
-    itoa(stdio4, stdio4str, 10);
-    SetEnvironmentVariable("PW_PIPE_READ", stdio3str);
-    SetEnvironmentVariable("PW_PIPE_WRITE", stdio4str);
     HANDLE pipeHandles[] = {reinterpret_cast<HANDLE>(stdio3),
                             reinterpret_cast<HANDLE>(stdio4)};
     attrs.AddInheritableHandles(pipeHandles);

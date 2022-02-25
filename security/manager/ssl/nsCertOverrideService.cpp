@@ -565,9 +565,9 @@ nsCertOverrideService::HasMatchingOverride(
   bool disableAllSecurityCheck = false;
   {
     MutexAutoLock lock(mMutex);
-    if (aUserContextId) {
+    if (aOriginAttributes.mUserContextId) {
       disableAllSecurityCheck = mUserContextIdsWithDisabledSecurityChecks.has(
-          aUserContextId);
+          aOriginAttributes.mUserContextId);
     } else {
       disableAllSecurityCheck = mDisableAllSecurityCheck;
     }
@@ -824,7 +824,16 @@ nsCertOverrideService::
 
   {
     MutexAutoLock lock(mMutex);
-    mDisableAllSecurityCheck = aDisable;
+    if (aUserContextId) {
+      if (aDisable) {
+        mozilla::Unused << mUserContextIdsWithDisabledSecurityChecks.put(aUserContextId);
+      } else {
+        mUserContextIdsWithDisabledSecurityChecks.remove(aUserContextId);
+      }
+      return NS_OK;
+    } else {
+      mDisableAllSecurityCheck = aDisable;
+    }
   }
 
   nsCOMPtr<nsINSSComponent> nss(do_GetService(PSM_COMPONENT_CONTRACTID));
