@@ -3978,6 +3978,9 @@ class Document : public nsINode,
   enum class IgnoreRFP { No, Yes };
   StylePrefersColorScheme PrefersColorScheme(IgnoreRFP = IgnoreRFP::No) const;
 
+  bool PrefersReducedMotion() const;
+  bool ForcedColors() const;
+
   // Returns true if we use overlay scrollbars on the system wide or on the
   // given document.
   static bool UseOverlayScrollbars(const Document* aDocument);

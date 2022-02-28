@@ -601,7 +601,7 @@ InterceptedHttpChannel::ResetInterceptionWithURI(nsIURI* aURI) {
   if (aURI) {
     mURI = aURI;
   }
-  return ResetInterception(false);
+  return ResetInterception(true);
 }
 
 NS_IMETHODIMP

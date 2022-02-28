@@ -733,8 +733,7 @@ nsDOMWindowUtils::SendMouseEventCommon(
   nsresult rv = nsContentUtils::SendMouseEvent(
       presShell, aType, aX, aY, aButton, aButtons, aClickCount, aModifiers,
       aIgnoreRootScrollFrame, aPressure, aInputSourceArg, aPointerId, aToWindow,
-      &preventDefaultResult, aIsDOMEventSynthesized, aIsWidgetEventSynthesized,
-      aConvertToPointer);
+      &preventDefaultResult, aIsDOMEventSynthesized, aIsWidgetEventSynthesized, aConvertToPointer);
 
   if (aPreventDefault) {
     *aPreventDefault = preventDefaultResult != PreventDefaultResult::No;

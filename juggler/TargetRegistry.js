@@ -12,6 +12,8 @@ const {NetUtil} = ChromeUtils.import('resource://gre/modules/NetUtil.jsm');
 const {AppConstants} = ChromeUtils.import("resource://gre/modules/AppConstants.jsm");
 const {OS} = ChromeUtils.import("resource://gre/modules/osfile.jsm");
 
+const Cr = Components.results;
+
 const helper = new Helper();
 
 const IDENTITY_NAME = 'JUGGLER ';
@@ -26,6 +28,7 @@ class DownloadInterceptor {
   constructor(registry) {
     this._registry = registry
     this._handlerToUuid = new Map();
+    this._uuidToHandler = new Map();
   }
 
   //
@@ -60,6 +63,7 @@ class DownloadInterceptor {
     }
     outFile.value = file;
     this._handlerToUuid.set(externalAppHandler, uuid);
+    this._uuidToHandler.set(uuid, externalAppHandler);
     const downloadInfo = {
       uuid,
       browserContextId: browserContext.browserContextId,
@@ -76,17 +80,27 @@ class DownloadInterceptor {
     if (!uuid)
       return;
     this._handlerToUuid.delete(externalAppHandler);
+    this._uuidToHandler.delete(uuid);
     const downloadInfo = {
       uuid,
+      error: errorName,
     };
-    if (errorName === 'NS_BINDING_ABORTED') {
+    if (canceled === 'NS_BINDING_ABORTED') {
       downloadInfo.canceled = true;
-    } else {
-      downloadInfo.error = errorName;
     }
     this._registry.emit(TargetRegistry.Events.DownloadFinished, downloadInfo);
   }
+
+  async cancelDownload(uuid) {
+    const externalAppHandler = this._uuidToHandler.get(uuid);
+    if (!externalAppHandler) {
+      return;
+    }
+    await externalAppHandler.cancel(Cr.NS_BINDING_ABORTED);
+  }
 }
+
+const screencastService = Cc['@mozilla.org/juggler/screencast;1'].getService(Ci.nsIScreencastService);
 
 class TargetRegistry {
   constructor() {
@@ -155,11 +169,15 @@ class TargetRegistry {
         throw new Error(`Internal error: cannot find context for userContextId=${userContextId}`);
       const target = new PageTarget(this, window, tab, browserContext, openerTarget);
       target.updateUserAgent();
+      target.updateJavaScriptDisabled();
       target.updateTouchOverride();
+      target.updateColorSchemeOverride();
+      target.updateReducedMotionOverride();
+      target.updateForcedColorsOverride();
       if (!hasExplicitSize)
         target.updateViewportSize();
-      if (browserContext.screencastOptions)
-        target._startVideoRecording(browserContext.screencastOptions);
+      if (browserContext.videoRecordingOptions)
+        target._startVideoRecording(browserContext.videoRecordingOptions);
     };
 
     const onTabCloseListener = event => {
@@ -222,11 +240,16 @@ class TargetRegistry {
     };
 
     const extHelperAppSvc = Cc["@mozilla.org/uriloader/external-helper-app-service;1"].getService(Ci.nsIExternalHelperAppService);
-    extHelperAppSvc.setDownloadInterceptor(new DownloadInterceptor(this));
+    this._downloadInterceptor = new DownloadInterceptor(this);
+    extHelperAppSvc.setDownloadInterceptor(this._downloadInterceptor);
 
     Services.wm.addListener({ onOpenWindow, onCloseWindow });
     for (const win of Services.wm.getEnumerator(null))
       onOpenWindow(win);
+  }
+
+  async cancelDownload(options) {
+    this._downloadInterceptor.cancelDownload(options.uuid);
   }
 
   setBrowserProxy(proxy) {
@@ -328,11 +351,14 @@ class PageTarget {
     this._linkedBrowser = tab.linkedBrowser;
     this._browserContext = browserContext;
     this._viewportSize = undefined;
+    this._initialDPPX = this._linkedBrowser.browsingContext.overrideDPPX;
     this._url = 'about:blank';
     this._openerId = opener ? opener.id() : undefined;
     this._channel = SimpleChannel.createForMessageManager(`browser::page[${this._targetId}]`, this._linkedBrowser.messageManager);
-    this._screencastInfo = undefined;
+    this._videoRecordingInfo = undefined;
+    this._screencastRecordingInfo = undefined;
     this._dialogs = new Map();
+    this.forcedColors = 'no-override';
 
     const navigationListener = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
@@ -380,6 +406,10 @@ class PageTarget {
     this._linkedBrowser.browsingContext.customUserAgent = this._browserContext.defaultUserAgent;
   }
 
+  updateJavaScriptDisabled() {
+    this._linkedBrowser.browsingContext.allowJavascript = !this._browserContext.javaScriptDisabled;
+  }
+
   _updateModalDialogs() {
     const prompts = new Set(this._linkedBrowser.tabModalPromptBox ? this._linkedBrowser.tabModalPromptBox.listPrompts() : []);
     for (const dialog of this._dialogs.values()) {
@@ -411,10 +441,43 @@ class PageTarget {
     // default viewport.
     const viewportSize = this._viewportSize || this._browserContext.defaultViewportSize;
     const actualSize = await setViewportSizeForBrowser(viewportSize, this._linkedBrowser, this._window);
+    this._linkedBrowser.browsingContext.overrideDPPX = this._browserContext.deviceScaleFactor || this._initialDPPX;
     await this._channel.connect('').send('awaitViewportDimensions', {
       width: actualSize.width,
-      height: actualSize.height
+      height: actualSize.height,
+      deviceSizeIsPageSize: !!this._browserContext.deviceScaleFactor,
     });
+  }
+
+  setEmulatedMedia(mediumOverride) {
+    this._linkedBrowser.browsingContext.mediumOverride = mediumOverride || '';
+  }
+
+  setColorScheme(colorScheme) {
+    this.colorScheme = fromProtocolColorScheme(colorScheme);
+    this.updateColorSchemeOverride();
+  }
+
+  updateColorSchemeOverride() {
+    this._linkedBrowser.browsingContext.prefersColorSchemeOverride = this.colorScheme || this._browserContext.colorScheme || 'none';
+  }
+
+  setReducedMotion(reducedMotion) {
+    this.reducedMotion = fromProtocolReducedMotion(reducedMotion);
+    this.updateReducedMotionOverride();
+  }
+
+  updateReducedMotionOverride() {
+    this._linkedBrowser.browsingContext.prefersReducedMotionOverride = this.reducedMotion || this._browserContext.reducedMotion || 'none';
+  }
+
+  setForcedColors(forcedColors) {
+    this.forcedColors = fromProtocolForcedColors(forcedColors);
+    this.updateForcedColorsOverride();
+  }
+
+  updateForcedColorsOverride() {
+    this._linkedBrowser.browsingContext.forcedColorsOverride = (this.forcedColors !== 'no-override' ? this.forcedColors : this._browserContext.forcedColors) || 'no-override';
   }
 
   async setViewportSize(viewportSize) {
@@ -458,8 +521,8 @@ class PageTarget {
     await this._channel.connect('').send('addScriptToEvaluateOnNewDocument', script).catch(e => void e);
   }
 
-  async addBinding(name, script) {
-    await this._channel.connect('').send('addBinding', { name, script }).catch(e => void e);
+  async addBinding(worldName, name, script) {
+    await this._channel.connect('').send('addBinding', { worldName, name, script }).catch(e => void e);
   }
 
   async applyContextSetting(name, value) {
@@ -470,7 +533,7 @@ class PageTarget {
     return await this._channel.connect('').send('hasFailedToOverrideTimezone').catch(e => true);
   }
 
-  async _startVideoRecording({width, height, scale, dir}) {
+  async _startVideoRecording({width, height, dir}) {
     // On Mac the window may not yet be visible when TargetCreated and its
     // NSWindow.windowNumber may be -1, so we wait until the window is known
     // to be initialized and visible.
@@ -478,46 +541,88 @@ class PageTarget {
     const file = OS.Path.join(dir, helper.generateId() + '.webm');
     if (width < 10 || width > 10000 || height < 10 || height > 10000)
       throw new Error("Invalid size");
-    if (scale && (scale <= 0 || scale > 1))
-      throw new Error("Unsupported scale");
 
-    const screencast = Cc['@mozilla.org/juggler/screencast;1'].getService(Ci.nsIScreencastService);
     const docShell = this._gBrowser.ownerGlobal.docShell;
     // Exclude address bar and navigation control from the video.
     const rect = this.linkedBrowser().getBoundingClientRect();
     const devicePixelRatio = this._window.devicePixelRatio;
-    const videoSessionId = screencast.startVideoRecording(docShell, file, width, height, scale || 0, devicePixelRatio * rect.top);
-    this._screencastInfo = { videoSessionId, file };
+    let sessionId;
+    const registry = this._registry;
+    const screencastClient = {
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIScreencastServiceClient]),
+      screencastFrame(data, deviceWidth, deviceHeight) {
+      },
+      screencastStopped() {
+        registry.emit(TargetRegistry.Events.ScreencastStopped, sessionId);
+      },
+    };
+    const viewport = this._viewportSize || this._browserContext.defaultViewportSize || { width: 0, height: 0 };
+    sessionId = screencastService.startVideoRecording(screencastClient, docShell, true, file, width, height, 0, viewport.width, viewport.height, devicePixelRatio * rect.top);
+    this._videoRecordingInfo = { sessionId, file };
     this.emit(PageTarget.Events.ScreencastStarted);
   }
 
-  async _stopVideoRecording() {
-    if (!this._screencastInfo)
+  _stopVideoRecording() {
+    if (!this._videoRecordingInfo)
       throw new Error('No video recording in progress');
-    const screencastInfo = this._screencastInfo;
-    this._screencastInfo = undefined;
-    const screencast = Cc['@mozilla.org/juggler/screencast;1'].getService(Ci.nsIScreencastService);
-    const result = new Promise(resolve =>
-      Services.obs.addObserver(function onStopped(subject, topic, data) {
-        if (screencastInfo.videoSessionId != data)
-          return;
-
-        Services.obs.removeObserver(onStopped, 'juggler-screencast-stopped');
-        resolve();
-      }, 'juggler-screencast-stopped')
-    );
-    screencast.stopVideoRecording(screencastInfo.videoSessionId);
-    return result;
+    const videoRecordingInfo = this._videoRecordingInfo;
+    this._videoRecordingInfo = undefined;
+    screencastService.stopVideoRecording(videoRecordingInfo.sessionId);
   }
 
-  screencastInfo() {
-    return this._screencastInfo;
+  videoRecordingInfo() {
+    return this._videoRecordingInfo;
+  }
+
+  async startScreencast({ width, height, quality }) {
+    // On Mac the window may not yet be visible when TargetCreated and its
+    // NSWindow.windowNumber may be -1, so we wait until the window is known
+    // to be initialized and visible.
+    await this.windowReady();
+    if (width < 10 || width > 10000 || height < 10 || height > 10000)
+      throw new Error("Invalid size");
+
+    const docShell = this._gBrowser.ownerGlobal.docShell;
+    // Exclude address bar and navigation control from the video.
+    const rect = this.linkedBrowser().getBoundingClientRect();
+    const devicePixelRatio = this._window.devicePixelRatio;
+
+    const self = this;
+    const screencastClient = {
+      QueryInterface: ChromeUtils.generateQI([Ci.nsIScreencastServiceClient]),
+      screencastFrame(data, deviceWidth, deviceHeight) {
+        if (self._screencastRecordingInfo)
+          self.emit(PageTarget.Events.ScreencastFrame, { data, deviceWidth, deviceHeight });
+      },
+      screencastStopped() {
+      },
+    };
+    const viewport = this._viewportSize || this._browserContext.defaultViewportSize || { width: 0, height: 0 };
+    const screencastId = screencastService.startVideoRecording(screencastClient, docShell, false, '', width, height, quality || 90, viewport.width, viewport.height, devicePixelRatio * rect.top);
+    this._screencastRecordingInfo = { screencastId };
+    return { screencastId };
+  }
+
+  screencastFrameAck({ screencastId }) {
+    if (!this._screencastRecordingInfo || this._screencastRecordingInfo.screencastId !== screencastId)
+      return;
+    screencastService.screencastFrameAck(screencastId);
+  }
+
+  stopScreencast() {
+    if (!this._screencastRecordingInfo)
+      throw new Error('No screencast in progress');
+    const { screencastId } = this._screencastRecordingInfo;
+    this._screencastRecordingInfo = undefined;
+    screencastService.stopVideoRecording(screencastId);
   }
 
   dispose() {
     this._disposed = true;
-    if (this._screencastInfo)
-      this._stopVideoRecording().catch(e => dump(`stopVideoRecording failed:\n${e}\n`));
+    if (this._videoRecordingInfo)
+      this._stopVideoRecording();
+    if (this._screencastRecordingInfo)
+      this.stopScreencast();
     this._browserContext.pages.delete(this);
     this._registry._browserToTarget.delete(this._linkedBrowser);
     this._registry._browserBrowsingContextToTarget.delete(this._linkedBrowser.browsingContext);
@@ -535,10 +640,35 @@ class PageTarget {
 
 PageTarget.Events = {
   ScreencastStarted: Symbol('PageTarget.ScreencastStarted'),
+  ScreencastFrame: Symbol('PageTarget.ScreencastFrame'),
   Crashed: Symbol('PageTarget.Crashed'),
   DialogOpened: Symbol('PageTarget.DialogOpened'),
   DialogClosed: Symbol('PageTarget.DialogClosed'),
 };
+
+function fromProtocolColorScheme(colorScheme) {
+  if (colorScheme === 'light' || colorScheme === 'dark')
+    return colorScheme;
+  if (colorScheme === null || colorScheme === 'no-preference')
+    return undefined;
+  throw new Error('Unknown color scheme: ' + colorScheme);
+}
+
+function fromProtocolReducedMotion(reducedMotion) {
+  if (reducedMotion === 'reduce' || reducedMotion === 'no-preference')
+    return reducedMotion;
+  if (reducedMotion === null)
+    return undefined;
+  throw new Error('Unknown reduced motion: ' + reducedMotion);
+}
+
+function fromProtocolForcedColors(forcedColors) {
+  if (forcedColors === 'active' || forcedColors === 'none')
+    return forcedColors;
+  if (forcedColors === null)
+    return undefined;
+  throw new Error('Unknown forced colors: ' + forcedColors);
+}
 
 class BrowserContext {
   constructor(registry, browserContextId, removeOnDetach) {
@@ -563,13 +693,36 @@ class BrowserContext {
     this.ignoreHTTPSErrors = undefined;
     this.downloadOptions = undefined;
     this.defaultViewportSize = undefined;
+    this.deviceScaleFactor = undefined;
     this.defaultUserAgent = null;
+    this.javaScriptDisabled = false;
     this.touchOverride = false;
-    this.screencastOptions = undefined;
+    this.colorScheme = 'none';
+    this.forcedColors = 'no-override';
+    this.reducedMotion = 'none';
+    this.videoRecordingOptions = undefined;
     this.scriptsToEvaluateOnNewDocument = [];
     this.bindings = [];
     this.settings = {};
     this.pages = new Set();
+  }
+
+  setColorScheme(colorScheme) {
+    this.colorScheme = fromProtocolColorScheme(colorScheme);
+    for (const page of this.pages)
+      page.updateColorSchemeOverride();
+  }
+
+  setReducedMotion(reducedMotion) {
+    this.reducedMotion = fromProtocolReducedMotion(reducedMotion);
+    for (const page of this.pages)
+      page.updateReducedMotionOverride();
+  }
+
+  setForcedColors(forcedColors) {
+    this.forcedColors = fromProtocolForcedColors(forcedColors);
+    for (const page of this.pages)
+      page.updateForcedColorsOverride();
   }
 
   async destroy() {
@@ -614,10 +767,16 @@ class BrowserContext {
     }
   }
 
-  async setDefaultUserAgent(userAgent) {
+  setDefaultUserAgent(userAgent) {
     this.defaultUserAgent = userAgent;
     for (const page of this.pages)
       page.updateUserAgent();
+  }
+
+  setJavaScriptDisabled(javaScriptDisabled) {
+    this.javaScriptDisabled = javaScriptDisabled;
+    for (const page of this.pages)
+      page.updateJavaScriptDisabled();
   }
 
   setTouchOverride(touchOverride) {
@@ -628,11 +787,8 @@ class BrowserContext {
 
   async setDefaultViewport(viewport) {
     this.defaultViewportSize = viewport ? viewport.viewportSize : undefined;
-    const promises = Array.from(this.pages).map(page => page.updateViewportSize());
-    await Promise.all([
-      this.applySetting('deviceScaleFactor', viewport ? viewport.deviceScaleFactor : undefined),
-      ...promises,
-    ]);
+    this.deviceScaleFactor = viewport ? viewport.deviceScaleFactor : undefined;
+    await Promise.all(Array.from(this.pages).map(page => page.updateViewportSize()));
   }
 
   async addScriptToEvaluateOnNewDocument(script) {
@@ -640,9 +796,9 @@ class BrowserContext {
     await Promise.all(Array.from(this.pages).map(page => page.addScriptToEvaluateOnNewDocument(script)));
   }
 
-  async addBinding(name, script) {
-    this.bindings.push({ name, script });
-    await Promise.all(Array.from(this.pages).map(page => page.addBinding(name, script)));
+  async addBinding(worldName, name, script) {
+    this.bindings.push({ worldName, name, script });
+    await Promise.all(Array.from(this.pages).map(page => page.addBinding(worldName, name, script)));
   }
 
   async applySetting(name, value) {
@@ -759,8 +915,8 @@ class BrowserContext {
     return result;
   }
 
-  async setScreencastOptions(options) {
-    this.screencastOptions = options;
+  async setVideoRecordingOptions(options) {
+    this.videoRecordingOptions = options;
     if (!options)
       return;
     const promises = [];
@@ -876,6 +1032,7 @@ TargetRegistry.Events = {
   TargetDestroyed: Symbol('TargetRegistry.Events.TargetDestroyed'),
   DownloadCreated: Symbol('TargetRegistry.Events.DownloadCreated'),
   DownloadFinished: Symbol('TargetRegistry.Events.DownloadFinished'),
+  ScreencastStopped: Symbol('TargetRegistry.ScreencastStopped'),
 };
 
 var EXPORTED_SYMBOLS = ['TargetRegistry', 'PageTarget'];

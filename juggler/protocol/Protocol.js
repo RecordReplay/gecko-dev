@@ -71,7 +71,7 @@ pageTypes.Size = {
 
 pageTypes.Viewport = {
   viewportSize: pageTypes.Size,
-  deviceScaleFactor: t.Number,
+  deviceScaleFactor: t.Optional(t.Number),
 };
 
 pageTypes.DOMQuad = {
@@ -128,6 +128,11 @@ runtimeTypes.CallFunctionArgument = {
   objectId: t.Optional(t.String),
   unserializableValue: t.Optional(t.Enum(['Infinity', '-Infinity', '-0', 'NaN'])),
   value: t.Any,
+};
+
+runtimeTypes.AuxData = {
+  frameId: t.Optional(t.String),
+  name: t.Optional(t.String),
 };
 
 const axTypes = {};
@@ -200,6 +205,12 @@ networkTypes.ResourceTiming = {
   responseStart: t.Number,
 };
 
+networkTypes.InterceptedResponse = {
+  status: t.Number,
+  statusText: t.String,
+  headers: t.Array(networkTypes.HTTPHeader),
+};
+
 const Browser = {
   targets: ['browser'],
 
@@ -226,7 +237,7 @@ const Browser = {
       canceled: t.Optional(t.Boolean),
       error: t.Optional(t.String),
     },
-    'screencastFinished': {
+    'videoRecordingFinished': {
       screencastId: t.String,
     },
   },
@@ -331,7 +342,7 @@ const Browser = {
     'setJavaScriptDisabled': {
       params: {
         browserContextId: t.Optional(t.String),
-        javaScriptDisabled: t.Nullable(t.Boolean),
+        javaScriptDisabled: t.Boolean,
       }
     },
     'setLocaleOverride': {
@@ -364,6 +375,12 @@ const Browser = {
         viewport: t.Nullable(pageTypes.Viewport),
       }
     },
+    'setScrollbarsHidden': {
+      params: {
+        browserContextId: t.Optional(t.String),
+        hidden: t.Boolean,
+      }
+    },
     'addScriptToEvaluateOnNewDocument': {
       params: {
         browserContextId: t.Optional(t.String),
@@ -373,6 +390,7 @@ const Browser = {
     'addBinding': {
       params: {
         browserContextId: t.Optional(t.String),
+        worldName: t.Optional(t.String),
         name: t.String,
         script: t.String,
       },
@@ -420,15 +438,31 @@ const Browser = {
         colorScheme: t.Nullable(t.Enum(['dark', 'light', 'no-preference'])),
       },
     },
-    'setScreencastOptions': {
+    'setReducedMotion': {
+      params: {
+        browserContextId: t.Optional(t.String),
+        reducedMotion: t.Nullable(t.Enum(['reduce', 'no-preference'])),
+      },
+    },
+    'setForcedColors': {
+      params: {
+        browserContextId: t.Optional(t.String),
+        forcedColors: t.Nullable(t.Enum(['active', 'none'])),
+      },
+    },
+    'setVideoRecordingOptions': {
       params: {
         browserContextId: t.Optional(t.String),
         dir: t.String,
         width: t.Number,
         height: t.Number,
-        scale: t.Optional(t.Number),
       },
     },
+    'cancelDownload': {
+      params: {
+        uuid: t.Optional(t.String),
+      }
+    }
   },
 };
 
@@ -465,6 +499,7 @@ const Network = {
     'requestFinished': {
       requestId: t.String,
       responseEndTime: t.Number,
+      transferSize: t.Number,
     },
     'requestFailed': {
       requestId: t.String,
@@ -495,6 +530,10 @@ const Network = {
         method: t.Optional(t.String),
         headers: t.Optional(t.Array(networkTypes.HTTPHeader)),
         postData: t.Optional(t.String),
+        interceptResponse: t.Optional(t.Boolean),
+      },
+      returns: {
+        response: t.Optional(networkTypes.InterceptedResponse),
       },
     },
     'fulfillInterceptedRequest': {
@@ -524,7 +563,7 @@ const Runtime = {
   events: {
     'executionContextCreated': {
       executionContextId: t.String,
-      auxData: t.Any,
+      auxData: runtimeTypes.AuxData,
     },
     'executionContextDestroyed': {
       executionContextId: t.String,
@@ -665,7 +704,7 @@ const Page = {
       workerId: t.String,
       message: t.String,
     },
-    'screencastStarted': {
+    'videoRecordingStarted': {
       screencastId: t.String,
       file: t.String,
     },
@@ -697,6 +736,11 @@ const Page = {
       opcode: t.Number,
       data: t.String,
     },
+    'screencastFrame': {
+      data: t.String,
+      deviceWidth: t.Number,
+      deviceHeight: t.Number,
+    },
   },
 
   methods: {
@@ -714,6 +758,7 @@ const Page = {
     },
     'addBinding': {
       params: {
+        worldName: t.Optional(t.String),
         name: t.String,
         script: t.String,
       },
@@ -731,6 +776,8 @@ const Page = {
       params: {
         type: t.Optional(t.Enum(['screen', 'print', ''])),
         colorScheme: t.Optional(t.Enum(['dark', 'light', 'no-preference'])),
+        reducedMotion: t.Optional(t.Enum(['reduce', 'no-preference'])),
+        forcedColors: t.Optional(t.Enum(['active', 'none'])),
       },
     },
     'setCacheDisabled': {
@@ -759,15 +806,7 @@ const Page = {
       params: {
         script: t.String,
         worldName: t.Optional(t.String),
-      },
-      returns: {
-        scriptId: t.String,
       }
-    },
-    'removeScriptToEvaluateOnNewDocument': {
-      params: {
-        scriptId: t.String,
-      },
     },
     'navigate': {
       params: {
@@ -801,15 +840,6 @@ const Page = {
         frameId: t.String,
       },
     },
-    'getBoundingBox': {
-      params: {
-        frameId: t.String,
-        objectId: t.String,
-      },
-      returns: {
-        boundingBox: t.Nullable(pageTypes.Rect),
-      },
-    },
     'adoptNode': {
       params: {
         frameId: t.String,
@@ -823,8 +853,8 @@ const Page = {
     'screenshot': {
       params: {
         mimeType: t.Enum(['image/png', 'image/jpeg']),
-        fullPage: t.Optional(t.Boolean),
         clip: t.Optional(pageTypes.Clip),
+        omitDeviceScaleFactor: t.Optional(t.Boolean),
       },
       returns: {
         data: t.String,
@@ -905,15 +935,22 @@ const Page = {
         message: t.String,
       },
     },
-    'startVideoRecording': {
+    'startScreencast': {
       params: {
-        file: t.String,
         width: t.Number,
         height: t.Number,
-        scale: t.Optional(t.Number),
+        quality: t.Number,
+      },
+      returns: {
+        screencastId: t.String,
       },
     },
-    'stopVideoRecording': {
+    'screencastFrameAck': {
+      params: {
+        screencastId: t.String,
+      },
+    },
+    'stopScreencast': {
     },
   },
 };

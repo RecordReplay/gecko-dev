@@ -15,10 +15,15 @@ const Cu = Components.utils;
 const XUL_NS = 'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul';
 const helper = new Helper();
 
+function hashConsoleMessage(params) {
+  return params.location.lineNumber + ':' + params.location.columnNumber + ':' + params.location.url;
+}
+
 class WorkerHandler {
   constructor(session, contentChannel, workerId) {
     this._session = session;
     this._contentWorker = contentChannel.connect(workerId);
+    this._workerConsoleMessages = new Set();
     this._workerId = workerId;
 
     const emitWrappedProtocolEvent = eventName => {
@@ -32,7 +37,10 @@ class WorkerHandler {
 
     this._eventListeners = [
       contentChannel.register(workerId, {
-        runtimeConsole: emitWrappedProtocolEvent('Runtime.console'),
+        runtimeConsole: (params) => {
+          this._workerConsoleMessages.add(hashConsoleMessage(params));
+          emitWrappedProtocolEvent('Runtime.console')(params);
+        },
         runtimeExecutionContextCreated: emitWrappedProtocolEvent('Runtime.executionContextCreated'),
         runtimeExecutionContextDestroyed: emitWrappedProtocolEvent('Runtime.executionContextDestroyed'),
       }),
@@ -64,7 +72,7 @@ class PageHandler {
     this._workers = new Map();
 
     this._pageTarget = target;
-    this._pageNetwork = NetworkObserver.instance().pageNetworkForTarget(target);
+    this._pageNetwork = PageNetwork.forPageTarget(target);
 
     const emitProtocolEvent = eventName => {
       return (...args) => this._session.emitEvent(eventName, ...args);
@@ -80,8 +88,8 @@ class PageHandler {
     // to be ignored by the protocol clients.
     this._isPageReady = false;
 
-    if (this._pageTarget.screencastInfo())
-      this._onScreencastStarted();
+    if (this._pageTarget.videoRecordingInfo())
+      this._onVideoRecordingStarted();
 
     this._eventListeners = [
       helper.on(this._pageTarget, PageTarget.Events.DialogOpened, this._onDialogOpened.bind(this)),
@@ -89,7 +97,8 @@ class PageHandler {
       helper.on(this._pageTarget, PageTarget.Events.Crashed, () => {
         this._session.emitEvent('Page.crashed', {});
       }),
-      helper.on(this._pageTarget, PageTarget.Events.ScreencastStarted, this._onScreencastStarted.bind(this)),
+      helper.on(this._pageTarget, PageTarget.Events.ScreencastStarted, this._onVideoRecordingStarted.bind(this)),
+      helper.on(this._pageTarget, PageTarget.Events.ScreencastFrame, this._onScreencastFrame.bind(this)),
       helper.on(this._pageNetwork, PageNetwork.Events.Request, this._handleNetworkEvent.bind(this, 'Network.requestWillBeSent')),
       helper.on(this._pageNetwork, PageNetwork.Events.Response, this._handleNetworkEvent.bind(this, 'Network.responseReceived')),
       helper.on(this._pageNetwork, PageNetwork.Events.RequestFinished, this._handleNetworkEvent.bind(this, 'Network.requestFinished')),
@@ -111,7 +120,16 @@ class PageHandler {
         pageUncaughtError: emitProtocolEvent('Page.uncaughtError'),
         pageWorkerCreated: this._onWorkerCreated.bind(this),
         pageWorkerDestroyed: this._onWorkerDestroyed.bind(this),
-        runtimeConsole: emitProtocolEvent('Runtime.console'),
+        runtimeConsole: params => {
+          const consoleMessageHash = hashConsoleMessage(params);
+          for (const worker of this._workers) {
+            if (worker._workerConsoleMessages.has(consoleMessageHash)) {
+              worker._workerConsoleMessages.delete(consoleMessageHash);
+              return;
+            }
+          }
+          emitProtocolEvent('Runtime.console')(params);
+        },
         runtimeExecutionContextCreated: emitProtocolEvent('Runtime.executionContextCreated'),
         runtimeExecutionContextDestroyed: emitProtocolEvent('Runtime.executionContextDestroyed'),
 
@@ -129,9 +147,13 @@ class PageHandler {
     helper.removeListeners(this._eventListeners);
   }
 
-  _onScreencastStarted() {
-    const info = this._pageTarget.screencastInfo();
-    this._session.emitEvent('Page.screencastStarted', { screencastId: info.videoSessionId, file: info.file });
+  _onVideoRecordingStarted() {
+    const info = this._pageTarget.videoRecordingInfo();
+    this._session.emitEvent('Page.videoRecordingStarted', { screencastId: info.sessionId, file: info.file });
+  }
+
+  _onScreencastFrame(params) {
+    this._session.emitEvent('Page.screencastFrame', params);
   }
 
   _onPageReady(event) {
@@ -237,8 +259,8 @@ class PageHandler {
       this._pageNetwork.disableRequestInterception();
   }
 
-  async ['Network.resumeInterceptedRequest']({requestId, url, method, headers, postData}) {
-    this._pageNetwork.resumeInterceptedRequest(requestId, url, method, headers, postData);
+  async ['Network.resumeInterceptedRequest']({requestId, url, method, headers, postData, interceptResponse}) {
+    return await this._pageNetwork.resumeInterceptedRequest(requestId, url, method, headers, postData, interceptResponse);
   }
 
   async ['Network.abortInterceptedRequest']({requestId, errorCode}) {
@@ -257,8 +279,11 @@ class PageHandler {
     return await this._contentPage.send('setFileInputFiles', options);
   }
 
-  async ['Page.setEmulatedMedia'](options) {
-    return await this._contentPage.send('setEmulatedMedia', options);
+  async ['Page.setEmulatedMedia']({colorScheme, type, reducedMotion, forcedColors}) {
+    this._pageTarget.setColorScheme(colorScheme || null);
+    this._pageTarget.setReducedMotion(reducedMotion || null);
+    this._pageTarget.setForcedColors(forcedColors || null);
+    this._pageTarget.setEmulatedMedia(type);
   }
 
   async ['Page.bringToFront'](options) {
@@ -279,10 +304,6 @@ class PageHandler {
 
   async ['Page.screenshot'](options) {
     return await this._contentPage.send('screenshot', options);
-  }
-
-  async ['Page.getBoundingBox'](options) {
-    return await this._contentPage.send('getBoundingBox', options);
   }
 
   async ['Page.getContentQuads'](options) {
@@ -315,10 +336,6 @@ class PageHandler {
 
   async ['Page.addScriptToEvaluateOnNewDocument'](options) {
     return await this._contentPage.send('addScriptToEvaluateOnNewDocument', options);
-  }
-
-  async ['Page.removeScriptToEvaluateOnNewDocument'](options) {
-    return await this._contentPage.send('removeScriptToEvaluateOnNewDocument', options);
   }
 
   async ['Page.dispatchKeyEvent'](options) {
@@ -359,15 +376,23 @@ class PageHandler {
     return await this._contentPage.send('setInterceptFileChooserDialog', options);
   }
 
+  async ['Page.startScreencast'](options) {
+    return await this._pageTarget.startScreencast(options);
+  }
+
+  async ['Page.screencastFrameAck'](options) {
+    await this._pageTarget.screencastFrameAck(options);
+  }
+
+  async ['Page.stopScreencast'](options) {
+    await this._pageTarget.stopScreencast(options);
+  }
+
   async ['Page.sendMessageToWorker']({workerId, message}) {
     const worker = this._workers.get(workerId);
     if (!worker)
       throw new Error('ERROR: cannot find worker with id ' + workerId);
     return await worker.sendMessage(JSON.parse(message));
-  }
-
-  async ['Page.stopVideoRecording']() {
-    await this._pageTarget.stopVideoRecording();
   }
 }
 

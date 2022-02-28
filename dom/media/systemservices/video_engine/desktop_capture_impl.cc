@@ -123,7 +123,7 @@ int32_t ScreenDeviceInfoImpl::GetOrientation(const char* deviceUniqueIdUTF8,
   return 0;
 }
 
-VideoCaptureModule* DesktopCaptureImpl::Create(const int32_t id,
+VideoCaptureModuleEx* DesktopCaptureImpl::Create(const int32_t id,
                                                const char* uniqueId,
                                                const CaptureDeviceType type,
                                                bool captureCursor) {
@@ -444,6 +444,19 @@ void DesktopCaptureImpl::DeRegisterCaptureDataCallback(
   }
 }
 
+void DesktopCaptureImpl::RegisterRawFrameCallback(RawFrameCallback* rawFrameCallback) {
+  rtc::CritScope lock(&_apiCs);
+  _rawFrameCallbacks.insert(rawFrameCallback);
+}
+
+void DesktopCaptureImpl::DeRegisterRawFrameCallback(RawFrameCallback* rawFrameCallback) {
+  rtc::CritScope lock(&_apiCs);
+  auto it = _rawFrameCallbacks.find(rawFrameCallback);
+  if (it != _rawFrameCallbacks.end()) {
+    _rawFrameCallbacks.erase(it);
+  }
+}
+
 int32_t DesktopCaptureImpl::StopCaptureIfAllClientsClose() {
   if (_dataCallBacks.empty()) {
     return StopCapture();
@@ -650,6 +663,12 @@ void DesktopCaptureImpl::OnCaptureResult(DesktopCapturer::Result result,
   frameInfo.width = frame->size().width();
   frameInfo.height = frame->size().height();
   frameInfo.videoType = VideoType::kARGB;
+
+  size_t videoFrameStride =
+      frameInfo.width * DesktopFrame::kBytesPerPixel;
+  for (auto rawFrameCallback : _rawFrameCallbacks) {
+    rawFrameCallback->OnRawFrame(videoFrame, videoFrameStride, frameInfo);
+  }
 
   size_t videoFrameLength =
       frameInfo.width * frameInfo.height * DesktopFrame::kBytesPerPixel;

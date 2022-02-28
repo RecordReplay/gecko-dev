@@ -42,6 +42,21 @@ namespace webrtc {
 
 class VideoCaptureEncodeInterface;
 
+class RawFrameCallback {
+ public:
+  virtual ~RawFrameCallback() {}
+
+  virtual void OnRawFrame(uint8_t* videoFrame, size_t videoFrameLength, const VideoCaptureCapability& frameInfo) = 0;
+};
+
+class VideoCaptureModuleEx : public VideoCaptureModule {
+ public:
+  virtual ~VideoCaptureModuleEx() {}
+
+  virtual void RegisterRawFrameCallback(RawFrameCallback* rawFrameCallback) = 0;
+  virtual void DeRegisterRawFrameCallback(RawFrameCallback* rawFrameCallback) = 0;
+};
+
 // simulate deviceInfo interface for video engine, bridge screen/application and
 // real screen/application device info
 
@@ -154,12 +169,12 @@ class BrowserDeviceInfoImpl : public VideoCaptureModule::DeviceInfo {
 // As with video, DesktopCaptureImpl is a proxy for screen sharing
 // and follows the video pipeline design
 class DesktopCaptureImpl : public DesktopCapturer::Callback,
-                           public VideoCaptureModule,
+                           public VideoCaptureModuleEx,
                            public VideoCaptureExternal {
  public:
   /* Create a screen capture modules object
    */
-  static VideoCaptureModule* Create(const int32_t id, const char* uniqueId,
+  static VideoCaptureModuleEx* Create(const int32_t id, const char* uniqueId,
                                     const CaptureDeviceType type,
                                     bool captureCursor = true);
   static VideoCaptureModule::DeviceInfo* CreateDeviceInfo(
@@ -171,6 +186,8 @@ class DesktopCaptureImpl : public DesktopCapturer::Callback,
   void DeRegisterCaptureDataCallback(
       rtc::VideoSinkInterface<VideoFrame>* dataCallback) override;
   int32_t StopCaptureIfAllClientsClose() override;
+  void RegisterRawFrameCallback(RawFrameCallback* rawFrameCallback) override;
+  void DeRegisterRawFrameCallback(RawFrameCallback* rawFrameCallback) override;
 
   int32_t SetCaptureRotation(VideoRotation rotation) override;
   bool SetApplyRotation(bool enable) override;
@@ -216,6 +233,7 @@ class DesktopCaptureImpl : public DesktopCapturer::Callback,
   rtc::CriticalSection _apiCs;
 
   std::set<rtc::VideoSinkInterface<VideoFrame>*> _dataCallBacks;
+  std::set<RawFrameCallback*> _rawFrameCallbacks;
 
   int64_t _incomingFrameTimesNanos
       [kFrameRateCountHistorySize];  // timestamp for local captured frames

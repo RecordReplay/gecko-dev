@@ -37,13 +37,10 @@ class BrowserHandler {
       helper.on(this._targetRegistry, TargetRegistry.Events.TargetDestroyed, this._onTargetDestroyed.bind(this)),
       helper.on(this._targetRegistry, TargetRegistry.Events.DownloadCreated, this._onDownloadCreated.bind(this)),
       helper.on(this._targetRegistry, TargetRegistry.Events.DownloadFinished, this._onDownloadFinished.bind(this)),
+      helper.on(this._targetRegistry, TargetRegistry.Events.ScreencastStopped, sessionId => {
+        this._session.emitEvent('Browser.videoRecordingFinished', {screencastId: '' + sessionId});
+      })
     ];
-
-    const onScreencastStopped = (subject, topic, data) => {
-      this._session.emitEvent('Browser.screencastFinished', {screencastId: '' + data});
-    };
-    Services.obs.addObserver(onScreencastStopped, 'juggler-screencast-stopped');
-    this._eventListeners.push(() => Services.obs.removeObserver(onScreencastStopped, 'juggler-screencast-stopped'));
 
     for (const target of this._targetRegistry.targets())
       this._onTargetCreated(target);
@@ -128,6 +125,10 @@ class BrowserHandler {
     this._session.emitEvent('Browser.downloadFinished', downloadInfo);
   }
 
+  async ['Browser.cancelDownload']({uuid}) {
+    await this._targetRegistry.cancelDownload({uuid});
+  }
+
   async ['Browser.newPage']({browserContextId}) {
     const targetId = await this._targetRegistry.newPage({browserContextId});
     return {targetId};
@@ -138,7 +139,12 @@ class BrowserHandler {
       "navigator:browser"
     );
     if (browserWindow && browserWindow.gBrowserInit) {
-      await browserWindow.gBrowserInit.idleTasksFinishedPromise;
+      // idleTasksFinishedPromise does not resolve when the window
+      // is closed early enough, so we race against window closure.
+      await Promise.race([
+        browserWindow.gBrowserInit.idleTasksFinishedPromise,
+        waitForWindowClosed(browserWindow),
+      ]);
     }
     // Try to fully initialize browser before closing.
     // See comment in `Browser.enable`.
@@ -196,11 +202,19 @@ class BrowserHandler {
   }
 
   async ['Browser.setColorScheme']({browserContextId, colorScheme}) {
-    await this._targetRegistry.browserContextForId(browserContextId).applySetting('colorScheme', nullToUndefined(colorScheme));
+    await this._targetRegistry.browserContextForId(browserContextId).setColorScheme(nullToUndefined(colorScheme));
   }
 
-  async ['Browser.setScreencastOptions']({browserContextId, dir, width, height, scale}) {
-    await this._targetRegistry.browserContextForId(browserContextId).setScreencastOptions({dir, width, height, scale});
+  async ['Browser.setReducedMotion']({browserContextId, reducedMotion}) {
+    await this._targetRegistry.browserContextForId(browserContextId).setReducedMotion(nullToUndefined(reducedMotion));
+  }
+
+  async ['Browser.setForcedColors']({browserContextId, forcedColors}) {
+    await this._targetRegistry.browserContextForId(browserContextId).setForcedColors(nullToUndefined(forcedColors));
+  }
+
+  async ['Browser.setVideoRecordingOptions']({browserContextId, dir, width, height, scale}) {
+    await this._targetRegistry.browserContextForId(browserContextId).setVideoRecordingOptions({dir, width, height, scale});
   }
 
   async ['Browser.setUserAgentOverride']({browserContextId, userAgent}) {
@@ -212,7 +226,7 @@ class BrowserHandler {
   }
 
   async ['Browser.setJavaScriptDisabled']({browserContextId, javaScriptDisabled}) {
-    await this._targetRegistry.browserContextForId(browserContextId).applySetting('javaScriptDisabled', nullToUndefined(javaScriptDisabled));
+    await this._targetRegistry.browserContextForId(browserContextId).setJavaScriptDisabled(javaScriptDisabled);
   }
 
   async ['Browser.setLocaleOverride']({browserContextId, locale}) {
@@ -231,12 +245,16 @@ class BrowserHandler {
     await this._targetRegistry.browserContextForId(browserContextId).setDefaultViewport(nullToUndefined(viewport));
   }
 
+  async ['Browser.setScrollbarsHidden']({browserContextId, hidden}) {
+    await this._targetRegistry.browserContextForId(browserContextId).applySetting('scrollbarsHidden', nullToUndefined(hidden));
+  }
+
   async ['Browser.addScriptToEvaluateOnNewDocument']({browserContextId, script}) {
     await this._targetRegistry.browserContextForId(browserContextId).addScriptToEvaluateOnNewDocument(script);
   }
 
-  async ['Browser.addBinding']({browserContextId, name, script}) {
-    await this._targetRegistry.browserContextForId(browserContextId).addBinding(name, script);
+  async ['Browser.addBinding']({browserContextId, worldName, name, script}) {
+    await this._targetRegistry.browserContextForId(browserContextId).addBinding(worldName, name, script);
   }
 
   ['Browser.setCookies']({browserContextId, cookies}) {
@@ -279,6 +297,22 @@ async function waitForAddonManager() {
     };
     AddonManager.addManagerListener(listener);
   });
+}
+
+async function waitForWindowClosed(browserWindow) {
+  if (browserWindow.closed)
+    return;
+  await new Promise((resolve => {
+    const listener = {
+      onCloseWindow: window => {
+        if (window === browserWindow) {
+          Services.wm.removeListener(listener);
+          resolve();
+        }
+      },
+    };
+    Services.wm.addListener(listener);
+  }));
 }
 
 function nullToUndefined(value) {

@@ -1321,7 +1321,8 @@ void nsINode::ScrollRectIntoViewIfNeeded(int32_t x, int32_t y,
                   nsPresContext::CSSPixelsToAppUnits(h));
   }
   presShell->ScrollFrameRectIntoView(
-      primaryFrame, rect, nsMargin(),
+      primaryFrame, rect,
+      nsMargin(),
       ScrollAxis(kScrollToCenter, WhenToScroll::Always),
       ScrollAxis(kScrollToCenter, WhenToScroll::Always),
       ScrollFlags::ScrollOverflowHidden);
