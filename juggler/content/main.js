@@ -58,17 +58,20 @@ const applySetting = {
     docShell.languageOverride = locale;
   },
 
-  javaScriptDisabled: (javaScriptDisabled) => {
-    docShell.allowJavascript = !javaScriptDisabled;
+  scrollbarsHidden: (hidden) => {
+    frameTree.setScrollbarsHidden(hidden);
   },
 
   colorScheme: (colorScheme) => {
     frameTree.setColorScheme(colorScheme);
   },
 
-  deviceScaleFactor: (deviceScaleFactor) => {
-    //docShell.contentViewer.overrideDPPX = deviceScaleFactor || this._initialDPPX;
-    docShell.deviceSizeIsPageSize = !!deviceScaleFactor;
+  reducedMotion: (reducedMotion) => {
+    frameTree.setReducedMotion(reducedMotion);
+  },
+
+  forcedColors: (forcedColors) => {
+    frameTree.setForcedColors(forcedColors);
   },
 };
 
@@ -94,10 +97,10 @@ function initialize() {
     if (value !== undefined)
       applySetting[name](value);
   }
+  for (const { worldName, name, script } of bindings)
+    frameTree.addBinding(worldName, name, script);
   for (const script of scriptsToEvaluateOnNewDocument)
     frameTree.addScriptToEvaluateOnNewDocument(script);
-  for (const { name, script } of bindings)
-    frameTree.addBinding(name, script);
 
   pageAgent = new PageAgent(messageManager, channel, frameTree);
 
@@ -106,8 +109,8 @@ function initialize() {
       frameTree.addScriptToEvaluateOnNewDocument(script);
     },
 
-    addBinding({name, script}) {
-      frameTree.addBinding(name, script);
+    addBinding({worldName, name, script}) {
+      frameTree.addBinding(worldName, name, script);
     },
 
     applyContextSetting({name, value}) {
@@ -122,7 +125,8 @@ function initialize() {
       return failedToOverrideTimezone;
     },
 
-    async awaitViewportDimensions({width, height}) {
+    async awaitViewportDimensions({width, height, deviceSizeIsPageSize}) {
+      docShell.deviceSizeIsPageSize = deviceSizeIsPageSize;
       const win = docShell.domWindow;
       if (win.innerWidth === width && win.innerHeight === height)
         return;
