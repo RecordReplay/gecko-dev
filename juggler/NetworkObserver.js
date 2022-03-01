@@ -886,13 +886,14 @@ function readRequestPostData(httpChannel) {
   let iStream = httpChannel.uploadStream;
   if (!iStream)
     return undefined;
-  const isSeekableStream = iStream instanceof Ci.nsISeekableStream;
 
   // For some reason, we cannot rewind back big streams,
   // so instead we should clone them.
   const isCloneable = iStream instanceof Ci.nsICloneableInputStream;
   if (isCloneable)
     iStream = iStream.clone();
+
+  const isSeekableStream = iStream instanceof Ci.nsISeekableStream;
 
   let prevOffset;
   if (isSeekableStream) {
