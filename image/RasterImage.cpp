@@ -31,6 +31,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/SizeOfState.h"
 #include "mozilla/StaticPrefs_image.h"
@@ -316,6 +317,15 @@ LookupResult RasterImage::LookupFrame(const UnorientedIntSize& aSize,
                                       PlaybackType aPlaybackType,
                                       bool aMarkUsed) {
   MOZ_ASSERT(NS_IsMainThread());
+
+  // [Replay-Diagnostic] Mismatch under RasterImage::LookupFrame
+  // https://github.com/RecordReplay/backend/issues/4719
+  mozilla::recordreplay::RecordReplayAssert(
+    "RasterImage::LookupFrame():"
+    " aWidth=%d aHeight=%d aFlags=%d aPlaybackType=%d aMarkUsed=%d",
+    aSize.width, aSize.height, aFlags,
+    (int) aPlaybackType, (int) aMarkUsed
+  );
 
   // If we're opaque, we don't need to care about premultiplied alpha, because
   // that can only matter for frames with transparency.
@@ -1355,6 +1365,24 @@ static bool HaveSkia() {
 
 bool RasterImage::CanDownscaleDuringDecode(const UnorientedIntSize& aSize,
                                            uint32_t aFlags) {
+  {
+    // [Replay-Diagnostic] Mismatch under RasterImage::LookupFrame
+    // https://github.com/RecordReplay/backend/issues/4719
+    UnorientedIntSize ourSize = ToUnoriented(mSize);
+    mozilla::recordreplay::RecordReplayAssert(
+      "RasterImage::CanDownscaleDuringDecode():"
+      " loadHasSize=%d loadTransient=%d haveSkia=%d "
+      " imageDownscaleEnabled=%d hqScaling=%d"
+      " animationState=%d aWidth=%d aHeight=%d ourWidth=%d ourHeight=%d",
+      (int) LoadHasSize(), (int) LoadTransient(), (int) HaveSkia(),
+      (int) StaticPrefs::image_downscale_during_decode_enabled();
+      (int) (aFlags & imgIContainer::FLAG_HIGH_QUALITY_SCALING),
+      (int) !!mAnimationState,
+      aSize.width, aSize.height,
+      ourSize.width, ourSize.height
+    );
+  }
+
   // Check basic requirements: downscale-during-decode is enabled, Skia is
   // available, this image isn't transient, we have all the source data and know
   // our size, and the flags allow us to do it.
