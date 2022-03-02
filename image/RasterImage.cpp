@@ -1375,7 +1375,7 @@ bool RasterImage::CanDownscaleDuringDecode(const UnorientedIntSize& aSize,
       " imageDownscaleEnabled=%d hqScaling=%d"
       " animationState=%d aWidth=%d aHeight=%d ourWidth=%d ourHeight=%d",
       (int) LoadHasSize(), (int) LoadTransient(), (int) HaveSkia(),
-      (int) StaticPrefs::image_downscale_during_decode_enabled();
+      (int) StaticPrefs::image_downscale_during_decode_enabled(),
       (int) (aFlags & imgIContainer::FLAG_HIGH_QUALITY_SCALING),
       (int) !!mAnimationState,
       aSize.width, aSize.height,
