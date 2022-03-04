@@ -94,6 +94,15 @@ body {
   }
 }
 
+/* [Replay] - This seems to fix the theme overlapping the native window
+   controls but likely will require adjustment */
+@media (-moz-os-version: windows-win8),
+       (-moz-os-version: windows-win10) {
+  .titlebar-buttonbox {
+    height: 29px;
+  }
+}
+
 %ifdef MENUBAR_CAN_AUTOHIDE
 #toolbar-menubar[autohide="true"] {
   overflow: hidden;
