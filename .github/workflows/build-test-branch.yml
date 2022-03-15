@@ -12,6 +12,10 @@ on:
       slot:
         description: "Checked out repository slot to use"
         required: false
+      test_runs:
+        description: "Number of times to run tests"
+        required: false
+        default: "1"
 
 jobs:
   build-test:
@@ -33,3 +37,4 @@ jobs:
           INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
           INPUT_CLOBBER: ${{ github.event.inputs.clobber }}
           INPUT_SLOT: ${{ github.event.inputs.slot }}
+          INPUT_TEST_RUNS: ${{ github.event.inputs.test_runs }}
