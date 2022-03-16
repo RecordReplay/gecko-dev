@@ -29,6 +29,10 @@ const slot = slotInput ? +slotInput : undefined;
 const buildOnly = !!process.env.BUILD_ONLY;
 console.log("BuildOnly", buildOnly);
 
+const testRunsInput = process.env.INPUT_TEST_RUNS;
+console.log("TestRuns", testRunsInput);
+const testRuns = testRunsInput ? +testRunsInput : 1;
+
 let requestName = `Gecko Build/Test Branch ${branchName} ${replayRevision}`;
 if (driverRevision) {
   requestName += ` driver ${driverRevision}`;
@@ -44,6 +48,8 @@ sendBuildTestRequest({
     ...platformTasks("linux"),
     ...platformTasks("windows"),
   ],
+  // If multiple test runs were specified then the request runs at low priority.
+  priority: testRuns > 1 ? 0 : undefined,
 });
 
 function platformTasks(platform) {
@@ -64,18 +70,20 @@ function platformTasks(platform) {
   const tasks = [buildReplayTask];
 
   if (!buildOnly) {
-    const testReplayTask = newTask(
-      `Run Tests ${platform}`,
-      {
-        kind: "StaticLiveTests",
-        runtime: "gecko",
-        revision: replayRevision,
-        driverRevision,
-      },
-      platform,
-      [buildReplayTask]
-    );
-    tasks.push(testReplayTask);
+    for (let i = 0; i < testRuns; i++) {
+      const testReplayTask = newTask(
+        `Run Tests ${platform}`,
+        {
+          kind: "StaticLiveTests",
+          runtime: "gecko",
+          revision: replayRevision,
+          driverRevision,
+        },
+        platform,
+        [buildReplayTask]
+      );
+      tasks.push(testReplayTask);
+    }
   }
 
   return tasks;
