@@ -78,6 +78,7 @@ function platformTasks(platform) {
           runtime: "gecko",
           revision: replayRevision,
           driverRevision,
+          noParallelTesting: testRuns > 1 ? true : undefined,
         },
         platform,
         [buildReplayTask]
