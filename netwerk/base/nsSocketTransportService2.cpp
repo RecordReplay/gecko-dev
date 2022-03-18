@@ -693,6 +693,12 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
   SOCKET_LOG(("    ...returned after %i milliseconds\n",
               PR_IntervalToMilliseconds(PR_IntervalNow() - ts)));
 
+  // https://github.com/RecordReplay/backend/issues/3977
+  recordreplay::RecordReplayAssert("nsSocketTransportService::Poll timeout %d elapsed %d",
+                                   PR_IntervalToMilliseconds(pollTimeout),
+                                   PR_IntervalToMilliseconds(PR_IntervalNow() - ts));
+  recordreplay::Diagnostic("nsSocketTransportService::Poll");
+
   return rv;
 }
 
@@ -1254,6 +1260,10 @@ void nsSocketTransportService::Reset(bool aGuardLocals) {
 
 nsresult nsSocketTransportService::DoPollIteration(TimeDuration* pollDuration) {
   SOCKET_LOG(("STS poll iter\n"));
+
+  // https://github.com/RecordReplay/backend/issues/3977
+  recordreplay::RecordReplayAssert("nsSocketTransportService::DoPollIteration");
+  recordreplay::Diagnostic("nsSocketTransportService::DoPollIteration");
 
   PRIntervalTime now = PR_IntervalNow();
 
