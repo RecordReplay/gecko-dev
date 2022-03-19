@@ -401,7 +401,8 @@ static void CollectVariationsFromDictionary(const void* aKey,
   // [Replay-Diagnostic]
   // Diagnostic for missing call to CFGetTypeId
   // https://github.com/RecordReplay/backend/issues/4555
-  recordreplay::RecordReplayAssert("CollectVariationsFromDictionary()");
+  recordreplay::RecordReplayAssert("CollectVariationsFromDictionary() key=%p value=%p",
+                                   aKey, aValue);
   if (CFGetTypeID(keyPtr) == CFNumberGetTypeID() &&
       CFGetTypeID(valuePtr) == CFNumberGetTypeID()) {
     uint64_t t;
@@ -427,8 +428,8 @@ static bool GetVariationsForCTFont(CTFontRef aCTFont,
     // Diagnostic for missing call to CFGetTypeId
     // https://github.com/RecordReplay/backend/issues/4555
     recordreplay::RecordReplayAssert(
-      "GetVariationsForCTFont(): count=%d",
-      count
+      "GetVariationsForCTFont(): dict=%p count=%d",
+      dict, count
     );
     aOutVariations->reserve(count);
     CFDictionaryApplyFunction(dict, CollectVariationsFromDictionary,
