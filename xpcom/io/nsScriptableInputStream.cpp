@@ -72,6 +72,9 @@ nsScriptableInputStream::Read(uint32_t aCount, char** aResult) {
 
 NS_IMETHODIMP
 nsScriptableInputStream::ReadBytes(uint32_t aCount, nsACString& aResult) {
+  // https://github.com/RecordReplay/backend/issues/4397
+  mozilla::recordreplay::RecordReplayAssert("nsScriptableInputStream::ReadBytes");
+
   if (!mInputStream) {
     return NS_ERROR_NOT_INITIALIZED;
   }

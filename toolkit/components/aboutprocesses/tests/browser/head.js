@@ -415,11 +415,16 @@ async function testAboutProcessesWithConfig({ showAllFrames, showThreads }) {
       skipAnimation: true,
     });
     await BrowserTestUtils.browserLoaded(tab.linkedBrowser);
+    let p = BrowserTestUtils.browserLoaded(
+      tab.linkedBrowser,
+      true /* includeSubFrames */
+    );
     await SpecialPowers.spawn(tab.linkedBrowser, [], async () => {
       // Open an in-process iframe to test toolkit.aboutProcesses.showAllSubframes
       let frame = content.document.createElement("iframe");
       content.document.body.appendChild(frame);
     });
+    await p;
     return tab;
   })();
 
@@ -485,8 +490,7 @@ async function testAboutProcessesWithConfig({ showAllFrames, showThreads }) {
 
   let doc = tabAboutProcesses.linkedBrowser.contentDocument;
   let tbody = doc.getElementById("process-tbody");
-  Assert.ok(doc);
-  Assert.ok(tbody);
+  Assert.ok(!!tbody, "Found the #process-tbody element");
 
   if (isFission) {
     // We're going to kill this process later, so tell it to add an
@@ -712,6 +716,13 @@ async function testAboutProcessesWithConfig({ showAllFrames, showThreads }) {
     }
   }
 
+  await promiseAboutProcessesUpdated({
+    doc,
+    tbody,
+    force: true,
+    tabAboutProcesses,
+  });
+
   // Testing subframes.
   info("Testing subframes");
   let foundAtLeastOneInProcessSubframe = false;
@@ -737,13 +748,6 @@ async function testAboutProcessesWithConfig({ showAllFrames, showThreads }) {
       "We shouldn't have any about:blank in-process subframe"
     );
   }
-
-  await promiseAboutProcessesUpdated({
-    doc,
-    tbody,
-    force: true,
-    tabAboutProcesses,
-  });
 
   info("Double-clicking on a tab");
   let whenTabSwitchedToWeb = BrowserTestUtils.switchTab(gBrowser, () => {

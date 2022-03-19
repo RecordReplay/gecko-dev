@@ -35,6 +35,7 @@
 #include "mozilla/BaseProfilerMarkers.h"
 #include "mozilla/ProfilerMarkersDetail.h"
 #include "mozilla/ProfilerLabels.h"
+#include "mozilla/RecordReplay.h"
 #include "nsJSUtils.h"  // for nsJSUtils::GetCurrentlyRunningCodeInnerWindowID
 
 class nsIDocShell;
@@ -204,12 +205,25 @@ class MOZ_RAII AutoProfilerTextMarker {
         mText(aText) {
     MOZ_ASSERT(mOptions.Timing().EndTime().IsNull(),
                "AutoProfilerTextMarker options shouldn't have an end time");
+
+    // The AutoProfilerTextMarker's system api usage should not affect
+    // runtime determinism of any part of a normal webpage.
+    // Allow them to pass through.
+    // See https://github.com/RecordReplay/gecko-dev/issues/733
+    mozilla::recordreplay::AutoPassThroughThreadEvents pt;
+
     if (mOptions.Timing().StartTime().IsNull()) {
       mOptions.Set(mozilla::MarkerTiming::InstantNow());
     }
   }
 
   ~AutoProfilerTextMarker() {
+    // The AutoProfilerTextMarker's system api usage should not
+    // affect runtime determinism of any part of a normal webpage.
+    // Allow them to pass through.
+    // See https://github.com/RecordReplay/gecko-dev/issues/733
+    mozilla::recordreplay::AutoPassThroughThreadEvents pt;
+
     AUTO_PROFILER_LABEL("TextMarker", PROFILER);
     mOptions.TimingRef().SetIntervalEnd();
     AUTO_PROFILER_STATS(AUTO_PROFILER_MARKER_TEXT);

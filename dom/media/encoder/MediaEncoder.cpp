@@ -660,6 +660,12 @@ already_AddRefed<MediaEncoder> MediaEncoder::CreateEncoder(
     TrackRate aTrackRate, uint64_t aMaxMemory, TimeDuration aTimeslice) {
   AUTO_PROFILER_LABEL("MediaEncoder::CreateEncoder", OTHER);
 
+  // Media encoding isn't supported when recording/replaying.
+  if (recordreplay::IsRecordingOrReplaying()) {
+    recordreplay::ReportUnsupportedFeature("Media encoding", 706);
+    return nullptr;
+  }
+
   UniquePtr<ContainerWriter> writer;
   UniquePtr<AudioTrackEncoder> audioEncoder;
   UniquePtr<VideoTrackEncoder> videoEncoder;

@@ -14,6 +14,7 @@
 
 #include "AccessibleEventId.h"
 #include "AccessibleHandler.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/RefPtr.h"
 
 namespace mozilla {

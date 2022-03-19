@@ -1653,10 +1653,6 @@ void nsImageLoadingContent::UntrackImage(
     /* = Nothing() */) {
   if (!aImage) return;
 
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  recordreplay::RecordReplayAssert("nsImageLoadingContent::UntrackImage %zu",
-                                   recordreplay::ThingIndex(aImage));
-
   MOZ_ASSERT(aImage == mCurrentRequest || aImage == mPendingRequest,
              "Why haven't we heard of this request?");
 

@@ -564,19 +564,62 @@ GeckoDriver.prototype.newSession = async function(cmd) {
     this.registerListenersForWindow(win);
   }
 
+  // Setup observer for modal dialogs
+  this.dialogObserver = new modal.DialogObserver(() => this.curBrowser);
+  this.dialogObserver.add(this.handleModalDialog.bind(this));
+
   if (this.mainFrame) {
     this.currentSession.chromeBrowsingContext = this.mainFrame.browsingContext;
     this.mainFrame.focus();
   }
 
   if (this.curBrowser.tab) {
-    this.currentSession.contentBrowsingContext = this.curBrowser.contentBrowser.browsingContext;
+    const browsingContext = this.curBrowser.contentBrowser.browsingContext;
+    this.currentSession.contentBrowsingContext = browsingContext;
+
+    let resolveNavigation;
+
+    // Prepare a promise that will resolve upon a navigation.
+    const onProgressListenerNavigation = new Promise(
+      resolve => (resolveNavigation = resolve)
+    );
+
+    // Create a basic webprogress listener which will check if the browsing
+    // context is ready for the new session on every state change.
+    const navigationListener = {
+      onStateChange: (progress, request, flag, status) => {
+        const isStop = flag & Ci.nsIWebProgressListener.STATE_STOP;
+        if (isStop) {
+          resolveNavigation();
+        }
+      },
+
+      QueryInterface: ChromeUtils.generateQI([
+        "nsIWebProgressListener",
+        "nsISupportsWeakReference",
+      ]),
+    };
+
+    // Monitor the webprogress listener before checking isLoadingDocument to
+    // avoid race conditions.
+    browsingContext.webProgress.addProgressListener(
+      navigationListener,
+      Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
+        Ci.nsIWebProgress.NOTIFY_STATE_DOCUMENT
+    );
+
+    if (browsingContext.webProgress.isLoadingDocument) {
+      await onProgressListenerNavigation;
+    }
+
+    browsingContext.webProgress.removeProgressListener(
+      navigationListener,
+      Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
+        Ci.nsIWebProgress.NOTIFY_STATE_DOCUMENT
+    );
+
     this.curBrowser.contentBrowser.focus();
   }
-
-  // Setup observer for modal dialogs
-  this.dialogObserver = new modal.DialogObserver(() => this.curBrowser);
-  this.dialogObserver.add(this.handleModalDialog.bind(this));
 
   // Check if there is already an open dialog for the selected browser window.
   this.dialog = modal.findModalDialogs(this.curBrowser);

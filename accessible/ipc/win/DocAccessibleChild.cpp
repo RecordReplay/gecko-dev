@@ -23,11 +23,7 @@ DocAccessibleChild::DocAccessibleChild(DocAccessible* aDoc, IProtocol* aManager)
     : DocAccessibleChildBase(aDoc), mEmulatedWindowHandle(nullptr) {
   MOZ_COUNT_CTOR_INHERITED(DocAccessibleChild, DocAccessibleChildBase);
 
-  // Avoid creating PlatformChild when replaying, to avoid registering
-  // COM proxies. Changing internal COM state isn't supported when replaying,
-  // and isn't necessary as COM call behavior is replayed from the recording.
-  if (!sPlatformChild && !recordreplay::IsReplaying()) {
-    recordreplay::AutoPassThroughThreadEvents pt;
+  if (!sPlatformChild) {
     sPlatformChild = new PlatformChild();
     ClearOnShutdown(&sPlatformChild, ShutdownPhase::XPCOMShutdown);
   }

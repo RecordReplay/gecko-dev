@@ -10,6 +10,7 @@
 #define mozilla_PresShell_h
 
 #include "mozilla/PresShellForwards.h"
+#include "mozilla/RecordReplay.h"
 
 #include <stdio.h>  // for FILE definition
 #include "FrameMetrics.h"
@@ -1360,6 +1361,16 @@ class PresShell final : public nsStubDocumentObserver,
    *   animation flush is required.
    */
   bool NeedFlush(FlushType aType) const {
+    // [Replay-Diagnostic] Mismatch in PresShell::DoFlushPendingNotifications under nsRefreshDriver::Tick
+    // https://github.com/RecordReplay/backend/issues/4764
+    mozilla::recordreplay::RecordReplayAssert(
+      "PresShell::NeedFlush(aType=%d):"
+      " mNeedStyleFlush=%d mNeedThrottedAnimationFlush=%d mInFlush=%d",
+      (int) aType,
+      (int) mNeedStyleFlush,
+      (int) mNeedThrottledAnimationFlush,
+      (int) mInFlush
+    );
     // We check mInFlush to handle re-entrant calls to FlushPendingNotifications
     // by reporting that we always need a flush in that case.  Otherwise,
     // we could end up missing needed flushes, since we clear the mNeedXXXFlush

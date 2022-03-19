@@ -515,7 +515,7 @@ NS_IMPL_ISUPPORTS(nsZipReaderCache, nsIZipReaderCache, nsIObserver,
                   nsISupportsWeakReference)
 
 nsZipReaderCache::nsZipReaderCache()
-    : mLock("nsZipReaderCache.mLock"),
+    : mLock("nsZipReaderCache.mLock", /* aOrdered */ true),
       mCacheSize(0),
       mZips()
 #ifdef ZIP_CACHE_HIT_RATE

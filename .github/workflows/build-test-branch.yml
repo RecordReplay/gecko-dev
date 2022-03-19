@@ -6,9 +6,16 @@ on:
         description: "Driver revision to use, if not the latest"
         required: false
       clobber:
-        description: "Whether to build the browser from scratch"
+        description: "Build the browser from scratch"
         type: boolean
         required: false
+      slot:
+        description: "Checked out repository slot to use"
+        required: false
+      test_runs:
+        description: "Number of times to run tests"
+        required: false
+        default: "1"
 
 jobs:
   build-test:
@@ -29,3 +36,5 @@ jobs:
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
           INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
           INPUT_CLOBBER: ${{ github.event.inputs.clobber }}
+          INPUT_SLOT: ${{ github.event.inputs.slot }}
+          INPUT_TEST_RUNS: ${{ github.event.inputs.test_runs }}

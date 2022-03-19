@@ -6950,6 +6950,12 @@ bool BaselineInterpreterGenerator::generate(BaselineInterpreter& interpreter) {
       return false;
     }
 
+    // Register code with the record/replay profiler.
+    if (mozilla::recordreplay::IsRecordingOrReplaying() || mozilla::recordreplay::IsProfiling()) {
+      mozilla::recordreplay::LabelExecutableCode(code->raw(), code->instructionsSize(),
+                                                 "SpiderMonkey:BaselineInterpreter");
+    }
+
     // Register BaselineInterpreter code with the profiler's JitCode table.
     {
       JitcodeGlobalEntry::BaselineInterpreterEntry entry;

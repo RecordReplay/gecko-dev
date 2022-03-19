@@ -20,6 +20,28 @@
 #include "AccessibleHypertext2_i.c"
 
 namespace mozilla {
+
+namespace mscom {
+
+UniquePtr<RegisteredProxy> RegisterProxyIfNotReplaying() {
+  if (recordreplay::IsReplaying()) {
+    return MakeUnique<RegisteredProxy>(reinterpret_cast<ITypeLib*>(0xDEADBEEF));
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+  return RegisterProxy();
+}
+
+UniquePtr<RegisteredProxy> RegisterProxyIfNotReplaying(const wchar_t* aLeafName,
+                                                       RegistrationFlags aFlags) {
+  if (recordreplay::IsReplaying()) {
+    return MakeUnique<RegisteredProxy>(reinterpret_cast<ITypeLib*>(0xDEADBEEF));
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+  return RegisterProxy(aLeafName, aFlags);
+}
+
+} // namespace mscom
+
 namespace a11y {
 
 /**
@@ -50,7 +72,7 @@ static const mozilla::mscom::ArrayData sPlatformChildArrayData[] = {
 // we intend to instantiate them. Therefore RegisterProxy() must be called
 // via EnsureMTA.
 PlatformChild::PlatformChild()
-    : mIA2Proxy(mozilla::mscom::RegisterProxy(L"ia2marshal.dll")),
+  : mIA2Proxy(mscom::RegisterProxyIfNotReplaying(L"ia2marshal.dll")),
       mAccTypelib(mozilla::mscom::RegisterTypelib(
           L"oleacc.dll",
           mozilla::mscom::RegistrationFlags::eUseSystemDirectory)),
@@ -71,14 +93,14 @@ PlatformChild::PlatformChild()
 
   UniquePtr<mozilla::mscom::RegisteredProxy> customProxy;
   mozilla::mscom::EnsureMTA([&customProxy]() -> void {
-    customProxy = mozilla::mscom::RegisterProxy();
+    customProxy = mscom::RegisterProxyIfNotReplaying();
   });
   mCustomProxy = std::move(customProxy);
 
   // IA2 needs to be registered in both the main thread's STA as well as the MTA
   UniquePtr<mozilla::mscom::RegisteredProxy> ia2ProxyMTA;
   mozilla::mscom::EnsureMTA([&ia2ProxyMTA]() -> void {
-    ia2ProxyMTA = mozilla::mscom::RegisterProxy(L"ia2marshal.dll");
+    ia2ProxyMTA = mscom::RegisterProxyIfNotReplaying(L"ia2marshal.dll");
   });
   mIA2ProxyMTA = std::move(ia2ProxyMTA);
 }

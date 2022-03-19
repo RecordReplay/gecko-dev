@@ -301,6 +301,11 @@ void CanonicalBrowsingContext::ReplacedBy(
   txn.SetHistoryID(GetHistoryID());
   txn.SetExplicitActive(GetExplicitActive());
   txn.SetHasRestoreData(GetHasRestoreData());
+  // As this is a different BrowsingContext, set InitialSandboxFlags to the
+  // current flags in the new context so that they also apply to any initial
+  // about:blank documents created in it.
+  txn.SetSandboxFlags(GetSandboxFlags());
+  txn.SetInitialSandboxFlags(GetSandboxFlags());
   if (aNewContext->EverAttached()) {
     MOZ_ALWAYS_SUCCEEDS(txn.Commit(aNewContext));
   } else {
@@ -745,6 +750,8 @@ void CanonicalBrowsingContext::SessionHistoryCommit(uint64_t aLoadId,
   MOZ_LOG(gSHLog, LogLevel::Verbose,
           ("CanonicalBrowsingContext::SessionHistoryCommit %p %" PRIu64, this,
            aLoadId));
+  MOZ_ASSERT(aLoadId != UINT64_MAX,
+             "Must not send special about:blank loadinfo to parent.");
   for (size_t i = 0; i < mLoadingEntries.Length(); ++i) {
     if (mLoadingEntries[i].mLoadId == aLoadId) {
       nsSHistory* shistory = static_cast<nsSHistory*>(GetSessionHistory());

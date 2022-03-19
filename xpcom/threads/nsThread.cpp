@@ -1184,6 +1184,14 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult) {
   // now.
   DrainDirectTasks();
 
+  // [RecordReplay-Diagnostic]
+  // Mismatch with MaybePokeCC
+  // https://github.com/RecordReplay/backend/issues/4404
+  mozilla::recordreplay::RecordReplayAssert(
+    "nsThread::ProcessNextEvent(): callScriptObserver=%s",
+    callScriptObserver ? "true" : "false"
+  );
+
   if (callScriptObserver) {
     if (mScriptObserver) {
       mScriptObserver->AfterProcessTask(mNestedEventLoopDepth);

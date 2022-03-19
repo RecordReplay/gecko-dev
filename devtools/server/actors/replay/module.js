@@ -56,6 +56,8 @@ const {
   initialize: initReactDevtools,
 } = require("devtools/server/actors/replay/react-devtools/contentScript");
 
+const { evalExpression } = ChromeUtils.import("resource://devtools/server/actors/replay/pure-eval-dbg.jsm");
+
 const { StackingContext } = require("devtools/server/actors/replay/stacking-context");
 
 let gWindow;
@@ -632,6 +634,7 @@ const commands = {
   "DOM.performSearch": DOM_performSearch,
   "DOM.querySelector": DOM_querySelector,
   "Graphics.getDevicePixelRatio": Graphics_getDevicePixelRatio,
+  "Target.getCapabilities": Target_getCapabilities,
   "Target.convertFunctionOffsetToLocation": Target_convertFunctionOffsetToLocation,
   "Target.convertFunctionOffsetsToLocations": Target_convertFunctionOffsetsToLocations,
   "Target.convertLocationToFunctionOffset": Target_convertLocationToFunctionOffset,
@@ -962,6 +965,13 @@ function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
   };
 }
 
+function Target_getCapabilities() {
+  const capabilities = {
+    pureEval: true,
+  };
+  return { capabilities };
+}
+
 function functionIdToScript(functionId) {
   const script = gScripts.getObject(Number(functionId));
   assert(script, "script is unknown: " + functionId);
@@ -1272,6 +1282,8 @@ if (isRecordingOrReplaying) {
   }
 
   function notifyRequestEvent(channelId, kind, data) {
+    // https://github.com/RecordReplay/backend/issues/4397
+    RecordReplayControl.recordReplayAssert(`notifyRequestEvent ${kind}`);
     gCurrentRequestEvent = {
       kind,
       data,
@@ -2096,11 +2108,11 @@ function nodeContents(node) {
   }
 
   let childNodes;
-  if (node.childNodes.length) {
-    childNodes = [...node.childNodes].map((n) => getObjectIdRaw(n));
-  } else if (node.nodeName == "IFRAME") {
+  if (node.nodeName == "IFRAME") {
     // Treat an iframe's content document as one of its child nodes.
     childNodes = [getObjectIdRaw(node.contentDocument)];
+  } else if (node.childNodes.length) {
+    childNodes = [...node.childNodes].map((n) => getObjectIdRaw(n));
   }
 
   let documentURL;
@@ -2220,29 +2232,30 @@ function styleSheetContents(styleSheet) {
 
 function completionToProtocolResult(completion) {
   let returned, exception;
-  if ("return" in completion) {
+  if (completion && "return" in completion) {
     returned = createProtocolValue(completion.return);
   }
-  if ("throw" in completion) {
+  if (completion && "throw" in completion) {
     exception = createProtocolValue(completion.throw);
   }
   return { returned, exception, data: {} };
 }
 
-function Pause_evaluateInFrame({ frameId, expression }) {
+function Pause_evaluateInFrame({ frameId, expression, pure }) {
   const frameIndexNum = Number(frameId);
   const frame = findScriptFrame((_, i) => i === frameIndexNum);
   if (!frame) {
     throw new Error("Can't find frame");
   }
 
-  const completion = frame.eval(expression);
+  const dbgWindow = gDebugger.makeGlobalObjectReference(getWindow());
+  const completion = evalExpression(gDebugger, dbgWindow, frame, expression, pure);
   return { result: completionToProtocolResult(completion) };
 }
 
-function Pause_evaluateInGlobal({ expression }) {
+function Pause_evaluateInGlobal({ expression, pure }) {
   const dbgWindow = gDebugger.makeGlobalObjectReference(getWindow());
-  const completion = dbgWindow.executeInGlobal(expression);
+  const completion = evalExpression(gDebugger, dbgWindow, null, expression, pure);
   return { result: completionToProtocolResult(completion) };
 }
 

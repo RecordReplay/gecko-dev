@@ -3,16 +3,24 @@ the Record Replay gecko based browser.
 
 ### Getting started:
 
-**macOS**
+**MacOS**
+
+If you are using Apple Silicone you should start by making sure you have a Rosetta terminal:
+
+* https://apple.stackexchange.com/questions/428768/on-apple-m1-with-rosetta-how-to-open-entire-terminal-iterm-in-x86-64-architec
+
+Then you should basically be able to follow the rest of the steps normally (with a couple of caveats called out down below - read carefully).
 
 1. Make sure that you are using Python v2.7
 2. `cp mozconfig.macsample mozconfig`
 3. Download `MacOSX11.1.sdk.tar.xz` from https://github.com/phracker/MacOSX-SDKs/releases
-4. untar `MacOSX11.1.sdk.tar.xz` in the repo root to create a `MacOSX11.1.sdk` directory
-5. run `./mach bootstrap` and select (2) Firefox Desktop
-6. run `node build`
+4. Untar `MacOSX11.1.sdk.tar.xz` in the repo root to create a `MacOSX11.1.sdk` directory
+5. Run `node build`
    * On Apple Silicon, you many need to run `RUSTC_BOOTSTRAP=qcms node build` to build successfully.
-7. run `./mach run`
+6. Run `./mach run`
+
+**MacOS with Apple Silicone**
+
 
 **Linux**
 
@@ -24,6 +32,20 @@ the Record Replay gecko based browser.
 ### Troubleshooting Tips
 
 * If you change your PATH to point to a different version of say Python or Rust you need to rerun `./mach bootstrap` to get the build system to pick up the change.
+
+* If you are seeing this error:
+
+```
+ERROR!!!!!! Could not find artifacts for a toolchain build named macosx64-dump-syms
+``` 
+Try cloning the latest mozilla-central (context: https://discord.com/channels/779097926135054346/801228428115312671/938567563644915713):
+
+* Make sure you have mercurial installed (`brew install hg`)
+* Clone mozilla central to sibling directory to this one (`cd .. && hg clone https://hg.mozilla.org/mozilla-central/`) 
+* Go into the freshly cloned mozilla-central repo and run `./mach bootstrap` within it and select `(2) Firefox Desktop` when prompted. Come back to this repo and try building again.
+* In some cases, even if `./mach bootstrap` fails with the above error, the build step might still work, so you can also try building without necessarily getting `./mach bootstrap` to complete everything successfully.
+
+You can also find some conversation of these steps at https://github.com/RecordReplay/gecko-dev/issues/745
 
 ### Merging from upstream
 

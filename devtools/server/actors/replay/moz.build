@@ -17,6 +17,7 @@ DevToolsModules(
     'globals.js',
     'module.js',
     'network-helpers.jsm',
+    'pure-eval-dbg.jsm',
     'stacking-context.js',
     'telemetry.js',
 )

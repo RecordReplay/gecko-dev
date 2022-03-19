@@ -123,6 +123,8 @@ enum class ExplicitActiveStatus : uint8_t {
   FIELD(Muted, bool)                                                          \
   /* See nsSandboxFlags.h for the possible flags. */                          \
   FIELD(SandboxFlags, uint32_t)                                               \
+  /* The value of SandboxFlags when the BrowsingContext is first created.     \
+   * Used for sandboxing the initial about:blank document. */                 \
   FIELD(InitialSandboxFlags, uint32_t)                                        \
   /* A non-zero unique identifier for the browser element that is hosting     \
    * this                                                                     \
@@ -791,7 +793,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
   void SetActiveSessionHistoryEntry(const Maybe<nsPoint>& aPreviousScrollPos,
                                     SessionHistoryInfo* aInfo,
                                     uint32_t aLoadType,
-                                    uint32_t aUpdatedCacheKey);
+                                    uint32_t aUpdatedCacheKey,
+                                    bool aUpdateLength = true);
 
   // Replace the active entry for this browsing context. This is used for
   // implementing history.replaceState and same document navigations.

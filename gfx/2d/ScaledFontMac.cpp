@@ -20,6 +20,7 @@
 #endif
 #include "nsCocoaFeatures.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/RecordReplay.h"
 
 #ifdef MOZ_WIDGET_COCOA
 // prototype for private API
@@ -397,6 +398,11 @@ static void CollectVariationsFromDictionary(const void* aKey,
   auto keyPtr = static_cast<const CFTypeRef>(aKey);
   auto valuePtr = static_cast<const CFTypeRef>(aValue);
   auto outVariations = static_cast<std::vector<FontVariation>*>(aContext);
+  // [Replay-Diagnostic]
+  // Diagnostic for missing call to CFGetTypeId
+  // https://github.com/RecordReplay/backend/issues/4555
+  recordreplay::RecordReplayAssert("CollectVariationsFromDictionary() key=%p value=%p",
+                                   aKey, aValue);
   if (CFGetTypeID(keyPtr) == CFNumberGetTypeID() &&
       CFGetTypeID(valuePtr) == CFNumberGetTypeID()) {
     uint64_t t;
@@ -418,6 +424,13 @@ static bool GetVariationsForCTFont(CTFontRef aCTFont,
   AutoRelease<CFDictionaryRef> dict(CTFontCopyVariation(aCTFont));
   CFIndex count = dict ? CFDictionaryGetCount(dict) : 0;
   if (count > 0) {
+    // [Replay-Diagnostic]
+    // Diagnostic for missing call to CFGetTypeId
+    // https://github.com/RecordReplay/backend/issues/4555
+    recordreplay::RecordReplayAssert(
+      "GetVariationsForCTFont(): dict=%p count=%d",
+      (CFDictionaryRef)dict, count
+    );
     aOutVariations->reserve(count);
     CFDictionaryApplyFunction(dict, CollectVariationsFromDictionary,
                               aOutVariations);

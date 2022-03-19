@@ -322,12 +322,11 @@ nsImageFrame::nsImageFrame(ComputedStyle* aStyle, nsPresContext* aPresContext,
       mForceSyncDecoding(false) {
   EnableVisibilityTracking();
 
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
+  // Image frame registration is needed for sorting in PresShell::DecApproximateVisibleCount
   recordreplay::RegisterThing(this);
 }
 
 nsImageFrame::~nsImageFrame() {
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
   recordreplay::UnregisterThing(this);
 }
 
@@ -2635,9 +2634,6 @@ nsresult nsImageFrame::AttributeChanged(int32_t aNameSpaceID,
 
 void nsImageFrame::OnVisibilityChange(
     Visibility aNewVisibility, const Maybe<OnNonvisible>& aNonvisibleAction) {
-  // Diagnostic for https://github.com/RecordReplay/backend/issues/4028
-  recordreplay::RecordReplayAssert("nsImageFrame::OnVisibilityChange %zu", recordreplay::ThingIndex(this));
-
   if (mKind == Kind::ImageElement) {
     nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
     imageLoader->OnVisibilityChange(aNewVisibility, aNonvisibleAction);
