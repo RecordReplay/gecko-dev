@@ -429,7 +429,7 @@ static bool GetVariationsForCTFont(CTFontRef aCTFont,
     // https://github.com/RecordReplay/backend/issues/4555
     recordreplay::RecordReplayAssert(
       "GetVariationsForCTFont(): dict=%p count=%d",
-      dict, count
+      (CFDictionaryRef)dict, count
     );
     aOutVariations->reserve(count);
     CFDictionaryApplyFunction(dict, CollectVariationsFromDictionary,
