@@ -255,7 +255,7 @@ void RemoteLazyInputStreamChild::ForgetStream(RemoteLazyInputStream* aStream) {
   RefPtr<RemoteLazyInputStreamChild> kungFuDeathGrip = this;
 
   {
-    MutexAutoLock lock(mMutex);
+    MutexAutoLockMaybeEventsDisallowed lock(mMutex);
     mStreams.RemoveElement(aStream);
 
     if (!mStreams.IsEmpty() || mState != eActive) {

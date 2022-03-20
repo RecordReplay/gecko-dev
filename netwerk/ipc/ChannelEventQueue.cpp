@@ -173,8 +173,13 @@ void ChannelEventQueue::ResumeInternal() {
     };
 
     if (!mOwner) {
+      // mOwner can be unset non-deterministically, so make sure we create the
+      // CompleteResume runnable at a consistent point.
+      recordreplay::RecordReplayAssert("ChannelEventQueue::ResumeInternal NoOwner");
       return;
     }
+
+    recordreplay::RecordReplayAssert("ChannelEventQueue::ResumeInternal CompleteResume");
 
     // Worker thread requires a CancelableRunnable.
     RefPtr<Runnable> event = new CompleteResumeRunnable(this, mOwner);

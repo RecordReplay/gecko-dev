@@ -891,7 +891,7 @@ void nsPipe::OnInputStreamException(nsPipeInputStream* aStream,
 
   nsPipeEvents events;
   {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mReentrantMonitor);
 
     // Its possible to re-enter this method when we call OnPipeException() or
     // OnInputExection() below.  If there is a caller stuck in our synchronous
@@ -915,11 +915,11 @@ void nsPipe::OnInputStreamException(nsPipeInputStream* aStream,
       }
 
       MonitorAction action =
-          mInputList[i]->OnInputException(aReason, events, mon);
+          mInputList[i]->OnInputException(aReason, events, mon.get());
 
       // Notify after element is removed in case we re-enter as a result.
       if (action == NotifyMonitor) {
-        mon.NotifyAll();
+        mon.get().NotifyAll();
       }
 
       return;
@@ -933,7 +933,7 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
 
   nsPipeEvents events;
   {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mReentrantMonitor);
 
     // if we've already hit an exception, then ignore this one.
     if (NS_FAILED(mStatus)) {
@@ -954,7 +954,7 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
         continue;
       }
 
-      if (list[i]->OnInputException(aReason, events, mon) == NotifyMonitor) {
+      if (list[i]->OnInputException(aReason, events, mon.get()) == NotifyMonitor) {
         needNotify = true;
       }
     }
@@ -965,7 +965,7 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
 
     // Notify after we have removed any input streams from mInputList
     if (needNotify) {
-      mon.NotifyAll();
+      mon.get().NotifyAll();
     }
   }
 }
@@ -1269,7 +1269,7 @@ nsPipeInputStream::CloseWithStatus(nsresult aReason) {
   LOG(("III CloseWithStatus [this=%p reason=%" PRIx32 "]\n", this,
        static_cast<uint32_t>(aReason)));
 
-  ReentrantMonitorAutoEnter mon(mPipe->mReentrantMonitor);
+  ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mPipe->mReentrantMonitor);
 
   if (NS_FAILED(mInputStatus)) {
     return NS_OK;
