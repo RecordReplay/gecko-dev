@@ -1707,9 +1707,9 @@ void SurfaceCache::UnlockEntries(const ImageKey aImageKey) {
 void SurfaceCache::RemoveImage(const ImageKey aImageKey) {
   RefPtr<ImageSurfaceCache> discard;
   {
-    OrderedStaticMutexAutoLock lock(sInstanceMutex);
+    OrderedStaticMutexAutoLockMaybeEventsDisallowed lock(sInstanceMutex);
     if (sInstance) {
-      discard = sInstance->RemoveImage(aImageKey, lock);
+      discard = sInstance->RemoveImage(aImageKey, lock.get());
     }
   }
 }

@@ -1633,7 +1633,7 @@ NS_IMETHODIMP_(MozExternalRefCountType)
 nsPipeOutputStream::Release() {
   bool close;
   {
-    ReentrantMonitorAutoEnter mon(mPipe->mReentrantMonitor);
+    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mPipe->mReentrantMonitor);
     close = --mWriterRefCnt == 0;
   }
 

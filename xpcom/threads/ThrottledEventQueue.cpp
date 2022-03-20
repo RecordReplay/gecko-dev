@@ -103,6 +103,9 @@ class ThrottledEventQueue::Inner final : public nsISupports {
   // emptied.
   EventQueueSized<64> mEventQueue;
 
+  mutable Mutex mMutexNonDeterministic;
+  EventQueue mEventQueueNonDeterministic;
+
   // The event target we dispatch our events (actually, just our Executor) to.
   //
   // Written only during construction. Readable by any thread without locking.
@@ -126,6 +129,7 @@ class ThrottledEventQueue::Inner final : public nsISupports {
                  uint32_t aPriority)
       : mMutex("ThrottledEventQueue", /* aOrdered */ true),
         mIdleCondVar(mMutex, "ThrottledEventQueue:Idle"),
+        mMutexNonDeterministic("ThrottledEventQueueNonDeterministic"),
         mBaseTarget(aBaseTarget),
         mName(aName),
         mPriority(aPriority),
@@ -208,6 +212,21 @@ class ThrottledEventQueue::Inner final : public nsISupports {
     mBaseTarget->IsOnCurrentThread(&currentThread);
     MOZ_ASSERT(currentThread);
 #endif
+
+    // Run any pending non-deterministic events.
+    if (recordreplay::IsRecordingOrReplaying()) {
+      recordreplay::AutoDisallowThreadEvents disallow;
+      MutexAutoLock lock(mMutexNonDeterministic);
+      while (true) {
+        TimeDuration delay;
+        nsCOMPtr<nsIRunnable> event = mEventQueueNonDeterministic.GetEvent(lock, &delay);
+        if (event) {
+          event->Run();
+        } else {
+          break;
+        }
+      }
+    }
 
     {
       MutexAutoLock lock(mMutex);
@@ -335,6 +354,13 @@ class ThrottledEventQueue::Inner final : public nsISupports {
 
   nsresult Dispatch(already_AddRefed<nsIRunnable> aEvent, uint32_t aFlags) {
     MOZ_ASSERT(aFlags == NS_DISPATCH_NORMAL || aFlags == NS_DISPATCH_AT_END);
+
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      MutexAutoLock lock(mMutexNonDeterministic);
+      nsCOMPtr<nsIRunnable> event(aEvent);
+      mEventQueueNonDeterministic.PutEvent(event.forget(), EventQueuePriority::Normal, lock);
+      return NS_OK;
+    }
 
     // Any thread
     MutexAutoLock lock(mMutex);
