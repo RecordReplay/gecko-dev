@@ -106,6 +106,10 @@ HttpChannelChild::HttpChannelChild()
 }
 
 HttpChannelChild::~HttpChannelChild() {
+  // Destruction can occur at non-deterministic points even if events aren't
+  // currently disallowed.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
   LOG(("Destroying HttpChannelChild @%p\n", this));
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
