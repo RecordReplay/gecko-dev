@@ -1408,13 +1408,6 @@ TextureClient::TextureClient(TextureData* aData, TextureFlags aFlags,
     MOZ_ASSERT(!(mFlags & TextureFlags::NON_BLOCKING_READ_LOCK));
     EnableBlockingReadLock();
   }
-
-  // The destructor can behave non-deterministically based on the texture state
-  // and sends messages over IPC, which we currently don't allow to happen
-  // non-deterministically. Avoid these problems by leaking all texture clients.
-  if (recordreplay::IsRecordingOrReplaying()) {
-    ADDREF_MANUALLY(this);
-  }
 }
 
 bool TextureClient::CopyToTextureClient(TextureClient* aTarget,
