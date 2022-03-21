@@ -534,17 +534,7 @@ static inline mach_vm_address_t toVMAddress(void* pointer) {
 bool SharedMemoryBasic::Create(size_t size) {
   MOZ_ASSERT(mPort == MACH_PORT_NULL, "already initialized");
 
-  if (recordreplay::HasDivergedFromRecording()) {
-    // Fake a port so we can avoid the system calls below.
-    mPort = 1;
-    Mapped(size);
-    return true;
-  }
-
   memory_object_size_t memoryObjectSize = round_page(size);
-
-  // https://github.com/RecordReplay/backend/issues/4307
-  recordreplay::RecordReplayAssert("SharedMemoryBasic::Create %d", (int)memoryObjectSize);
 
   kern_return_t kr =
       mach_make_memory_entry_64(mach_task_self(), &memoryObjectSize, 0,
