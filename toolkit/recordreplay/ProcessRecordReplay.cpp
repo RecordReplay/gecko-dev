@@ -112,7 +112,7 @@ static void (*gOrderedUnlock)(int aLock);
 static void (*gOnMouseEvent)(const char* aKind, size_t aClientX, size_t aClientY);
 static void (*gOnKeyEvent)(const char* aKind, const char* aKey);
 static void (*gOnNavigationEvent)(const char* aKind, const char* aUrl);
-static void (*gSetRecordingIdCallback)(void (*aCallback)(const char*));
+static const char* (*gGetRecordingId)();
 static void (*gProcessRecording)();
 static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
 static void (*gInvalidateRecording)(const char* aFormat, ...);
@@ -149,8 +149,6 @@ void LoadSymbolInternal(const char* name, void** psym, bool aOptional) {
     MOZ_CRASH();
   }
 }
-
-static void RecordingIdCallback(const char* aRecordingId);
 
 // This is called when the process crashes to return any reason why Gecko is crashing.
 static const char* GetCrashReason() {
@@ -412,7 +410,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayOnMouseEvent", gOnMouseEvent);
   LoadSymbol("RecordReplayOnKeyEvent", gOnKeyEvent);
   LoadSymbol("RecordReplayOnNavigationEvent", gOnNavigationEvent);
-  LoadSymbol("RecordReplaySetRecordingIdCallback", gSetRecordingIdCallback);
+  LoadSymbol("RecordReplayGetRecordingId", gGetRecordingId);
   LoadSymbol("RecordReplayProcessRecording", gProcessRecording);
   LoadSymbol("RecordReplaySetCrashReasonCallback", gSetCrashReasonCallback);
   LoadSymbol("RecordReplayInvalidateRecording", gInvalidateRecording);
@@ -481,8 +479,14 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   ParseJSFilters("RECORD_REPLAY_RECORD_JS_ASSERTS", gJSAsserts);
 
   gRecordCommandLineArguments(aArgc, aArgv);
-  gSetRecordingIdCallback(RecordingIdCallback);
   gSetCrashReasonCallback(GetCrashReason);
+
+  if (IsRecording()) {
+    // Print out a string that is recognized by the automated test harness.
+    AutoPassThroughThreadEvents pt;
+    const char* url = getenv("RECORD_REPLAY_URL");
+    fprintf(stderr, "CreateRecording %s %s\n", GetRecordingId(), url ? url : "");
+  }
 
   // Unless disabled via the environment, pre-process all created recordings so
   // that they will load faster after saving the recording.
@@ -745,6 +749,10 @@ MOZ_EXPORT void RecordReplayInterface_LabelExecutableCode(const void* aCode, siz
 
 }  // extern "C"
 
+const char* GetRecordingId() {
+  return gGetRecordingId();
+}
+
 static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilters) {
   const char* value = getenv(aEnv);
   if (!value) {
@@ -952,13 +960,6 @@ void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFl
 
   gOnNavigationEvent(nullptr, url.get());
   gLastLocationURL = url;
-}
-
-static void RecordingIdCallback(const char* aRecordingId) {
-  // Print out a string that is recognized by the automated test harness.
-  AutoPassThroughThreadEvents pt;
-  const char* url = getenv("RECORD_REPLAY_URL");
-  fprintf(stderr, "CreateRecording %s %s\n", aRecordingId, url ? url : "");
 }
 
 void NewStableHashTable(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate) {

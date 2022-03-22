@@ -63,7 +63,6 @@ void AddRecordingOperation(const char* aKind, const char* aValue) {
 namespace js {
 
 static void (*gOnNewSource)(const char* aId, const char* aKind, const char* aUrl);
-static char* (*gGetRecordingId)();
 static void (*gSetDefaultCommandCallback)(char* (*aCallback)(const char*, const char*));
 static void (*gSetClearPauseDataCallback)(void (*aCallback)());
 static void (*gSetChangeInstrumentCallback)(void (*aCallback)(bool));
@@ -97,7 +96,6 @@ static void ChangeInstrumentCallback(bool aValue);
 // Handle initialization at process startup.
 void InitializeJS() {
   LoadSymbol("RecordReplayOnNewSource", gOnNewSource);
-  LoadSymbol("RecordReplayGetRecordingId", gGetRecordingId);
   LoadSymbol("RecordReplaySetDefaultCommandCallback", gSetDefaultCommandCallback);
   LoadSymbol("RecordReplaySetClearPauseDataCallback", gSetClearPauseDataCallback);
   LoadSymbol("RecordReplaySetChangeInstrumentCallback", gSetChangeInstrumentCallback);
@@ -256,33 +254,6 @@ static bool IsRecordingUnusable() {
   return false;
 }
 
-// Recording IDs are UUIDs, and have a fixed length.
-static char gRecordingId[40];
-static bool gHasRecordingId;
-
-static const char* GetRecordingId() {
-  if (IsRecordingUnusable()) {
-    return nullptr;
-  }
-  if (!gHasRecordingId) {
-    // RecordReplayGetRecordingId() is not currently supported while replaying,
-    // so we embed the recording ID in the recording itself.
-    gHasRecordingId = true;
-    if (IsRecording()) {
-      char* recordingId = gGetRecordingId();
-      if (recordingId) {
-        MOZ_RELEASE_ASSERT(*recordingId != 0);
-        MOZ_RELEASE_ASSERT(strlen(recordingId) + 1 <= sizeof(gRecordingId));
-        strcpy(gRecordingId, recordingId);
-      } else {
-        memset(gRecordingId, 0, sizeof(gRecordingId));
-      }
-    }
-    RecordReplayBytes("RecordingId", gRecordingId, sizeof(gRecordingId));
-  }
-  return gRecordingId[0] ? gRecordingId : nullptr;
-}
-
 // If we are recording all content processes, whether any interesting content was found.
 static bool gHasInterestingContent;
 
@@ -337,15 +308,13 @@ void SendRecordingFinished() {
   AutoSafeJSContext cx;
   JSAutoRealm ar(cx, xpc::PrivilegedJunkScope());
 
-  const char* recordingId = GetRecordingId();
-  if (!recordingId) {
-    char* reason = gGetUnusableRecordingReason();
-    MOZ_RELEASE_ASSERT(reason);
+  char* reason = gGetUnusableRecordingReason();
+  if (reason) {
     CallModuleMethod(cx, "SendRecordingUnusable", reason);
-    return;
+  } else {
+    const char* recordingId = GetRecordingId();
+    CallModuleMethod(cx, "SendRecordingFinished", recordingId);
   }
-
-  CallModuleMethod(cx, "SendRecordingFinished", recordingId);
 }
 
 void MaybeSendRecordingUnusable() {
@@ -353,7 +322,7 @@ void MaybeSendRecordingUnusable() {
 
   if (IsRecordingUnusable()) {
     // Finishing the recording after it is unusable will notify the UI process
-    // appropriately, and will trigger shutdown of this process appropriately.
+    // appropriately, and will trigger shutdown of this process.
     FinishRecording();
   }
 }

@@ -34,6 +34,8 @@ void InitializeGraphics();
 bool HasCheckpoint();
 void FinishRecording();
 
+const char* GetRecordingId();
+
 // If specified, all content processes are being recorded. The recording for
 // this process will be added to a file specified by an env var if it loads any
 // interesting sources.
