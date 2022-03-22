@@ -6930,7 +6930,8 @@ class MLoadTypedArrayElementHole : public MBinaryInstruction,
     return congruentIfOperandsEqual(other);
   }
   AliasSet getAliasSet() const override {
-    return AliasSet::Load(AliasSet::UnboxedElement);
+    return AliasSet::Load(AliasSet::UnboxedElement | AliasSet::ObjectFields |
+                          AliasSet::ArrayBufferViewLengthOrOffset);
   }
   bool canProduceFloat32() const override {
     return arrayType_ == Scalar::Float32;

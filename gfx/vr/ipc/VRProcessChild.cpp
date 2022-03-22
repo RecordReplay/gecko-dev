@@ -9,6 +9,7 @@
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/ipc/IOThreadChild.h"
 #include "mozilla/ipc/ProcessUtils.h"
+#include "mozilla/StaticPrefs_dom.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
