@@ -320,6 +320,9 @@ static void MaybeStartProfiling() {
 // recording will not be usable.
 static bool gPretendNotRecording = false;
 
+// Whether the recorder will be directly uploading the recording, vs. writing it to disk.
+static bool gUploadingRecording = false;
+
 extern "C" {
 
 MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
@@ -436,6 +439,10 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 #endif
 
   gAttach(*dispatchAddress, gBuildId);
+
+  if (*dispatchAddress) {
+    gUploadingRecording = true;
+  }
 
   if (TestEnv("RECORD_ALL_CONTENT")) {
     gRecordAllContent = true;
@@ -748,6 +755,10 @@ MOZ_EXPORT void RecordReplayInterface_LabelExecutableCode(const void* aCode, siz
 }
 
 }  // extern "C"
+
+bool IsUploadingRecording() {
+  return gUploadingRecording;
+}
 
 const char* GetRecordingId() {
   return gGetRecordingId();

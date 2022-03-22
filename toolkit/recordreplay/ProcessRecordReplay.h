@@ -33,7 +33,7 @@ static inline bool TestEnv(const char* env) {
 void InitializeGraphics();
 bool HasCheckpoint();
 void FinishRecording();
-
+bool IsUploadingRecording();
 const char* GetRecordingId();
 
 // If specified, all content processes are being recorded. The recording for

@@ -683,8 +683,8 @@ static bool Method_RecordingId(JSContext* aCx, unsigned aArgc,
                                      Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
 
-  const char* recordingId = GetRecordingId();
-  if (recordingId) {
+  if (IsUploadingRecording()) {
+    const char* recordingId = GetRecordingId();
     JSString* str = JS_NewStringCopyZ(aCx, recordingId);
     if (!str) {
       return false;
