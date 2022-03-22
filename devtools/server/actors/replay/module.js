@@ -221,7 +221,7 @@ function setSourceMap({
     return;
   }
   const recordingId = RecordReplayControl.recordingId();
-  if (!recordingId || !url) {
+  if (!url) {
     return;
   }
 
@@ -1337,6 +1337,31 @@ if (isRecordingOrReplaying) {
       notifyRequestEvent(channelId, "response-raw-headers", {
         responseRawHeaders,
       });
+    },
+  });
+
+  Services.cpmm.addMessageListener("RecordReplaySourcemapContents", {
+    receiveMessage({ data }) {
+      RecordReplayControl.writeSourcemap(
+        data.id || "",
+        data.contents || "",
+        data.sourceMapURL || "",
+        data.sourceMapBaseURL || "",
+        data.targetContentHash || "",
+        data.targetURLHash || "",
+        data.targetMapURLHash || ""
+      );
+    },
+  });
+
+  Services.cpmm.addMessageListener("RecordReplayOriginalSourceContents", {
+    receiveMessage({ data }) {
+      RecordReplayControl.writeOriginalSource(
+        data.parentId,
+        data.url,
+        data.contents,
+        data.parentOffset
+      );
     },
   });
 

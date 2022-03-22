@@ -82,6 +82,9 @@ static size_t (*gNewTimeWarpTarget)();
 static size_t (*gElapsedTimeMs)();
 static char* (*gGetUnusableRecordingReason)();
 static void (*gAddMetadata)(const char* metadata);
+static void (*gMaybeWriteSourcemapToDisk)(const char *aId, const char *aContents, const char *aUrl, const char *aBaseUrl,
+                                          const char *aTargetContentHash, const char *aTargetURLHash, const char *aTargetMapURLHash);
+static void (*gMaybeWriteOriginalSourceToDisk)(const char *aUrl, const char *aContents, const char *aParentId, uint32_t parentOffset);
 
 // Callback used when the recording driver is sending us a command to look up
 // some state.
@@ -116,6 +119,8 @@ void InitializeJS() {
   LoadSymbol("RecordReplayElapsedTimeMs", gElapsedTimeMs);
   LoadSymbol("RecordReplayGetUnusableRecordingReason", gGetUnusableRecordingReason);
   LoadSymbol("RecordReplayAddMetadata", gAddMetadata);
+  LoadSymbol("RecordReplayMaybeWriteSourcemapToDisk", gMaybeWriteSourcemapToDisk);
+  LoadSymbol("RecordReplayMaybeWriteOriginalSourceToDisk", gMaybeWriteOriginalSourceToDisk);
 
   gSetDefaultCommandCallback(CommandCallback);
   gSetClearPauseDataCallback(ClearPauseDataCallback);
@@ -831,6 +836,40 @@ static bool Method_RecordingOperations(JSContext* aCx, unsigned aArgc, Value* aV
   return true;
 }
 
+static bool Method_WriteSourcemap(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  nsAutoCString id, contents, url, baseUrl, targetContentHash, targetURLHash, targetMapURLHash;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), id);
+  ConvertJSStringToCString(aCx, args.get(1).toString(), contents);
+  ConvertJSStringToCString(aCx, args.get(2).toString(), url);
+  ConvertJSStringToCString(aCx, args.get(3).toString(), baseUrl);
+  ConvertJSStringToCString(aCx, args.get(4).toString(), targetContentHash);
+  ConvertJSStringToCString(aCx, args.get(5).toString(), targetURLHash);
+  ConvertJSStringToCString(aCx, args.get(6).toString(), targetMapURLHash);
+
+  gMaybeWriteSourcemapToDisk(id.get(), contents.get(), url.get(), baseUrl.get(),
+                             targetContentHash.get(), targetURLHash.get(), targetMapURLHash.get());
+
+  args.rval().setUndefined();
+  return true;
+}
+
+static bool Method_WriteOriginalSource(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  nsAutoCString url, contents, parentId;
+  ConvertJSStringToCString(aCx, args.get(0).toString(), url);
+  ConvertJSStringToCString(aCx, args.get(1).toString(), contents);
+  ConvertJSStringToCString(aCx, args.get(2).toString(), parentId);
+  uint32_t parentOffset = args.get(3).toNumber();
+
+  gMaybeWriteOriginalSourceToDisk(url.get(), contents.get(), parentId.get(), parentOffset);
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("log", Method_Log, 1, 0),
   JS_FN("recordReplayAssert", Method_RecordReplayAssert, 1, 0),
@@ -853,6 +892,8 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("addMetadata", Method_AddMetadata, 1, 0),
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
+  JS_FN("writeSourcemap", Method_WriteSourcemap, 3, 0),
+  JS_FN("writeOriginalSource", Method_WriteOriginalSource, 1, 0),
   JS_FS_END
 };
 

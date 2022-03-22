@@ -472,18 +472,24 @@ class Recording extends EventEmitter {
   }
 
   _onNewSourcemap(params) {
-    this._lockRecording(params.recordingId);
+    if (params.recordingId) {
+      this._lockRecording(params.recordingId);
 
-    this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
-      console.error("Exception while processing sourcemap", err, params);
-
-      pingTelemetry("sourcemap-upload", "upload-exception", {
-        message: err?.message,
-        stack: err?.stack,
-        recordingId: params.recordingId,
-        commandErrorData: err instanceof CommandError ? err.data : undefined,
-      });
-    }));
+      this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
+        console.error("Exception while processing sourcemap", err, params);
+  
+        pingTelemetry("sourcemap-upload", "upload-exception", {
+          message: err?.message,
+          stack: err?.stack,
+          recordingId: params.recordingId,
+          commandErrorData: err instanceof CommandError ? err.data : undefined,
+        });
+      }));
+    } else {
+      this._resourceUploads.push(writeAllSourcemapAssets(params, this).catch(err => {
+        console.error("Exception while writing sourcemap", err, params);
+      }));
+    }
   }
 
   async _onFinished(data) {
@@ -944,9 +950,9 @@ function handleRecordingStarted(pmm) {
   // recording begins, so we lazily look it up the first time it is needed.
   let _browser = null;
   function getBrowser() {
-    for (let frameLoader of recordings.keys()) {
-      if (frameLoader.remoteTab && frameLoader.remoteTab.osPid === pmm.osPid) {
-        _browser = frameLoader.ownerElement;
+    for (const win of Services.wm.getEnumerator("navigator:browser")) {
+      if (win.gBrowser.selectedBrowser.frameLoader.remoteTab.osPid === pmm.osPid) {
+        _browser = win.gBrowser.selectedBrowser.frameLoader.ownerElement;
         break;
       }
     }
@@ -1187,6 +1193,48 @@ async function uploadAllSourcemapAssets({
       ]);
     })),
   ]);
+}
+
+async function writeAllSourcemapAssets({
+  recordingId,
+  sourceMapURL,
+  sourceMapBaseURL,
+  targetContentHash,
+  targetURLHash,
+  targetMapURLHash,
+}, recording) {
+  const contentPrincipal = recording.browser.contentPrincipal;
+  const result = await fetchText(contentPrincipal, recordingId, sourceMapURL);
+  if (!result) {
+    return;
+  }
+  const mapText = result.text;
+  const id = String(Math.floor(Math.random() * 10000000000));
+  recording.sendProcessMessage("RecordReplaySourcemapContents", {
+    id,
+    contents: mapText,
+    sourceMapURL,
+    sourceMapBaseURL,
+    targetContentHash,
+    targetURLHash,
+    targetMapURLHash,
+  });
+
+  const { sources } =
+    collectUnresolvedSourceMapResources(mapText, sourceMapURL, sourceMapBaseURL);
+
+  for (const { offset, url } of sources) {
+    const result = await fetchText(contentPrincipal, recordingId, url);
+    if (!result) {
+      continue;
+    }
+    recording.sendProcessMessage("RecordReplayOriginalSourceContents", {
+      url,
+      contents: result.text,
+      parentId: id,
+      parentOffset: offset,
+    });
+  }
 }
 
 function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
