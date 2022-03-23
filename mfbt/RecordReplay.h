@@ -118,6 +118,22 @@ struct MOZ_RAII AutoDisallowThreadEvents {
   ~AutoDisallowThreadEvents() { EndDisallowThreadEvents(); }
 };
 
+// Mark a region where thread events are passed through the record/replay
+// system. While recording, no information from system calls or other events
+// will be recorded for the thread. While replaying, system calls and other
+// events are performed normally.
+static inline void BeginPassThroughGetTimeOperations();
+static inline void EndPassThroughGetTimeOperations();
+
+// Whether events in this thread are passed through.
+static inline bool AreGetTimeOperationsPassedThrough();
+
+// RAII class to make 
+struct MOZ_RAII AutoPassThroughGetTimeOperations {
+  AutoPassThroughGetTimeOperations() { BeginPassThroughGetTimeOperations(); }
+  ~AutoPassThroughGetTimeOperations() { EndPassThroughGetTimeOperations(); }
+};
+
 // Mark a region where a note will be printed when crashing.
 static inline void PushCrashNote(const char* aNote);
 static inline void PopCrashNote();
@@ -403,6 +419,10 @@ MOZ_MAKE_RECORD_REPLAY_WRAPPER(AreThreadEventsPassedThrough, bool, false, (),
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(BeginDisallowThreadEvents, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(EndDisallowThreadEvents, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER(AreThreadEventsDisallowed, bool, false, (), ())
+MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(BeginPassThroughGetTimeOperations, (), ())
+MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(EndPassThroughGetTimeOperations, (), ())
+MOZ_MAKE_RECORD_REPLAY_WRAPPER(AreGetTimeOperationsPassedThrough, bool, false, (),
+                               ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(PushCrashNote, (const char* aNote), (aNote))
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(PopCrashNote, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER(RecordReplayValue, size_t, aValue,

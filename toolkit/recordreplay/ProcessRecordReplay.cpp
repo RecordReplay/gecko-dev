@@ -102,6 +102,9 @@ static bool (*gAreEventsPassedThrough)();
 static void (*gBeginDisallowEvents)();
 static void (*gEndDisallowEvents)();
 static bool (*gAreEventsDisallowed)();
+static void (*gBeginPassThroughGetTimeOperations)();
+static void (*gEndPassThroughGetTimeOperations)();
+static bool (*gAreGetTimeOperationsPassedThrough)();
 static bool (*gHasDivergedFromRecording)();
 static bool (*gIsUnhandledDivergenceAllowed)();
 static void (*gRecordReplayNewCheckpoint)();
@@ -402,6 +405,9 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayBeginDisallowEvents", gBeginDisallowEvents);
   LoadSymbol("RecordReplayEndDisallowEvents", gEndDisallowEvents);
   LoadSymbol("RecordReplayAreEventsDisallowed", gAreEventsDisallowed);
+  LoadSymbol("RecordReplayBeginPassThroughGetTimeOperations", gBeginPassThroughGetTimeOperations);
+  LoadSymbol("RecordReplayEndPassThroughGetTimeOperations", gEndPassThroughGetTimeOperations);
+  LoadSymbol("RecordReplayAreGetTimeOperationsPassedThrough", gAreGetTimeOperationsPassedThrough);
   LoadSymbol("RecordReplayHasDivergedFromRecording", gHasDivergedFromRecording);
   LoadSymbol("RecordReplayIsUnhandledDivergenceAllowed", gIsUnhandledDivergenceAllowed);
   LoadSymbol("RecordReplayNewCheckpoint", gRecordReplayNewCheckpoint);
@@ -638,6 +644,18 @@ MOZ_EXPORT void RecordReplayInterface_InternalEndDisallowThreadEvents() {
 
 MOZ_EXPORT bool RecordReplayInterface_InternalAreThreadEventsDisallowed() {
   return gAreEventsDisallowed();
+}
+
+MOZ_EXPORT void RecordReplayInterface_InternalBeginPassThroughGetTimeOperations() {
+  gBeginPassThroughGetTimeOperations();
+}
+
+MOZ_EXPORT void RecordReplayInterface_InternalEndPassThroughGetTimeOperations() {
+  gEndPassThroughGetTimeOperations();
+}
+
+MOZ_EXPORT bool RecordReplayInterface_InternalAreGetTimeOperationsPassedThrough() {
+  return gAreGetTimeOperationsPassedThrough();
 }
 
 MOZ_EXPORT bool RecordReplayInterface_InternalHasDivergedFromRecording() {

@@ -28,6 +28,7 @@ namespace recordreplay {
 #define FOR_EACH_INTERFACE(Macro)                                              \
   Macro(InternalAreThreadEventsPassedThrough, bool, (), ())                    \
   Macro(InternalAreThreadEventsDisallowed, bool, (), ())                       \
+  Macro(InternalAreGetTimeOperationsPassedThrough, bool, (), ())               \
   Macro(InternalRecordReplayValue, size_t, (const char* aWhy, size_t aValue),  \
         (aWhy, aValue))                                                        \
   Macro(InternalHasDivergedFromRecording, bool, (), ())                        \
