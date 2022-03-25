@@ -503,7 +503,7 @@ nsresult SourceBuffer::AppendFromInputStream(nsIInputStream* aInputStream,
 }
 
 void SourceBuffer::Complete(nsresult aStatus) {
-  MutexAutoLockMaybeEventsDisallowed lock(mMutex);
+  MutexAutoLock lock(mMutex);
 
   // When an error occurs internally (e.g. due to an OOM), we save the status.
   // This will indirectly trigger a failure higher up and that will call
@@ -535,7 +535,7 @@ void SourceBuffer::Complete(nsresult aStatus) {
 }
 
 bool SourceBuffer::IsComplete() {
-  MutexAutoLockMaybeEventsDisallowed lock(mMutex);
+  MutexAutoLock lock(mMutex);
   return bool(mStatus);
 }
 

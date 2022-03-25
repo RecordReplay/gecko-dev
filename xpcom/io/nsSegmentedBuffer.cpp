@@ -129,9 +129,14 @@ void nsSegmentedBuffer::FreeOMT(void* aPtr) {
 }
 
 void nsSegmentedBuffer::FreeOMT(std::function<void()>&& aTask) {
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
-
   if (!NS_IsMainThread()) {
+    aTask();
+    return;
+  }
+
+  // The point where mFreeOMT is cleared seems to race and doesn't replay
+  // at a consistent point, so we avoid using mFreeOMT when recording/replaying.
+  if (recordreplay::IsRecordingOrReplaying()) {
     aTask();
     return;
   }

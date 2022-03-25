@@ -822,6 +822,12 @@ void FinalizationRegistryCleanup::QueueCallback(JSFunction* aDoCleanup,
 
 void FinalizationRegistryCleanup::QueueCallback(JSFunction* aDoCleanup,
                                                 JSObject* aIncumbentGlobal) {
+  // FinalizationRegistry callbacks are not invoked when recording/replaying,
+  // as the invocations can happen at non-deterministic points in the recording.
+  if (recordreplay::IsRecordingOrReplaying()) {
+    return;
+  }
+
   bool firstCallback = mCallbacks.empty();
 
   MOZ_ALWAYS_TRUE(mCallbacks.append(Callback{aDoCleanup, aIncumbentGlobal}));

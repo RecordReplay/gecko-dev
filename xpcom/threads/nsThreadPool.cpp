@@ -62,7 +62,6 @@ nsThreadPool::nsThreadPool()
     : Runnable("nsThreadPool"),
       mMutex("[nsThreadPool.mMutex]", /* aOrdered */ true),
       mEventsAvailable(mMutex, "[nsThreadPool.mEventsAvailable]"),
-      mMutexNonDeterministic("[nsThreadPool.mMutexNonDeterministic]"),
       mThreadLimit(DEFAULT_THREAD_LIMIT),
       mIdleThreadLimit(DEFAULT_IDLE_THREAD_LIMIT),
       mIdleThreadTimeout(DEFAULT_IDLE_THREAD_TIMEOUT),
@@ -91,16 +90,6 @@ nsresult nsThreadPool::PutEvent(nsIRunnable* aEvent) {
 nsresult nsThreadPool::PutEvent(already_AddRefed<nsIRunnable> aEvent,
                                 uint32_t aFlags) {
   // Avoid spawning a new thread while holding the event queue lock...
-
-  // Events dispatched while record/replay thread events are disallowed are
-  // happening at a non-deterministic point, and use a separate thread pool.
-  if (recordreplay::AreThreadEventsDisallowed()) {
-    MOZ_RELEASE_ASSERT(!aFlags);
-    MutexAutoLock lock(mMutexNonDeterministic);
-    nsCOMPtr<nsIRunnable> event(aEvent);
-    mEventsNonDeterministic.PutEvent(event.forget(), EventQueuePriority::Normal, lock);
-    return NS_OK;
-  }
 
   bool spawnThread = false;
   uint32_t stackSize = 0;
@@ -252,17 +241,6 @@ nsThreadPool::Run() {
   gCurrentThreadPool.set(this);
 
   do {
-    // Run any pending non-deterministic events first.
-    {
-      recordreplay::AutoDisallowThreadEvents disallow;
-      MutexAutoLock lock(mMutexNonDeterministic);
-      TimeDuration delay;
-      nsCOMPtr<nsIRunnable> event = mEventsNonDeterministic.GetEvent(lock, &delay);
-      if (event) {
-        event->Run();
-      }
-    }
-
     nsCOMPtr<nsIRunnable> event;
     TimeDuration delay;
     {

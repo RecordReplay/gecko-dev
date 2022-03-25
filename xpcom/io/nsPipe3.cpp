@@ -151,7 +151,13 @@ class nsPipeInputStream final : public nsIAsyncInputStream,
         mBlocking(true),
         mBlocked(false),
         mCallbackFlags(0),
-        mPriority(nsIRunnablePriority::PRIORITY_NORMAL) {}
+        mPriority(nsIRunnablePriority::PRIORITY_NORMAL) {
+    // Avoid closing the stream at non-deterministic points when recording/replaying
+    // by leaking the stream entirely.
+    if (recordreplay::IsRecordingOrReplaying()) {
+      AddRef();
+    }
+  }
 
   nsPipeInputStream(const nsPipeInputStream& aOther)
       : mPipe(aOther.mPipe),
@@ -161,7 +167,12 @@ class nsPipeInputStream final : public nsIAsyncInputStream,
         mBlocked(false),
         mCallbackFlags(0),
         mReadState(aOther.mReadState),
-        mPriority(nsIRunnablePriority::PRIORITY_NORMAL) {}
+        mPriority(nsIRunnablePriority::PRIORITY_NORMAL) {
+    // Leak streams when record/replaying, as above.
+    if (recordreplay::IsRecordingOrReplaying()) {
+      AddRef();
+    }
+  }
 
   nsresult Fill();
   void SetNonBlocking(bool aNonBlocking) { mBlocking = !aNonBlocking; }
@@ -891,7 +902,7 @@ void nsPipe::OnInputStreamException(nsPipeInputStream* aStream,
 
   nsPipeEvents events;
   {
-    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mReentrantMonitor);
+    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
     // Its possible to re-enter this method when we call OnPipeException() or
     // OnInputExection() below.  If there is a caller stuck in our synchronous
@@ -915,11 +926,11 @@ void nsPipe::OnInputStreamException(nsPipeInputStream* aStream,
       }
 
       MonitorAction action =
-          mInputList[i]->OnInputException(aReason, events, mon.get());
+          mInputList[i]->OnInputException(aReason, events, mon);
 
       // Notify after element is removed in case we re-enter as a result.
       if (action == NotifyMonitor) {
-        mon.get().NotifyAll();
+        mon.NotifyAll();
       }
 
       return;
@@ -933,7 +944,7 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
 
   nsPipeEvents events;
   {
-    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mReentrantMonitor);
+    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
     // if we've already hit an exception, then ignore this one.
     if (NS_FAILED(mStatus)) {
@@ -954,7 +965,7 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
         continue;
       }
 
-      if (list[i]->OnInputException(aReason, events, mon.get()) == NotifyMonitor) {
+      if (list[i]->OnInputException(aReason, events, mon) == NotifyMonitor) {
         needNotify = true;
       }
     }
@@ -965,7 +976,7 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
 
     // Notify after we have removed any input streams from mInputList
     if (needNotify) {
-      mon.get().NotifyAll();
+      mon.NotifyAll();
     }
   }
 }
@@ -1269,7 +1280,7 @@ nsPipeInputStream::CloseWithStatus(nsresult aReason) {
   LOG(("III CloseWithStatus [this=%p reason=%" PRIx32 "]\n", this,
        static_cast<uint32_t>(aReason)));
 
-  ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mPipe->mReentrantMonitor);
+  ReentrantMonitorAutoEnter mon(mPipe->mReentrantMonitor);
 
   if (NS_FAILED(mInputStatus)) {
     return NS_OK;
@@ -1633,7 +1644,7 @@ NS_IMETHODIMP_(MozExternalRefCountType)
 nsPipeOutputStream::Release() {
   bool close;
   {
-    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mPipe->mReentrantMonitor);
+    ReentrantMonitorAutoEnter mon(mPipe->mReentrantMonitor);
     close = --mWriterRefCnt == 0;
   }
 

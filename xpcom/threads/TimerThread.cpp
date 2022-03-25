@@ -533,7 +533,7 @@ nsresult TimerThread::AddTimer(nsTimerImpl* aTimer) {
 }
 
 nsresult TimerThread::RemoveTimer(nsTimerImpl* aTimer) {
-  MonitorAutoLockMaybeEventsDisallowed lock(mMonitor);
+  MonitorAutoLock lock(mMonitor);
 
   // Remove the timer from our array.  Tell callers that aTimer was not found
   // by returning NS_ERROR_NOT_AVAILABLE.
@@ -542,8 +542,8 @@ nsresult TimerThread::RemoveTimer(nsTimerImpl* aTimer) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  // Awaken the timer thread, unless thread events are disallowed.
-  if (mWaiting && !recordreplay::AreThreadEventsDisallowed()) {
+  // Awaken the timer thread.
+  if (mWaiting) {
     mNotified = true;
     mMonitor.Notify();
   }

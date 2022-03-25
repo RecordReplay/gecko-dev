@@ -52,8 +52,7 @@ ThreadEventQueue::ThreadEventQueue(UniquePtr<EventQueue> aQueue,
     : mBaseQueue(std::move(aQueue)),
       mLock("ThreadEventQueue", /* aOrdered */ true),
       mEventsAvailable(mLock, "EventsAvail"),
-      mIsMainThread(aIsMainThread),
-      mLockNonDeterministic("ThreadEventQueueNonDeterministic") {
+      mIsMainThread(aIsMainThread) {
   if (aIsMainThread) {
     TaskController::Get()->SetConditionVariable(&mEventsAvailable);
   }
@@ -104,13 +103,6 @@ bool ThreadEventQueue::PutEventInternal(already_AddRefed<nsIRunnable>&& aEvent,
       }
     }
 
-    if (recordreplay::AreThreadEventsDisallowed()) {
-      MutexAutoLock lock(mLockNonDeterministic);
-      MOZ_RELEASE_ASSERT(!aSink);
-      mBaseQueueNonDeterministic.PutEvent(event.take(), aPriority, lock);
-      return true;
-    }
-
     MutexAutoLock lock(mLock);
 
     if (mEventsAreDoomed) {
@@ -145,21 +137,6 @@ bool ThreadEventQueue::PutEventInternal(already_AddRefed<nsIRunnable>&& aEvent,
 
 already_AddRefed<nsIRunnable> ThreadEventQueue::GetEvent(
     bool aMayWait, mozilla::TimeDuration* aLastEventDelay) {
-  // Run any pending non-deterministic events.
-  if (recordreplay::IsRecordingOrReplaying()) {
-    recordreplay::AutoDisallowThreadEvents disallow;
-    MutexAutoLock lock(mLockNonDeterministic);
-    while (true) {
-      TimeDuration delay;
-      nsCOMPtr<nsIRunnable> event = mBaseQueueNonDeterministic.GetEvent(lock, &delay);
-      if (event) {
-        event->Run();
-      } else {
-        break;
-      }
-    }
-  }
-
   nsCOMPtr<nsIRunnable> event;
   {
     // Scope for lock.  When we are about to return, we will exit this

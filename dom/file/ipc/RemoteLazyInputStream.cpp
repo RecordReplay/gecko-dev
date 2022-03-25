@@ -150,6 +150,11 @@ RemoteLazyInputStream::RemoteLazyInputStream(RemoteLazyInputStreamChild* aActor)
       }
     }
   }
+
+  // Avoid non-deterministic behavior in destructor when recording/replaying.
+  if (recordreplay::IsRecordingOrReplaying()) {
+    AddRef();
+  }
 }
 
 RemoteLazyInputStream::~RemoteLazyInputStream() { Close(); }

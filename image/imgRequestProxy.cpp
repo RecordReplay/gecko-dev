@@ -120,6 +120,12 @@ imgRequestProxy::imgRequestProxy()
       mHadDispatch(false) {
   /* member initializers and constructor code */
   LOG_FUNC(gImgLog, "imgRequestProxy::imgRequestProxy");
+
+  // For now we always leak imgRequestProxy objects when recording/replaying,
+  // to avoid non-deterministic behavior that can be triggered by the destructor.
+  if (recordreplay::IsRecordingOrReplaying()) {
+    NS_ADDREF(this);
+  }
 }
 
 imgRequestProxy::~imgRequestProxy() {

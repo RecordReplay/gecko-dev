@@ -1707,9 +1707,9 @@ void SurfaceCache::UnlockEntries(const ImageKey aImageKey) {
 void SurfaceCache::RemoveImage(const ImageKey aImageKey) {
   RefPtr<ImageSurfaceCache> discard;
   {
-    OrderedStaticMutexAutoLockMaybeEventsDisallowed lock(sInstanceMutex);
+    OrderedStaticMutexAutoLock lock(sInstanceMutex);
     if (sInstance) {
-      discard = sInstance->RemoveImage(aImageKey, lock.get());
+      discard = sInstance->RemoveImage(aImageKey, lock);
     }
   }
 }
@@ -1824,9 +1824,9 @@ void SurfaceCache::ReleaseImageOnMainThread(
     return;
   }
 
-  OrderedStaticMutexAutoLockMaybeEventsDisallowed lock(sInstanceMutex);
+  OrderedStaticMutexAutoLock lock(sInstanceMutex);
   if (sInstance) {
-    sInstance->ReleaseImageOnMainThread(std::move(aImage), lock.get());
+    sInstance->ReleaseImageOnMainThread(std::move(aImage), lock);
   } else {
     NS_ReleaseOnMainThread("SurfaceCache::ReleaseImageOnMainThread",
                            std::move(aImage), /* aAlwaysProxy */ true);
