@@ -103,14 +103,13 @@ HttpChannelChild::HttpChannelChild()
   // We require that the parent cookie service actor exists while
   // processing HTTP responses.
   RefPtr<CookieServiceChild> cookieService = CookieServiceChild::GetSingleton();
-
-  if (recordreplay::IsRecordingOrReplaying()) {
-    // Leak this to avoid non-deterministic behavior in destructor.
-    AddRef();
-  }
 }
 
 HttpChannelChild::~HttpChannelChild() {
+  // Destruction can occur at non-deterministic points even if events aren't
+  // currently disallowed.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
   LOG(("Destroying HttpChannelChild @%p\n", this));
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
@@ -158,13 +157,8 @@ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
     return;
   }
 
-  if (recordreplay::IsRecordingOrReplaying()) {
-    // Leak reference to avoid non-deterministic dtor call.
-    (void)mRedirectChannelChild.forget().take();
-  } else {
-    NS_ReleaseOnMainThread("HttpChannelChild::mRedirectChannelChild",
-                           mRedirectChannelChild.forget());
-  }
+  NS_ReleaseOnMainThread("HttpChannelChild::mRedirectChannelChild",
+                         mRedirectChannelChild.forget());
 }
 //-----------------------------------------------------------------------------
 // HttpChannelChild::nsISupports

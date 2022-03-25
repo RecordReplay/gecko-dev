@@ -85,6 +85,23 @@ class MOZ_STACK_CLASS MonitorAutoLock {
   Monitor* mMonitor;
 };
 
+// Locks an ordered monitor. When events are disallowed on the current thread,
+// the lock will be unordered and could occur at a different point when replaying.
+class MonitorAutoLockMaybeEventsDisallowed {
+ public:
+  MonitorAutoLockMaybeEventsDisallowed(Monitor& aMonitor) {
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      recordreplay::AutoPassThroughThreadEvents pt;
+      mLock.emplace(aMonitor);
+    } else {
+      mLock.emplace(aMonitor);
+    }
+  }
+  MonitorAutoLock& get() { return mLock.ref(); }
+ private:
+  Maybe<MonitorAutoLock> mLock;
+};
+
 /**
  * Unlock the monitor for the lexical scope instances of this class
  * are bound to (except for MonitorAutoLock in nested scopes).

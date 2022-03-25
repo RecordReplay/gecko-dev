@@ -70,6 +70,10 @@ Decoder::Decoder(RasterImage* aImage)
       mFinalizeFrames(true) {}
 
 Decoder::~Decoder() {
+  // Decoder destruction occurs at non-deterministic points even if events
+  // aren't disallowed, due to its threadsafe refcount.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
   MOZ_ASSERT(mProgress == NoProgress || !mImage,
              "Destroying Decoder without taking all its progress changes");
   MOZ_ASSERT(mInvalidRect.IsEmpty() || !mImage,
@@ -84,9 +88,7 @@ Decoder::~Decoder() {
     qcms_profile_release(mInProfile);
   }
 
-  // For now we leak the image reference when recording/replaying rather than
-  // non-deterministically dispatch events to the main thread.
-  if (mImage && !NS_IsMainThread() && !recordreplay::IsRecordingOrReplaying()) {
+  if (mImage && !NS_IsMainThread()) {
     // Dispatch mImage to main thread to prevent it from being destructed by the
     // decode thread.
     SurfaceCache::ReleaseImageOnMainThread(mImage.forget());

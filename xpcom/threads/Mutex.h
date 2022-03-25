@@ -8,6 +8,7 @@
 #define mozilla_Mutex_h
 
 #include "mozilla/BlockingResourceBase.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/PlatformMutex.h"
 #include "mozilla/RecordReplay.h"
 #include "nsISupports.h"
@@ -215,6 +216,23 @@ BaseAutoLock(MutexType&) -> BaseAutoLock<MutexType&>;
 
 typedef detail::BaseAutoLock<Mutex&> MutexAutoLock;
 typedef detail::BaseAutoLock<OffTheBooksMutex&> OffTheBooksMutexAutoLock;
+
+// Locks an ordered mutex. When events are disallowed on the current thread,
+// the lock will be unordered and could occur at a different point when replaying.
+class MutexAutoLockMaybeEventsDisallowed {
+ public:
+  MutexAutoLockMaybeEventsDisallowed(Mutex& aMutex) {
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      recordreplay::AutoPassThroughThreadEvents pt;
+      mLock.emplace(aMutex);
+    } else {
+      mLock.emplace(aMutex);
+    }
+  }
+  MutexAutoLock& get() { return mLock.ref(); }
+ private:
+  Maybe<MutexAutoLock> mLock;
+};
 
 namespace detail {
 /**

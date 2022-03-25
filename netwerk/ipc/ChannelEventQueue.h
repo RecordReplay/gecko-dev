@@ -148,7 +148,7 @@ class ChannelEventQueue final {
   void Resume();
 
   void NotifyReleasingOwner() {
-    MutexAutoLock lock(mMutex);
+    MutexAutoLockMaybeEventsDisallowed lock(mMutex);
     mOwner = nullptr;
   }
 

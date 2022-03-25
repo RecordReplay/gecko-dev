@@ -161,6 +161,8 @@ void ChannelEventQueue::ResumeInternal() {
             mOwner(aOwner) {}
 
       NS_IMETHOD Run() override {
+        // https://github.com/RecordReplay/backend/issues/4307
+        recordreplay::RecordReplayAssert("CompleteResumeRunnable::Run");
         mQueue->CompleteResume();
         return NS_OK;
       }
@@ -173,8 +175,15 @@ void ChannelEventQueue::ResumeInternal() {
     };
 
     if (!mOwner) {
+      // https://github.com/RecordReplay/backend/issues/4307
+      // mOwner can be unset non-deterministically, so make sure we create the
+      // CompleteResume runnable at a consistent point.
+      recordreplay::RecordReplayAssert("ChannelEventQueue::ResumeInternal NoOwner");
       return;
     }
+
+    // https://github.com/RecordReplay/backend/issues/4307
+    recordreplay::RecordReplayAssert("ChannelEventQueue::ResumeInternal CompleteResume");
 
     // Worker thread requires a CancelableRunnable.
     RefPtr<Runnable> event = new CompleteResumeRunnable(this, mOwner);

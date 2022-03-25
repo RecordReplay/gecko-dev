@@ -121,7 +121,7 @@ nsresult TimerThreadWrapper::AddTimer(nsTimerImpl* aTimer) {
 }
 
 nsresult TimerThreadWrapper::RemoveTimer(nsTimerImpl* aTimer) {
-  mozilla::OrderedStaticMutexAutoLock lock(sMutex);
+  mozilla::OrderedStaticMutexAutoLockMaybeEventsDisallowed lock(sMutex);
   if (mThread) {
     return mThread->RemoveTimer(aTimer);
   }

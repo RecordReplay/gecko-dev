@@ -22,7 +22,6 @@
 #include "mozilla/Array.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/DeferredFinalize.h"
-#include "mozilla/RecordReplay.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BindingCallContext.h"
 #include "mozilla/dom/BindingDeclarations.h"
@@ -2676,11 +2675,6 @@ class MOZ_STACK_CLASS BindingJSObjectCreator {
   void InitializationSucceeded() {
     T* pointer;
     mNative.forget(&pointer);
-
-    // Never collect binding objects while recording or replaying, to avoid
-    // non-deterministically releasing references during finalization.
-    recordreplay::HoldJSObject(mReflector);
-
     mReflector = nullptr;
   }
 

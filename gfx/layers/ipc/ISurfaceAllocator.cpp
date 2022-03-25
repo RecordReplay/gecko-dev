@@ -216,6 +216,14 @@ void FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap() {
     return;
   }
 
+  // The shmem sections in use can vary between recording and replaying, leading
+  // to non-deterministic reads of the number of allocated blocks in each section.
+  // Never shrink the heap to avoid sending non-deterministic IPDL messages when
+  // the shmems are deallocated.
+  if (recordreplay::IsRecordingOrReplaying()) {
+    return;
+  }
+
   // The loop will terminate as we either increase i, or decrease size
   // every time through.
   size_t i = 0;

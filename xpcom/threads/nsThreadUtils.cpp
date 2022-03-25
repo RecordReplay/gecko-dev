@@ -376,6 +376,12 @@ NS_INTERFACE_MAP_END_INHERITING(Runnable)
 extern nsresult NS_DispatchToThreadQueue(already_AddRefed<nsIRunnable>&& aEvent,
                                          uint32_t aTimeout, nsIThread* aThread,
                                          EventQueuePriority aQueue) {
+  // Ignore the timeout for non-deterministic events when recording/replaying,
+  // dispatch the event with a normal priority.
+  if (recordreplay::AreThreadEventsDisallowed()) {
+    return NS_DispatchToThreadQueue(std::move(aEvent), aThread, EventQueuePriority::Normal);
+  }
+
   nsCOMPtr<nsIRunnable> event(std::move(aEvent));
   NS_ENSURE_TRUE(event, NS_ERROR_INVALID_ARG);
   MOZ_ASSERT(aQueue == EventQueuePriority::Idle ||

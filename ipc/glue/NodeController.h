@@ -161,7 +161,7 @@ class NodeController final : public mojo::core::ports::NodeDelegate,
     NodeMap<nsTArray<PortRef>> mPendingMerges;
   };
 
-  DataMutex<State> mState{"NodeController::mState"};
+  DataMutex<State> mState{State(), "NodeController::mState", /* aOrdered */ true};
 };
 
 }  // namespace mozilla::ipc
