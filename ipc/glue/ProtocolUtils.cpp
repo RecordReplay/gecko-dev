@@ -520,9 +520,9 @@ bool IProtocol::ChannelSend(IPC::Message* aMsg) {
 
   // We don't have a way to send IPC messages at non-deterministic points.
   // For now, silently discard the messages.
-  if (recordreplay::AreThreadEventsDisallowed()) {
-    return true;
-  }
+  //if (recordreplay::AreThreadEventsDisallowed()) {
+  //  return true;
+  //}
 
   if (CanSend()) {
     // NOTE: This send call failing can only occur during toplevel channel
