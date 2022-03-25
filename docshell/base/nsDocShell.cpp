@@ -38,6 +38,7 @@
 #include "mozilla/ObservedDocShell.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
@@ -410,6 +411,7 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
       mForcedAutodetection(false),
       mNeedToReportActiveAfterLoadingBecomesActive(false) {
   // If no outer window ID was provided, generate a new one.
+  recordreplay::RegisterThing(this);
   if (aContentWindowID == 0) {
     mContentWindowID = nsContentUtils::GenerateWindowId();
   }
@@ -463,6 +465,7 @@ nsDocShell::~nsDocShell() {
          (void*)this, gNumberOfDocShells, getpid(), mDocShellID, url.get()));
   }
 #endif
+  recordreplay::UnregisterThing(this);
 }
 
 bool nsDocShell::Initialize() {
@@ -4976,6 +4979,11 @@ nsDocShell::GetVisibility(bool* aVisibility) {
 }
 
 void nsDocShell::ActivenessMaybeChanged() {
+  // Assert the same-ness of the docshell on record and replay.
+  // https://github.com/RecordReplay/gecko-dev/issues/748
+  recordreplay::RecordReplayAssert("nsDocShell(%u)::ActivenessMaybeChanged()",
+    (unsigned) recordreplay::ThingIndex(this));
+
   const bool isActive = mForceActiveState || mBrowsingContext->IsActive();
   if (RefPtr<PresShell> presShell = GetPresShell()) {
     presShell->ActivenessMaybeChanged();
