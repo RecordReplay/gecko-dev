@@ -759,11 +759,6 @@ void XPCJSRuntime::EndCycleCollectionCallback(CycleCollectorResults& aResults) {
 }
 
 void XPCJSRuntime::DispatchDeferredDeletion(bool aContinuation, bool aPurge) {
-  // References held by JS objects are not released when recording/replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
-    return;
-  }
-
   mAsyncSnowWhiteFreer->Start(aContinuation, aPurge);
 }
 

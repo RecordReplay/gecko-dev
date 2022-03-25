@@ -81,6 +81,9 @@ class ThreadEventQueue final : public SynchronizedEventQueue {
   bool mEventsAreDoomed = false;
   nsCOMPtr<nsIThreadObserver> mObserver;
   bool mIsMainThread;
+
+  Mutex mLockNonDeterministic;
+  EventQueue mBaseQueueNonDeterministic;
 };
 
 }  // namespace mozilla

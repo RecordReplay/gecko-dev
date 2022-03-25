@@ -198,6 +198,29 @@ class MOZ_STACK_CLASS ReentrantMonitorAutoEnter {
   mozilla::ReentrantMonitor* mReentrantMonitor;
 };
 
+// Enters an ordered monitor. When events are disallowed on the current thread,
+// the enter will be unordered and could occur at a different point when replaying.
+class ReentrantMonitorAutoEnterMaybeEventsDisallowed {
+ public:
+  ReentrantMonitorAutoEnterMaybeEventsDisallowed(ReentrantMonitor& aMonitor) {
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      recordreplay::AutoPassThroughThreadEvents pt;
+      mEnter.emplace(aMonitor);
+    } else {
+      mEnter.emplace(aMonitor);
+    }
+  }
+  ~ReentrantMonitorAutoEnterMaybeEventsDisallowed() {
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      recordreplay::AutoPassThroughThreadEvents pt;
+      mEnter.reset();
+    }
+  }
+  ReentrantMonitorAutoEnter& get() { return mEnter.ref(); }
+ private:
+  Maybe<ReentrantMonitorAutoEnter> mEnter;
+};
+
 /**
  * ReentrantMonitorAutoExit
  * Exit the ReentrantMonitor when it enters scope, and enters it when it leaves

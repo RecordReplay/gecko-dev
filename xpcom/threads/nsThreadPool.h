@@ -40,6 +40,8 @@ class nsThreadPool final : public mozilla::Runnable, public nsIThreadPool {
   mozilla::Mutex mMutex;
   mozilla::CondVar mEventsAvailable;
   mozilla::EventQueue mEvents;
+  mozilla::Mutex mMutexNonDeterministic;
+  mozilla::EventQueue mEventsNonDeterministic;
   uint32_t mThreadLimit;
   uint32_t mIdleThreadLimit;
   uint32_t mIdleThreadTimeout;

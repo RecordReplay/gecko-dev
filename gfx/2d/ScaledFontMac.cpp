@@ -524,10 +524,18 @@ static CFDictionaryRef CreateVariationDictionaryOrNull(
   // This will typically be a very low value, so we just linear-search them.
   bool allDefaultValues = true;
 
+  // https://github.com/RecordReplay/backend/issues/4555
+  recordreplay::RecordReplayAssert("CreateVariationDictionaryOrNull #5 %d", (int)axisCount);
+
   for (CFIndex i = 0; i < axisCount; ++i) {
     // We sanity-check the axis info found in the CTFont, and bail out
     // (returning null) if it doesn't have the expected types.
     CFTypeRef axisInfo = CFArrayGetValueAtIndex(aCTAxesCache, i);
+
+    // https://github.com/RecordReplay/backend/issues/4555
+    recordreplay::RecordReplayAssert("CreateVariationDictionaryOrNull #6 %p %d %p",
+                                     aCTAxesCache, (int)i, axisInfo);
+
     if (CFDictionaryGetTypeID() != CFGetTypeID(axisInfo)) {
       return nullptr;
     }
@@ -535,6 +543,11 @@ static CFDictionaryRef CreateVariationDictionaryOrNull(
 
     CFTypeRef axisTag =
         CFDictionaryGetValue(axis, kCTFontVariationAxisIdentifierKey);
+
+    // https://github.com/RecordReplay/backend/issues/4555
+    recordreplay::RecordReplayAssert("CreateVariationDictionaryOrNull #7 %p %p",
+                                     axis, axisTag);
+
     if (!axisTag || CFGetTypeID(axisTag) != CFNumberGetTypeID()) {
       return nullptr;
     }

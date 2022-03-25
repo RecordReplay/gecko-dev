@@ -85,6 +85,23 @@ typedef detail::BaseAutoUnlock<StaticMutex&> StaticMutexAutoUnlock;
 typedef detail::BaseAutoLock<OrderedStaticMutex&> OrderedStaticMutexAutoLock;
 typedef detail::BaseAutoUnlock<OrderedStaticMutex&> OrderedStaticMutexAutoUnlock;
 
+// Locks an ordered static mutex. When events are disallowed on the current thread,
+// the lock will be unordered and could occur at a different point when replaying.
+class OrderedStaticMutexAutoLockMaybeEventsDisallowed {
+ public:
+  OrderedStaticMutexAutoLockMaybeEventsDisallowed(OrderedStaticMutex& aMutex) {
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      recordreplay::AutoPassThroughThreadEvents pt;
+      mLock.emplace(aMutex);
+    } else {
+      mLock.emplace(aMutex);
+    }
+  }
+  OrderedStaticMutexAutoLock& get() { return mLock.ref(); }
+ private:
+  Maybe<OrderedStaticMutexAutoLock> mLock;
+};
+
 }  // namespace mozilla
 
 #endif

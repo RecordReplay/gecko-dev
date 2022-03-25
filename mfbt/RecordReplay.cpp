@@ -62,7 +62,6 @@ namespace recordreplay {
   Macro(InternalRecordReplayBytes, (const char* aWhy, void* aData, size_t aSize), \
         (aWhy, aData, aSize))                                                  \
   Macro(InternalInvalidateRecording, (const char* aWhy), (aWhy))               \
-  Macro(InternalHoldJSObject, (void* aJSObj), (aJSObj))                        \
   Macro(InternalRecordReplayAssert, (const char* aFormat, va_list aArgs),      \
         (aFormat, aArgs))                                                      \
   Macro(InternalRecordReplayAssertBytes, (const void* aData, size_t aSize),    \

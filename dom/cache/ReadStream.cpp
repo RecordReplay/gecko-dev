@@ -575,12 +575,6 @@ void ReadStream::Serialize(
 ReadStream::ReadStream(SafeRefPtr<ReadStream::Inner> aInner)
     : mInner(std::move(aInner)) {
   MOZ_DIAGNOSTIC_ASSERT(mInner);
-
-  // Leak this class when recording/replaying, to avoid problems with the
-  // destructor being called at non-deterministic points.
-  if (recordreplay::IsRecordingOrReplaying()) {
-    AddRef();
-  }
 }
 
 ReadStream::~ReadStream() {

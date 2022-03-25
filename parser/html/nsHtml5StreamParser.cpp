@@ -1520,11 +1520,13 @@ class nsHtml5RequestStopper : public Runnable {
 
  public:
   explicit nsHtml5RequestStopper(nsHtml5StreamParser* aStreamParser)
-      : Runnable("nsHtml5RequestStopper"), mStreamParser(aStreamParser) {
-    if (recordreplay::IsRecordingOrReplaying()) {
-      // Leak to avoid non-deterministic behavior in destructor.
-      AddRef();
-    }
+      : Runnable("nsHtml5RequestStopper"), mStreamParser(aStreamParser) {}
+
+  ~nsHtml5RequestStopper() {
+    // This can be destroyed at non-deterministic points, so disallow events
+    // while the stream parser pointer is destroyed.
+    recordreplay::AutoDisallowThreadEvents disallow;
+    mStreamParser = nullptr;
   }
 
   NS_IMETHOD Run() override {
