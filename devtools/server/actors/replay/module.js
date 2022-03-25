@@ -217,13 +217,13 @@ function setSourceMap({
   objectText,
   objectMapURL: url
 }) {
-  if (!Services.prefs.getBoolPref("devtools.recordreplay.uploadSourceMaps")) {
+  if (!Services.prefs.getBoolPref("devtools.recordreplay.uploadSourceMaps") ||
+      !RecordReplayControl.isUploadingRecording() ||
+      !url) {
     return;
   }
+
   const recordingId = RecordReplayControl.recordingId();
-  if (!recordingId || !url) {
-    return;
-  }
 
   let sourceBaseURL;
   if (typeof objectURL === "string" && isValidBaseURL(objectURL)) {

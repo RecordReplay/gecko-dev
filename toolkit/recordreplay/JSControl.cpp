@@ -679,21 +679,22 @@ static bool Method_MakeBookmark(JSContext* aCx, unsigned aArgc, Value* aVp) {
   return true;
 }
 
-static bool Method_RecordingId(JSContext* aCx, unsigned aArgc,
-                                     Value* aVp) {
+static bool Method_RecordingId(JSContext* aCx, unsigned aArgc, Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
 
-  if (IsUploadingRecording()) {
-    const char* recordingId = GetRecordingId();
-    JSString* str = JS_NewStringCopyZ(aCx, recordingId);
-    if (!str) {
-      return false;
-    }
-
-    args.rval().setString(str);
-  } else {
-    args.rval().setNull();
+  const char* recordingId = GetRecordingId();
+  JSString* str = JS_NewStringCopyZ(aCx, recordingId);
+  if (!str) {
+    return false;
   }
+
+  args.rval().setString(str);
+  return true;
+}
+
+static bool Method_IsUploadingRecording(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+  args.rval().setBoolean(IsUploadingRecording());
   return true;
 }
 
@@ -819,6 +820,7 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("onConsoleMessage", Method_OnConsoleMessage, 1, 0),
   JS_FN("onAnnotation", Method_OnAnnotation, 2, 0),
   JS_FN("recordingId", Method_RecordingId, 0, 0),
+  JS_FN("isUploadingRecording", Method_IsUploadingRecording, 0, 0),
   JS_FN("addMetadata", Method_AddMetadata, 1, 0),
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
