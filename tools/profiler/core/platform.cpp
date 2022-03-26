@@ -56,6 +56,7 @@
 #include "mozilla/ProfileBufferChunkManagerSingle.h"
 #include "mozilla/ProfileBufferChunkManagerWithLocalLimit.h"
 #include "mozilla/ProfileChunkedBuffer.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/Services.h"
 #include "mozilla/StackWalk.h"
@@ -5164,6 +5165,15 @@ void profiler_start(PowerOfTwo32 aCapacity, double aInterval,
                     uint32_t aFeatures, const char** aFilters,
                     uint32_t aFilterCount, uint64_t aActiveTabID,
                     const Maybe<double>& aDuration) {
+  // Disable gecko profiler in Replay Browser.
+  // Enabling the profiler during recording leads to SegFault crashes,
+  // and there's no reasonable justification for running gecko
+  // profiler while recording or replaying.
+  // See issue https://github.com/RecordReplay/gecko-dev/issues/702
+  if (recordreplay::IsRecordingOrReplaying()) {
+    return;
+  }
+
   LOG("profiler_start");
 
   ProfilerParent::ProfilerWillStopIfStarted();
