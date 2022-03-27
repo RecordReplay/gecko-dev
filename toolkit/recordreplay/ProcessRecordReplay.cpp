@@ -440,9 +440,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   gAttach(*dispatchAddress, gBuildId);
 
-  if (*dispatchAddress) {
-    gUploadingRecording = true;
-  }
+  gUploadingRecording = RecordReplayValue("UploadingRecording", !!*dispatchAddress);
 
   if (TestEnv("RECORD_ALL_CONTENT")) {
     gRecordAllContent = true;
