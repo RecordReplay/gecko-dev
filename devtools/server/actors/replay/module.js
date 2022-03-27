@@ -217,11 +217,16 @@ function setSourceMap({
   objectText,
   objectMapURL: url
 }) {
+  RecordReplayControl.recordReplayAssert("setSourceMap start");
+
   if (!Services.prefs.getBoolPref("devtools.recordreplay.uploadSourceMaps") ||
       !RecordReplayControl.isUploadingRecording() ||
       !url) {
+    RecordReplayControl.recordReplayAssert("setSourceMap #1");
     return;
   }
+
+  RecordReplayControl.recordReplayAssert("setSourceMap #2");
 
   const recordingId = RecordReplayControl.recordingId();
 

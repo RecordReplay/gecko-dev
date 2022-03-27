@@ -747,6 +747,7 @@ MOZ_EXPORT void RecordReplayInterface_LabelExecutableCode(const void* aCode, siz
 }  // extern "C"
 
 bool IsUploadingRecording() {
+  RecordReplayAssert("IsUploadingRecording %d", gUploadingRecording);
   return gUploadingRecording;
 }
 
