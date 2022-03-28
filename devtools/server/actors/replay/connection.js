@@ -472,18 +472,31 @@ class Recording extends EventEmitter {
   }
 
   _onNewSourcemap(params) {
-    this._lockRecording(params.recordingId);
+    if (params.isUploadingRecording) {
+      this._lockRecording(params.recordingId);
 
-    this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
-      console.error("Exception while processing sourcemap", err, params);
+      this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
+        console.error("Exception while processing sourcemap", err, params);
 
-      pingTelemetry("sourcemap-upload", "upload-exception", {
-        message: err?.message,
-        stack: err?.stack,
-        recordingId: params.recordingId,
-        commandErrorData: err instanceof CommandError ? err.data : undefined,
-      });
-    }));
+        pingTelemetry("sourcemap-upload", "upload-exception", {
+          message: err?.message,
+          stack: err?.stack,
+          recordingId: params.recordingId,
+          commandErrorData: err instanceof CommandError ? err.data : undefined,
+        });
+      }));
+    } else {
+      this._resourceUploads.push(writeAllSourcemapAssets(params, this.browser).catch(err => {
+        console.error("Exception while writing sourcemap", err, params);
+
+        pingTelemetry("sourcemap-write", "write-exception", {
+          message: err?.message,
+          stack: err?.stack,
+          recordingId: params.recordingId,
+          commandErrorData: err instanceof CommandError ? err.data : undefined,
+        });
+      }));
+    }
   }
 
   async _onFinished(data) {
@@ -690,7 +703,7 @@ function updateRecordingState(key, state) {
 }
 
 function addRecordingInstance(key, recording) {
-  const entry = recordings.get(key);
+  let entry = recordings.get(key);
   if (!entry) {
     entry = updateRecordingState(key, RecordingState.RECORDING);
   }
@@ -944,10 +957,23 @@ function handleRecordingStarted(pmm) {
   // recording begins, so we lazily look it up the first time it is needed.
   let _browser = null;
   function getBrowser() {
+    // if the recording was started by a click on the [REC] button, toggleRecording()
+    // already added the frameLoader for this process to the recordings map.
     for (let frameLoader of recordings.keys()) {
       if (frameLoader.remoteTab && frameLoader.remoteTab.osPid === pmm.osPid) {
         _browser = frameLoader.ownerElement;
         break;
+      }
+    }
+    if (!_browser) {
+      // this way of finding the frameLoader can theoretically return the wrong one
+      // if a browser process was terminated and a new one started with the same PID,
+      // so we only use it as a fallback.
+      for (const win of Services.wm.getEnumerator("navigator:browser")) {
+        if (win.gBrowser.selectedBrowser.frameLoader.remoteTab.osPid === pmm.osPid) {
+          _browser = win.gBrowser.selectedBrowser;
+          break;
+        }
       }
     }
     return _browser;
@@ -1187,6 +1213,103 @@ async function uploadAllSourcemapAssets({
       ]);
     })),
   ]);
+}
+
+async function writeAllSourcemapAssets({
+  recordingId,
+  sourceMapURL,
+  sourceMapBaseURL,
+  targetContentHash,
+  targetURLHash,
+  targetMapURLHash,
+}, browser) {
+  const contentPrincipal = browser.contentPrincipal;
+  pingTelemetry("sourcemap-write", "fetching-sourcemap", { url: sourceMapURL });
+  const result = await fetchText(contentPrincipal, null, sourceMapURL);
+  pingTelemetry("sourcemap-write", "fetched-sourcemap", { url: sourceMapURL });
+  if (!result) {
+    return;
+  }
+  const id = String(Math.floor(Math.random() * 10000000000));
+  const name = `sourcemap-${id}.map`;
+  const path = await writeToRecordingDirectory(name, result.text);
+  await addRecordingEvent({
+    kind: "sourcemapAdded",
+    path,
+    recordingId,
+    id,
+    url: sourceMapURL,
+    baseURL: sourceMapBaseURL,
+    targetContentHash,
+    targetURLHash,
+    targetMapURLHash,
+  });
+  pingTelemetry("sourcemap-write", "sourcemap-written", { url: sourceMapURL });
+
+  const { sources } =
+    collectUnresolvedSourceMapResources(result.text, sourceMapURL, sourceMapBaseURL);
+
+  for (const { offset, url } of sources) {
+    pingTelemetry("sourcemap-write", "fetching-original-source", { url });
+    const result = await fetchText(contentPrincipal, null, url);
+    pingTelemetry("sourcemap-write", "fetched-original-source", { url });
+    if (!result) {
+      continue;
+    }
+    const sourceId = String(Math.floor(Math.random() * 10000000000));
+    const name = `original-source-${id}-${sourceId}`;
+    const path = await writeToRecordingDirectory(name, result.text);
+    await addRecordingEvent({
+      kind: "originalSourceAdded",
+      path,
+      recordingId,
+      parentId: id,
+      parentOffset: offset,
+    });
+    pingTelemetry("sourcemap-write", "original-source-written", { url });
+  }
+}
+
+async function writeToRecordingDirectory(filename, contents) {
+  const recordingDir = getRecordingDirectory();
+  if (!recordingDir) {
+    return;
+  }
+  await OS.File.makeDir(recordingDir, { ignoreExisting: true });
+  const path = OS.Path.join(recordingDir, filename);
+  await OS.File.writeAtomic(path, new TextEncoder().encode(contents));
+  return path;
+}
+
+async function addRecordingEvent(event) {
+  const recordingDir = getRecordingDirectory();
+  if (!recordingDir) {
+    return;
+  }
+  const file = await OS.File.open(
+    OS.Path.join(recordingDir, "recordings.log"),
+    { write: true, append: true }
+  );
+  try {
+    await file.write(new TextEncoder().encode(JSON.stringify(event) + "\n"));
+  } finally {
+    await file.close();
+  }
+}
+
+function getRecordingDirectory() {
+  // see matching logic in recordreplay::InitializeRecordingEvents() in the backend
+  // and in getDirectory() in the recordings cli
+  let recordingDir = getenv("RECORD_REPLAY_DIRECTORY");
+  if (recordingDir) {
+    return recordingDir;
+  }
+  let homeDir = getenv("HOME") || getenv("USERPROFILE");
+  if (!homeDir) {
+    ChromeUtils.recordReplayLog("NoRecordingDirectory");
+    return undefined;
+  }
+  return OS.Path.join(homeDir, ".replay");
 }
 
 function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {

@@ -217,9 +217,7 @@ function setSourceMap({
   objectText,
   objectMapURL: url
 }) {
-  if (!Services.prefs.getBoolPref("devtools.recordreplay.uploadSourceMaps") ||
-      !RecordReplayControl.isUploadingRecording() ||
-      !url) {
+  if (!Services.prefs.getBoolPref("devtools.recordreplay.uploadSourceMaps") || !url) {
     return;
   }
 
@@ -252,6 +250,7 @@ function setSourceMap({
 
   Services.cpmm.sendAsyncMessage("RecordReplayGeneratedSourceWithSourceMap", {
     recordingId,
+    isUploadingRecording: RecordReplayControl.isUploadingRecording(),
     sourceMapURL,
     sourceMapBaseURL,
 
