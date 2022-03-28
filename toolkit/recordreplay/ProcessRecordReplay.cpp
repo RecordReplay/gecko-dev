@@ -440,10 +440,6 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   gAttach(*dispatchAddress, gBuildId);
 
-  if (*dispatchAddress) {
-    gUploadingRecording = true;
-  }
-
   if (TestEnv("RECORD_ALL_CONTENT")) {
     gRecordAllContent = true;
 
@@ -487,6 +483,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   gRecordCommandLineArguments(aArgc, aArgv);
   gSetCrashReasonCallback(GetCrashReason);
+
+  gUploadingRecording = RecordReplayValue("UploadingRecording", !!*dispatchAddress);
 
   if (IsRecording()) {
     // Print out a string that is recognized by the automated test harness.
