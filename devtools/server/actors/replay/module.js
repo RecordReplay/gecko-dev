@@ -1665,7 +1665,12 @@ function createProtocolObject(objectId, level) {
     return { objectId, className: "BadObjectId" };
   }
 
-  const className = getClassName(obj)
+  let className = getClassName(obj);
+  if (className === "Object") {
+    try {
+      className = obj.proto?.getProperty("constructor").return?.name || className;
+    } catch {}
+  }
   let preview;
   if (level != "none") {
     preview = new ProtocolObjectPreview(obj, level).fill();
