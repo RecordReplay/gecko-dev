@@ -856,6 +856,7 @@ PresShell::PresShell(Document* aDocument)
       mMouseLocationWasSetBySynthesizedMouseEventForTests(false) {
   MOZ_LOG(gLog, LogLevel::Debug, ("PresShell::PresShell this=%p", this));
   MOZ_ASSERT(aDocument);
+  mozilla::recordreplay::RegisterThing(this);
 
 #ifdef MOZ_REFLOW_PERF
   mReflowCountMgr = MakeUnique<ReflowCountMgr>();
@@ -886,6 +887,7 @@ NS_IMPL_ADDREF(PresShell)
 NS_IMPL_RELEASE(PresShell)
 
 PresShell::~PresShell() {
+  mozilla::recordreplay::UnregisterThing(this);
   MOZ_RELEASE_ASSERT(!mForbiddenToFlush,
                      "Flag should only be set temporarily, while doing things "
                      "that shouldn't cause destruction");
@@ -10900,6 +10902,12 @@ bool PresShell::ShouldBeActive() const {
 
 void PresShell::SetIsActive(bool aIsActive) {
   MOZ_ASSERT(mDocument, "should only be called with a document");
+
+  // See issue https://github.com/RecordReplay/gecko-dev/issues/774
+  mozilla::recordreplay::RecordReplayAssert(
+    "PresShell::SetIsActive this=%u isActive=%d",
+    mozilla::recordreplay::ThingIndex(this),
+    (int) isActive);
 
   const bool changed = mIsActive != aIsActive;
 
