@@ -6,6 +6,7 @@
 #include "DecodedSurfaceProvider.h"
 
 #include "mozilla/StaticPrefs_image.h"
+#include "mozilla/RecordReplay.h"
 #include "nsProxyRelease.h"
 
 #include "Decoder.h"
@@ -23,13 +24,17 @@ DecodedSurfaceProvider::DecodedSurfaceProvider(NotNull<RasterImage*> aImage,
       mImage(aImage.get()),
       mMutex("mozilla::image::DecodedSurfaceProvider"),
       mDecoder(aDecoder.get()) {
+  recordreplay::RegisterThing(this);
   MOZ_ASSERT(!mDecoder->IsMetadataDecode(),
              "Use MetadataDecodingTask for metadata decodes");
   MOZ_ASSERT(mDecoder->IsFirstFrameDecode(),
              "Use AnimationSurfaceProvider for animation decodes");
 }
 
-DecodedSurfaceProvider::~DecodedSurfaceProvider() { DropImageReference(); }
+DecodedSurfaceProvider::~DecodedSurfaceProvider() {
+  recordreplay::UnregisterThing(this);
+  DropImageReference();
+}
 
 void DecodedSurfaceProvider::DropImageReference() {
   if (!mImage) {
@@ -114,6 +119,10 @@ size_t DecodedSurfaceProvider::LogicalSizeInBytes() const {
 void DecodedSurfaceProvider::Run() {
   MutexAutoLock lock(mMutex);
 
+  // See issue: https://github.com/RecordReplay/gecko-dev/issues/773
+  recordreplay::RecordReplayAssert("DecodedSurfaceProvider::Run %u",
+    (unsigned) recordreplay::ThingIndex(this));
+
   if (!mDecoder || !mImage) {
     MOZ_ASSERT_UNREACHABLE("Running after decoding finished?");
     return;
@@ -121,6 +130,10 @@ void DecodedSurfaceProvider::Run() {
 
   // Run the decoder.
   LexerResult result = mDecoder->Decode(WrapNotNull(this));
+
+  // See issue: https://github.com/RecordReplay/gecko-dev/issues/773
+  recordreplay::RecordReplayAssert("DecodedSurfaceProvider::Run LexerResult %d",
+    (int) result.is<TerminalState>());
 
   // If there's a new surface available, announce it to the surface cache.
   CheckForNewSurface();
