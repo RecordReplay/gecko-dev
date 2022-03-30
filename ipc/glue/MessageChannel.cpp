@@ -598,6 +598,7 @@ MessageChannel::MessageChannel(const char* aName, IToplevelProtocol* aListener)
       mBuildIDsConfirmedMatch(false),
       mIsSameThreadChannel(false) {
   MOZ_COUNT_CTOR(ipc::MessageChannel);
+  recordreplay::RegisterThing(this);
 
 #ifdef OS_WIN
   mTopFrame = nullptr;
@@ -630,6 +631,7 @@ MessageChannel::~MessageChannel() {
   }
 #endif
   Clear();
+  recordreplay::UnregisterThing(this);
 }
 
 #ifdef DEBUG
@@ -863,7 +865,7 @@ bool MessageChannel::Send(UniquePtr<Message> aMsg) {
   // [RecordReplay-Diagnostic]
   // Mismatch: SendMessage with PDocAccessibleChild::SendShowEvent
   // https://github.com/RecordReplay/backend/issues/4522
-  recordreplay::RecordReplayAssert("MessageChannel::Send(): length=%d", aMsg->size());
+  recordreplay::RecordReplayAssert("MessageChannel::Send(): this=%u length=%d", recordreplay::ThingIndex(this), aMsg->size());
 
   if (aMsg->size() >= kMinTelemetryMessageSize) {
     Telemetry::Accumulate(Telemetry::IPC_MESSAGE_SIZE2, aMsg->size());

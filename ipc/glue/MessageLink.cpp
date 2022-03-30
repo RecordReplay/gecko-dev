@@ -104,7 +104,8 @@ void PortLink::SendMessage(UniquePtr<Message> aMessage) {
   // Check that messages sent over IPC channels have consistent contents when
   // recording vs. replaying.
   recordreplay::RecordReplayAssert(
-    "PortLink::SendMessage %d %d %u %s",
+    "PortLink::SendMessage channel=%u %d %d %u %s",
+    recordreplay::ThingIndex(mChan),
     aMessage->type(),
     aMessage->routing_id(),
     aMessage->size(),
