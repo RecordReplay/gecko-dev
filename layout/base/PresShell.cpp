@@ -10907,7 +10907,7 @@ void PresShell::SetIsActive(bool aIsActive) {
   mozilla::recordreplay::RecordReplayAssert(
     "PresShell::SetIsActive this=%u isActive=%d",
     mozilla::recordreplay::ThingIndex(this),
-    (int) isActive);
+    (int) aIsActive);
 
   const bool changed = mIsActive != aIsActive;
 
