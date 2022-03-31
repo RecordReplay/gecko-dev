@@ -497,7 +497,14 @@ static already_AddRefed<TextureClient> CreateBackBufferTexture(
     aAllocator->ReportClientLost();
   }
 
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("CreateBackBufferTexture Start");
+
   RefPtr<TextureClient> texture = aAllocator->GetTextureClient();
+
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("CreateBackBufferTexture HaveTexture id=%zu",
+                                   recordreplay::ThingIndex(texture));
 
   if (!texture) {
     gfxCriticalError() << "[Tiling:Client] Failed to allocate a TextureClient";

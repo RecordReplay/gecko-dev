@@ -1550,7 +1550,12 @@ nsresult nsPipeInputStream::Status() const {
   return Status(mon);
 }
 
-nsPipeInputStream::~nsPipeInputStream() { Close(); }
+nsPipeInputStream::~nsPipeInputStream() {
+  // The destructor can run at non-deterministic points due to threadsafe refcounts.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
+  Close();
+}
 
 //-----------------------------------------------------------------------------
 // nsPipeOutputStream methods:
