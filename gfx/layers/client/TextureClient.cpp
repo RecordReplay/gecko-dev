@@ -736,6 +736,10 @@ void TextureClient::Unlock() {
 }
 
 void TextureClient::EnableReadLock() {
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("TextureClient::EnableReadLock Start id=%zu hasReadLock=%d",
+                                   recordreplay::ThingIndex(this), !!mReadLock);
+
   if (!mReadLock) {
     if (mAllocator->GetTileLockAllocator()) {
       mReadLock = NonBlockingTextureReadLock::Create(mAllocator);
@@ -763,6 +767,8 @@ bool TextureClient::OnForwardedToHost() {
 }
 
 TextureClient::~TextureClient() {
+  recordreplay::UnregisterThing(this);
+
   // TextureClients should be kept alive while there are references on the
   // paint thread.
   MOZ_ASSERT(mPaintThreadRefs == 0);
@@ -1195,6 +1201,9 @@ already_AddRefed<TextureClient> TextureClient::CreateForDrawing(
     gfx::IntSize aSize, KnowsCompositor* aKnowsCompositor,
     BackendSelector aSelector, TextureFlags aTextureFlags,
     TextureAllocationFlags aAllocFlags) {
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("TextureClient::CreateForDrawing Start");
+
   LayersBackend layersBackend = aKnowsCompositor->GetCompositorBackendType();
   gfx::BackendType moz2DBackend =
       BackendTypeForBackendSelector(layersBackend, aSelector);
@@ -1311,6 +1320,9 @@ already_AddRefed<TextureClient> TextureClient::CreateForRawBufferAccess(
     gfx::IntSize aSize, gfx::BackendType aMoz2DBackend,
     LayersBackend aLayersBackend, TextureFlags aTextureFlags,
     TextureAllocationFlags aAllocFlags) {
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("TextureClient::CreateForRawBufferAccess Start");
+
   // also test the validity of aAllocator
   if (!aAllocator || !aAllocator->IPCOpen()) {
     return nullptr;
@@ -1398,6 +1410,8 @@ TextureClient::TextureClient(TextureData* aData, TextureFlags aFlags,
       mPoolTracker(nullptr)
 #endif
 {
+  recordreplay::RegisterThing(this);
+
   mData->FillInfo(mInfo);
   mFlags |= mData->GetTextureFlags();
 

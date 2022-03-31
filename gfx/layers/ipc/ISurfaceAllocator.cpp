@@ -103,6 +103,9 @@ bool FixedSizeSmallShmemSectionAllocator::AllocShmemSection(
     return false;
   }
 
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::AllocShmemSection Start");
+
   uint32_t allocationSize = (aSize + sizeof(ShmemSectionHeapAllocation));
 
   for (size_t i = 0; i < mUsedShmems.size(); i++) {
@@ -118,6 +121,9 @@ bool FixedSizeSmallShmemSectionAllocator::AllocShmemSection(
   }
 
   if (!aShmemSection->shmem().IsWritable()) {
+    // https://github.com/RecordReplay/backend/issues/5113
+    recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::AllocShmemSection AllocShmem");
+
     ipc::Shmem tmp;
     if (!mShmProvider->AllocUnsafeShmem(sShmemPageSize, OptimalShmemType(),
                                         &tmp)) {
@@ -182,6 +188,14 @@ void FixedSizeSmallShmemSectionAllocator::FreeShmemSection(
     return;
   }
 
+  // Refuse to free shmem sections when recording/replaying. This can happen at
+  // non-deterministic points, and differences in the allocated shmem sections
+  // can affect the shmem allocations which need to be performed, which must be
+  // the same when replaying.
+  if (recordreplay::IsRecordingOrReplaying()) {
+    return;
+  }
+
   ShmemSectionHeapAllocation* allocHeader =
       reinterpret_cast<ShmemSectionHeapAllocation*>(
           aShmemSection.shmem().get<char>() + aShmemSection.offset() -
@@ -213,14 +227,6 @@ void FixedSizeSmallShmemSectionAllocator::DeallocShmemSection(
 void FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap() {
   if (!IPCOpen()) {
     mUsedShmems.clear();
-    return;
-  }
-
-  // The shmem sections in use can vary between recording and replaying, leading
-  // to non-deterministic reads of the number of allocated blocks in each section.
-  // Never shrink the heap to avoid sending non-deterministic IPDL messages when
-  // the shmems are deallocated.
-  if (recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

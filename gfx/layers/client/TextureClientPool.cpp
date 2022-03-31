@@ -97,6 +97,10 @@ already_AddRefed<TextureClient> TextureClientPool::GetTextureClient() {
   // Try to fetch a client from the pool
   RefPtr<TextureClient> textureClient;
 
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("TextureClientPool::GetTextureClient Start textureClientsEmpty=%d",
+                                   mTextureClients.empty());
+
   // We initially allocate mInitialPoolSize for our pool. If we run
   // out of TextureClients, we allocate additional TextureClients to try and
   // keep around mPoolUnusedSize
