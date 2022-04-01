@@ -159,7 +159,7 @@ function init_all() {
     let helpButton = document.getElementById("helpButton");
     // [REPLAY] Redirect support links to replay docs
     let helpUrl =
-      Services.urlFormatter.formatURLPref("replay.support.baseURL") +
+      Services.urlFormatter.formatURLPref("replay.support.baseURL", "https://docs.replay.io/docs#") +
       "preferences";
     helpButton.setAttribute("href", helpUrl);
 

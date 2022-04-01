@@ -53,7 +53,7 @@ var gSearchResultsPane = {
     }
     // [REPLAY] Redirect support links to replay docs
     let helpUrl =
-      Services.urlFormatter.formatURLPref("replay.support.baseURL") +
+      Services.urlFormatter.formatURLPref("replay.support.baseURL", "https://docs.replay.io/docs#") +
       "preferences";
     let helpContainer = document.getElementById("need-help");
     helpContainer.querySelector("a").href = helpUrl;
