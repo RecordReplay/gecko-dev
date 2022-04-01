@@ -186,6 +186,14 @@ bool FixedSizeSmallShmemSectionAllocator::AllocShmemSection(
   return true;
 }
 
+static bool ShouldFreeShmemSections() {
+  // Never free shmem sections. This can happen at non-deterministic points when
+  // recording/replaying, and can also happen from the compositor in the UI process,
+  // so we just let these leak to ensure that the available sections (plus the
+  // associated shmems themselves) are always consistent when replaying.
+  return false;
+}
+
 void FixedSizeSmallShmemSectionAllocator::FreeShmemSection(
     mozilla::layers::ShmemSection& aShmemSection) {
   MOZ_ASSERT(aShmemSection.size() == sSupportedBlockSize);
@@ -195,11 +203,7 @@ void FixedSizeSmallShmemSectionAllocator::FreeShmemSection(
     return;
   }
 
-  // Refuse to free shmem sections when recording/replaying. This can happen at
-  // non-deterministic points, and differences in the allocated shmem sections
-  // can affect the shmem allocations which need to be performed, which must be
-  // the same when replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (!ShouldFreeShmemSections()) {
     return;
   }
 
@@ -233,15 +237,11 @@ void FixedSizeSmallShmemSectionAllocator::DeallocShmemSection(
 
 void FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap() {
   if (!IPCOpen()) {
-    // https://github.com/RecordReplay/backend/issues/5113
-    recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap IPC closed");
     mUsedShmems.clear();
     return;
   }
 
-  // Refuse to free unused shmems when recording/replaying, for the same reason
-  // as in FreeShmemSection.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (!ShouldFreeShmemSections()) {
     return;
   }
 
