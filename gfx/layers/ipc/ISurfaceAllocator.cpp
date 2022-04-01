@@ -233,6 +233,8 @@ void FixedSizeSmallShmemSectionAllocator::DeallocShmemSection(
 
 void FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap() {
   if (!IPCOpen()) {
+    // https://github.com/RecordReplay/backend/issues/5113
+    recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap IPC closed");
     mUsedShmems.clear();
     return;
   }
