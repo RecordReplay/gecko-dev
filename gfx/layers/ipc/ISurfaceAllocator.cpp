@@ -104,13 +104,17 @@ bool FixedSizeSmallShmemSectionAllocator::AllocShmemSection(
   }
 
   // https://github.com/RecordReplay/backend/issues/5113
-  recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::AllocShmemSection Start");
+  recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::AllocShmemSection Start size=%u numUsedShmems=%zu",
+                                   aSize, mUsedShmems.size());
 
   uint32_t allocationSize = (aSize + sizeof(ShmemSectionHeapAllocation));
 
   for (size_t i = 0; i < mUsedShmems.size(); i++) {
     ShmemSectionHeapHeader* header =
         mUsedShmems[i].get<ShmemSectionHeapHeader>();
+    // https://github.com/RecordReplay/backend/issues/5113
+    recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::AllocShmemSection Loop allocatedBlocks=%u",
+                                     (uint32_t)header->mAllocatedBlocks);
     if ((header->mAllocatedBlocks + 1) * allocationSize +
             sizeof(ShmemSectionHeapHeader) <
         sShmemPageSize) {
@@ -137,6 +141,9 @@ bool FixedSizeSmallShmemSectionAllocator::AllocShmemSection(
     mUsedShmems.push_back(tmp);
     aShmemSection->shmem() = tmp;
   }
+
+  // https://github.com/RecordReplay/backend/issues/5113
+  recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::AllocShmemSection HaveShmem");
 
   MOZ_ASSERT(aShmemSection->shmem().IsWritable());
 
@@ -226,7 +233,15 @@ void FixedSizeSmallShmemSectionAllocator::DeallocShmemSection(
 
 void FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap() {
   if (!IPCOpen()) {
+    // https://github.com/RecordReplay/backend/issues/5113
+    recordreplay::RecordReplayAssert("FixedSizeSmallShmemSectionAllocator::ShrinkShmemSectionHeap IPC closed");
     mUsedShmems.clear();
+    return;
+  }
+
+  // Refuse to free unused shmems when recording/replaying, for the same reason
+  // as in FreeShmemSection.
+  if (recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 
