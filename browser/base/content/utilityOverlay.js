@@ -1070,7 +1070,7 @@ function makeURLAbsolute(aBase, aUrl) {
 }
 
 function getHelpLinkURL(aHelpTopic) {
-  var url = Services.urlFormatter.formatURLPref("replay.support.baseURL");
+  var url = Services.urlFormatter.formatURLPref("replay.support.baseURL", "https://docs.replay.io/docs#");
   return url + aHelpTopic;
 }
 

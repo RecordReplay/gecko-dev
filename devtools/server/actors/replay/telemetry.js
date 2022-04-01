@@ -10,8 +10,8 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
 function pingTelemetry(source, name, data) {
-  const url = Services.prefs.getStringPref("replay.telemetry.url");
-  const enabled = Services.prefs.getBoolPref("replay.telemetry.enabled");
+  const url = Services.prefs.getStringPref("replay.telemetry.url", "https://telemetry.replay.io");
+  const enabled = Services.prefs.getBoolPref("replay.telemetry.enabled", true);
 
   if (!enabled || !url) return;
 
