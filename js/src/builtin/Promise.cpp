@@ -532,6 +532,9 @@ class PromiseDebugInfo : public NativeObject {
       }
     }
 
+    // https://github.com/RecordReplay/backend/issues/5145
+    mozilla::recordreplay::RecordReplayAssert("PromiseDebugInfo::setResolutionInfo Done");
+
     debugInfo->setFixedSlot(Slot_ResolutionSite, ObjectOrNullValue(stack));
     debugInfo->setFixedSlot(Slot_ResolutionTime,
                             DoubleValue(MillisecondsSinceStartup()));

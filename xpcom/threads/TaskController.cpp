@@ -372,6 +372,9 @@ void TaskController::AddTask(already_AddRefed<Task>&& aTask) {
     task->mPriorityModifier = manager->mCurrentPriorityModifier;
   }
 
+  // https://github.com/RecordReplay/backend/issues/5145
+  mozilla::recordreplay::RecordReplayAssert("TaskController::AddTask Insert");
+
   task->mInsertionTime = TimeStamp::Now();
 
 #ifdef DEBUG
