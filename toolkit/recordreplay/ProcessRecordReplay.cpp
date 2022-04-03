@@ -486,13 +486,6 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   gUploadingRecording = RecordReplayValue("UploadingRecording", !!*dispatchAddress);
 
-  if (IsRecording()) {
-    // Print out a string that is recognized by the automated test harness.
-    AutoPassThroughThreadEvents pt;
-    const char* url = getenv("RECORD_REPLAY_URL");
-    fprintf(stderr, "CreateRecording %s %s\n", GetRecordingId(), url ? url : "");
-  }
-
   // Unless disabled via the environment, pre-process all created recordings so
   // that they will load faster after saving the recording.
   if (!TestEnv("RECORD_REPLAY_DONT_PROCESS_RECORDINGS") &&
