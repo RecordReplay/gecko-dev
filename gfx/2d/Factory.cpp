@@ -207,6 +207,10 @@ void mozilla_UnlockFTLibrary(FT_Library aFTLibrary) {
 }
 #endif
 
+namespace mozilla {
+  extern std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v);
+}
+
 namespace mozilla::gfx {
 
 #ifdef MOZ_ENABLE_FREETYPE
@@ -363,7 +367,9 @@ already_AddRefed<DrawTarget> Factory::CreateDrawTarget(BackendType aBackend,
                                                        SurfaceFormat aFormat) {
   if (!AllowedSurfaceSize(aSize)) {
     gfxCriticalError(LoggerOptionsBasedOnSize(aSize))
-        << "Failed to allocate a surface due to invalid size (CDT) " << aSize;
+        << "Failed to allocate a surface due to invalid size (CDT) "
+        << NumberToStringRecordReplayWorkaroundForWindows(aSize.width) << " "
+        << NumberToStringRecordReplayWorkaroundForWindows(aSize.height);
     return nullptr;
   }
 
@@ -410,8 +416,11 @@ already_AddRefed<DrawTarget> Factory::CreateDrawTarget(BackendType aBackend,
   if (!retVal) {
     // Failed
     gfxCriticalError(LoggerOptionsBasedOnSize(aSize))
-        << "Failed to create DrawTarget, Type: " << int(aBackend)
-        << " Size: " << aSize;
+        << "Failed to create DrawTarget, Type: "
+        << NumberToStringRecordReplayWorkaroundForWindows(int(aBackend))
+        << " Size: "
+        << NumberToStringRecordReplayWorkaroundForWindows(aSize.width) << " "
+        << NumberToStringRecordReplayWorkaroundForWindows(aSize.height);
   }
 
   return retVal.forget();
