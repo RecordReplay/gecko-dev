@@ -819,9 +819,6 @@ async function startRecording(browser) {
     }
   } catch (e) {}
 
-  // The recording process uses this env var when printing out the recording ID.
-  setenv("RECORD_REPLAY_URL", url);
-
   let remoteType = E10SUtils.getRemoteTypeForURI(
     url,
     /* aMultiProcess */ true,
