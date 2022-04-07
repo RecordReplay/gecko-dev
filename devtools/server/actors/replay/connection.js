@@ -1126,7 +1126,7 @@ function uploadSourceMap(
 ) {
   return withUploadedResource(
     mapText,
-    withRetryCommand(async (resource) => {
+    wrapRetryCommand(async (resource) => {
       const result = await sendCommand("Recording.addSourceMap", {
         recordingId,
         resource,
@@ -1194,7 +1194,7 @@ async function uploadAllSourcemapAssets({
         ensureMapUploading(),
         withUploadedResource(
           result.text,
-          withRetryCommand(async (resource) => {
+          wrapRetryCommand(async (resource) => {
             let parentId;
             try {
               parentId = await ensureMapUploading();
@@ -1483,24 +1483,26 @@ async function withUploadedResource(text, callback) {
 
 const READY_RETRY_COUNT = 5;
 
-async function withRetryCommand(callback) {
-  for (let i = 0; i < READY_RETRY_COUNT - 1; i++) {
-    try {
-      return await callback();
-    } catch (err) {
-      // If the command fail with an "Invalid Recording ID", that may be because
-      // the backend hasn't finished creating the recording yet so we retry a
-      // few times to allow that process to finish.
-      if (err instanceof CommandError && err.code === 9) {
-        console.error("Recording is not ready yet, retrying", err);
-        await new Promise(resolve => setTimeout(resolve, 250));
-        continue;
+function wrapRetryCommand(callback) {
+  return async () => {
+    for (let i = 0; i < READY_RETRY_COUNT - 1; i++) {
+      try {
+        return await callback();
+      } catch (err) {
+        // If the command fail with an "Invalid Recording ID", that may be because
+        // the backend hasn't finished creating the recording yet so we retry a
+        // few times to allow that process to finish.
+        if (err instanceof CommandError && err.code === 9) {
+          console.error("Recording is not ready yet, retrying", err);
+          await new Promise(resolve => setTimeout(resolve, 250));
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
-  }
 
-  return callback(await uploadResource(text));
+    return callback(await uploadResource(text));
+  };
 }
 
 Services.ppmm.addMessageListener("RecordingStarting", {
