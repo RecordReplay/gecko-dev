@@ -1484,10 +1484,10 @@ async function withUploadedResource(text, callback) {
 const READY_RETRY_COUNT = 5;
 
 function wrapRetryCommand(callback) {
-  return async () => {
+  return async (...args) => {
     for (let i = 0; i < READY_RETRY_COUNT - 1; i++) {
       try {
-        return await callback();
+        return await callback(...args);
       } catch (err) {
         // If the command fail with an "Invalid Recording ID", that may be because
         // the backend hasn't finished creating the recording yet so we retry a
@@ -1501,7 +1501,7 @@ function wrapRetryCommand(callback) {
       }
     }
 
-    return callback(await uploadResource(text));
+    return callback(...args);
   };
 }
 
