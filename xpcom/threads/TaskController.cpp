@@ -373,7 +373,11 @@ void TaskController::AddTask(already_AddRefed<Task>&& aTask) {
   }
 
   // https://github.com/RecordReplay/backend/issues/5145
-  mozilla::recordreplay::RecordReplayAssert("TaskController::AddTask Insert");
+  mozilla::recordreplay::RecordReplayAssert(
+    "TaskController::AddTask Insert mainThreadOnly=%d seqNo=%lld queueSize=%d",
+    task->IsMainThreadOnly(),
+    task->mSeqNo,
+    task->IsMainThreadOnly() ? mMainThreadTasks.size() : mThreadableTasks.size());
 
   task->mInsertionTime = TimeStamp::Now();
 
