@@ -279,6 +279,12 @@ void DebugState::clearBreakpointsIn(JSFreeOp* fop, WasmInstanceObject* instance,
 }
 
 void DebugState::toggleDebugTrap(uint32_t offset, bool enabled) {
+  // Refuse to enable debug traps when recording/replaying. Sometimes these get
+  // enabled for unclear reasons, causing large performance degradations.
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+    enabled = false;
+  }
+
   MOZ_ASSERT(offset);
   uint8_t* trap = code_->segment(Tier::Debug).base() + offset;
   const Uint32Vector& farJumpOffsets =
