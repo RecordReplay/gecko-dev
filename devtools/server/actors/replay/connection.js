@@ -1124,17 +1124,20 @@ function uploadSourceMap(
   baseURL,
   { targetContentHash, targetURLHash, targetMapURLHash }
 ) {
-  return withUploadedResource(mapText, async (resource) => {
-    const result = await sendCommand("Recording.addSourceMap", {
-      recordingId,
-      resource,
-      baseURL,
-      targetContentHash,
-      targetURLHash,
-      targetMapURLHash,
+  return withUploadedResource(
+    mapText,
+    wrapRetryCommand(async (resource) => {
+      const result = await sendCommand("Recording.addSourceMap", {
+        recordingId,
+        resource,
+        baseURL,
+        targetContentHash,
+        targetURLHash,
+        targetMapURLHash,
+      })
+      return result.id;
     })
-    return result.id;
-  });
+  );
 }
 
 async function uploadAllSourcemapAssets({
@@ -1189,24 +1192,27 @@ async function uploadAllSourcemapAssets({
         // Once we know there are original sources that we can upload, we want
         // ensure that the map is uploading, if it wasn't already.
         ensureMapUploading(),
-        withUploadedResource(result.text, async (resource) => {
-          let parentId;
-          try {
-            parentId = await ensureMapUploading();
-          } catch (err) {
-            // The error will be handled above, but if it fails,
-            // that we don't bother seeing the failure that should
-            // trigger a retry of this.
-            return;
-          }
+        withUploadedResource(
+          result.text,
+          wrapRetryCommand(async (resource) => {
+            let parentId;
+            try {
+              parentId = await ensureMapUploading();
+            } catch (err) {
+              // The error will be handled above, but if it fails,
+              // that we don't bother seeing the failure that should
+              // trigger a retry of this.
+              return;
+            }
 
-          await sendCommand("Recording.addOriginalSource", {
-            recordingId,
-            resource,
-            parentId,
-            parentOffset: offset,
-          });
-        })
+            await sendCommand("Recording.addOriginalSource", {
+              recordingId,
+              resource,
+              parentId,
+              parentOffset: offset,
+            });
+          })
+        )
       ]);
     })),
   ]);
@@ -1473,6 +1479,30 @@ async function withUploadedResource(text, callback) {
   }
 
   return callback(await uploadResource(text));
+}
+
+const READY_RETRY_COUNT = 5;
+
+function wrapRetryCommand(callback) {
+  return async (...args) => {
+    for (let i = 0; i < READY_RETRY_COUNT - 1; i++) {
+      try {
+        return await callback(...args);
+      } catch (err) {
+        // If the command fail with an "Invalid Recording ID", that may be because
+        // the backend hasn't finished creating the recording yet so we retry a
+        // few times to allow that process to finish.
+        if (err instanceof CommandError && err.code === 9) {
+          console.error("Recording is not ready yet, retrying", err);
+          await new Promise(resolve => setTimeout(resolve, 250));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    return callback(...args);
+  };
 }
 
 Services.ppmm.addMessageListener("RecordingStarting", {
