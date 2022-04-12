@@ -49,7 +49,7 @@ function getChannelRequestData(channel) {
   };
 }
 
-function getChannelResponseData(channel, fromCache) {
+function getChannelResponseData(channel, fromCache, fromServiceWorker) {
   const responseHeaders = [];
   channel.visitOriginalResponseHeaders({
     visitHeader: (name, value) => responseHeaders.push({ name, value }),
@@ -61,7 +61,8 @@ function getChannelResponseData(channel, fromCache) {
     responseStatus: channel.responseStatus,
     responseStatusText: channel.responseStatusText,
     responseFromCache: !!fromCache,
-    remoteDestination: fromCache ? null : {
+    responseFromServiceWorker: !!fromServiceWorker,
+    remoteDestination: (fromServiceWorker || fromCache) ? null : {
       address: channel.remoteAddress,
       port: channel.remotePort,
     },

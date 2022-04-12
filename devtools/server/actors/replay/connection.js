@@ -1597,21 +1597,30 @@ Services.obs.addObserver((subject, topic, data) => {
   sendChannelResponseStart(channel, false);
 }, "http-on-examine-response");
 
-function sendChannelResponseStart(channel, fromCache) {
+Services.obs.addObserver(
+  (subject) => {
+    const channel = ensureHttpChannel(subject);
+
+    sendChannelResponseStart(channel, false, true);
+  },
+  "service-worker-synthesized-response"
+);
+
+function sendChannelResponseStart(channel, fromCache, fromServiceWorker) {
   const recording = getChannelRecording(channel);
   if (!recording) {
     return;
   }
 
-  // If we're reading from cache, there may not have been an http-on-opening-request
-  // notification for this channel.
-  if (fromCache) {
+  // If we're reading from cache or returning from a service worker, there may
+  // not have been an http-on-opening-request notification for this channel.
+  if (fromCache || fromServiceWorker) {
     sendChannelRequestStart(recording, channel);
   }
 
   recording.sendProcessMessage("RecordingChannelResponseStart", {
     channelId: channel.channelId,
-    data: getChannelResponseData(channel, fromCache),
+    data: getChannelResponseData(channel, fromCache, fromServiceWorker),
   });
 }
 
