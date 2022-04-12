@@ -44,17 +44,6 @@ ChromeUtils.defineModuleGetter(
 
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
-function defer() {
-  let resolve, reject;
-  const promise = new Promise(function(res, rej) {
-    resolve = res;
-    reject = rej;
-  });
-  return { resolve, reject, promise };
-};
-
-let deferredAccessToken = defer();
-
 const Env = Cc["@mozilla.org/process/environment;1"].getService(
   Ci.nsIEnvironment
 );
@@ -73,12 +62,13 @@ function setReplayRefreshToken(token) {
 }
 
 function setReplayUserToken(token) {
-  if (token) {
-    deferredAccessToken.resolve(token);
-  } else {
-    deferredAccessToken = defer();
-  }
-  Services.prefs.setStringPref("devtools.recordreplay.user-token", token || "");
+  token = token || "";
+
+  // Only update and notify if the token has changed
+  if (token === getReplayUserToken()) return;
+
+  Services.prefs.setStringPref("devtools.recordreplay.user-token", token);
+  notifyWebChannelTargets();
 }
 function getReplayUserToken() {
   return Services.prefs.getStringPref("devtools.recordreplay.user-token");
@@ -117,6 +107,29 @@ function tokenExpiration(token) {
 }
 
 let authChannel;
+// Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
+// will be set to null and will be removed from the map on the next pass
+const webChannelTargets = new Map();
+
+// Notifies all replay.io tabs of the current auth state
+function notifyWebChannelTargets() {
+  if (authChannel) {
+    for (let [key, target] of webChannelTargets.entries()) {
+      if (target.browsingContext.currentWindowGlobal) {
+        notifyWebChannelTarget(target);
+      } else {
+        webChannelTargets.delete(key)
+      }
+    }
+  }
+}
+
+// Notify a single tab of the current auth state
+function notifyWebChannelTarget(target) {
+  const token = getReplayUserToken();
+
+  authChannel.send({ token }, target);
+}
 
 function handleAuthChannelMessage(_id, message, target) {
   const { type } = message;
@@ -125,11 +138,8 @@ function handleAuthChannelMessage(_id, message, target) {
   // (the app) to request a login which would launch the sign in page in the
   // user's preferred browser.
   if (type === "connect") {
-    deferredAccessToken.promise.then(token => {
-      if (authChannel) {
-        authChannel.send({ token }, target);
-      }
-    })
+    webChannelTargets.set(target.browsingContext, target);
+    notifyWebChannelTarget(target);
   } else if ('token' in message) {
     if (!message.token) {
       setReplayRefreshToken(null);
