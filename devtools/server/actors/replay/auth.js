@@ -68,7 +68,6 @@ function setReplayUserToken(token) {
   if (token === getReplayUserToken()) return;
 
   Services.prefs.setStringPref("devtools.recordreplay.user-token", token);
-  notifyWebChannelTargets();
 }
 function getReplayUserToken() {
   return Services.prefs.getStringPref("devtools.recordreplay.user-token");
@@ -106,40 +105,37 @@ function tokenExpiration(token) {
   return typeof exp === "number" ? exp * 1000 : null;
 }
 
-let authChannel;
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
 // will be set to null and will be removed from the map on the next pass
 const webChannelTargets = new Map();
 
 // Notifies all replay.io tabs of the current auth state
 function notifyWebChannelTargets() {
-  if (authChannel) {
-    for (let [key, target] of webChannelTargets.entries()) {
-      if (target.browsingContext.currentWindowGlobal) {
-        notifyWebChannelTarget(target);
-      } else {
-        webChannelTargets.delete(key)
-      }
+  for (let [key, {channel, target}] of webChannelTargets.entries()) {
+    if (target.browsingContext.currentWindowGlobal) {
+      notifyWebChannelTarget(channel, target);
+    } else {
+      webChannelTargets.delete(key)
     }
   }
 }
 
 // Notify a single tab of the current auth state
-function notifyWebChannelTarget(target) {
+function notifyWebChannelTarget(channel, target) {
   const token = getReplayUserToken();
 
-  authChannel.send({ token }, target);
+  channel.send({ token }, target);
 }
 
-function handleAuthChannelMessage(_id, message, target) {
+function handleAuthChannelMessage(channel, _id, message, target) {
   const { type } = message;
   // TODO [ryanjduffy]: Add support for app login to use the browser auth flow
   // by extending this logic to support a webchannel message from the client
   // (the app) to request a login which would launch the sign in page in the
   // user's preferred browser.
   if (type === "connect") {
-    webChannelTargets.set(target.browsingContext, target);
-    notifyWebChannelTarget(target);
+    webChannelTargets.set(target.browsingContext, {channel, target});
+    notifyWebChannelTarget(channel, target);
   } else if ('token' in message) {
     if (!message.token) {
       setReplayRefreshToken(null);
@@ -159,9 +155,9 @@ function initializeRecordingWebChannel() {
 
   function registerWebChannel(url) {
     const urlForWebChannel = Services.io.newURI(url);
-    authChannel = new WebChannel("record-replay-token", urlForWebChannel);
+    const channel = new WebChannel("record-replay-token", urlForWebChannel);
 
-    authChannel.listen(handleAuthChannelMessage);
+    channel.listen((...args) => handleAuthChannelMessage(channel, ...args));
   }
 }
 
@@ -260,6 +256,10 @@ function openSigninPage() {
     })
   ]).catch(console.error);
 }
+
+Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
+  notifyWebChannelTargets();
+});
 
 // Init
 (() => {
