@@ -111,7 +111,7 @@ const webChannelTargets = new Map();
 
 // Notifies all replay.io tabs of the current auth state
 function notifyWebChannelTargets() {
-  for (let [key, {channel, target}] of webChannelTargets.entries()) {
+  for (let [key, {channel, target}] of Array.from(webChannelTargets.entries())) {
     if (target.browsingContext.currentWindowGlobal) {
       notifyWebChannelTarget(channel, target);
     } else {
