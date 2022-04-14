@@ -1835,7 +1835,7 @@ void SurfaceCache::ReleaseImageOnMainThread(
 
   OrderedStaticMutexAutoLock lock(sInstanceMutex);
   if (sInstance) {
-    sInstance->ReleaseImageOnMainThread(std::move(aImage), lock.get());
+    sInstance->ReleaseImageOnMainThread(std::move(aImage), lock);
   } else {
     NS_ReleaseOnMainThread("SurfaceCache::ReleaseImageOnMainThread",
                            std::move(aImage), /* aAlwaysProxy */ true);
