@@ -751,6 +751,12 @@ void nsWindowMemoryReporter::AsyncCheckForGhostWindows() {
     return;
   }
 
+  // We don't support posting timers at non-deterministic points when
+  // recording/replaying, so skip the check in this case.
+  if (recordreplay::AreThreadEventsDisallowed()) {
+    return;
+  }
+
   // If more than kTimeBetweenChecks seconds have elapsed since the last check,
   // timerDelay is 0.  Otherwise, it is kTimeBetweenChecks, reduced by the time
   // since the last check.  Reducing the delay by the time since the last check

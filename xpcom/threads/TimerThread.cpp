@@ -490,9 +490,6 @@ TimerThread::Run() {
       }
     }
 
-    // https://github.com/RecordReplay/backend/issues/5146
-    recordreplay::RecordReplayAssert("TimerThread::Run Wait");
-
     mWaiting = true;
     mNotified = false;
     mMonitor.Wait(waitFor);

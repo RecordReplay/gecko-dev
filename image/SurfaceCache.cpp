@@ -1824,7 +1824,16 @@ void SurfaceCache::ReleaseImageOnMainThread(
     return;
   }
 
-  OrderedStaticMutexAutoLockMaybeEventsDisallowed lock(sInstanceMutex);
+  // When events are disallowed, don't combine releases using the surface
+  // cache. Taking the surface cache mutex here can introduce artificial
+  // deadlocks.
+  if (recordreplay::AreThreadEventsDisallowed()) {
+    NS_ReleaseOnMainThread("SurfaceCache::ReleaseImageOnMainThread",
+                           std::move(aImage), /* aAlwaysProxy */ true);
+    return;
+  }
+
+  OrderedStaticMutexAutoLock lock(sInstanceMutex);
   if (sInstance) {
     sInstance->ReleaseImageOnMainThread(std::move(aImage), lock.get());
   } else {
