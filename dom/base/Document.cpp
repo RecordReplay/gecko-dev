@@ -1122,7 +1122,13 @@ nsresult ExternalResourceMap::PendingLoad::StartLoad(
 
   mURI = aURI;
 
-  return channel->AsyncOpen(this);
+  nsCOMPtr<nsIStreamListener> chanListener;
+  chanListener = recordreplay::WrapNetworkStreamListener(this);
+
+  rv = channel->AsyncOpen(this);
+  chanListener = nullptr;
+
+  return rv;
 }
 
 NS_IMPL_ISUPPORTS(ExternalResourceMap::LoadgroupCallbacks,
