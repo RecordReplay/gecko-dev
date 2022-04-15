@@ -849,7 +849,10 @@ void gfxUserFontEntry::LoadPlatformFontAsync(
     nsIFontLoadCompleteCallback* aCallback) {
   nsMainThreadPtrHandle<nsIFontLoadCompleteCallback> cb(
       new nsMainThreadPtrHolder<nsIFontLoadCompleteCallback>("FontLoader",
-                                                             aCallback));
+                                                             aCallback,
+                                                             /* aStrict */ true,
+                                                             /* aMainThreadEventTarget */ nullptr,
+                                                             /* aRecordReplayNonDeterministic */ true));
 
   // Do the OpenType sanitization over on the font loading thread.  Once that is
   // complete, we'll continue in ContinuePlatformFontLoadOnMainThread.
