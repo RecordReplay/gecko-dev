@@ -11,6 +11,8 @@
 
 #include "MainThreadUtils.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/Unused.h"
 #include "nsCOMPtr.h"
 #include "nsIEventTarget.h"
@@ -228,9 +230,11 @@ class MOZ_IS_SMARTPTR_TO_REFCOUNTED nsMainThreadPtrHolder final {
   // multiple classes, some of which are main-thread-only and some of which
   // aren't. So we allow them to explicitly disable this strict checking.
   nsMainThreadPtrHolder(const char* aName, T* aPtr, bool aStrict = true,
-                        nsIEventTarget* aMainThreadEventTarget = nullptr)
+                        nsIEventTarget* aMainThreadEventTarget = nullptr,
+                        bool aRecordReplayNonDeterministic = false)
       : mRawPtr(aPtr),
         mStrict(aStrict),
+        mRecordReplayNonDeterministic(aRecordReplayNonDeterministic),
         mMainThreadEventTarget(aMainThreadEventTarget)
 #ifndef RELEASE_OR_BETA
         ,
@@ -244,9 +248,11 @@ class MOZ_IS_SMARTPTR_TO_REFCOUNTED nsMainThreadPtrHolder final {
   }
   nsMainThreadPtrHolder(const char* aName, already_AddRefed<T> aPtr,
                         bool aStrict = true,
-                        nsIEventTarget* aMainThreadEventTarget = nullptr)
+                        nsIEventTarget* aMainThreadEventTarget = nullptr,
+                        bool aRecordReplayNonDeterministic = false)
       : mRawPtr(aPtr.take()),
         mStrict(aStrict),
+        mRecordReplayNonDeterministic(aRecordReplayNonDeterministic),
         mMainThreadEventTarget(aMainThreadEventTarget)
 #ifndef RELEASE_OR_BETA
         ,
@@ -265,6 +271,10 @@ class MOZ_IS_SMARTPTR_TO_REFCOUNTED nsMainThreadPtrHolder final {
  private:
   // We can be released on any thread.
   ~nsMainThreadPtrHolder() {
+    mozilla::Maybe<mozilla::recordreplay::AutoDisallowThreadEvents> disallow;
+    if (mRecordReplayNonDeterministic) {
+      disallow.emplace();
+    }
     if (NS_IsMainThread()) {
       NS_IF_RELEASE(mRawPtr);
     } else if (mRawPtr) {
@@ -305,6 +315,10 @@ class MOZ_IS_SMARTPTR_TO_REFCOUNTED nsMainThreadPtrHolder final {
 
   // Whether to strictly enforce thread invariants in this class.
   bool mStrict = true;
+
+  // Whether to disallow events when destroying this, because it can happen
+  // at a non-deterministic point.
+  bool mRecordReplayNonDeterministic;
 
   nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
 
