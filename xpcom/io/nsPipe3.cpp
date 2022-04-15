@@ -1636,6 +1636,9 @@ nsPipeOutputStream::AddRef() {
 
 NS_IMETHODIMP_(MozExternalRefCountType)
 nsPipeOutputStream::Release() {
+  // References can be held by JS tearoffs and released at non-deterministic points.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
   bool close;
   {
     ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mPipe->mReentrantMonitor);
