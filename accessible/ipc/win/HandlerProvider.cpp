@@ -615,6 +615,14 @@ void HandlerProvider::PrebuildPayload(
 
 template <typename Interface>
 HRESULT HandlerProvider::ToWrappedObject(Interface** aObj) {
+  // Wrapping COM interfaces while replaying is not currently supported.
+  // Because the underlying COM calls will not actually execute while replaying,
+  // there isn't a need to proxy them to the main thread.
+  if (recordreplay::IsReplaying()) {
+    return S_OK;
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   MOZ_ASSERT(NS_IsMainThread());
   mscom::STAUniquePtr<Interface> inObj(*aObj);
   RefPtr<HandlerProvider> hprov = new HandlerProvider(
