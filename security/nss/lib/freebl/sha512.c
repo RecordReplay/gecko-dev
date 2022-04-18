@@ -207,7 +207,7 @@ SHA256_Begin(SHA256Context *ctx)
 
 #if defined(USE_HW_SHA2) && defined(IS_LITTLE_ENDIAN)
     /* arm's implementation is tested on little endian only */
-    use_hw_sha2 = arm_sha2_support() || (sha_support() && ssse3_support() && sse4_1_support());
+    use_hw_sha2 = PR_FALSE; // arm_sha2_support() || (sha_support() && ssse3_support() && sse4_1_support());
 #endif
 
     if (use_hw_sha2) {
@@ -703,7 +703,7 @@ SHA224_Begin(SHA224Context *ctx)
 
 #if defined(USE_HW_SHA2) && defined(IS_LITTLE_ENDIAN)
     /* arm's implementation is tested on little endian only */
-    use_hw_sha2 = arm_sha2_support() || (sha_support() && ssse3_support() && sse4_1_support());
+    use_hw_sha2 = PR_FALSE; // arm_sha2_support() || (sha_support() && ssse3_support() && sse4_1_support());
 #else
     use_hw_sha2 = PR_FALSE;
 #endif
