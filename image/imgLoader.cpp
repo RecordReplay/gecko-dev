@@ -63,6 +63,7 @@
 #include "nsReadableUtils.h"
 #include "nsStreamUtils.h"
 #include "prtime.h"
+#include "mozilla/RecordReplay.h"
 
 // we want to explore making the document own the load group
 // so we can associate the document URI with the load group.
@@ -2479,6 +2480,7 @@ nsresult imgLoader::LoadImage(
 
     // create the proxy listener
     nsCOMPtr<nsIStreamListener> listener = new ProxyListener(request.get());
+    nsCOMPtr<nsIStreamListener> replayListener = recordreplay::WrapNetworkStreamListener(listener);
 
     MOZ_LOG(gImgLog, LogLevel::Debug,
             ("[this=%p] imgLoader::LoadImage -- Calling channel->AsyncOpen()\n",
@@ -2488,7 +2490,8 @@ nsresult imgLoader::LoadImage(
                                  nsINetworkPredictor::LEARN_LOAD_SUBRESOURCE,
                                  aLoadGroup);
 
-    nsresult openRes = newChannel->AsyncOpen(listener);
+    nsresult openRes = newChannel->AsyncOpen(replayListener);
+    replayListener = nullptr;
 
     if (NS_FAILED(openRes)) {
       MOZ_LOG(
