@@ -940,6 +940,10 @@ nsresult XPCWrappedNative::InitTearOff(JSContext* cx,
                                        bool needJSObject) {
   // Determine if the object really does this interface...
 
+  // Because of non-deterministic GC behavior, tear/off behavior is non-deterministic
+  // as well and we shouldn't interact with the recording while creating tear/offs.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
   const nsIID* iid = aInterface->GetIID();
   nsISupports* identity = GetIdentityObject();
 

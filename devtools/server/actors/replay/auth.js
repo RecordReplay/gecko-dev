@@ -44,17 +44,6 @@ ChromeUtils.defineModuleGetter(
 
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
-function defer() {
-  let resolve, reject;
-  const promise = new Promise(function(res, rej) {
-    resolve = res;
-    reject = rej;
-  });
-  return { resolve, reject, promise };
-};
-
-let deferredAccessToken = defer();
-
 const Env = Cc["@mozilla.org/process/environment;1"].getService(
   Ci.nsIEnvironment
 );
@@ -73,12 +62,12 @@ function setReplayRefreshToken(token) {
 }
 
 function setReplayUserToken(token) {
-  if (token) {
-    deferredAccessToken.resolve(token);
-  } else {
-    deferredAccessToken = defer();
-  }
-  Services.prefs.setStringPref("devtools.recordreplay.user-token", token || "");
+  token = token || "";
+
+  // Only update and notify if the token has changed
+  if (token === getReplayUserToken()) return;
+
+  Services.prefs.setStringPref("devtools.recordreplay.user-token", token);
 }
 function getReplayUserToken() {
   return Services.prefs.getStringPref("devtools.recordreplay.user-token");
@@ -116,18 +105,35 @@ function tokenExpiration(token) {
   return typeof exp === "number" ? exp * 1000 : null;
 }
 
-let authChannel;
+// Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
+// will be set to null and will be removed from the map on the next pass
+const webChannelTargets = new Map();
 
-function handleAuthChannelMessage(_id, message, target) {
+// Notifies all replay.io tabs of the current auth state
+function notifyWebChannelTargets() {
+  for (let [key, {channel, target}] of Array.from(webChannelTargets.entries())) {
+    if (target.browsingContext.currentWindowGlobal) {
+      notifyWebChannelTarget(channel, target);
+    } else {
+      webChannelTargets.delete(key)
+    }
+  }
+}
+
+// Notify a single tab of the current auth state
+function notifyWebChannelTarget(channel, target) {
+  const token = getReplayUserToken();
+
+  channel.send({ token }, target);
+}
+
+function handleAuthChannelMessage(channel, _id, message, target) {
   const { type } = message;
   if (type === "login") {
     openSigninPage();
   } else if (type === "connect") {
-    deferredAccessToken.promise.then(token => {
-      if (authChannel) {
-        authChannel.send({ token }, target);
-      }
-    })
+    webChannelTargets.set(target.browsingContext, {channel, target});
+    notifyWebChannelTarget(channel, target);
   } else if ('token' in message) {
     if (!message.token) {
       setReplayRefreshToken(null);
@@ -147,9 +153,9 @@ function initializeRecordingWebChannel() {
 
   function registerWebChannel(url) {
     const urlForWebChannel = Services.io.newURI(url);
-    authChannel = new WebChannel("record-replay-token", urlForWebChannel);
+    const channel = new WebChannel("record-replay-token", urlForWebChannel);
 
-    authChannel.listen(handleAuthChannelMessage);
+    channel.listen((...args) => handleAuthChannelMessage(channel, ...args));
   }
 }
 
@@ -248,6 +254,10 @@ function openSigninPage() {
     })
   ]).catch(console.error);
 }
+
+Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
+  notifyWebChannelTargets();
+});
 
 // Init
 (() => {
