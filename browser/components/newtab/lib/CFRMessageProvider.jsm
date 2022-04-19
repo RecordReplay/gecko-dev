@@ -789,7 +789,9 @@ const CFR_MESSAGES = [
 
 const CFRMessageProvider = {
   getMessages() {
-    return Promise.resolve(CFR_MESSAGES.filter(msg => !msg.exclude));
+    // [Replay] - Suppress Firefox feature and extension recommendation door hangers
+    // return Promise.resolve(CFR_MESSAGES.filter(msg => !msg.exclude));
+    return Promise.resolve([]);
   },
 };
 this.CFRMessageProvider = CFRMessageProvider;
