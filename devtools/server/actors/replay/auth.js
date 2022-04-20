@@ -129,11 +129,9 @@ function notifyWebChannelTarget(channel, target) {
 
 function handleAuthChannelMessage(channel, _id, message, target) {
   const { type } = message;
-  // TODO [ryanjduffy]: Add support for app login to use the browser auth flow
-  // by extending this logic to support a webchannel message from the client
-  // (the app) to request a login which would launch the sign in page in the
-  // user's preferred browser.
-  if (type === "connect") {
+  if (type === "login") {
+    openSigninPage();
+  } else if (type === "connect") {
     webChannelTargets.set(target.browsingContext, {channel, target});
     notifyWebChannelTarget(channel, target);
   } else if ('token' in message) {
