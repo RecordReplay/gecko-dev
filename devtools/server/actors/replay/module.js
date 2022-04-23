@@ -973,8 +973,8 @@ function getEncodedBreakpoints(sourceId) {
   let lastScript, lastFunctionId;
   forMatchingBreakpointPositions(
     source,
-    begin,
-    end,
+    undefined,
+    undefined,
     (script, offset, line, column) => {
       if (script != lastScript) {
         lastScript = script;
