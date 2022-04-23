@@ -875,14 +875,14 @@ static char* CommandCallback(const char* aMethod, const char* aParams) {
     PrintLog("COMMAND_HAVE_JSON");
   }
 
-  char* rv = strdup(str.get());
+  char* rvstr = strdup(str.get());
 
   if (!strcmp(aMethod, "Target.getPossibleBreakpointsForMultipleSources") ||
       !strcmp(aMethod, "Target.getPossibleBreakpointsAndFunctionOffsets")) {
     PrintLog("COMMAND_DUPLICATED_JSON");
   }
 
-  return rv;
+  return rvstr;
 }
 
 static void ClearPauseDataCallback() {
