@@ -881,11 +881,6 @@ static char* CommandCallback(const char* aMethod, const char* aParams) {
     MOZ_CRASH("CommandCallback");
   }
 
-  if (!strcmp(aMethod, "Target.getPossibleBreakpointsForMultipleSources") ||
-      !strcmp(aMethod, "Target.getPossibleBreakpointsAndFunctionOffsets")) {
-    PrintLog("COMMAND_HAVE_RESULT");
-  }
-
   if (!rv.isObject()) {
     return nullptr;
   }
@@ -898,19 +893,7 @@ static char* CommandCallback(const char* aMethod, const char* aParams) {
     MOZ_CRASH("CommandCallback");
   }
 
-  if (!strcmp(aMethod, "Target.getPossibleBreakpointsForMultipleSources") ||
-      !strcmp(aMethod, "Target.getPossibleBreakpointsAndFunctionOffsets")) {
-    PrintLog("COMMAND_HAVE_JSON");
-  }
-
-  char* rvstr = strdup(str.get());
-
-  if (!strcmp(aMethod, "Target.getPossibleBreakpointsForMultipleSources") ||
-      !strcmp(aMethod, "Target.getPossibleBreakpointsAndFunctionOffsets")) {
-    PrintLog("COMMAND_DUPLICATED_JSON");
-  }
-
-  return rvstr;
+  return strdup(str.get());
 }
 
 static void ClearPauseDataCallback() {
