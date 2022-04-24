@@ -650,7 +650,6 @@ const commands = {
   "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
   "Target.getCurrentNetworkStreamData": Target_getCurrentNetworkStreamData,
   "Target.getPossibleBreakpointsForMultipleSources": Target_getPossibleBreakpointsForMultipleSources,
-  "Target.getPossibleBreakpointsAndFunctionOffsets": Target_getPossibleBreakpointsAndFunctionOffsets,
 };
 
 function OnProtocolCommand(method, params) {
@@ -673,6 +672,7 @@ const exports = {
   OnTestCommand,
   OnProtocolCommand,
   ClearPauseData,
+  GetPossibleBreakpoints,
   SetScanningScripts,
 };
 
@@ -966,10 +966,9 @@ function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
   };
 }
 
-function getEncodedBreakpoints(sourceId) {
+function GetPossibleBreakpoints(sourceId) {
   const source = protocolSourceIdToSource(sourceId);
 
-  const rv = [];
   let lastScript, lastFunctionId;
   forMatchingBreakpointPositions(
     source,
@@ -980,19 +979,9 @@ function getEncodedBreakpoints(sourceId) {
         lastScript = script;
         lastFunctionId = scriptToFunctionId(script);
       }
-      rv.push(line, column, lastFunctionId, offset);
+      RecordReplayControl.addPossibleBreakpoint(line, column, lastFunctionId, offset);
     }
   );
-  return rv;
-}
-
-function Target_getPossibleBreakpointsAndFunctionOffsets({ sourceIds }) {
-  return {
-    possibleBreakpoints: sourceIds.map(sourceId => {
-      const encodedBreakpoints = getEncodedBreakpoints(sourceId);
-      return { sourceId, encodedBreakpoints };
-    })
-  };
 }
 
 function Target_getCapabilities() {

@@ -66,6 +66,8 @@ static void (*gOnNewSource)(const char* aId, const char* aKind, const char* aUrl
 static void (*gSetDefaultCommandCallback)(char* (*aCallback)(const char*, const char*));
 static void (*gSetClearPauseDataCallback)(void (*aCallback)());
 static void (*gSetChangeInstrumentCallback)(void (*aCallback)(bool));
+static void (*gSetPossibleBreakpointsCallback)(void (*aCallback)(const char*));
+static void (*gAddPossibleBreakpoint)(int, int, const char*, int);
 static void (*gInstrument)(const char* aKind, const char* aFunctionId, int aOffset);
 static void (*gOnExceptionUnwind)();
 static void (*gOnDebuggerStatement)();
@@ -93,12 +95,17 @@ static void ClearPauseDataCallback();
 // call OnInstrument.
 static void ChangeInstrumentCallback(bool aValue);
 
+// Callback used when the recorder wants us to notify it about possible breakpoints in a source.
+static void PossibleBreakpointsCallback(const char* aSourceId);
+
 // Handle initialization at process startup.
 void InitializeJS() {
   LoadSymbol("RecordReplayOnNewSource", gOnNewSource);
   LoadSymbol("RecordReplaySetDefaultCommandCallback", gSetDefaultCommandCallback);
   LoadSymbol("RecordReplaySetClearPauseDataCallback", gSetClearPauseDataCallback);
   LoadSymbol("RecordReplaySetChangeInstrumentCallback", gSetChangeInstrumentCallback);
+  LoadSymbol("RecordReplaySetPossibleBreakpointsCallback", gSetPossibleBreakpointsCallback);
+  LoadSymbol("RecordReplayAddPossibleBreakpoint", gAddPossibleBreakpoint);
   LoadSymbol("RecordReplayOnInstrument", gInstrument);
   LoadSymbol("RecordReplayOnExceptionUnwind", gOnExceptionUnwind);
   LoadSymbol("RecordReplayOnDebuggerStatement", gOnDebuggerStatement);
@@ -118,6 +125,7 @@ void InitializeJS() {
   gSetDefaultCommandCallback(CommandCallback);
   gSetClearPauseDataCallback(ClearPauseDataCallback);
   gSetChangeInstrumentCallback(ChangeInstrumentCallback);
+  gSetPossibleBreakpointsCallback(PossibleBreakpointsCallback);
 }
 
 // URL of the root module script.
@@ -801,6 +809,25 @@ static bool Method_RecordingOperations(JSContext* aCx, unsigned aArgc, Value* aV
   return true;
 }
 
+static bool Method_AddPossibleBreakpoint(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isNumber() || !args.get(1).isNumber() ||
+      !args.get(2).isString() || !args.get(3).isNumber()) {
+    JS_ReportErrorASCII(aCx, "Bad parameters");
+    return false;
+  }
+
+  nsAutoCString functionId;
+  ConvertJSStringToCString(aCx, args.get(2).toString(), functionId);
+
+  gAddPossibleBreakpoint(args.get(0).toNumber(), args.get(1).toNumber(),
+                         functionId.get(), args.get(3).toNumber());
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("log", Method_Log, 1, 0),
   JS_FN("recordReplayAssert", Method_RecordReplayAssert, 1, 0),
@@ -824,6 +851,7 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("addMetadata", Method_AddMetadata, 1, 0),
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
+  JS_FN("addPossibleBreakpoint", Method_AddPossibleBreakpoint, 4, 0),
   JS_FS_END
 };
 
@@ -898,6 +926,23 @@ static void ClearPauseDataCallback() {
   RootedValue rv(cx);
   if (!JS_CallFunctionName(cx, *js::gModuleObject, "ClearPauseData", args, &rv)) {
     MOZ_CRASH("ClearPauseDataCallback");
+  }
+}
+
+static void PossibleBreakpointsCallback(const char* aSourceId) {
+  MOZ_RELEASE_ASSERT(js::IsModuleInitialized());
+
+  AutoSafeJSContext cx;
+  JSAutoRealm ar(cx, xpc::PrivilegedJunkScope());
+
+  RootedString sourceId(cx, JS_NewStringCopyZ(cx, aSourceId));
+
+  JS::RootedValueArray<1> args(cx);
+  args[0].setString(sourceId);
+
+  RootedValue rv(cx);
+  if (!JS_CallFunctionName(cx, *js::gModuleObject, "GetPossibleBreakpoints", args, &rv)) {
+    MOZ_CRASH("GetPossibleBreakpoints");
   }
 }
 
