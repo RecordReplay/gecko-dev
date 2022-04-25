@@ -819,6 +819,12 @@ bool TaskController::DoExecuteNextTaskOnlyMainThreadInternal(
                 task->GetPerformanceCounter(), now,
                 manager == mIdleTaskManager);
 
+        // https://github.com/RecordReplay/backend/issues/5145
+        // NB: Added this assert after that issue closed, but this is still
+        // the same idea as what's described in the issue.
+        mozilla::recordreplay::RecordReplayAssert(
+          "TaskController::DoExecuteNextTaskOnlyMainThread running task seqNo=%lld",
+          task->mSeqNo);
         {
           LogTask::Run log(task);
           AUTO_PROFILE_FOLLOWING_TASK(task);
