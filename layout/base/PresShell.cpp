@@ -11081,6 +11081,8 @@ void PresShell::UpdateImageLockingState() {
     // quickly as possible when we get foregrounded to minimize flashing.
     for (const auto& key : mApproximatelyVisibleFrames) {
       if (nsImageFrame* imageFrame = do_QueryFrame(key)) {
+        recordreplay::RecordReplayAssert("PresShell::UpdateImageLockingState imageFrame=%u",
+          recordreplay::ThingIndex(imageFrame));
         imageFrame->MaybeDecodeForPredictedSize();
       }
     }
