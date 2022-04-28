@@ -27,7 +27,25 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIApplicationUpdateService"
 );
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm"
+});
+
 const PREF_APP_UPDATE_UNSUPPORTED_URL = "app.update.unsupported.url";
+
+function getNotificationBox() {
+  var win = BrowserWindowTracker.getTopWindow();
+  return win.gBrowser.getNotificationBox();
+}
+
+function removeReplayNotification(name) {
+  const notificationBox = getNotificationBox();
+  const notification = notificationBox.getNotificationWithValue(name);
+
+  if (notification) {
+    notificationBox.removeNotification(notification)
+  }
+}
 
 // Setup the hamburger button badges for updates.
 var UpdateListener = {
@@ -171,9 +189,26 @@ var UpdateListener = {
   },
 
   showUpdateAvailableNotification(update, dismissed) {
-    this.showUpdateNotification("available", false, dismissed, () => {
+    const callback = () => {
       AppUpdateService.downloadUpdate(update, true);
-    });
+    };
+    this.showUpdateNotification("available", false, dismissed, callback);
+
+    // [Replay] - Currently pref'ed to allow us to test this banner
+    // with real updates before releasing generally
+    if (Services.prefs.getBoolPref("replay.update.banner", false)) {
+      const notifyBox = getNotificationBox();
+      notifyBox.appendNotification(
+        "Replay needs to update",
+        "replay-update-available",
+        undefined,
+        notifyBox.PRIORITY_WARNING_HIGH,
+        [{
+          label: "Update",
+          callback
+        }],
+      );
+    }
   },
 
   showManualUpdateNotification(update, dismissed) {
@@ -248,6 +283,8 @@ var UpdateListener = {
       case "pending-elevate":
       case "success":
         this.clearCallbacks();
+
+        removeReplayNotification("replay-update-available");
 
         let initialBadgeWaitTimeMs = this.badgeWaitTime * 1000;
         let initialDoorhangerWaitTimeMs = update.promptWaitTime * 1000;
