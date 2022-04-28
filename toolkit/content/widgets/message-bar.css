@@ -279,7 +279,6 @@ strong {
 }
 
 
-
 /* [Replay] */
 
 :host([value^="replay-"]) {
@@ -287,6 +286,7 @@ strong {
   --notification-text: #7e6c8f;
   --notification-image: url("chrome://global/skin/icons/replay-logo-light.svg");
   --message-bar-icon-url: "";
+  --icon-size: 24px;
 }
 
 @media (-moz-toolbar-prefers-color-scheme: dark) {
@@ -300,7 +300,6 @@ strong {
 :host([value^="replay-"]) .container {
   background-color: var(--notification-background);
   align-items: center;
-  --icon-size: 24px;
 }
 
 :host([value^="replay-"]) .notification-message {
@@ -308,11 +307,7 @@ strong {
   font-size: 16px;
 }
 
-:host([value="replay-update-available"]) .notification-close {
-  display: none;
-}
-
-:host([value="replay-update-available"]) .icon {
+:host([value^="replay-"]) .icon {
   background-image: var(--notification-image);
   background-size: contain;
   background-repeat: no-repeat;
@@ -333,4 +328,8 @@ strong {
 :host([value^="replay-"]) .button-text {
   font-size: 16px;
   font-weight: normal;
+}
+
+:host([value="replay-update-available"]) .notification-close {
+  display: none;
 }
