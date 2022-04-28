@@ -672,6 +672,7 @@ const exports = {
   OnTestCommand,
   OnProtocolCommand,
   ClearPauseData,
+  GetPossibleBreakpoints,
   SetScanningScripts,
 };
 
@@ -949,6 +950,7 @@ function getPossibleBreakpoints({sourceId, begin, end}) {
     });
   }
 }
+
 function Debugger_getPossibleBreakpoints({ sourceId, begin, end }) {
   return getPossibleBreakpoints({source, begin, end});
 }
@@ -962,6 +964,24 @@ function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
       };
     }))
   };
+}
+
+function GetPossibleBreakpoints(sourceId) {
+  const source = protocolSourceIdToSource(sourceId);
+
+  let lastScript, lastFunctionId;
+  forMatchingBreakpointPositions(
+    source,
+    undefined,
+    undefined,
+    (script, offset, line, column) => {
+      if (script != lastScript) {
+        lastScript = script;
+        lastFunctionId = scriptToFunctionId(script);
+      }
+      RecordReplayControl.addPossibleBreakpoint(line, column, lastFunctionId, offset);
+    }
+  );
 }
 
 function Target_getCapabilities() {
