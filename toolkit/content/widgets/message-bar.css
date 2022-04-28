@@ -277,3 +277,60 @@ strong {
   }
 }
 }
+
+
+
+/* [Replay] */
+
+:host([value^="replay-"]) {
+  --notification-background: #ffefe6;
+  --notification-text: #7e6c8f;
+  --notification-image: url("chrome://global/skin/icons/replay-logo-light.svg");
+  --message-bar-icon-url: "";
+}
+
+@media (-moz-toolbar-prefers-color-scheme: dark) {
+  :host([value^="replay-"]) {
+    --notification-background: #2a1b50;
+    --notification-text: #c2afb9;
+    --notification-image: url("chrome://global/skin/icons/replay-logo-dark.svg");
+  }
+}
+
+:host([value^="replay-"]) .container {
+  background-color: var(--notification-background);
+  align-items: center;
+  --icon-size: 24px;
+}
+
+:host([value^="replay-"]) .notification-message {
+  color: var(--notification-text);
+  font-size: 16px;
+}
+
+:host([value="replay-update-available"]) .notification-close {
+  display: none;
+}
+
+:host([value="replay-update-available"]) .icon {
+  background-image: var(--notification-image);
+  background-size: contain;
+  background-repeat: no-repeat;
+}
+
+:host([value^="replay-"]) .notification-button {
+  /* clear out some rules to make it look like a link */
+  background-color: transparent;
+  padding: 0;
+  text-decoration: underline;
+  margin: 0;
+  border: 0;
+  min-width: 0;
+  cursor: pointer;
+  color: var(--notification-text);
+}
+
+:host([value^="replay-"]) .button-text {
+  font-size: 16px;
+  font-weight: normal;
+}
