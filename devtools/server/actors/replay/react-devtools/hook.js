@@ -288,6 +288,10 @@ function installHook(target) {
   function inject(renderer) {
     const id = ++uidCounter;
     renderers.set(id, renderer);
+
+    window.__RECORD_REPLAY_REMEMBER_OBJECT__(renderer);
+    window.__RECORD_REPLAY_ANNOTATE__("react-new-renderer");
+
     const reactBuildType = hasDetectedBadDCE ? 'deadcode' : detectReactBuildType(renderer); // Patching the console enables DevTools to do a few useful things:
     // * Append component stacks to warnings and error messages
     // * Disabling or marking logs during a double render in Strict Mode
@@ -396,6 +400,9 @@ function installHook(target) {
   }
 
   function onCommitFiberUnmount(rendererID, fiber) {
+    window.__RECORD_REPLAY_REMEMBER_OBJECT__(fiber);
+    window.__RECORD_REPLAY_ANNOTATE__("react-on-commit-fiber-unmount");
+
     const rendererInterface = rendererInterfaces.get(rendererID);
 
     if (rendererInterface != null) {
@@ -404,6 +411,9 @@ function installHook(target) {
   }
 
   function onCommitFiberRoot(rendererID, root, priorityLevel) {
+    window.__RECORD_REPLAY_REMEMBER_OBJECT__(root);
+    window.__RECORD_REPLAY_ANNOTATE__("react-on-commit-fiber-root");
+
     const mountedRoots = hook.getFiberRoots(rendererID);
     const current = root.current;
     const isKnownRoot = mountedRoots.has(root);
@@ -423,6 +433,9 @@ function installHook(target) {
   }
 
   function onPostCommitFiberRoot(rendererID, root) {
+    window.__RECORD_REPLAY_REMEMBER_OBJECT__(root);
+    window.__RECORD_REPLAY_ANNOTATE__("react-on-post-commit-fiber-root");
+
     const rendererInterface = rendererInterfaces.get(rendererID);
 
     if (rendererInterface != null) {

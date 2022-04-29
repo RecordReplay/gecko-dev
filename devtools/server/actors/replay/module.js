@@ -673,6 +673,7 @@ const exports = {
   OnProtocolCommand,
   ClearPauseData,
   SetScanningScripts,
+  EnsurePersistentID,
 };
 
 function Initialize() {
@@ -1657,6 +1658,33 @@ function getClassName(obj) {
   return obj.isProxy ? "Proxy" : obj.class;
 }
 
+const gPersistentIDs = new WeakMap();
+let gNextPersistentID = 1;
+
+function EnsurePersistentID(obj) {
+  if (!isNonNullObject(obj)) {
+    return;
+  }
+  obj = unwrapXray(obj);
+  const id = gPersistentIDs.get(obj);
+  if (id) {
+    RecordReplayControl.log(`ExistingPersistentId ${id}`);
+    return;
+  }
+  const newId = (gNextPersistentID++).toString();
+  gPersistentIDs.set(obj, newId);
+
+  RecordReplayControl.log(`NewPersistentId ${newId}`);
+}
+
+function getPersistentId(obj) {
+  const id = gPersistentIDs.get(unwrapXray(obj.unsafeDereference()));
+  if (id) {
+    return id;
+  }
+  return undefined;
+}
+
 function createProtocolObject(objectId, level) {
   const obj = getObjectFromId(objectId);
 
@@ -1676,7 +1704,8 @@ function createProtocolObject(objectId, level) {
     preview = new ProtocolObjectPreview(obj, level).fill();
   }
 
-  return { objectId, className, preview };
+  const persistentId = getPersistentId(obj);
+  return { objectId, className, preview, persistentId };
 }
 
 // Return whether an object should be ignored when generating previews.

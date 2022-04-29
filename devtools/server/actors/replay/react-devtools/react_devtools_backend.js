@@ -4798,6 +4798,8 @@ class Bridge extends _events__WEBPACK_IMPORTED_MODULE_0__[/* default */ "a"] {
   }
 
   send(event, ...payload) {
+    window.__RECORD_REPLAY_LOG__(`BACKEND_SEND ${event} ${payload} ${Error().stack}`);
+
     if (this._isShutdown) {
       console.warn(`Cannot send message "${event}" through a Bridge that has been shutdown.`);
       return;
@@ -7579,6 +7581,8 @@ function attach(hook, rendererID, renderer, global) {
     const isRoot = fiber.tag === HostRoot;
     const id = getOrGenerateFiberID(fiber);
 
+    window.__RECORD_REPLAY_LOG__(`recordMount #1 ${Error().stack}`);
+
     if (constants["s" /* __DEBUG__ */]) {
       debug('recordMount()', fiber, parentFiber);
     }
@@ -7946,6 +7950,8 @@ function attach(hook, rendererID, renderer, global) {
 
   function updateFiberRecursively(nextFiber, prevFiber, parentFiber, traceNearestHostComponentUpdate) {
     const id = getOrGenerateFiberID(nextFiber);
+
+    window.__RECORD_REPLAY_LOG__("updateFiberRecursively");
 
     if (constants["s" /* __DEBUG__ */]) {
       debug('updateFiberRecursively()', nextFiber, parentFiber);
@@ -15347,6 +15353,8 @@ function attach(hook, rendererID, renderer, global) {
 
   function recordMount(internalInstance, id, parentID) {
     const isRoot = parentID === 0;
+
+    window.__RECORD_REPLAY_LOG__(`recordMount #2 ${Error().stack}`);
 
     if (constants["s" /* __DEBUG__ */]) {
       console.log('%crecordMount()', 'color: green; font-weight: bold;', id, getData(internalInstance).displayName);

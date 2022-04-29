@@ -801,6 +801,37 @@ static bool Method_RecordingOperations(JSContext* aCx, unsigned aArgc, Value* aV
   return true;
 }
 
+static bool Method_EnsurePersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  RecordReplayAssert("EnsurePersistentId");
+
+  if (!args.get(0).isObject()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  {
+    JSAutoRealm ar(aCx, xpc::PrivilegedJunkScope());
+
+    RootedObject obj(aCx, &args.get(0).toObject());
+    if (!JS_WrapObject(aCx, &obj)) {
+      return false;
+    }
+
+    JS::RootedValueArray<1> args(aCx);
+    args[0].setObject(*obj);
+
+    RootedValue rv(aCx);
+    if (!JS_CallFunctionName(aCx, *js::gModuleObject, "EnsurePersistentID", args, &rv)) {
+      return false;
+    }
+  }
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("log", Method_Log, 1, 0),
   JS_FN("recordReplayAssert", Method_RecordReplayAssert, 1, 0),
@@ -824,6 +855,7 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("addMetadata", Method_AddMetadata, 1, 0),
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
+  JS_FN("ensurePersistentId", Method_EnsurePersistentId, 1, 0),
   JS_FS_END
 };
 
