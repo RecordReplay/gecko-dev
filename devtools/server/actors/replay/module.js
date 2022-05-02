@@ -56,6 +56,10 @@ const {
   initialize: initReactDevtools,
 } = require("devtools/server/actors/replay/react-devtools/contentScript");
 
+const {
+  initialize: initReduxDevtools,
+} = require("devtools/server/actors/replay/redux-devtools/contentScript");
+
 const { evalExpression } = ChromeUtils.import("resource://devtools/server/actors/replay/pure-eval-dbg.jsm");
 
 const { StackingContext } = require("devtools/server/actors/replay/stacking-context");
@@ -468,6 +472,7 @@ gNewGlobalHooks.push(dbgWindow => {
   if (!gReactDevtoolsInitialized) {
     gReactDevtoolsInitialized = true;
     initReactDevtools(dbgWindow, RecordReplayControl);
+    initReduxDevtools(dbgWindow, RecordReplayControl);
   }
 });
 

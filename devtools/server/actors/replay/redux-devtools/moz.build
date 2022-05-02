@@ -1,0 +1,4 @@
+DevToolsModules(
+    "contentScript.js",
+    "page.bundle.js",
+)
