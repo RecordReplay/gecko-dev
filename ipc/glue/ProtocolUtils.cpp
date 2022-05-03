@@ -518,11 +518,12 @@ void IProtocol::SetManagerAndRegister(IProtocol* aManager, int32_t aId) {
 bool IProtocol::ChannelSend(IPC::Message* aMsg) {
   UniquePtr<IPC::Message> msg(aMsg);
 
-  // We don't have a way to send IPC messages at non-deterministic points.
-  // For now, silently discard the messages.
-  if (recordreplay::AreThreadEventsDisallowed()) {
+  // IPC message sends are allowed to vary recording vs. replaying, so don't send
+  // them at all when replaying.
+  if (recordreplay::IsReplaying()) {
     return true;
   }
+  recordreplay::AutoDisallowThreadEvents disallow;
 
   if (CanSend()) {
     // NOTE: This send call failing can only occur during toplevel channel

@@ -54,6 +54,9 @@ Message::Message(int32_t routing_id, msgid_t type, uint32_t segment_capacity,
 #endif
   header()->footer_offset = -1;
   if (recordWriteLatency) {
+    // IPDL message sends are allowed to vary when recording/replaying, so don't
+    // interact with the recording when getting the creation time.
+    mozilla::recordreplay::AutoDisallowThreadEvents disallow;
     create_time_ = mozilla::TimeStamp::Now();
   }
 }
