@@ -1404,7 +1404,7 @@ async function fetchText(contentPrincipal, recordingId, url) {
   }
 
   try {
-    const {inputStream, resultCode} = await new Promise(resolve => NetUtil.asyncFetch(
+    const {inputStream, resultCode, statusCode} = await new Promise((resolve, reject) => NetUtil.asyncFetch(
       {
         uri: urlObj.toString(),
         loadingPrincipal: contentPrincipal,
@@ -1412,13 +1412,16 @@ async function fetchText(contentPrincipal, recordingId, url) {
         contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
         securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
       },
-      (inputStream, resultCode) => resolve({inputStream, resultCode})
+      (inputStream, resultCode, request) => {
+        resolve({inputStream, resultCode, statusCode: request.responseStatus})
+      }
     ));
 
-    if (resultCode !== 0) {
+    if (resultCode !== 0 || statusCode !== 200) {
       pingTelemetry("sourcemap-upload", "fetch-bad-status", {
-        message: `Request got result code: ${resultCode}`,
-        status: resultCode,
+        message: "Invalid source map response",
+        resultCode,
+        statusCode,
         url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
         recordingId,
       });
