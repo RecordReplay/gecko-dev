@@ -6,7 +6,7 @@
 
 DIRS += [
     "react-devtools",
-    "redux-devtools"
+    "redux-devtools",
 ]
 
 DevToolsModules(
