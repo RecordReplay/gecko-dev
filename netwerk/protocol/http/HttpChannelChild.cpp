@@ -167,6 +167,10 @@ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
 NS_IMPL_ADDREF(HttpChannelChild)
 
 NS_IMETHODIMP_(MozExternalRefCountType) HttpChannelChild::Release() {
+  // Reference counts can vary between recording/replaying and we don't want to
+  // interact with the recording.
+  recordreplay::AutoDisallowThreadEvents disallow;
+
   if (!NS_IsMainThread()) {
     nsrefcnt count = mRefCnt;
     nsresult rv = NS_DispatchToMainThread(NewNonOwningRunnableMethod(
