@@ -410,6 +410,10 @@ bool FunctionScriptEmitter::prepareForParameters() {
     }
   }
 
+  if (!funbox_->isArrow() && !bce_->emitTrackConstructedThis()) {
+    return false;
+  }
+
 #ifdef DEBUG
   state_ = State::Parameters;
 #endif

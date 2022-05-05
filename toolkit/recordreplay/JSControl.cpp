@@ -828,6 +828,32 @@ static bool Method_AddPossibleBreakpoint(JSContext* aCx, unsigned aArgc, Value* 
   return true;
 }
 
+static bool Method_GetPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isObject()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  RootedObject obj(aCx, &args.get(0).toObject());
+
+  int persistentId = JS::RecordReplayGetTrackedObjectId(aCx, obj);
+  if (persistentId) {
+    char buf[50];
+    snprintf(buf, sizeof(buf), "obj%d", persistentId);
+    RootedString rv(aCx, JS_NewStringCopyZ(aCx, buf));
+    if (!rv) {
+      return false;
+    }
+    args.rval().setString(rv);
+    return true;
+  }
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("log", Method_Log, 1, 0),
   JS_FN("recordReplayAssert", Method_RecordReplayAssert, 1, 0),
@@ -852,6 +878,7 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
   JS_FN("addPossibleBreakpoint", Method_AddPossibleBreakpoint, 4, 0),
+  JS_FN("getPersistentId", Method_GetPersistentId, 1, 0),
   JS_FS_END
 };
 

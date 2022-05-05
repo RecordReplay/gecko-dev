@@ -1696,6 +1696,7 @@ static bool BytecodeIsEffectful(JSOp op) {
     case JSOp::ThrowMsg:
     case JSOp::ForceInterpreter:
     case JSOp::ExecutionProgress:
+    case JSOp::TrackConstructedThis:
       return false;
   }
 

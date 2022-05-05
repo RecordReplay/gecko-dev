@@ -3515,8 +3515,7 @@
      */ \
     MACRO(InstrumentationScriptId, instrumentation_script_id, NULL, 1, 0, 1, JOF_BYTE) \
     /*
-     * If record/replay progress is tracked for the script, add a record/replay
-     * assertion that the value is consistent between recording/replaying.
+     * Add a record/replay assertion that a value is consistent between recording/replaying.
      *
      *   Category: Other
      *   Operands: uint32_t nameIndex
@@ -3524,14 +3523,18 @@
      */ \
     MACRO(RecordReplayAssert, record_replay_assert, NULL, 5, 1, 0, JOF_ATOM) \
     /*
-     * If record/replay progress is tracked for the script, increment the
-     * execution progress counter.
+     * Increment the record/replay execution progress counter.
      *
      *   Category: Other
      *   Operands:
      *   Stack: =>
      */ \
     MACRO(ExecutionProgress, execution_progress, NULL, 1, 0, 0, JOF_BYTE) \
+    /*
+     * Ensure that an ID is tracked for the "this" object if the current frame
+     * is constructing.
+     */ \
+    MACRO(TrackConstructedThis, track_constructed_this, NULL, 1, 0, 0, JOF_BYTE) \
     /*
      * Break in the debugger, if one is attached. Otherwise this is a no-op.
      *
@@ -3555,7 +3558,6 @@
  * a power of two.  Use this macro to do so.
  */
 #define FOR_EACH_TRAILING_UNUSED_OPCODE(MACRO) \
-  MACRO(232)                                   \
   MACRO(233)                                   \
   MACRO(234)                                   \
   MACRO(235)                                   \

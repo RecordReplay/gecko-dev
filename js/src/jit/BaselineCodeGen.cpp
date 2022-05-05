@@ -2208,6 +2208,30 @@ bool BaselineCodeGen<Handler>::emit_ExecutionProgress() {
 }
 
 template <typename Handler>
+bool BaselineCodeGen<Handler>::emit_TrackConstructedThis() {
+  if (!RecordReplayShouldTrackObjects()) {
+    return true;
+  }
+
+  Label notConstructing;
+  masm.branchTestPtr(Assembler::Zero, frame.addressOfCalleeToken(),
+                     Imm32(CalleeToken_FunctionConstructing), &notConstructing);
+
+  frame.syncStack(0);
+  masm.loadValue(frame.addressOfThis(), R0);
+
+  prepareVMCall();
+  pushArg(R0);
+
+  using Fn = bool (*)(JSContext*, HandleValue);
+  if (!callVM<Fn, RecordReplayTrackObject>()) {
+    return false;
+  }
+
+  masm.bind(&notConstructing);
+}
+
+template <typename Handler>
 bool BaselineCodeGen<Handler>::emit_Void() {
   frame.pop();
   frame.push(UndefinedValue());

@@ -948,6 +948,24 @@ bool js::RecordReplayProgressReached(JSContext* cx) {
   return true;
 }
 
+static bool gTrackObjects;
+
+void js::SetTrackObjectsCallback(bool aTrackObjects) {
+  gTrackObjects = aTrackObjects;
+}
+
+bool js::RecordReplayShouldTrackObjects() {
+  return gTrackObjects;
+}
+
+bool js::RecordReplayTrackObject(JSContext* cx, HandleValue val) {
+  return true;
+}
+
+JS_PUBLIC_API int JS::RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj) {
+  return 0;
+}
+
 bool js::RecordReplayAssertValue(JSContext* cx, HandlePropertyName name, HandleValue value) {
   if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
     MOZ_RELEASE_ASSERT(gForceEmitRecordReplayAsserts);

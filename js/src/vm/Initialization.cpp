@@ -262,6 +262,7 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
   }
   if (mozilla::recordreplay::IsReplaying()) {
     mozilla::recordreplay::SetExecutionProgressCallback(SetExecutionProgressTargetCallback);
+    mozilla::recordreplay::SetTrackObjectsCallback(SetTrackObjectsCallback);
   }
 #endif
 

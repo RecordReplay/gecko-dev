@@ -1701,7 +1701,8 @@ function createProtocolObject(objectId, level) {
     preview = new ProtocolObjectPreview(obj, level).fill();
   }
 
-  return { objectId, className, preview };
+  const persistentId = RecordReplayControl.getPersistentId(obj.unsafeDereference());
+  return { objectId, className, preview, persistentId };
 }
 
 // Return whether an object should be ignored when generating previews.

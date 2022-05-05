@@ -249,6 +249,9 @@ MFBT_API void SetExecutionProgressCallback(void (*aCallback)(uint64_t));
 // Called when the last destination progress value which was set has been reached.
 MFBT_API void ExecutionProgressReached();
 
+// Set a callback the driver can use to track persistent IDs for created objects.
+MFBT_API void SetTrackObjectsCallback(void (*aCallback)(bool));
+
 // Get an identifier for the current execution point which can be used to warp
 // here later.
 MFBT_API ProgressCounter NewTimeWarpTarget();

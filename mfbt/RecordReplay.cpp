@@ -90,6 +90,7 @@ namespace recordreplay {
   Macro(AdvanceExecutionProgressCounter, (), ())                               \
   Macro(SetExecutionProgressCallback, (void (*aCallback)(uint64_t)), (aCallback)) \
   Macro(ExecutionProgressReached, (), ())                                      \
+  Macro(SetTrackObjectsCallback, (void (*aCallback)(bool)), (aCallback))       \
   Macro(InternalAssertScriptedCaller, (const char* aWhy), (aWhy))              \
   Macro(InternalNotifyActivity, (), ())                                        \
   Macro(AddProfilerEvent, (const char* aEvent, const char* aJSON), (aEvent, aJSON)) \

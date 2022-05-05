@@ -1050,6 +1050,13 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
     return true;
   }
 
+  [[nodiscard]] bool emitTrackConstructedThis() {
+    if (shouldEmitInstrumentation() && mozilla::recordreplay::IsReplaying()) {
+      return emit1(JSOp::TrackConstructedThis);
+    }
+    return true;
+  }
+
   [[nodiscard]] bool emitInstrumentation(InstrumentationKind kind) {
     if (shouldEmitInstrumentation() &&
         mozilla::recordreplay::IsReplaying() &&

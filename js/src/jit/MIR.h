@@ -5964,6 +5964,22 @@ class MExecutionProgress : public MNullaryInstruction {
   void* script() const { return script_; }
 };
 
+class MTrackObject : public MUnaryInstruction, public BoxInputsPolicy::Data {
+  bool checkFrameConstructing_;
+
+  MTrackObject(MDefinition* value, bool checkFrameConstructing)
+    : MUnaryInstruction(classOpcode, value), checkFrameConstructing_(checkFrameConstructing) {
+    setGuard();
+  }
+
+ public:
+  INSTRUCTION_HEADER(TrackObject)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, value))
+
+  bool checkFrameConstructing() const { return checkFrameConstructing_; }
+};
+
 class MRecordReplayAssertValue : public MUnaryInstruction,
                                  public BoxInputsPolicy::Data {
   CompilerPropertyName name_;

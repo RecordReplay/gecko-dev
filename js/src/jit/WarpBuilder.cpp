@@ -3120,6 +3120,27 @@ bool WarpBuilder::build_ExecutionProgress(BytecodeLocation loc) {
   return resumeAfter(progress, loc);
 }
 
+bool WarpBuilder::build_TrackConstructedThis(BytecodeLocation loc) {
+  if (!RecordReplayShouldTrackObjects()) {
+    return true;
+  }
+
+  bool checkFrameConstructing = false;
+  if (inlineCallInfo()) {
+    if (!inlineCallInfo()->constructing()) {
+      return true;
+    }
+  } else {
+    checkFrameConstructing = true;
+  }
+
+  MDefinition* thisv = current->getSlot(info().thisSlot());
+
+  MTrackObject* track = MTrackObject::New(alloc(), thisv, checkFrameConstructing);
+  current->add(track);
+  return true;
+}
+
 bool WarpBuilder::build_ThrowMsg(BytecodeLocation loc) {
   auto* ins = MThrowMsg::New(alloc(), loc.throwMsgKind());
   current->add(ins);
