@@ -2109,6 +2109,7 @@ function getSerializeParameter(config) {
 
 function post(message) {
   // window.postMessage(message, '*');
+  dump(`REDUX_DEVTOOLS_SEND_MESSAGE\n`);
   window.__RECORD_REPLAY_REDUX_DEVTOOLS_SEND_BRIDGE__(message)
 }
 
@@ -10405,14 +10406,23 @@ function __REDUX_DEVTOOLS_EXTENSION__(config) {
   return enhance();
 }
 
+function wrapFunction(name, target) {
+  return (...args) => {
+    dump(`${name}\n`);
+    return target(...args);
+  };
+}
+
 // noinspection JSAnnotator
 window.__REDUX_DEVTOOLS_EXTENSION__ = __REDUX_DEVTOOLS_EXTENSION__;
-window.__REDUX_DEVTOOLS_EXTENSION__.open = _app_api_openWindow__WEBPACK_IMPORTED_MODULE_7__["default"];
-window.__REDUX_DEVTOOLS_EXTENSION__.notifyErrors = _app_api_notifyErrors__WEBPACK_IMPORTED_MODULE_5__["default"];
-window.__REDUX_DEVTOOLS_EXTENSION__.send = _app_api__WEBPACK_IMPORTED_MODULE_9__.sendMessage;
-window.__REDUX_DEVTOOLS_EXTENSION__.listen = _app_api__WEBPACK_IMPORTED_MODULE_9__.setListener;
-window.__REDUX_DEVTOOLS_EXTENSION__.connect = _app_api__WEBPACK_IMPORTED_MODULE_9__.connect;
-window.__REDUX_DEVTOOLS_EXTENSION__.disconnect = _app_api__WEBPACK_IMPORTED_MODULE_9__.disconnect;
+window.__REDUX_DEVTOOLS_EXTENSION__.open = wrapFunction("EXTENSION_OPEN", _app_api_openWindow__WEBPACK_IMPORTED_MODULE_7__["default"]);
+window.__REDUX_DEVTOOLS_EXTENSION__.notifyErrors = wrapFunction("EXTENSION_NOTIFY_ERRORS", _app_api_notifyErrors__WEBPACK_IMPORTED_MODULE_5__["default"]);
+window.__REDUX_DEVTOOLS_EXTENSION__.send = wrapFunction("EXTENSION_SEND", _app_api__WEBPACK_IMPORTED_MODULE_9__.sendMessage);
+window.__REDUX_DEVTOOLS_EXTENSION__.listen = wrapFunction("EXTENSION_LISTEN", _app_api__WEBPACK_IMPORTED_MODULE_9__.setListener);
+window.__REDUX_DEVTOOLS_EXTENSION__.connect = wrapFunction("EXTENSION_CONNECT", _app_api__WEBPACK_IMPORTED_MODULE_9__.connect);
+window.__REDUX_DEVTOOLS_EXTENSION__.disconnect = wrapFunction("EXTENSION_DISCONNECT", _app_api__WEBPACK_IMPORTED_MODULE_9__.disconnect);
+
+dump(`INSTALL_REDUX_DEVTOOLS_EXTENSION\n`);
 
 var preEnhancer = function preEnhancer(instanceId) {
   return function (next) {
