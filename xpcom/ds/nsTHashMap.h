@@ -32,9 +32,29 @@ struct nsKeyClass {
                                   KeyType, void>;
 };
 
+template <class KeyType>
+struct nsReplayStableKeyClass {
+  // Prevent instantiation with an incomplete KeyType, as std::is_base_of_v
+  // would have undefined behaviour then.
+  static_assert(sizeof(KeyType) > 0,
+                "KeyType must be a complete type (unless there's an explicit "
+                "specialization for nsReplayStableKeyClass<KeyType>)");
+  static_assert(std::is_base_of_v<PLDHashEntryHdr, KeyType>,
+                "KeyType must inherit from PLDHashEntryHdr (unless there's an "
+                "explicit specialization for nsReplayStableKeyClass<KeyType>)");
+
+  using type = std::conditional_t<std::is_base_of_v<PLDHashEntryHdr, KeyType>,
+                                  KeyType, void>;
+};
+
 template <typename KeyType>
 struct nsKeyClass<KeyType*> {
   using type = nsPtrHashKey<KeyType>;
+};
+
+template <typename KeyType>
+struct nsReplayStableKeyClass<KeyType*> {
+  using type = nsReplayStablePtrHashKey<KeyType>;
 };
 
 template <>
