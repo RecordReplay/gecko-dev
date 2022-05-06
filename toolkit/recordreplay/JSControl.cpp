@@ -391,6 +391,7 @@ static bool IsInterestingSource(const char* aURL) {
     "moz-extension://",
     "resource://",
     "chrome://",
+    "react-devtools-hook-script",
   };
 
   for (const char* prefix : uninterestingPrefixes) {

@@ -543,6 +543,10 @@ void Realm::setNewObjectMetadata(JSContext* cx, HandleObject obj) {
 static int gNextTrackedObjectId = 1;
 
 void ObjectRealm::ensureTrackedObjectId(JSContext* cx, HandleObject obj) {
+  if (mozilla::recordreplay::AreThreadEventsDisallowed()) {
+    return;
+  }
+
   AutoEnterOOMUnsafeRegion oomUnsafe;
 
   if (!trackedObjectIdTable_) {

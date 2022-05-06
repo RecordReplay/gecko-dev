@@ -375,6 +375,10 @@ function registerSource(source) {
     } catch {}
   }
 
+  if (source.url == "react-devtools-hook-script" && source.introductionType == "debugger eval") {
+    sourceURL = source.url;
+  }
+
   RecordReplayControl.recordReplayAssert(`RegisterSource #2 ${sourceURL}`);
 
   if (source.text !== "[wasm]") {
