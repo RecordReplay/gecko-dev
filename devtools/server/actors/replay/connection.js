@@ -292,10 +292,10 @@ async function getEnvMetadata() {
 
   if (metadataFile) {
     try {
-      const { type } = IOUtils.stat(metadataFile);
+      const { type } = await IOUtils.stat(metadataFile);
       if (type !== "regular") {
         console.error(`RECORD_REPLAY_METADATA_FILE is not a valid file`);
-        return null;
+        return;
       }
 
       const buffer = await IOUtils.read(metadataFile);
@@ -314,8 +314,6 @@ async function getEnvMetadata() {
       console.error(`Failed to parse metadata`);
     }
   }
-
-  return null;
 }
 
 class CommandError extends Error {
