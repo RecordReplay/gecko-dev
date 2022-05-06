@@ -466,14 +466,9 @@ getWindow().docShell.chromeEventHandler.addEventListener(
   true
 );
 
-let gReactDevtoolsInitialized = false;
-
 gNewGlobalHooks.push(dbgWindow => {
-  if (!gReactDevtoolsInitialized) {
-    gReactDevtoolsInitialized = true;
-    initReactDevtools(dbgWindow, RecordReplayControl);
-    initReduxDevtools(dbgWindow, RecordReplayControl);
-  }
+  initReactDevtools(dbgWindow, RecordReplayControl);
+  initReduxDevtools(dbgWindow, RecordReplayControl);
 });
 
 // This logic is mostly copied from actors/style-sheet.js

@@ -25,6 +25,10 @@ function initialize(dbgWindow, RecordReplayControl) {
       );
     };
 
+  window.wrappedJSObject.__RECORD_REPLAY_REACT_DEVTOOLS_HOOK__ = kind => {
+    RecordReplayControl.onAnnotation("react-devtools-hook", kind);
+  };
+
   const { installHook } = require("devtools/server/actors/replay/react-devtools/hook");
   dbgWindow.executeInGlobal(`(${installHook}(window))`);
 
