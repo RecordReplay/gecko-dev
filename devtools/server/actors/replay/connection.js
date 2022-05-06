@@ -286,6 +286,38 @@ async function sendCommand(method, params) {
   }
 }
 
+async function getEnvMetadata() {
+  let metadata = getenv("RECORD_REPLAY_METADATA");
+  const metadataFile = getenv("RECORD_REPLAY_METADATA_FILE");
+
+  if (metadataFile) {
+    try {
+      const { type } = IOUtils.stat(metadataFile);
+      if (type !== "regular") {
+        console.error(`RECORD_REPLAY_METADATA_FILE is not a valid file`);
+        return null;
+      }
+
+      const buffer = await IOUtils.read(metadataFile);
+      if (buffer.length) {
+        metadata = new TextDecoder().decode(buffer);
+      }
+    } catch (e) {
+      console.error(`Failed to read RECORD_REPLAY_METADATA_FILE: ${metadataFile}`);
+    }
+  }
+  
+  if (metadata) {
+    try {
+      return JSON.parse(metadata);
+    } catch (e) {
+      console.error(`Failed to parse metadata`);
+    }
+  }
+
+  return null;
+}
+
 class CommandError extends Error {
   constructor(message, code, data) {
     super(message);
@@ -512,7 +544,6 @@ class Recording extends EventEmitter {
       // Upload the metadata without the screenshot earlier to unblock the
       // upload screen
       await sendCommand("Internal.setRecordingMetadata", {
-        authId: undefined,
         recordingData: {...data, lastScreenData: "", lastScreenMimeType: ""},
       });
 
@@ -524,8 +555,8 @@ class Recording extends EventEmitter {
       await this._recordingResourcesUpload;
 
       await sendCommand("Internal.setRecordingMetadata", {
-        authId: undefined,
         recordingData: data,
+        metadata: await getEnvMetadata()
       });
     } catch (err) {
       console.error("Exception while setting recording metadata", err);
