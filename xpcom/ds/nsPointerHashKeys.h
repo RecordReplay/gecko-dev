@@ -13,6 +13,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/HashFunctions.h"
+#include "mozilla/RecordReplay.h"
 
 #include "PLDHashTable.h"
 
@@ -38,6 +39,36 @@ class nsPtrHashKey : public PLDHashEntryHdr {
   static KeyTypePointer KeyToPointer(KeyType aKey) { return aKey; }
   static PLDHashNumber HashKey(KeyTypePointer aKey) {
     return mozilla::HashGeneric(aKey);
+  }
+  enum { ALLOW_MEMMOVE = true };
+
+ protected:
+  T* MOZ_NON_OWNING_REF mKey;
+};
+
+/**
+ * replay-stable hashkey wrapper using T* KeyType
+ *
+ * @see nsTHashtable::EntryType for specification
+ */
+template <class T>
+class nsReplayStablePtrHashKey : public PLDHashEntryHdr {
+ public:
+  typedef T* KeyType;
+  typedef const T* KeyTypePointer;
+
+  explicit nsReplayStablePtrHashKey(const T* aKey) : mKey(const_cast<T*>(aKey)) {}
+  nsReplayStablePtrHashKey(nsReplayStablePtrHashKey<T>&& aToMove)
+      : PLDHashEntryHdr(std::move(aToMove)), mKey(std::move(aToMove.mKey)) {}
+  ~nsReplayStablePtrHashKey() = default;
+
+  KeyType GetKey() const { return mKey; }
+  bool KeyEquals(KeyTypePointer aKey) const { return aKey == mKey; }
+
+  static KeyTypePointer KeyToPointer(KeyType aKey) { return aKey; }
+  static PLDHashNumber HashKey(KeyTypePointer aKey) {
+    return mozilla::HashGeneric(
+      mozilla::recordreplay::ThingIndex(const_cast<KeyType>(aKey)));
   }
   enum { ALLOW_MEMMOVE = true };
 
