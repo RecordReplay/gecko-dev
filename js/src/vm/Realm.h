@@ -218,6 +218,7 @@ struct IteratorHashPolicy {
 };
 
 class DebugEnvironments;
+class ObjectValueWeakMap;
 class ObjectWeakMap;
 class WeakMapBase;
 
@@ -233,6 +234,10 @@ class ObjectRealm {
   // map because when loading scripts into a non-syntactic environment, we
   // need to use the same lexical environment to persist lexical bindings.
   js::UniquePtr<js::ObjectWeakMap> nonSyntacticLexicalEnvironments_;
+
+  // Keep track of record/replay persistent IDs for tracked objects. Keys are
+  // in this realm, values are numbers.
+  js::UniquePtr<js::ObjectValueWeakMap> trackedObjectIdTable_;
 
   ObjectRealm(const ObjectRealm&) = delete;
   void operator=(const ObjectRealm&) = delete;
@@ -283,6 +288,9 @@ class ObjectRealm {
                                             js::HandleObject thisv);
   js::NonSyntacticLexicalEnvironmentObject* getNonSyntacticLexicalEnvironment(
       JSObject* key) const;
+
+  void ensureTrackedObjectId(JSContext* cx, HandleObject obj);
+  int getTrackedObjectId(JSObject* obj);
 };
 
 }  // namespace js

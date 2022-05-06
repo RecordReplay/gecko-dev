@@ -959,11 +959,16 @@ bool js::RecordReplayShouldTrackObjects() {
 }
 
 bool js::RecordReplayTrackObject(JSContext* cx, HandleValue val) {
+  if (val.isObject()) {
+    RootedObject obj(cx, &val.toObject());
+    ObjectRealm::get(obj).ensureTrackedObjectId(cx, obj);
+  }
   return true;
 }
 
 JS_PUBLIC_API int JS::RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj) {
-  return 0;
+  JSObject* unwrapped = UncheckedUnwrap(obj);
+  return ObjectRealm::get(unwrapped).getTrackedObjectId(unwrapped);
 }
 
 bool js::RecordReplayAssertValue(JSContext* cx, HandlePropertyName name, HandleValue value) {

@@ -296,6 +296,10 @@ void ObjectRealm::trace(JSTracer* trc) {
     objectMetadataTable->trace(trc);
   }
 
+  if (trackedObjectIdTable_) {
+    trackedObjectIdTable_->trace(trc);
+  }
+
   if (nonSyntacticLexicalEnvironments_) {
     nonSyntacticLexicalEnvironments_->trace(trc);
   }
@@ -337,6 +341,10 @@ void Realm::traceRoots(JSTracer* trc,
 void ObjectRealm::finishRoots() {
   if (objectMetadataTable) {
     objectMetadataTable->clear();
+  }
+
+  if (trackedObjectIdTable_) {
+    trackedObjectIdTable_->clear();
   }
 
   if (nonSyntacticLexicalEnvironments_) {
@@ -530,6 +538,39 @@ void Realm::setNewObjectMetadata(JSContext* cx, HandleObject obj) {
       oomUnsafe.crash("setNewObjectMetadata");
     }
   }
+}
+
+static int gNextTrackedObjectId = 1;
+
+void ObjectRealm::ensureTrackedObjectId(JSContext* cx, HandleObject obj) {
+  AutoEnterOOMUnsafeRegion oomUnsafe;
+
+  if (!trackedObjectIdTable_) {
+    auto table = cx->make_unique<ObjectValueWeakMap>(cx, nullptr);
+    if (!table) {
+      oomUnsafe.crash("createTrackedObjectId");
+    }
+
+    trackedObjectIdTable_ = std::move(table);
+  }
+
+  // Don't create multiple tracked object IDs for the same object.
+  if (ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj)) {
+    return;
+  }
+
+  Value targetVal(Int32Value(gNextTrackedObjectId++));
+  if (!trackedObjectIdTable_->putNew(obj, targetVal)) {
+    oomUnsafe.crash("createTrackedObjectId");
+  }
+}
+
+int ObjectRealm::getTrackedObjectId(JSObject* obj) {
+  if (ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj)) {
+    return p->value().toInt32();
+  }
+
+  return 0;
 }
 
 void Realm::updateDebuggerObservesFlag(unsigned flag) {

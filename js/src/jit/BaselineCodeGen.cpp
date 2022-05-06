@@ -2229,6 +2229,7 @@ bool BaselineCodeGen<Handler>::emit_TrackConstructedThis() {
   }
 
   masm.bind(&notConstructing);
+  return true;
 }
 
 template <typename Handler>
