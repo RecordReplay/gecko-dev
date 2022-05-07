@@ -855,6 +855,21 @@ static bool Method_GetPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
   return true;
 }
 
+static bool Method_CheckPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isObject()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  RootedObject obj(aCx, &args.get(0).toObject());
+  JS::RecordReplayCheckTrackedObject(aCx, obj);
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("log", Method_Log, 1, 0),
   JS_FN("recordReplayAssert", Method_RecordReplayAssert, 1, 0),
@@ -880,6 +895,7 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
   JS_FN("addPossibleBreakpoint", Method_AddPossibleBreakpoint, 4, 0),
   JS_FN("getPersistentId", Method_GetPersistentId, 1, 0),
+  JS_FN("checkPersistentId", Method_CheckPersistentId, 1, 0),
   JS_FS_END
 };
 

@@ -1051,7 +1051,8 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   }
 
   [[nodiscard]] bool emitTrackConstructedThis() {
-    if (shouldEmitInstrumentation() && mozilla::recordreplay::IsReplaying()) {
+    if (shouldEmitInstrumentation() &&
+        (mozilla::recordreplay::IsReplaying() || RecordReplayShouldTrackObjects())) {
       return emit1(JSOp::TrackConstructedThis);
     }
     return true;

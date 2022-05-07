@@ -971,6 +971,11 @@ JS_PUBLIC_API int JS::RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject
   return ObjectRealm::get(unwrapped).getTrackedObjectId(unwrapped);
 }
 
+JS_PUBLIC_API void JS::RecordReplayCheckTrackedObject(JSContext* cx, HandleObject obj) {
+  JSObject* unwrapped = UncheckedUnwrap(obj);
+  ObjectRealm::get(unwrapped).checkTrackedObject(unwrapped);
+}
+
 bool js::RecordReplayAssertValue(JSContext* cx, HandlePropertyName name, HandleValue value) {
   if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
     MOZ_RELEASE_ASSERT(gForceEmitRecordReplayAsserts);

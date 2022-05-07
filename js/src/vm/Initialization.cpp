@@ -264,6 +264,12 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
     mozilla::recordreplay::SetExecutionProgressCallback(SetExecutionProgressTargetCallback);
     mozilla::recordreplay::SetTrackObjectsCallback(SetTrackObjectsCallback);
   }
+  if (mozilla::recordreplay::IsRecording()) {
+    mozilla::recordreplay::AutoPassThroughThreadEvents pt;
+    if (getenv("RECORDING_TRACK_OBJECTS")) {
+      SetTrackObjectsCallback(true);
+    }
+  }
 #endif
 
   libraryInitState = InitState::Running;

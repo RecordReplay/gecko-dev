@@ -33,6 +33,10 @@ function initialize(dbgWindow, RecordReplayControl) {
     return RecordReplayControl.getPersistentId(obj);
   };
 
+  window.wrappedJSObject.__RECORD_REPLAY_CHECK_PERSISTENT_ID__ = obj => {
+    RecordReplayControl.checkPersistentId(obj);
+  };
+
   // The hook script is given a special URL so it won't be ignored and clients can inspect
   // state in its frames.
   const { installHook } = require("devtools/server/actors/replay/react-devtools/hook");

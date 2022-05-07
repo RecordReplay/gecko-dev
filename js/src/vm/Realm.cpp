@@ -570,11 +570,31 @@ void ObjectRealm::ensureTrackedObjectId(JSContext* cx, HandleObject obj) {
 }
 
 int ObjectRealm::getTrackedObjectId(JSObject* obj) {
+  if (!trackedObjectIdTable_) {
+    return 0;
+  }
+
   if (ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj)) {
     return p->value().toInt32();
   }
 
   return 0;
+}
+
+void ObjectRealm::checkTrackedObject(JSObject* obj) {
+  if (!RecordReplayShouldTrackObjects()) {
+    return;
+  }
+
+  if (trackedObjectIdTable_) {
+    ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj);
+    if (p) {
+      mozilla::recordreplay::PrintLog("Found tracked object ID %d for %p", p->value().toInt32(), obj);
+      return;
+    }
+  }
+
+  mozilla::recordreplay::PrintLog("Error: Unexpected missing tracked object ID for %p", obj);
 }
 
 void Realm::updateDebuggerObservesFlag(unsigned flag) {

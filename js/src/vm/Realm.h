@@ -291,6 +291,7 @@ class ObjectRealm {
 
   void ensureTrackedObjectId(JSContext* cx, HandleObject obj);
   int getTrackedObjectId(JSObject* obj);
+  void checkTrackedObject(JSObject* obj);
 };
 
 }  // namespace js
