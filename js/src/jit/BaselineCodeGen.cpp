@@ -2209,15 +2209,15 @@ bool BaselineCodeGen<Handler>::emit_ExecutionProgress() {
 
 template <typename Handler>
 bool BaselineCodeGen<Handler>::emit_TrackConstructedThis() {
-  if (!RecordReplayShouldTrackObjects()) {
-    return true;
-  }
-
-  Label notConstructing;
-  masm.branchTestPtr(Assembler::Zero, frame.addressOfCalleeToken(),
-                     Imm32(CalleeToken_FunctionConstructing), &notConstructing);
-
   frame.syncStack(0);
+  Label done;
+
+  AbsoluteAddress address(RecordReplayAddressOfShouldTrackObjects());
+  masm.branch32(Assembler::Equal, address, Imm32(0), &done);
+
+  masm.branchTestPtr(Assembler::Zero, frame.addressOfCalleeToken(),
+                     Imm32(CalleeToken_FunctionConstructing), &done);
+
   masm.loadValue(frame.addressOfThis(), R0);
 
   prepareVMCall();
@@ -2228,7 +2228,7 @@ bool BaselineCodeGen<Handler>::emit_TrackConstructedThis() {
     return false;
   }
 
-  masm.bind(&notConstructing);
+  masm.bind(&done);
   return true;
 }
 

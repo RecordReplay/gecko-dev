@@ -589,7 +589,6 @@ void ObjectRealm::checkTrackedObject(JSObject* obj) {
   if (trackedObjectIdTable_) {
     ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj);
     if (p) {
-      mozilla::recordreplay::PrintLog("Found tracked object ID %d for %p", p->value().toInt32(), obj);
       return;
     }
   }

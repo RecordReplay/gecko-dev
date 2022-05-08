@@ -948,14 +948,33 @@ bool js::RecordReplayProgressReached(JSContext* cx) {
   return true;
 }
 
-static bool gTrackObjects;
+static int32_t gTrackObjects;
 
 void js::SetTrackObjectsCallback(bool aTrackObjects) {
+  if (gTrackObjects != aTrackObjects) {
+    JSContext* cx = TlsContext.get();
+    if (cx) {
+      js::CancelOffThreadIonCompile(cx->runtime());
+
+      for (ZonesIter zone(cx->runtime(), SkipAtoms); !zone.done(); zone.next()) {
+        zone->setPreservingCode(false);
+
+        Zone::DiscardOptions options;
+        options.discardBaselineCode = false;
+        zone->discardJitCode(cx->runtime()->defaultFreeOp(), options);
+      }
+    }
+  }
+
   gTrackObjects = aTrackObjects;
 }
 
 bool js::RecordReplayShouldTrackObjects() {
   return gTrackObjects;
+}
+
+int32_t* js::RecordReplayAddressOfShouldTrackObjects() {
+  return &gTrackObjects;
 }
 
 bool js::RecordReplayTrackObject(JSContext* cx, HandleValue val) {

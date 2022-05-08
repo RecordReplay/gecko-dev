@@ -1215,6 +1215,9 @@ extern void SetTrackObjectsCallback(bool aTrackObjects);
 // Whether to track persistent IDs for new objects.
 extern bool RecordReplayShouldTrackObjects();
 
+// Get an address of the location which is non-zero when objects are being tracked.
+extern int32_t* RecordReplayAddressOfShouldTrackObjects();
+
 // Ensure an object has a persistent ID tracked over its lifetime.
 extern bool RecordReplayTrackObject(JSContext* cx, HandleValue val);
 
