@@ -2601,7 +2601,8 @@ nsresult XMLHttpRequestMainThread::InitiateFetch(
 
     if (uploadStream) {
       if (httpChannel) {
-        uploadStream = recordreplay::WrapNetworkRequestBodyStream(httpChannel, uploadStream);
+        uploadStream = recordreplay::WrapNetworkRequestBodyStream(
+            httpChannel, uploadStream, mUploadTotal);
       }
 
       // If necessary, wrap the stream in a buffered stream so as to guarantee
