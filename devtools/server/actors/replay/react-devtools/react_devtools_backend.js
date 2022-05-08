@@ -7440,9 +7440,6 @@ function attach(hook, rendererID, renderer, global) {
       } else {
         const errorCount = mergeMapsAndGetCountHelper(fiber, fiberID, pendingFiberToErrorsMap, fiberIDToErrorsMap);
         const warningCount = mergeMapsAndGetCountHelper(fiber, fiberID, pendingFiberToWarningsMap, fiberIDToWarningsMap);
-
-        dump(`PUSH_OPERATION TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS ${fiberID} ${errorCount} ${warningCount}\n`);
-
         pushOperation(constants["q" /* TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS */]);
         pushOperation(fiberID);
         pushOperation(errorCount);
@@ -7486,8 +7483,6 @@ function attach(hook, rendererID, renderer, global) {
     // This enables roots to be mapped to renderers,
     // Which in turn enables fiber props, states, and hooks to be inspected.
 
-    dump(`FLUSH_PENDING_EVENTS RENDERER ${rendererID} ROOT ${currentRootID} STRING_LENGTH ${pendingStringTableLength} NUM_UNMOUNTS ${numUnmountIDs} PENDING_OPERATIONS ${pendingOperations}\n`);
-
     let i = 0;
     operations[i++] = rendererID;
     operations[i++] = currentRootID; // Now fill in the string table.
@@ -7506,8 +7501,6 @@ function attach(hook, rendererID, renderer, global) {
       }
 
       i += length;
-
-      dump(`STRING_OPERATION ${encodedString} POSITION ${i}\n`);
     });
 
     if (numUnmountIDs > 0) {
@@ -7569,9 +7562,6 @@ function attach(hook, rendererID, renderer, global) {
 
     const id = pendingStringTable.size + 1;
     const encodedString = Object(utils["m" /* utfEncodeString */])(string);
-
-    dump(`GET_STRING_ID ${string} ID ${id} ENCODED ${encodedString}\n`);
-
     pendingStringTable.set(string, {
       encodedString,
       id
@@ -7608,8 +7598,6 @@ function attach(hook, rendererID, renderer, global) {
     }
 
     if (isRoot) {
-      dump(`PUSH_OPERATION TREE_OPERATION_ADD ROOT ${id}\n`);
-
       pushOperation(constants["l" /* TREE_OPERATION_ADD */]);
       pushOperation(id);
       pushOperation(types["m" /* ElementTypeRoot */]);
@@ -7642,8 +7630,6 @@ function attach(hook, rendererID, renderer, global) {
       const displayNameStringID = getStringID(displayName); // This check is a guard to handle a React element that has been modified
       // in such a way as to bypass the default stringification of the "key" property.
 
-      dump(`PUSH_OPERATION TREE_OPERATION_ADD #2 ${id} PARENT ${parentID} OWNER ${ownerID}\n`);
-
       const keyString = key === null ? null : String(key);
       const keyStringID = getStringID(keyString);
       pushOperation(constants["l" /* TREE_OPERATION_ADD */]);
@@ -7655,8 +7641,6 @@ function attach(hook, rendererID, renderer, global) {
       pushOperation(keyStringID); // If this subtree has a new mode, let the frontend know.
 
       if ((fiber.mode & StrictModeBits) !== 0 && (parentFiber.mode & StrictModeBits) === 0) {
-        dump(`PUSH_OPERATION TREE_OPERATION_SET_SUBTREE_MODE ${id}\n`);
-
         pushOperation(constants["p" /* TREE_OPERATION_SET_SUBTREE_MODE */]);
         pushOperation(id);
         pushOperation(types["q" /* StrictMode */]);
@@ -7850,8 +7834,6 @@ function attach(hook, rendererID, renderer, global) {
       // because it's possible that one of its descendants did.
 
       if (alternate == null || treeBaseDuration !== alternate.treeBaseDuration) {
-        dump(`PUSH_OPERATION TREE_OPERATION_UPDATE_TREE_BASE_DURATION ${id}\n`);
-
         // Tree base duration updates are included in the operations typed array.
         // So we have to convert them from milliseconds to microseconds so we can send them as ints.
         const convertedTreeBaseDuration = Math.floor((treeBaseDuration || 0) * 1000);
@@ -7924,8 +7906,6 @@ function attach(hook, rendererID, renderer, global) {
       // No need to reorder.
       return;
     }
-
-    dump(`PUSH_OPERATION TREE_OPERATION_REORDER_CHILDREN ${getFiberIDThrows(fiber)} NUM_CHILDREN ${numChildren}\n`);
 
     pushOperation(constants["o" /* TREE_OPERATION_REORDER_CHILDREN */]);
     pushOperation(getFiberIDThrows(fiber));
@@ -15373,8 +15353,6 @@ function attach(hook, rendererID, renderer, global) {
     }
 
     if (isRoot) {
-      dump(`PUSH_OPERATION TREE_OPERATION_ADD #3 ${id}\n`);
-
       // TODO Is this right? For all versions?
       const hasOwnerMetadata = internalInstance._currentElement != null && internalInstance._currentElement._owner != null;
       pushOperation(constants["l" /* TREE_OPERATION_ADD */]);
@@ -15388,8 +15366,6 @@ function attach(hook, rendererID, renderer, global) {
 
       pushOperation(hasOwnerMetadata ? 1 : 0);
     } else {
-      dump(`PUSH_OPERATION TREE_OPERATION_ADD #4 ${id}\n`);
-
       const type = getElementType(internalInstance);
       const {
         displayName,
@@ -15409,8 +15385,6 @@ function attach(hook, rendererID, renderer, global) {
   }
 
   function recordReorder(internalInstance, id, nextChildren) {
-    dump(`PUSH_OPERATION TREE_OPERATION_REORDER_CHILDREN #2 ${id}\n`);
-
     pushOperation(constants["o" /* TREE_OPERATION_REORDER_CHILDREN */]);
     pushOperation(id);
     const nextChildIDs = nextChildren.map(getID);
