@@ -375,6 +375,10 @@ function registerSource(source) {
     } catch {}
   }
 
+  // The react devtools hook script is special cased as one that is available to clients,
+  // so that its frames and their arguments can be observed. Avoid using the default
+  // null url which getDebuggerSourceURL would normally use for this so that it is
+  // easier to distinguish from actual page JS.
   if (source.url == "react-devtools-hook-script" && source.introductionType == "debugger eval") {
     sourceURL = source.url;
   }
@@ -470,10 +474,29 @@ getWindow().docShell.chromeEventHandler.addEventListener(
   true
 );
 
+let gReactDevtoolsInitialized = false;
+
 gNewGlobalHooks.push(dbgWindow => {
-  initReactDevtools(dbgWindow, RecordReplayControl);
-  initReduxDevtools(dbgWindow, RecordReplayControl);
+  initRecordReplayGlobals(dbgWindow);
+  if (!gReactDevtoolsInitialized) {
+    gReactDevtoolsInitialized = true;
+    initReactDevtools(dbgWindow, RecordReplayControl);
+    initReduxDevtools(dbgWindow, RecordReplayControl);
+  }
 });
+
+// Add some global variables to all windows when recording/replaying.
+function initRecordReplayGlobals(dbgWindow) {
+  const window = dbgWindow.unsafeDereference();
+
+  window.wrappedJSObject.__RECORD_REPLAY_PERSISTENT_ID__ = obj => {
+    return RecordReplayControl.getPersistentId(obj);
+  };
+
+  window.wrappedJSObject.__RECORD_REPLAY_CHECK_PERSISTENT_ID__ = obj => {
+    RecordReplayControl.checkPersistentId(obj);
+  };
+}
 
 // This logic is mostly copied from actors/style-sheet.js
 function getStylesheetWindow(stylesheet) {

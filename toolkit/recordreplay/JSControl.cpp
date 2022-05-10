@@ -832,6 +832,16 @@ static bool Method_AddPossibleBreakpoint(JSContext* aCx, unsigned aArgc, Value* 
 static bool Method_GetPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
 
+  // Persistent IDs can't be inspected unless we've diverged from the recording
+  // to inspect pause state. This method is accessible to page scripts so that
+  // persistent IDs can be read during record/replay evaluations, but if the page
+  // tries to read the persistent ID while running normally its behavior will
+  // diverge because we may or may not be tracking objects.
+  if (!HasDivergedFromRecording()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
   if (!args.get(0).isObject()) {
     args.rval().setUndefined();
     return true;
