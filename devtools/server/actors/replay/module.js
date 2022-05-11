@@ -473,12 +473,11 @@ getWindow().docShell.chromeEventHandler.addEventListener(
   true
 );
 
-let gReactDevtoolsInitialized = false;
-
 gNewGlobalHooks.push(dbgWindow => {
   initRecordReplayGlobals(dbgWindow);
-  if (!gReactDevtoolsInitialized) {
-    gReactDevtoolsInitialized = true;
+
+  const window = dbgWindow.unsafeDereference();
+  if (window.parent === window && window.location.href.match(/https?:\/\//)) {
     initReactDevtools(dbgWindow, RecordReplayControl);
     initReduxDevtools(dbgWindow, RecordReplayControl);
   }
@@ -1225,17 +1224,6 @@ if (isRecordingOrReplaying) {
       if (available > 0) {
         const value = NetUtil.readInputStream(inputStream, available);
         onStreamData(value);
-      }
-
-      // For some reason, request streams don't appear to be marked closed properly.
-      // Firefox doesn't support using an actual ReadableStream for fetch bodies,
-      // so every request body SHOULD have all of its data available immediately,
-      // meaning that we can immediately consider all request body streams to
-      // end once they have been read.
-      if (isRequestBody) {
-        onStreamEnd();
-        stream.close();
-        return;
       }
 
       listenForStreamData();

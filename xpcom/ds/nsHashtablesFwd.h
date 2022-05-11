@@ -61,6 +61,9 @@ using nsRefPtrHashtable = nsRefCountedHashtable<KeyClass, RefPtr<ClassType>>;
 namespace mozilla::detail {
 template <class KeyType>
 struct nsKeyClass;
+
+template <class KeyType>
+struct nsReplayStableKeyClass;
 }  // namespace mozilla::detail
 
 /**
@@ -90,5 +93,10 @@ class nsTBaseHashSet;
 template <class KeyType>
 using nsTHashSet =
     nsTBaseHashSet<typename mozilla::detail::nsKeyClass<KeyType>::type>;
+
+template <class KeyType>
+using nsTReplayStableHashSet =
+    nsTBaseHashSet<
+      typename mozilla::detail::nsReplayStableKeyClass<KeyType>::type>;
 
 #endif  // XPCOM_DS_NSHASHTABLESFWD_H_

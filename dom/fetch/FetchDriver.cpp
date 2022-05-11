@@ -771,7 +771,7 @@ nsresult FetchDriver::HttpFetch(
     mRequest->GetBody(getter_AddRefs(bodyStream), &bodyLength);
     if (bodyStream) {
       if (httpChan) {
-        bodyStream = recordreplay::WrapNetworkRequestBodyStream(httpChan, bodyStream);
+        bodyStream = recordreplay::WrapNetworkRequestBodyStream(httpChan, bodyStream, bodyLength);
       }
 
       nsAutoCString method;

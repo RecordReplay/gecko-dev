@@ -361,7 +361,8 @@ already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener*
 // Wrap a given request input stream to emit an observer notification when the stream
 // begins and allow observation of a tee stream.
 already_AddRefed<nsIInputStream> WrapNetworkRequestBodyStream(nsIHttpChannel* aChannel,
-                                                              nsIInputStream* aStream);
+                                                              nsIInputStream* aStream,
+                                                              int64_t aLength);
 
 // Helper to build a JSON object with the given properties.
 bool BuildJSON(size_t aNumProperties,
