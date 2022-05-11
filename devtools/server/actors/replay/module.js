@@ -466,11 +466,9 @@ getWindow().docShell.chromeEventHandler.addEventListener(
   true
 );
 
-let gReactDevtoolsInitialized = false;
-
 gNewGlobalHooks.push(dbgWindow => {
-  if (!gReactDevtoolsInitialized) {
-    gReactDevtoolsInitialized = true;
+  const window = dbgWindow.unsafeDereference();
+  if (window.parent === window && window.location.href.match(/https?:\/\//)) {
     initReactDevtools(dbgWindow, RecordReplayControl);
     initReduxDevtools(dbgWindow, RecordReplayControl);
   }
