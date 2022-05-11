@@ -391,6 +391,7 @@ static bool IsInterestingSource(const char* aURL) {
     "moz-extension://",
     "resource://",
     "chrome://",
+    "replay-content://",
   };
 
   for (const char* prefix : uninterestingPrefixes) {
@@ -828,6 +829,57 @@ static bool Method_AddPossibleBreakpoint(JSContext* aCx, unsigned aArgc, Value* 
   return true;
 }
 
+static bool Method_GetPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  // Persistent IDs can't be inspected unless we've diverged from the recording
+  // to inspect pause state. This method is accessible to page scripts so that
+  // persistent IDs can be read during record/replay evaluations, but if the page
+  // tries to read the persistent ID while running normally its behavior will
+  // diverge because we may or may not be tracking objects.
+  if (!HasDivergedFromRecording()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  if (!args.get(0).isObject()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  RootedObject obj(aCx, &args.get(0).toObject());
+
+  uint64_t persistentId = JS::RecordReplayGetTrackedObjectId(aCx, obj);
+  if (persistentId) {
+    char buf[50];
+    snprintf(buf, sizeof(buf), "obj%llu", persistentId);
+    RootedString rv(aCx, JS_NewStringCopyZ(aCx, buf));
+    if (!rv) {
+      return false;
+    }
+    args.rval().setString(rv);
+    return true;
+  }
+
+  args.rval().setUndefined();
+  return true;
+}
+
+static bool Method_CheckPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+
+  if (!args.get(0).isObject()) {
+    args.rval().setUndefined();
+    return true;
+  }
+
+  RootedObject obj(aCx, &args.get(0).toObject());
+  JS::RecordReplayCheckTrackedObject(aCx, obj);
+
+  args.rval().setUndefined();
+  return true;
+}
+
 static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("log", Method_Log, 1, 0),
   JS_FN("recordReplayAssert", Method_RecordReplayAssert, 1, 0),
@@ -852,6 +904,8 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),
   JS_FN("makeBookmark", Method_MakeBookmark, 0, 0),
   JS_FN("addPossibleBreakpoint", Method_AddPossibleBreakpoint, 4, 0),
+  JS_FN("getPersistentId", Method_GetPersistentId, 1, 0),
+  JS_FN("checkPersistentId", Method_CheckPersistentId, 1, 0),
   JS_FS_END
 };
 

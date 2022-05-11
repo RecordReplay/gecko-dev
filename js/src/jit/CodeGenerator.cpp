@@ -14376,6 +14376,23 @@ void CodeGenerator::visitExecutionProgress(LExecutionProgress* lir) {
   }
 }
 
+void CodeGenerator::visitTrackObject(LTrackObject* lir) {
+  ValueOperand value = ToValue(lir, LTrackObject::ValueOperand);
+
+  using Fn = bool (*)(JSContext*, HandleValue);
+  OutOfLineCode* ool =
+    oolCallVM<Fn, RecordReplayTrackObject>(lir, ArgList(value), StoreNothing());
+
+  if (lir->mir()->checkFrameConstructing()) {
+    Address calleeToken(masm.getStackPointer(),
+                        frameSize() + JitFrameLayout::offsetOfCalleeToken());
+    masm.branchTestPtr(Assembler::Zero, calleeToken,
+                       Imm32(CalleeToken_FunctionConstructing), ool->rejoin());
+  }
+  masm.jump(ool->entry());
+  masm.bind(ool->rejoin());
+}
+
 void CodeGenerator::visitWasmInterruptCheck(LWasmInterruptCheck* lir) {
   MOZ_ASSERT(gen->compilingWasm());
 

@@ -681,6 +681,20 @@ class LExecutionProgress : public LInstructionHelper<0, 0, 1> {
   const LDefinition* scratch() { return getTemp(0); }
 };
 
+class LTrackObject : public LInstructionHelper<0, BOX_PIECES, 0> {
+ public:
+  LIR_HEADER(TrackObject)
+
+  static const size_t ValueOperand = 0;
+
+  explicit LTrackObject(const LBoxAllocation& value)
+      : LInstructionHelper(classOpcode) {
+    setBoxOperand(ValueOperand, value);
+  }
+
+  MTrackObject* mir() const { return mir_->toTrackObject(); }
+};
+
 class LWasmInterruptCheck : public LInstructionHelper<0, 1, 0> {
  public:
   LIR_HEADER(WasmInterruptCheck)

@@ -706,6 +706,7 @@ AbortReasonOr<WarpScriptSnapshot*> WarpScriptOracle::createScriptSnapshot() {
       case JSOp::RetRval:
       case JSOp::RecordReplayAssert:
       case JSOp::ExecutionProgress:
+      case JSOp::TrackConstructedThis:
       case JSOp::InitialYield:
       case JSOp::Yield:
       case JSOp::ResumeKind:

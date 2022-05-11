@@ -286,6 +286,8 @@ function installHook(target) {
   let uidCounter = 0;
 
   function inject(renderer) {
+    window.__RECORD_REPLAY_REACT_DEVTOOLS_HOOK__("inject");
+
     const id = ++uidCounter;
     renderers.set(id, renderer);
     const reactBuildType = hasDetectedBadDCE ? 'deadcode' : detectReactBuildType(renderer); // Patching the console enables DevTools to do a few useful things:
@@ -396,6 +398,8 @@ function installHook(target) {
   }
 
   function onCommitFiberUnmount(rendererID, fiber) {
+    window.__RECORD_REPLAY_REACT_DEVTOOLS_HOOK__("commit-fiber-unmount");
+
     const rendererInterface = rendererInterfaces.get(rendererID);
 
     if (rendererInterface != null) {
@@ -404,6 +408,8 @@ function installHook(target) {
   }
 
   function onCommitFiberRoot(rendererID, root, priorityLevel) {
+    window.__RECORD_REPLAY_REACT_DEVTOOLS_HOOK__("commit-fiber-root");
+
     const mountedRoots = hook.getFiberRoots(rendererID);
     const current = root.current;
     const isKnownRoot = mountedRoots.has(root);
@@ -423,6 +429,8 @@ function installHook(target) {
   }
 
   function onPostCommitFiberRoot(rendererID, root) {
+    window.__RECORD_REPLAY_REACT_DEVTOOLS_HOOK__("post-commit-fiber-root");
+
     const rendererInterface = rendererInterfaces.get(rendererID);
 
     if (rendererInterface != null) {

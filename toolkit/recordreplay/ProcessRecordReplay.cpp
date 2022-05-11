@@ -96,6 +96,7 @@ static void (*gFinishRecording)();
 static uint64_t* (*gProgressCounter)();
 static void (*gSetProgressCallback)(void (*aCallback)(uint64_t));
 static void (*gProgressReached)();
+static void (*gSetTrackObjectsCallback)(void (*aCallback)(bool));
 static void (*gBeginPassThroughEvents)();
 static void (*gEndPassThroughEvents)();
 static bool (*gAreEventsPassedThrough)();
@@ -397,6 +398,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayProgressCounter", gProgressCounter);
   LoadSymbol("RecordReplaySetProgressCallback", gSetProgressCallback, /* aOptional */ true);
   LoadSymbol("RecordReplayProgressReached", gProgressReached, /* aOptional */ true);
+  LoadSymbol("RecordReplaySetTrackObjectsCallback", gSetTrackObjectsCallback);
   LoadSymbol("RecordReplayBeginPassThroughEvents", gBeginPassThroughEvents);
   LoadSymbol("RecordReplayEndPassThroughEvents", gEndPassThroughEvents);
   LoadSymbol("RecordReplayAreEventsPassedThrough", gAreEventsPassedThrough);
@@ -608,6 +610,10 @@ MOZ_EXPORT void RecordReplayInterface_SetExecutionProgressCallback(void (*aCallb
 
 MOZ_EXPORT void RecordReplayInterface_ExecutionProgressReached() {
   gProgressReached();
+}
+
+MOZ_EXPORT void RecordReplayInterface_SetTrackObjectsCallback(void (*aCallback)(bool)) {
+  gSetTrackObjectsCallback(aCallback);
 }
 
 MOZ_EXPORT void RecordReplayInterface_InternalBeginPassThroughThreadEvents() {

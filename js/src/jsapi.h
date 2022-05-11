@@ -1829,6 +1829,12 @@ class MOZ_RAII JS_PUBLIC_API AutoFilename {
   const char* get() const;
 };
 
+// Get any persistent ID being tracked for an object, or zero if there is none.
+extern JS_PUBLIC_API uint64_t RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj);
+
+// Print a warning if IDs are being tracked but the specified object does not have one.
+extern JS_PUBLIC_API void RecordReplayCheckTrackedObject(JSContext* cx, HandleObject obj);
+
 /**
  * Return the current filename, line number and column number of the most
  * currently running frame. Returns true if a scripted frame was found, false

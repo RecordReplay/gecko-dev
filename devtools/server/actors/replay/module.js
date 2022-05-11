@@ -375,6 +375,13 @@ function registerSource(source) {
     } catch {}
   }
 
+  // replay-content:// protocol scripts are available to clients, so that their frames and
+  // arguments can be observed. Avoid using the default null url which getDebuggerSourceURL
+  // would normally use for this so that it is easier to distinguish from actual page JS.
+  if (source.url.startsWith("replay-content://") && source.introductionType == "debugger eval") {
+    sourceURL = source.url;
+  }
+
   RecordReplayControl.recordReplayAssert(`RegisterSource #2 ${sourceURL}`);
 
   if (source.text !== "[wasm]") {
@@ -467,12 +474,27 @@ getWindow().docShell.chromeEventHandler.addEventListener(
 );
 
 gNewGlobalHooks.push(dbgWindow => {
+  initRecordReplayGlobals(dbgWindow);
+
   const window = dbgWindow.unsafeDereference();
   if (window.parent === window && window.location.href.match(/https?:\/\//)) {
     initReactDevtools(dbgWindow, RecordReplayControl);
     initReduxDevtools(dbgWindow, RecordReplayControl);
   }
 });
+
+// Add some global variables to all windows when recording/replaying.
+function initRecordReplayGlobals(dbgWindow) {
+  const window = dbgWindow.unsafeDereference();
+
+  window.wrappedJSObject.__RECORD_REPLAY_PERSISTENT_ID__ = obj => {
+    return RecordReplayControl.getPersistentId(obj);
+  };
+
+  window.wrappedJSObject.__RECORD_REPLAY_CHECK_PERSISTENT_ID__ = obj => {
+    RecordReplayControl.checkPersistentId(obj);
+  };
+}
 
 // This logic is mostly copied from actors/style-sheet.js
 function getStylesheetWindow(stylesheet) {
@@ -1688,7 +1710,8 @@ function createProtocolObject(objectId, level) {
     preview = new ProtocolObjectPreview(obj, level).fill();
   }
 
-  return { objectId, className, preview };
+  const persistentId = RecordReplayControl.getPersistentId(obj.unsafeDereference());
+  return { objectId, className, preview, persistentId };
 }
 
 // Return whether an object should be ignored when generating previews.

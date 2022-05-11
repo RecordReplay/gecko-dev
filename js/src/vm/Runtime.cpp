@@ -948,6 +948,54 @@ bool js::RecordReplayProgressReached(JSContext* cx) {
   return true;
 }
 
+// This is an int32_t so it can be accessed from jitcode.
+static int32_t gTrackObjects;
+
+void js::SetTrackObjectsCallback(bool aTrackObjects) {
+  if (gTrackObjects != aTrackObjects) {
+    JSContext* cx = TlsContext.get();
+    if (cx) {
+      js::CancelOffThreadIonCompile(cx->runtime());
+
+      for (ZonesIter zone(cx->runtime(), SkipAtoms); !zone.done(); zone.next()) {
+        zone->setPreservingCode(false);
+
+        Zone::DiscardOptions options;
+        options.discardBaselineCode = false;
+        zone->discardJitCode(cx->runtime()->defaultFreeOp(), options);
+      }
+    }
+  }
+
+  gTrackObjects = aTrackObjects;
+}
+
+bool js::RecordReplayShouldTrackObjects() {
+  return gTrackObjects;
+}
+
+int32_t* js::RecordReplayAddressOfShouldTrackObjects() {
+  return &gTrackObjects;
+}
+
+bool js::RecordReplayTrackObject(JSContext* cx, HandleValue val) {
+  if (val.isObject()) {
+    RootedObject obj(cx, &val.toObject());
+    ObjectRealm::get(obj).ensureTrackedObjectId(cx, obj);
+  }
+  return true;
+}
+
+JS_PUBLIC_API uint64_t JS::RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj) {
+  JSObject* unwrapped = UncheckedUnwrap(obj);
+  return ObjectRealm::get(unwrapped).getTrackedObjectId(unwrapped);
+}
+
+JS_PUBLIC_API void JS::RecordReplayCheckTrackedObject(JSContext* cx, HandleObject obj) {
+  JSObject* unwrapped = UncheckedUnwrap(obj);
+  ObjectRealm::get(unwrapped).checkTrackedObject(unwrapped);
+}
+
 bool js::RecordReplayAssertValue(JSContext* cx, HandlePropertyName name, HandleValue value) {
   if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
     MOZ_RELEASE_ASSERT(gForceEmitRecordReplayAsserts);

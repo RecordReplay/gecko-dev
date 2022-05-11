@@ -1208,6 +1208,19 @@ extern void SetExecutionProgressTargetCallback(uint64_t aProgress);
 // Called when the target progress has been reached.
 extern bool RecordReplayProgressReached(JSContext* cx);
 
+// Callback used by the record/replay driver to indicate if persistent IDs should be
+// tracked for objects.
+extern void SetTrackObjectsCallback(bool aTrackObjects);
+
+// Whether to track persistent IDs for new objects.
+extern bool RecordReplayShouldTrackObjects();
+
+// Get an address of the location which is non-zero when objects are being tracked.
+extern int32_t* RecordReplayAddressOfShouldTrackObjects();
+
+// Ensure an object has a persistent ID tracked over its lifetime.
+extern bool RecordReplayTrackObject(JSContext* cx, HandleValue val);
+
 extern bool ShouldEmitRecordReplayAssert(const char* aFilename,
                                          unsigned aLineno, unsigned aColumn);
 

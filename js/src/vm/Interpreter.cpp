@@ -2187,6 +2187,13 @@ static MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER bool Interpret(JSContext* cx,
       AdvanceExecutionProgressCounter();
     END_CASE(ExecutionProgress)
 
+    CASE(TrackConstructedThis)
+      if (RecordReplayShouldTrackObjects() && REGS.fp()->isConstructing()) {
+        ReservedRooted<Value> val(&rootValue0, REGS.fp()->thisArgument());
+        RecordReplayTrackObject(cx, val);
+      }
+    END_CASE(TrackConstructedThis)
+
     CASE(Lineno)
     END_CASE(Lineno)
 

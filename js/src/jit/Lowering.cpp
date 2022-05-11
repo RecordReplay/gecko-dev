@@ -2896,6 +2896,13 @@ void LIRGenerator::visitExecutionProgress(MExecutionProgress* ins) {
   assignSafepoint(lir, ins);
 }
 
+void LIRGenerator::visitTrackObject(MTrackObject* ins) {
+  MOZ_ASSERT(ins->value()->type() == MIRType::Value);
+
+  LInstruction* lir = new (alloc()) LTrackObject(useBoxAtStart(ins->value()));
+  add(lir, ins);
+}
+
 void LIRGenerator::visitWasmInterruptCheck(MWasmInterruptCheck* ins) {
   auto* lir =
       new (alloc()) LWasmInterruptCheck(useRegisterAtStart(ins->tlsPtr()));
