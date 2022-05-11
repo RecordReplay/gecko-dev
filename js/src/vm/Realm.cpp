@@ -570,12 +570,10 @@ void ObjectRealm::ensureTrackedObjectId(JSContext* cx, HandleObject obj) {
 }
 
 uint64_t ObjectRealm::getTrackedObjectId(JSObject* obj) {
-  if (!trackedObjectIdTable_) {
-    return 0;
-  }
-
-  if (ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj)) {
-    return (uint64_t) p->value().toDouble();
+  if (trackedObjectIdTable_) {
+    if (ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj)) {
+      return (uint64_t) p->value().toDouble();
+    }
   }
 
   return 0;
