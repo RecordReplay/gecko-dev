@@ -29,10 +29,9 @@ function initialize(dbgWindow, RecordReplayControl) {
     RecordReplayControl.onAnnotation("react-devtools-hook", kind);
   };
 
-  // The hook script is given a special URL so it won't be ignored and clients can
-  // inspect state in its frames. We test for this script in a few other places
-  // in gecko, so be careful when changing this.
-  const reactDevtoolsHookScriptURL = "react-devtools-hook-script";
+  // The hook script uses the replay-content:// protocol so it won't be ignored
+  // and clients can inspect state in its frames.
+  const reactDevtoolsHookScriptURL = "replay-content://react-devtools-hook-script";
 
   const { installHook } = require("devtools/server/actors/replay/react-devtools/hook");
   dbgWindow.executeInGlobal(`(${installHook}(window))`, { url: reactDevtoolsHookScriptURL });

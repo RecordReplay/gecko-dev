@@ -1830,7 +1830,7 @@ class MOZ_RAII JS_PUBLIC_API AutoFilename {
 };
 
 // Get any persistent ID being tracked for an object, or zero if there is none.
-extern JS_PUBLIC_API int RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj);
+extern JS_PUBLIC_API uint64_t RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj);
 
 // Print a warning if IDs are being tracked but the specified object does not have one.
 extern JS_PUBLIC_API void RecordReplayCheckTrackedObject(JSContext* cx, HandleObject obj);

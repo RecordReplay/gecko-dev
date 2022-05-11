@@ -391,7 +391,7 @@ static bool IsInterestingSource(const char* aURL) {
     "moz-extension://",
     "resource://",
     "chrome://",
-    "react-devtools-hook-script",
+    "replay-content://",
   };
 
   for (const char* prefix : uninterestingPrefixes) {
@@ -849,10 +849,10 @@ static bool Method_GetPersistentId(JSContext* aCx, unsigned aArgc, Value* aVp) {
 
   RootedObject obj(aCx, &args.get(0).toObject());
 
-  int persistentId = JS::RecordReplayGetTrackedObjectId(aCx, obj);
+  uint64_t persistentId = JS::RecordReplayGetTrackedObjectId(aCx, obj);
   if (persistentId) {
     char buf[50];
-    snprintf(buf, sizeof(buf), "obj%d", persistentId);
+    snprintf(buf, sizeof(buf), "obj%llu", persistentId);
     RootedString rv(aCx, JS_NewStringCopyZ(aCx, buf));
     if (!rv) {
       return false;

@@ -290,7 +290,7 @@ class ObjectRealm {
       JSObject* key) const;
 
   void ensureTrackedObjectId(JSContext* cx, HandleObject obj);
-  int getTrackedObjectId(JSObject* obj);
+  uint64_t getTrackedObjectId(JSObject* obj);
   void checkTrackedObject(JSObject* obj);
 };
 

@@ -948,6 +948,7 @@ bool js::RecordReplayProgressReached(JSContext* cx) {
   return true;
 }
 
+// This is an int32_t so it can be accessed from jitcode.
 static int32_t gTrackObjects;
 
 void js::SetTrackObjectsCallback(bool aTrackObjects) {
@@ -985,7 +986,7 @@ bool js::RecordReplayTrackObject(JSContext* cx, HandleValue val) {
   return true;
 }
 
-JS_PUBLIC_API int JS::RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj) {
+JS_PUBLIC_API uint64_t JS::RecordReplayGetTrackedObjectId(JSContext* cx, HandleObject obj) {
   JSObject* unwrapped = UncheckedUnwrap(obj);
   return ObjectRealm::get(unwrapped).getTrackedObjectId(unwrapped);
 }

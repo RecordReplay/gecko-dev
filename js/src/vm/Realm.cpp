@@ -540,7 +540,7 @@ void Realm::setNewObjectMetadata(JSContext* cx, HandleObject obj) {
   }
 }
 
-static int gNextTrackedObjectId = 1;
+static uint64_t gNextTrackedObjectId = 1;
 
 void ObjectRealm::ensureTrackedObjectId(JSContext* cx, HandleObject obj) {
   if (mozilla::recordreplay::AreThreadEventsDisallowed()) {
@@ -563,19 +563,19 @@ void ObjectRealm::ensureTrackedObjectId(JSContext* cx, HandleObject obj) {
     return;
   }
 
-  Value targetVal(Int32Value(gNextTrackedObjectId++));
+  Value targetVal(DoubleValue(gNextTrackedObjectId++));
   if (!trackedObjectIdTable_->putNew(obj, targetVal)) {
     oomUnsafe.crash("createTrackedObjectId");
   }
 }
 
-int ObjectRealm::getTrackedObjectId(JSObject* obj) {
+uint64_t ObjectRealm::getTrackedObjectId(JSObject* obj) {
   if (!trackedObjectIdTable_) {
     return 0;
   }
 
   if (ObjectValueWeakMap::Ptr p = trackedObjectIdTable_->lookup(obj)) {
-    return p->value().toInt32();
+    return (uint64_t) p->value().toDouble();
   }
 
   return 0;
