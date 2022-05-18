@@ -1423,7 +1423,10 @@ bool Debugger::wrapDebuggeeValue(JSContext* cx, MutableHandleValue vp) {
         name = cx->names().uninitialized;
         break;
       default:
-        MOZ_CRASH("Unsupported magic value escaped to Debugger");
+        mozilla::recordreplay::PrintLog("Unsupported magic value escaped to Debugger %d",
+                                        (int)vp.whyMagic());
+        name = cx->names().optimizedOut;
+        break;
     }
 
     RootedValue trueVal(cx, BooleanValue(true));
