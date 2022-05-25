@@ -407,6 +407,12 @@ if (ReplayAuth.hasOriginalApiKey()) {
   ensureAccessTokenStateSynchronized();
 }
 
+const beginRecordingResourceUpload = wrapRetryCommand(recordingId => {
+  return sendCommand("Internal.beginRecordingResourceUpload", {
+    recordingId: recordingId,
+  });
+});
+
 const SEEN_MANAGERS = new WeakSet();
 class Recording extends EventEmitter {
   constructor(pmm) {
@@ -459,9 +465,7 @@ class Recording extends EventEmitter {
       return;
     }
 
-    this._recordingResourcesUpload = sendCommand("Internal.beginRecordingResourceUpload", {
-      recordingId: recordingId,
-    }).then(
+    this._recordingResourcesUpload = beginRecordingResourceUpload(recordingId).then(
       params => params.key,
       err => {
         console.error("Failed to tell the server about in-progress resource uploading", err);
