@@ -45,6 +45,7 @@
 #include "mozilla/ProfileBufferChunkManagerSingle.h"
 #include "mozilla/ProfileBufferChunkManagerWithLocalLimit.h"
 #include "mozilla/ProfileChunkedBuffer.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/Services.h"
 #include "mozilla/Span.h"
 #include "mozilla/StackWalk.h"
@@ -3394,6 +3395,8 @@ void profiler_remove_sampled_counter(BaseProfilerCount* aCounter) {
 
 ProfilingStack* profiler_register_thread(const char* aName,
                                          void* aGuessStackTop) {
+  recordreplay::AutoPassThroughThreadEvents rrPassThrough;
+
   DEBUG_LOG("profiler_register_thread(%s)", aName);
 
   MOZ_RELEASE_ASSERT(CorePS::Exists());
@@ -3425,6 +3428,8 @@ ProfilingStack* profiler_register_thread(const char* aName,
 }
 
 void profiler_unregister_thread() {
+  recordreplay::AutoPassThroughThreadEvents rrPassThrough;
+
   if (!CorePS::Exists()) {
     // This function can be called after the main thread has already shut down.
     return;
