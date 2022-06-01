@@ -182,6 +182,14 @@ struct MOZ_RAII AutoOrderedLock {
   ~AutoOrderedLock() { OrderedUnlock(mLock); }
 };
 
+// RAII class scoping pointer registration for ThingIndex usage.
+struct MOZ_RAII AutoRegisterThing {
+  void* mThing;
+
+  AutoRegisterThing(void* aThing) : mThing(aThing) { RegisterThing(aThing); }
+  ~AutoRegisterThing() { UnregisterThing(mThing); }
+};
+
 // Mark an existing mutex so that locking operations on it will occur in the
 // same order when replaying as when recording.
 #ifndef XP_WIN

@@ -20,6 +20,7 @@
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/ProfilerLabels.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/Result.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_browser.h"
@@ -4249,6 +4250,9 @@ void WorkerPrivate::PostMessageToParent(
     const Sequence<JSObject*>& aTransferable, ErrorResult& aRv) {
   AssertIsOnWorkerThread();
   MOZ_DIAGNOSTIC_ASSERT(IsDedicatedWorker());
+
+  // For issue https://github.com/RecordReplay/backend/issues/5799
+  recordreplay::RecordReplayAssert("WorkerPrivate::PostMessageToParent start");
 
   JS::Rooted<JS::Value> transferable(aCx, JS::UndefinedValue());
 

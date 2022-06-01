@@ -16,6 +16,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryHistogramEnums.h"
 #include "mozilla/TimeStamp.h"
@@ -50,7 +51,11 @@ WorkerRunnable::WorkerRunnable(WorkerPrivate* aWorkerPrivate,
     : mWorkerPrivate(aWorkerPrivate),
       mBehavior(aBehavior),
       mCanceled(0),
-      mCallingCancelWithinRun(false) {
+      mCallingCancelWithinRun(false),
+      mRecordReplayAutoReg(this) {
+  // For issue https://github.com/RecordReplay/backend/issues/5799
+  recordreplay::RecordReplayAssert("WorkerRunnable::WorkerRunnable thingIdx=%u",
+    recordreplay::ThingIndex(this));
   MOZ_ASSERT(aWorkerPrivate);
 }
 
@@ -91,11 +96,17 @@ bool WorkerRunnable::PreDispatch(WorkerPrivate* aWorkerPrivate) {
 }
 
 bool WorkerRunnable::Dispatch() {
+  // For issue https://github.com/RecordReplay/backend/issues/5799
+  recordreplay::RecordReplayAssert("WorkerRunnable::Dispatch PRE %u",
+          recordreplay::ThingIndex(this));
   bool ok = PreDispatch(mWorkerPrivate);
   if (ok) {
     ok = DispatchInternal();
   }
   PostDispatch(mWorkerPrivate, ok);
+  // For issue https://github.com/RecordReplay/backend/issues/5799
+  recordreplay::RecordReplayAssert("WorkerRunnable::Dispatch POST %u ok=%s",
+          recordreplay::ThingIndex(this), ok ? "yes" : "no");
   return ok;
 }
 

@@ -11,6 +11,7 @@
 #include <utility>
 #include "MainThreadUtils.h"
 #include "mozilla/Atomics.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerStatus.h"
@@ -65,6 +66,9 @@ class WorkerRunnable : public nsIRunnable, public nsICancelableRunnable {
   // It's unclear whether or not Cancel() is supposed to work when called on any
   // thread. To be safe we're using an atomic but it's likely overkill.
   Atomic<uint32_t> mCanceled;
+
+  // For issue https://github.com/RecordReplay/backend/issues/5799
+  recordreplay::AutoRegisterThing mRecordReplayAutoReg;
 
  private:
   // Whether or not Cancel() is currently being called from inside the Run()
