@@ -1000,6 +1000,10 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
     return;
   }
 
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/5734
+  recordreplay::RecordReplayAssert("nsRefreshDriver #10 mOwnTimer=%s sRegularRateTimer=%s",
+    !!mOwnTimer ? "yes" : "no",
+    !!sRegularRateTimer ? "yes" : "no");
   if (!mOwnTimer) {
     // If available, we fetch the widget-specific vsync source.
     nsPresContext* pc = GetPresContext();
@@ -1007,6 +1011,8 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
     if (widget) {
       if (RefPtr<gfx::VsyncSource> localVsyncSource =
               widget->GetVsyncSource()) {
+        // Diagnostic for https://github.com/RecordReplay/backend/issues/5734
+        recordreplay::RecordReplayAssert("nsRefreshDriver #20 GetWidgetTimer");
         mOwnTimer = new VsyncRefreshDriverTimer(localVsyncSource);
         sRegularRateTimerList->AppendElement(mOwnTimer.get());
         return;
@@ -1014,6 +1020,8 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
       if (BrowserChild* browserChild = widget->GetOwningBrowserChild()) {
         if (RefPtr<VsyncChild> localVsyncSource =
                 browserChild->GetVsyncChild()) {
+          // Diagnostic for https://github.com/RecordReplay/backend/issues/5734
+          recordreplay::RecordReplayAssert("nsRefreshDriver #30 GetBrowserChildTimer");
           mOwnTimer = new VsyncRefreshDriverTimer(localVsyncSource);
           sRegularRateTimerList->AppendElement(mOwnTimer.get());
           return;
@@ -1034,6 +1042,8 @@ void nsRefreshDriver::CreateVsyncRefreshTimer() {
         return;
       }
 
+      // Diagnostic for https://github.com/RecordReplay/backend/issues/5734
+      recordreplay::RecordReplayAssert("nsRefreshDriver #40 SendPVSyncConstructor");
       dom::PVsyncChild* actor = actorChild->SendPVsyncConstructor();
       if (NS_WARN_IF(!actor)) {
         return;
