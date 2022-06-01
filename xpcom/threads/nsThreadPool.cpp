@@ -263,16 +263,23 @@ nsThreadPool::Run() {
       }
     }
 
+    // Diagnostic for https://github.com/RecordReplay/backend/issues/5737
+    recordreplay::RecordReplayAssert("nsThreadPool::Run #4");
+
     nsCOMPtr<nsIRunnable> event;
     TimeDuration delay;
     {
       MutexAutoLock lock(mMutex);
 
       event = mEvents.GetEvent(lock, &delay);
-      if (!event) {
-        // Diagnostic for https://github.com/RecordReplay/backend/issues/4226
-        recordreplay::RecordReplayAssert("nsThreadPool::Run #5");
 
+      // Diagnostic for https://github.com/RecordReplay/backend/issues/5737
+      // Diagnostic for https://github.com/RecordReplay/backend/issues/4226
+      recordreplay::RecordReplayAssert("nsThreadPool::Run #5 event=%s wasIdle=%s",
+        !!event ? "yes" : "no",
+        wasIdle ? "yes" : "no");
+
+      if (!event) {
         TimeStamp now = TimeStamp::Now();
         uint32_t idleTimeoutDivider =
             (mIdleCount && mRegressiveMaxIdleTime) ? mIdleCount : 1;
