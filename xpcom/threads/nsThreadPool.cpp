@@ -257,8 +257,11 @@ nsThreadPool::Run() {
       recordreplay::AutoDisallowThreadEvents disallow;
       MutexAutoLock lock(mMutexNonDeterministic);
       TimeDuration delay;
-      nsCOMPtr<nsIRunnable> event = mEventsNonDeterministic.GetEvent(lock, &delay);
-      if (event) {
+      for (;;) {
+        nsCOMPtr<nsIRunnable> event = mEventsNonDeterministic.GetEvent(lock, &delay);
+        if (!event) {
+          break;
+        }
         event->Run();
       }
     }
