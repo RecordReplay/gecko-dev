@@ -2036,7 +2036,10 @@ function previewRegExp() {
 }
 
 function previewDate() {
-  this.extra.dateTime = this.raw.getTime();
+  const dateTime = this.raw.getTime();
+  if (!Number.isNaN(dateTime)) {
+    this.extra.dateTime = dateTime;
+  }
 }
 
 const ErrorProperties = [
