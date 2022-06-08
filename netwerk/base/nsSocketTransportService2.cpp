@@ -640,6 +640,13 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
   bool pendingEvents = false;
   mRawThread->HasPendingEvents(&pendingEvents);
 
+  // https://github.com/RecordReplay/backend/issues/3977
+  recordreplay::RecordReplayAssert(
+    "nsSocketTransportService::Poll 10 ts=%u pendingEvents=%s hasFd=%s",
+    (unsigned) ts,
+    pendingEvents ? "yes" : "no",
+    mPollList[0].fd ? "yes" : "no");
+
   if (mPollList[0].fd) {
     mPollList[0].out_flags = 0;
     pollList = mPollList;
@@ -666,6 +673,10 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
       SOCKET_LOG(("  timeout shorthened after network change event"));
     }
   }
+  // https://github.com/RecordReplay/backend/issues/3977
+  recordreplay::RecordReplayAssert(
+    "nsSocketTransportService::Poll 20 pollTimeout=%u",
+    (unsigned) pollTimeout);
 
   TimeStamp pollStart;
   if (Telemetry::CanRecordPrereleaseData()) {
