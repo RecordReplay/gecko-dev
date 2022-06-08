@@ -306,7 +306,7 @@ async function getEnvMetadata() {
       console.error(`Failed to read RECORD_REPLAY_METADATA_FILE: ${metadataFile}`);
     }
   }
-  
+
   if (metadata) {
     try {
       return JSON.parse(metadata);
@@ -1446,7 +1446,16 @@ async function fetchText(contentPrincipal, recordingId, url) {
         securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
       },
       (inputStream, resultCode, request) => {
-        resolve({inputStream, resultCode, statusCode: request.responseStatus})
+        let statusCode = "unknown";
+        try {
+          // This will throw if the statuscode is unavailable.
+          statusCode = request.responseStatus;
+        } catch { }
+        resolve({
+          inputStream,
+          resultCode,
+          statusCode,
+        });
       }
     ));
 
