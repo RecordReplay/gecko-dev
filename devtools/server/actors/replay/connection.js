@@ -1417,6 +1417,8 @@ function collectUnresolvedSourceMapResources(mapText, mapURL, mapBaseURL) {
   };
 }
 
+const FETCH_TIMEOUT = 20_000;
+
 async function fetchText(contentPrincipal, recordingId, url) {
   let urlObj;
   try {
@@ -1437,32 +1439,37 @@ async function fetchText(contentPrincipal, recordingId, url) {
   }
 
   try {
-    const {inputStream, resultCode, statusCode} = await new Promise((resolve, reject) => NetUtil.asyncFetch(
-      {
+    const {inputStream, resultCode, statusCode} = await new Promise((resolve, reject) => {
+      const channel = NetUtil.newChannel({
         uri: urlObj.toString(),
         loadingPrincipal: contentPrincipal,
         triggeringPrincipal: contentPrincipal,
         contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
         securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-      },
-      (inputStream, resultCode, request) => {
+      });
+      const timer = setTimeout(() => {
+        channel.cancel(Cr.NS_ERROR_NET_TIMEOUT_EXTERNAL);
+      }, FETCH_TIMEOUT);
+      NetUtil.asyncFetch(channel, (inputStream, resultCode, request) => {
         let statusCode = "unknown";
         try {
           // This will throw if the statuscode is unavailable.
           statusCode = request.responseStatus;
         } catch { }
+        clearTimeout(timer);
         resolve({
           inputStream,
           resultCode,
           statusCode,
         });
-      }
-    ));
+      });
+    });
 
     if (resultCode !== 0 || statusCode !== 200) {
       pingTelemetry("sourcemap-upload", "fetch-bad-status", {
         message: "Invalid source map response",
         resultCode,
+        resultCodeText: typeof resultCode === "number" ? `0x${resultCode.toString(16)}` : "",
         statusCode,
         url: ["http:", "https:"].includes(urlObj.protocol) ? url : urlObj.protocol,
         recordingId,
