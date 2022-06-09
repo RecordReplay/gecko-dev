@@ -130,7 +130,7 @@ function getChannelRequestFailedData(channel) {
     requestFailedReason = FAILED_BLOCKED_REASONS.get(channel.loadInfo.requestBlockingReason) ?? "BLOCKED";
   } else if (channel.status !== Cr.NS_OK) {
     // Return one of Firefox's internal NS_FOO error strings.
-    requestFailedReason = ChromeUtils.getXPCOMErrorName(channel.status);
+    requestFailedReason = `0x${channel.status.toString(16)}`;
   }
 
   return {
