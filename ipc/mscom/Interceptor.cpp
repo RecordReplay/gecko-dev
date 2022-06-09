@@ -444,14 +444,22 @@ Interceptor::CreateInterceptor(REFIID aIid, IUnknown* aOuter,
   // pass that into CoGetInterceptorFromTypeInfo.
 
   RefPtr<ITypeInfo> typeInfo;
-  bool found = RegisteredProxy::Find(aIid, getter_AddRefs(typeInfo));
-  // If this assert fires then we have omitted registering the typelib for a
-  // required interface. To fix this, review our calls to mscom::RegisterProxy
-  // and mscom::RegisterTypelib, and add the additional typelib as necessary.
-  MOZ_ASSERT(found);
-  if (!found) {
-    return kFileNotFound;
+
+  // Avoid calling RegisteredProxy::Find when replaying, as it can call into
+  // invalid ITypeLib pointers (see RegisterProxyIfNotReplaying). We can't
+  // do these checks within RegisteredProxy::Find itself due to linking issues.
+  if (!mozilla::recordreplay::IsReplaying()) {
+    mozilla::recordreplay::AutoPassThroughThreadEvents pt;
+    bool found = RegisteredProxy::Find(aIid, getter_AddRefs(typeInfo));
+    // If this assert fires then we have omitted registering the typelib for a
+    // required interface. To fix this, review our calls to mscom::RegisterProxy
+    // and mscom::RegisterTypelib, and add the additional typelib as necessary.
+    MOZ_ASSERT(found);
+    if (!found) {
+      return kFileNotFound;
+    }
   }
+  mozilla::recordreplay::RecordReplayBytes("Interceptor::CreateInterceptor", &typeInfo, sizeof(typeInfo));
 
   hr = ::CoGetInterceptorFromTypeInfo(aIid, aOuter, typeInfo, IID_IUnknown,
                                       (void**)aOutput);
