@@ -323,7 +323,7 @@ const replaySchemeMap = {
       toggleRecording(browser.ownerDocument.defaultView.gBrowser.selectedBrowser);
     }).catch((e) => {
       pingTelemetry("replay:record", "error", { url: target, newtab, message: e.message });
-      tabbrowser.loadURI(`https://app.replay.io/browser/error?message=Failed to launch recorder: (${e.message})`, {
+      tabbrowser.loadURI(`https://app.replay.io/browser/error?message=Failed to launch recorder: (${e.message})&url=${encodeURIComponent(url.asciiSpec)}`, {
         triggeringPrincipal: principal
       });
     });
