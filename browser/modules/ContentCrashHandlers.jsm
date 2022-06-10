@@ -169,7 +169,10 @@ var TabCrashHandler = {
         );
         let shutdown = env.exists("MOZ_CRASHREPORTER_SHUTDOWN");
 
-        if (shutdown) {
+        // Recording processes abort() after finishing the recording and look like
+        // they crashed, but they didn't. So, we don't shut down the parent process
+        // after apparent child process crashes.
+        if (shutdown && !env.exists("RECORD_ALL_CONTENT")) {
           dump(
             "A content process crashed and MOZ_CRASHREPORTER_SHUTDOWN is " +
               "set, shutting down\n"
