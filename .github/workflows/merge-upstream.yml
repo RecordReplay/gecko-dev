@@ -3,7 +3,7 @@ name: Merge from upstream
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
 
 jobs:
   merge:
@@ -12,9 +12,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Connect to Tailscale
-        uses: tailscale/github-action@v1
+        uses: tailscale/github-action@effa99fe9dc68518c77d0e7c00879f6599714d39
         with:
           authkey: ${{ secrets.TAILSCALE_API_KEY }}
+          version: "1.26.0"
       - uses: actions/checkout@v2
         with:
           ref: webreplay-release
