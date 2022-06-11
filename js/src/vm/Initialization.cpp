@@ -245,6 +245,7 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
     if (getenv("RECORD_REPLAY_RECORD_DATA_BUFFERS")) {
       gRecordDataBuffers = true;
     }
+    mozilla::recordreplay::SetExecutionProgressCallback(SetExecutionProgressTargetCallback);
   }
   // This option is used for shell testing of assertion instrumentation.
   if (getenv("RECORD_REPLAY_FORCE_EMIT_EXECUTION_PROGRESS")) {
@@ -261,7 +262,6 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
     }
   }
   if (mozilla::recordreplay::IsReplaying()) {
-    mozilla::recordreplay::SetExecutionProgressCallback(SetExecutionProgressTargetCallback);
     mozilla::recordreplay::SetTrackObjectsCallback(SetTrackObjectsCallback);
   }
   if (mozilla::recordreplay::IsRecording()) {
