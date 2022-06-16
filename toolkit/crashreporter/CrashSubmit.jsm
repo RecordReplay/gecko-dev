@@ -242,7 +242,6 @@ Submitter.prototype = {
     const permittedKeys = [
       "RecordReplay",
       "MozCrashReason",
-      "BuildID",
       "StackTraces",
     ];
 
@@ -252,6 +251,9 @@ Submitter.prototype = {
         formData.append(name, JSON.stringify(value));
       }
     }
+
+    // Include the record/replay build ID instead of the mozilla one.
+    formData.append("BuildID", Services.appinfo.platformBuildID);
 
     const promises = [];
 
