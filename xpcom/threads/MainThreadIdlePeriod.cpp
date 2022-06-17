@@ -35,6 +35,12 @@ MainThreadIdlePeriod::GetIdlePeriodHint(TimeStamp* aIdleDeadline) {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aIdleDeadline);
 
+
+  // [RecordReplay-Diagnostic]
+  // Mismatch with MaybePokeCC
+  // https://github.com/RecordReplay/backend/issues/4404
+  mozilla::recordreplay::RecordReplayAssert("MainThreadIdlePeriod::GetIdlePeriodHint");
+
   TimeStamp now = TimeStamp::Now();
   TimeStamp currentGuess =
       now + TimeDuration::FromMilliseconds(kLongIdlePeriodMS);
