@@ -246,8 +246,8 @@ const { toggleRecording } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/connection.js"
 );
 
-const { getenv } = ChromeUtils.import(
-  "resource://devtools/server/actors/replay/env.js"
+const { getViewHost } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/config.js"
 );
 
 const { pingTelemetry } = ChromeUtils.import(
@@ -257,7 +257,7 @@ const { pingTelemetry } = ChromeUtils.import(
 // [Replay] - Mapping of replay: URL scheme values to destinations. Can either
 // be a URL or a function which invokes arbitrary browser-chrome functionality
 const replaySchemeMap = {
-  library: getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io/",
+  library: getViewHost(),
   migrate: (uri, principal, browsingContext) => {
     const win = browsingContext.topFrameElement.getTabBrowser().ownerGlobal;
     MigrationUtils.showMigrationWizard(win, [
@@ -324,7 +324,7 @@ const replaySchemeMap = {
     }).catch((e) => {
       const message = encodeURIComponent('Failed to launch recorder: ' + e.message);
       pingTelemetry("replay:record", "error", { url: target, newtab, message: e.message });
-      tabbrowser.loadURI(`https://app.replay.io/browser/error?message=${message}&url=${encodeURIComponent(url.spec)}`, {
+      tabbrowser.loadURI(`${getViewHost()}/browser/error?message=${message}&url=${encodeURIComponent(url.spec)}`, {
         triggeringPrincipal: principal
       });
     });

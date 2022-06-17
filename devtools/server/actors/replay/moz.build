@@ -12,6 +12,7 @@ DIRS += [
 DevToolsModules(
     'api-server.js',
     'auth.js',
+    'config.js',
     'connection-worker.js',
     'connection.js',
     'env.js',

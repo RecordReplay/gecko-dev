@@ -52,6 +52,9 @@ const { openSigninPage } = ChromeUtils.import(
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
+const { getViewHost } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/config.js"
+);
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -1491,7 +1494,7 @@ function pickSigninPage(gBrowser) {
     return;
   }
 
-  const url = "https://app.replay.io/?signin=true";
+  const url = getViewHost() + "/login";
   const options = { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() };
 
   // open a new tab to authenticate if not on a replay (or auth0 replay) host
@@ -1561,14 +1564,14 @@ Services.obs.addObserver(
   "recordreplay-recording-changed"
 );
 
-AboutNewTab.newTabURL = Services.prefs.getStringPref("replay.newtab.url", "https://app.replay.io/browser/new-tab");
+AboutNewTab.newTabURL = Services.prefs.getStringPref("replay.newtab.url", getViewHost() + "/browser/new-tab");
 Services.ppmm.loadProcessScript("resource://devtools/server/actors/replay/globals.js", true);
 
 function viewRecordings(evt) {
   const { gBrowser } = evt.target.ownerDocument.defaultView;
   const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
   gBrowser.loadURI(
-    Services.prefs.getStringPref("devtools.recordreplay.recordingsUrl"),
+    getViewHost(),
     { triggeringPrincipal }
   );
 }

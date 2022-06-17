@@ -33,6 +33,9 @@ const { pingTelemetry } = ChromeUtils.import(
 const { getenv, setenv } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/env.js"
 );
+const { getViewHost } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/config.js"
+);
 
 ChromeUtils.defineModuleGetter(
   this,
@@ -90,14 +93,7 @@ function openInNewTab(browser, url) {
 }
 
 function getViewURL(path) {
-  let viewHost = "https://app.replay.io";
-
-  // For testing, allow overriding the host for the view page.
-  const hostOverride = getenv("RECORD_REPLAY_VIEW_HOST");
-  if (hostOverride) {
-    viewHost = hostOverride;
-  }
-
+  const viewHost = getViewHost();
   const url = new URL(viewHost);
 
   if (path) {
@@ -669,7 +665,7 @@ function getLocationListener(key) {
       if(!aWebProgress.isTopLevel) return;
 
       // Always allow blank and new tab
-      if (aLocation.displaySpec === "about:blank" || aLocation.displaySpec === "https://app.replay.io/browser/new-tab") {
+      if (aLocation.displaySpec === "about:blank" || aLocation.displaySpec === getViewHost() + "/browser/new-tab") {
         return;
       }
 

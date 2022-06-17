@@ -25,8 +25,8 @@ const { pingTelemetry } = ChromeUtils.import(
 const { queryAPIServer } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/api-server.js"
 );
-const { getenv } = ChromeUtils.import(
-  "resource://devtools/server/actors/replay/env.js"
+const { getApiKey, getViewHost } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/config.js"
 );
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -44,11 +44,7 @@ ChromeUtils.defineModuleGetter(
 
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
-const Env = Cc["@mozilla.org/process/environment;1"].getService(
-  Ci.nsIEnvironment
-);
-
-const gOriginalApiKey = Env.get("RECORD_REPLAY_API_KEY");
+const gOriginalApiKey = getApiKey();
 function hasOriginalApiKey() {
   return !!gOriginalApiKey;
 }
@@ -143,9 +139,7 @@ function handleAuthChannelMessage(channel, _id, message, target) {
 }
 
 function initializeRecordingWebChannel() {
-  const pageUrl = Services.prefs.getStringPref(
-    "devtools.recordreplay.recordingsUrl"
-  );
+  const pageUrl = getViewHost();
   const localUrl = "http://localhost:8080/";
 
   registerWebChannel(pageUrl);
@@ -214,7 +208,7 @@ function base64URLEncode(str) {
 function openSigninPage() {
   const keyArray = Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256)));
   const key = base64URLEncode(btoa(keyArray.join("")));
-  const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
+  const viewHost = getViewHost();
   const url = Services.io.newURI(`${viewHost}/api/browser/auth?key=${key}`);
 
   gExternalProtocolService
