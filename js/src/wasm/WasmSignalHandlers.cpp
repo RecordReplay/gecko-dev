@@ -909,11 +909,6 @@ static bool EnsureLazyProcessSignalHandlers() {
   lazyInstallState->tried = true;
   MOZ_RELEASE_ASSERT(lazyInstallState->success == false);
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
-    lazyInstallState->success = true;
-    return true;
-  }
-
 #ifdef XP_DARWIN
   // Create the port that all JSContext threads will redirect their traps to.
   kern_return_t kret;
@@ -956,6 +951,11 @@ bool wasm::EnsureFullSignalHandlers(JSContext* cx) {
     if (!eagerInstallState->success) {
       return false;
     }
+  }
+
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+    cx->wasm().haveSignalHandlers = true;
+    return true;
   }
 
   if (!EnsureLazyProcessSignalHandlers()) {
