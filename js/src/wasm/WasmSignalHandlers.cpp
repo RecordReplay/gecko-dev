@@ -505,6 +505,51 @@ struct AutoHandlingTrap {
   return true;
 }
 
+static bool RecordReplayFaultCallback(void** prip, void* rbp, void* rsp) {
+  if (sAlreadyHandlingTrap.get()) {
+    return false;
+  }
+
+  AutoHandlingTrap aht;
+
+  void* pc = *prip;
+  const CodeSegment* codeSegment = LookupCodeSegment(pc);
+  if (!codeSegment || !codeSegment->isModule()) {
+    return false;
+  }
+
+  const ModuleSegment& segment = *codeSegment->asModule();
+
+  Trap trap;
+  BytecodeOffset bytecode;
+  if (!segment.code().lookupTrap(pc, &trap, &bytecode)) {
+    return false;
+  }
+
+  auto* frame = reinterpret_cast<Frame*>(rbp);
+  Instance* instance = GetNearestEffectiveTls(frame)->instance;
+  MOZ_RELEASE_ASSERT(&instance->code() == &segment.code() ||
+                     trap == Trap::IndirectCallBadSig);
+
+  JSContext* cx =
+      instance->realm()->runtimeFromAnyThread()->mainContextFromAnyThread();
+
+  JS::ProfilingFrameIterator::RegisterState registerState;
+  registerState.fp = rbp;
+  registerState.pc = pc;
+  registerState.sp = rsp;
+  registerState.lr = (void*)UINTPTR_MAX;
+
+  // JitActivation::startWasmTrap() stores enough register state from the
+  // point of the trap to allow stack unwinding or resumption, both of which
+  // will call finishWasmTrap().
+  jit::JitActivation* activation = cx->activation()->asJit();
+  activation->startWasmTrap(trap, bytecode.offset(), registerState);
+
+  *prip = segment.trapCode();
+  return true;
+}
+
 // =============================================================================
 // The following platform-specific handlers funnel all signals/exceptions into
 // the shared HandleTrap() above.
@@ -785,6 +830,12 @@ void wasm::EnsureEagerProcessSignalHandlers() {
 
   sAlreadyHandlingTrap.infallibleInit();
 
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+    mozilla::recordreplay::SetFaultCallback(RecordReplayFaultCallback);
+    eagerInstallState->success = true;
+    return;
+  }
+
   // Install whatever exception/signal handler is appropriate for the OS.
 #if defined(XP_WIN)
 
@@ -857,6 +908,11 @@ static bool EnsureLazyProcessSignalHandlers() {
 
   lazyInstallState->tried = true;
   MOZ_RELEASE_ASSERT(lazyInstallState->success == false);
+
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+    lazyInstallState->success = true;
+    return true;
+  }
 
 #ifdef XP_DARWIN
   // Create the port that all JSContext threads will redirect their traps to.
