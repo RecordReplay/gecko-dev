@@ -309,8 +309,49 @@ mozilla::GenericErrorResult<OOM> js::ReportOutOfMemoryResult(JSContext* cx) {
   return cx->alreadyReportedOOM();
 }
 
+static void snprintf_append(char** aBuf, size_t* aSize, const char* aFormat, ...) {
+  va_list args;
+  va_start(args, aFormat);
+  vsnprintf(*aBuf, *aSize, aFormat, args);
+  va_end(args);
+
+  size_t n = strlen(*aBuf);
+  (*aBuf) += n;
+  (*aSize) -= n;
+}
+
 void js::ReportOverRecursed(JSContext* maybecx, unsigned errorNumber) {
-  mozilla::recordreplay::InvalidateRecording("Over-recursed exception unwind");
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+    char buf[1024];
+    buf[sizeof(buf) - 1] = 0;
+
+    char* ptr = buf;
+    size_t size = sizeof(buf) - 1;
+
+    snprintf_append(&ptr, &size, "Over-recursed exception thrown");
+
+    if (maybecx) {
+      size_t numFrames = 0;
+      for (NonBuiltinFrameIter iter(maybecx, maybecx->realm()->principals());
+           !iter.done();
+           ++iter, ++numFrames) {}
+
+      snprintf_append(&ptr, &size, ": %zu frames:", numFrames);
+
+      for (NonBuiltinFrameIter iter(maybecx, maybecx->realm()->principals());
+           !iter.done() && size;
+           ++iter, ++numFrames) {
+        const char* cfilename = iter.filename();
+        if (!cfilename) {
+          cfilename = "<no url>";
+        }
+        uint32_t column, line = iter.computeLine(&column);
+        snprintf_append(&ptr, &size, " %s:%u:%u", cfilename, line, column);
+      }
+    }
+
+    mozilla::recordreplay::InvalidateRecording(buf);
+  }
 
   /*
    * We cannot make stack depth deterministic across different
