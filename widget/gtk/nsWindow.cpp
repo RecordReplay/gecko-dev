@@ -460,7 +460,7 @@ nsWindow::nsWindow()
       mHasAlphaVisual(false),
       mLastMotionPressure(0),
       mLastSizeMode(nsSizeMode_Normal),
-      mBoundsAreValid(true),
+      mHasReceivedSizeAllocate(false),
       mPopupTrackInHierarchy(false),
       mPopupTrackInHierarchyConfigured(false),
       mHiddenPopupPositioned(false),
@@ -477,7 +477,7 @@ nsWindow::nsWindow()
       mPreferredPopupRect(),
       mPreferredPopupRectFlushed(false),
       mWaitingForMoveToRectCallback(false),
-      mNewSizeAfterMoveToRect(LayoutDeviceIntRect(0, 0, 0, 0))
+      mResizedAfterMoveToRect(false)
 #ifdef ACCESSIBILITY
       ,
       mRootAccessible(nullptr)
@@ -618,7 +618,8 @@ void nsWindow::OnDestroy(void) {
 }
 
 bool nsWindow::AreBoundsSane() {
-  return mBounds.width > 0 && mBounds.height > 0;
+  // Check requested size, as mBounds might not have been updated.
+  return !mLastSizeRequest.IsEmpty();
 }
 
 static GtkWidget* EnsureInvisibleContainer() {
@@ -1138,14 +1139,10 @@ void nsWindow::Show(bool aState) {
   NativeShow(aState);
 }
 
-void nsWindow::ResizeInt(int aX, int aY, int aWidth, int aHeight, bool aMove,
-                         bool aRepaint) {
-  LOG(("nsWindow::ResizeInt [%p] x:%d y:%d -> w:%d h:%d repaint %d aMove %d\n",
-       (void*)this, aX, aY, aWidth, aHeight, aRepaint, aMove));
-
-  ConstrainSize(&aWidth, &aHeight);
-
-  LOG(("  ConstrainSize: w:%d h;%d\n", aWidth, aHeight));
+void nsWindow::ResizeInt(const Maybe<LayoutDeviceIntPoint>& aMove,
+                         LayoutDeviceIntSize aSize, bool aRepaint) {
+  LOG(("nsWindow::ResizeInt [%p] w:%d h:%d repaint %d\n", (void*)this,
+       aSize.width, aSize.height, aRepaint));
 
   // If we used to have insane bounds, we may have skipped actually positioning
   // the widget in NativeMoveResizeWaylandPopup, in which case we need to
@@ -1154,18 +1151,18 @@ void nsWindow::ResizeInt(int aX, int aY, int aWidth, int aHeight, bool aMove,
       !AreBoundsSane() && IsWaylandPopup();
 
   if (aMove) {
-    mBounds.x = aX;
-    mBounds.y = aY;
+    mBounds.x = aMove->x;
+    mBounds.y = aMove->y;
+    LOG(("  with move to left:%d top:%d", aMove->x, aMove->y));
   }
 
-  // For top-level windows, aWidth and aHeight should possibly be
-  // interpreted as frame bounds, but NativeResize treats these as window
-  // bounds (Bug 581866).
-  mBounds.SizeTo(aWidth, aHeight);
+  ConstrainSize(&aSize.width, &aSize.height);
+  LOG(("  ConstrainSize: w:%d h;%d\n", aSize.width, aSize.height));
 
-  // We set correct mBounds in advance here. This can be invalided by state
-  // event.
-  mBoundsAreValid = true;
+  // For top-level windows, aSize should possibly be
+  // interpreted as frame bounds, but NativeMoveResize treats these as window
+  // bounds (Bug 581866).
+  mLastSizeRequest = aSize;
 
   // Recalculate aspect ratio when resized from DOM
   if (mAspectRatio != 0.0) {
@@ -1184,8 +1181,27 @@ void nsWindow::ResizeInt(int aX, int aY, int aWidth, int aHeight, bool aMove,
 
   NotifyRollupGeometryChange();
 
-  // send a resize notification if this is a toplevel
-  if (mIsTopLevel || mListenForResizes) {
+  // We optimistically assume size changes immediately in two cases:
+  // 1. Override-redirect window: Size is controlled by only us.
+  // 2. Managed window that has not not yet received a size-allocate event:
+  //    Resize() Callers expect initial sizes to be applied synchronously.
+  //    If the size request is not honored, then we'll correct in
+  //    OnSizeAllocate().
+  //
+  // When a managed window has already received a size-allocate, we cannot
+  // assume we'll always get a notification if our request does not get
+  // honored: "If the configure request has not changed, we don't ever resend
+  // it, because it could mean fighting the user or window manager."
+  // https://gitlab.gnome.org/GNOME/gtk/-/blob/3.24.31/gtk/gtkwindow.c#L9782
+  // So we don't update mBounds until OnSizeAllocate() when we know the
+  // request is granted.
+  if ((mIsTopLevel || mListenForResizes) &&
+      (!mHasReceivedSizeAllocate ||
+       gtk_window_get_window_type(GTK_WINDOW(mShell)) == GTK_WINDOW_POPUP)) {
+    mBounds.SizeTo(aSize);
+    if (mCompositorWidgetDelegate) {
+      mCompositorWidgetDelegate->NotifyClientSizeChanged(aSize);
+    }
     DispatchResized();
   }
 }
@@ -1195,10 +1211,9 @@ void nsWindow::Resize(double aWidth, double aHeight, bool aRepaint) {
 
   double scale =
       BoundsUseDesktopPixels() ? GetDesktopToDeviceScale().scale : 1.0;
-  int32_t width = NSToIntRound(scale * aWidth);
-  int32_t height = NSToIntRound(scale * aHeight);
+  auto size = LayoutDeviceIntSize::Round(scale * aWidth, scale * aHeight);
 
-  ResizeInt(0, 0, width, height, /* aMove */ false, aRepaint);
+  ResizeInt(Nothing(), size, aRepaint);
 }
 
 void nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
@@ -1208,13 +1223,10 @@ void nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
 
   double scale =
       BoundsUseDesktopPixels() ? GetDesktopToDeviceScale().scale : 1.0;
-  int32_t width = NSToIntRound(scale * aWidth);
-  int32_t height = NSToIntRound(scale * aHeight);
+  auto size = LayoutDeviceIntSize::Round(scale * aWidth, scale * aHeight);
+  auto topLeft = LayoutDeviceIntPoint::Round(scale * aX, scale * aY);
 
-  int32_t x = NSToIntRound(scale * aX);
-  int32_t y = NSToIntRound(scale * aY);
-
-  ResizeInt(x, y, width, height, /* aMove */ true, aRepaint);
+  ResizeInt(Some(topLeft), size, aRepaint);
 }
 
 void nsWindow::Enable(bool aState) { mEnabled = aState; }
@@ -1936,20 +1948,20 @@ void nsWindow::NativeMoveResizeWaylandPopupCallback(
 
   // We ignore the callback position data because the another resize has been
   // called before the callback have been triggered.
-  if (mNewSizeAfterMoveToRect.height > 0 || mNewSizeAfterMoveToRect.width > 0) {
+  if (mResizedAfterMoveToRect) {
     LOG_POPUP(
         ("  Another resize called during waiting for callback, calling "
          "Resize(%d, %d)\n",
-         mNewSizeAfterMoveToRect.width, mNewSizeAfterMoveToRect.height));
+         mLastSizeRequest.width, mLastSizeRequest.height));
     // Set the preferred size to zero to avoid wrong size of popup because the
     // mPreferredPopupRect is used in nsMenuPopupFrame to set dimensions
     mPreferredPopupRect = nsRect(0, 0, 0, 0);
 
     // We need to schedule another resize because the window has been resized
     // again before callback was called.
-    Resize(mNewSizeAfterMoveToRect.width, mNewSizeAfterMoveToRect.height, true);
+    ResizeInt(Nothing(), mLastSizeRequest, true);
     DispatchResized();
-    mNewSizeAfterMoveToRect.width = mNewSizeAfterMoveToRect.height = 0;
+    mResizedAfterMoveToRect = false;
     return;
   }
 
@@ -1976,8 +1988,11 @@ void nsWindow::NativeMoveResizeWaylandPopupCallback(
 
   bool needsPositionUpdate =
       (newBounds.x != mBounds.x || newBounds.y != mBounds.y);
-  bool needsSizeUpdate =
-      (newWidth != mBounds.width || newHeight != mBounds.height);
+  // Beware that gtk_window_resize() requests sizes asynchronously and so
+  // newBounds might not have the size from the most recent
+  // gtk_window_resize().
+  bool needsSizeUpdate = newWidth != mLastSizeRequest.width ||
+                         newHeight != mLastSizeRequest.height;
   // Update view
   if (needsSizeUpdate) {
     LOG_POPUP(("  needSizeUpdate\n"));
@@ -2054,8 +2069,8 @@ void nsWindow::NativeMoveResizeWaylandPopup(GdkPoint* aPosition,
   // Compositor may be confused by windows with width/height = 0
   // and positioning such windows leads to Bug 1555866.
   if (!AreBoundsSane()) {
-    LOG_POPUP(("  Bounds are not sane (width: %d height: %d)\n", mBounds.width,
-               mBounds.height));
+    LOG_POPUP(("  Bounds are not sane (width: %d height: %d)\n",
+               mLastSizeRequest.width, mLastSizeRequest.height));
     return;
   }
 
@@ -2378,10 +2393,6 @@ void nsWindow::SetSizeMode(nsSizeMode aMode) {
       }
       break;
   }
-
-  // Request mBounds update from configure event as we may not get
-  // OnSizeAllocate for size state changes (Bug 1489463).
-  mBoundsAreValid = false;
 
   mSizeState = mSizeMode;
 }
@@ -3623,27 +3634,6 @@ gboolean nsWindow::OnConfigureEvent(GtkWidget* aWidget,
   // complete.  wtf?
   NotifyWindowMoved(mBounds.x, mBounds.y);
 
-  // A GTK app would usually update its client area size in response to
-  // a "size-allocate" signal.
-  // However, we need to set mBounds in advance at Resize()
-  // as JS code expects immediate window size change.
-  // If Gecko requests a resize from GTK, but subsequently,
-  // before a corresponding "size-allocate" signal is emitted, the window is
-  // resized to its former size via other means, such as maximizing,
-  // then there is no "size-allocate" signal from which to update
-  // the value of mBounds. Similarly, if Gecko's resize request is refused
-  // by the window manager, then there will be no "size-allocate" signal.
-  // In the refused request case, the window manager is required to dispatch
-  // a ConfigureNotify event. mBounds can then be updated here.
-  // This seems to also be sufficient to update mBounds when Gecko resizes
-  // the window from maximized size and then immediately maximizes again.
-  if (!mBoundsAreValid) {
-    GtkAllocation allocation = {-1, -1, 0, 0};
-    gtk_window_get_size(GTK_WINDOW(mShell), &allocation.width,
-                        &allocation.height);
-    OnSizeAllocate(&allocation);
-  }
-
   return FALSE;
 }
 
@@ -3675,12 +3665,12 @@ void nsWindow::OnSizeAllocate(GtkAllocation* aAllocation) {
     }
   }
 
-  mBoundsAreValid = true;
+  mHasReceivedSizeAllocate = true;
 
   LayoutDeviceIntSize size = GdkRectToDevicePixels(*aAllocation).Size();
   if (mBounds.Size() == size) {
     LOG(("  Already the same size"));
-    // We were already resized at nsWindow::OnConfigureEvent() so skip it.
+    // mBounds was set at Create() or Resize().
     return;
   }
 
@@ -5068,6 +5058,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   mPreferredPopupRectFlushed = false;
 
   ConstrainSize(&mBounds.width, &mBounds.height);
+  mLastSizeRequest = mBounds.Size();
 
   GtkWidget* eventWidget = nullptr;
   bool popupNeedsAlphaVisual = (mWindowType == eWindowType_popup &&
@@ -5598,8 +5589,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
 
   // resize so that everything is set to the right dimensions
   if (!mIsTopLevel) {
-    ResizeInt(mBounds.x, mBounds.y, mBounds.width, mBounds.height,
-              /* aMove */ false, /* aRepaint */ false);
+    ResizeInt(Nothing(), mBounds.Size(), /* aRepaint */ false);
   }
 
 #ifdef MOZ_X11
@@ -5719,7 +5709,7 @@ void nsWindow::NativeResize() {
     return;
   }
 
-  GdkRectangle size = DevicePixelsToGdkSizeRoundUp(mBounds.Size());
+  GdkRectangle size = DevicePixelsToGdkSizeRoundUp(mLastSizeRequest);
 
   LOG(("nsWindow::NativeResize [%p] %d %d\n", (void*)this, size.width,
        size.height));
@@ -5730,7 +5720,7 @@ void nsWindow::NativeResize() {
     gtk_window_resize(GTK_WINDOW(mShell), size.width, size.height);
     if (mWaitingForMoveToRectCallback) {
       LOG_POPUP(("  waiting for move to rect, schedulling "));
-      mNewSizeAfterMoveToRect = mBounds;
+      mResizedAfterMoveToRect = true;
     }
   } else if (mContainer) {
     GtkWidget* widget = GTK_WIDGET(mContainer);
@@ -5743,12 +5733,6 @@ void nsWindow::NativeResize() {
     gtk_widget_size_allocate(widget, &allocation);
   } else if (mGdkWindow) {
     gdk_window_resize(mGdkWindow, size.width, size.height);
-  }
-
-  // Notify the GtkCompositorWidget of a ClientSizeChange
-  // This is different than OnSizeAllocate to catch initial sizing
-  if (mCompositorWidgetDelegate) {
-    mCompositorWidgetDelegate->NotifyClientSizeChanged(GetClientSize());
   }
 
   // Does it need to be shown because bounds were previously insane?
@@ -5774,7 +5758,7 @@ void nsWindow::NativeMoveResize() {
     return;
   }
 
-  GdkRectangle size = DevicePixelsToGdkSizeRoundUp(mBounds.Size());
+  GdkRectangle size = DevicePixelsToGdkSizeRoundUp(mLastSizeRequest);
   GdkPoint topLeft = DevicePixelsToGdkPointRoundDown(mBounds.TopLeft());
 
   LOG(("nsWindow::NativeMoveResize [%p] %d,%d -> %d x %d\n", (void*)this,
@@ -5807,12 +5791,6 @@ void nsWindow::NativeMoveResize() {
       gdk_window_move_resize(mGdkWindow, topLeft.x, topLeft.y, size.width,
                              size.height);
     }
-  }
-
-  // Notify the GtkCompositorWidget of a ClientSizeChange
-  // This is different than OnSizeAllocate to catch initial sizing
-  if (mCompositorWidgetDelegate) {
-    mCompositorWidgetDelegate->NotifyClientSizeChanged(GetClientSize());
   }
 
   // Does it need to be shown because bounds were previously insane?
@@ -8342,6 +8320,7 @@ void nsWindow::SetDrawsInTitlebar(bool aState) {
     gtk_widget_realize(GTK_WIDGET(mShell));
     gtk_widget_reparent(GTK_WIDGET(mContainer), GTK_WIDGET(mShell));
     mNeedsShow = true;
+    mLastSizeRequest = mBounds.Size();
     NativeResize();
 
     // Label mShell toplevel window so property_notify_event_cb callback
@@ -9240,9 +9219,9 @@ void nsWindow::LockAspectRatio(bool aShouldLock) {
     AddCSDDecorationSize(&decWidth, &decHeight);
 
     float width =
-        (float)DevicePixelsToGdkCoordRoundDown(mBounds.width) + (float)decWidth;
-    float height = (float)DevicePixelsToGdkCoordRoundDown(mBounds.height) +
-                   (float)decHeight;
+        DevicePixelsToGdkCoordRoundDown(mLastSizeRequest.width) + decWidth;
+    float height =
+        DevicePixelsToGdkCoordRoundDown(mLastSizeRequest.height) + decHeight;
 
     mAspectRatio = width / height;
     LOG(("nsWindow::LockAspectRatio() [%p] width %f height %f aspect %f\n",
