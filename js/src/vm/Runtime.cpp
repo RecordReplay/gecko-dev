@@ -939,7 +939,6 @@ uint64_t* js::ExecutionProgressTarget() {
 }
 
 void js::SetExecutionProgressTargetCallback(uint64_t aProgress) {
-  MOZ_RELEASE_ASSERT(mozilla::recordreplay::IsReplaying());
   gExecutionProgressTarget = aProgress;
 }
 

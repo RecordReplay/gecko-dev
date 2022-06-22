@@ -96,6 +96,7 @@ static void (*gSaveRecording)(const char* dir);
 static void (*gFinishRecording)();
 static uint64_t* (*gProgressCounter)();
 static void (*gSetProgressCallback)(void (*aCallback)(uint64_t));
+static void (*gEnableProgressCheckpoints)();
 static void (*gProgressReached)();
 static void (*gSetTrackObjectsCallback)(void (*aCallback)(bool));
 static void (*gBeginPassThroughEvents)();
@@ -398,8 +399,9 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayAssert", gAssert);
   LoadSymbol("RecordReplayAssertBytes", gAssertBytes);
   LoadSymbol("RecordReplayProgressCounter", gProgressCounter);
-  LoadSymbol("RecordReplaySetProgressCallback", gSetProgressCallback, /* aOptional */ true);
-  LoadSymbol("RecordReplayProgressReached", gProgressReached, /* aOptional */ true);
+  LoadSymbol("RecordReplaySetProgressCallback", gSetProgressCallback);
+  LoadSymbol("RecordReplayEnableProgressCheckpoints", gEnableProgressCheckpoints);
+  LoadSymbol("RecordReplayProgressReached", gProgressReached);
   LoadSymbol("RecordReplaySetTrackObjectsCallback", gSetTrackObjectsCallback);
   LoadSymbol("RecordReplayBeginPassThroughEvents", gBeginPassThroughEvents);
   LoadSymbol("RecordReplayEndPassThroughEvents", gEndPassThroughEvents);
@@ -605,9 +607,8 @@ MOZ_EXPORT void RecordReplayInterface_AdvanceExecutionProgressCounter() {
 }
 
 MOZ_EXPORT void RecordReplayInterface_SetExecutionProgressCallback(void (*aCallback)(uint64_t)) {
-  if (gSetProgressCallback) {
-    gSetProgressCallback(aCallback);
-  }
+  gSetProgressCallback(aCallback);
+  gEnableProgressCheckpoints();
 }
 
 MOZ_EXPORT void RecordReplayInterface_ExecutionProgressReached() {

@@ -2183,26 +2183,25 @@ bool BaselineCodeGen<Handler>::emit_ExecutionProgress() {
       loadScript(scratch);
       masm.maybeCallExecutionProgressHook(scratch);
     }
+
+    frame.syncStack(0);
     masm.inc64(AbsoluteAddress(ExecutionProgressCounter()));
-    if (mozilla::recordreplay::IsReplaying()) {
-      frame.syncStack(0);
 
-      Register scratch = R0.scratchReg();
-      Label done;
+    Register scratch = R0.scratchReg();
+    Label done;
 
-      masm.loadPtr(AbsoluteAddress(ExecutionProgressTarget()), scratch);
-      masm.branchPtr(Assembler::Equal, scratch, ImmPtr(nullptr), &done);
-      masm.branchPtr(Assembler::NotEqual, AbsoluteAddress(ExecutionProgressCounter()),
-                     scratch, &done);
+    masm.loadPtr(AbsoluteAddress(ExecutionProgressTarget()), scratch);
+    masm.branchPtr(Assembler::Equal, scratch, ImmPtr(nullptr), &done);
+    masm.branchPtr(Assembler::NotEqual, AbsoluteAddress(ExecutionProgressCounter()),
+                   scratch, &done);
 
-      prepareVMCall();
-      using Fn = bool (*)(JSContext*);
-      if (!callVM<Fn, RecordReplayProgressReached>()) {
-        return false;
-      }
-
-      masm.bind(&done);
+    prepareVMCall();
+    using Fn = bool (*)(JSContext*);
+    if (!callVM<Fn, RecordReplayProgressReached>()) {
+      return false;
     }
+
+    masm.bind(&done);
   }
   return true;
 }
