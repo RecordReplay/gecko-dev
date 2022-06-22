@@ -777,7 +777,7 @@ void XPCJSRuntime::GCSliceCallback(JSContext* cx, JS::GCProgress progress,
   }
 
   nsCOMPtr<nsIObserverService> obs;
-  if (!recordreplay::IsRecordingOrReplaying()) {
+  if (!recordreplay::IsRecordingOrReplaying("XPCJSRuntime::GCSliceCallback")) {
     // See https://github.com/RecordReplay/backend/issues/4606
     // Do not notify observers from within GC slices, since
     // gc slices are allowed to run divergently in the replay

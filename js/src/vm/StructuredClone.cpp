@@ -588,7 +588,7 @@ struct JSStructuredCloneWriter {
       // preserved during recording/replaying, as the callbacks used
       // during transfer may interact with the recording. Just use the
       // same hash number for all elements to ensure this.
-      if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+      if (mozilla::recordreplay::IsRecordingOrReplaying("TransferableObjectHasher::hash")) {
         return 0;
       }
       return DefaultHasher<JSObject*>::hash(l);

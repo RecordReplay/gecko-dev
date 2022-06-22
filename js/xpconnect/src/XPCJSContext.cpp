@@ -564,7 +564,7 @@ bool XPCJSContext::RecordScriptActivity(bool aActive) {
 
   // Since the slow script dialog never activates if we are recording or
   // replaying, don't record/replay JS activity notifications.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("XPCJSContext::RecordScriptActivity")) {
     return oldValue;
   }
 
@@ -591,7 +591,7 @@ static bool sTelemetryEventEnabled(false);
 bool XPCJSContext::InterruptCallback(JSContext* cx) {
   // The slow script dialog never activates if we are recording or replaying,
   // since the precise timing of the dialog cannot be replayed.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("XPCJSContext::InterruptCallback")) {
     return true;
   }
 
@@ -1144,7 +1144,7 @@ XPCJSContext* XPCJSContext::Get() {
 #ifdef XP_WIN
 static size_t GetWindowsStackSize() {
   // Workaround VirtualQuery not being supported when replaying.
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("XPCJSContext::GetWindowsStackSize")) {
     using GetCurrentThreadStackLimitsFn = void(WINAPI*)(PULONG_PTR LowLimit,
                                                         PULONG_PTR HighLimit);
     static const StaticDynamicallyLinkedFunctionPtr<

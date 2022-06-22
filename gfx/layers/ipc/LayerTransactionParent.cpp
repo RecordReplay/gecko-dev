@@ -875,7 +875,7 @@ bool LayerTransactionParent::DeallocShmem(ipc::Shmem& aShmem) {
 }
 
 bool LayerTransactionParent::IsSameProcess() const {
-  return recordreplay::IsRecordingOrReplaying() ||
+  return recordreplay::IsRecordingOrReplaying("LayerTransactionParent::IsSameProcess") ||
     OtherPid() == base::GetCurrentProcId();
 }
 

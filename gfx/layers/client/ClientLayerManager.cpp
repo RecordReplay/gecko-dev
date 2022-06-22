@@ -779,7 +779,7 @@ bool ClientLayerManager::AreComponentAlphaLayersEnabled() {
          // The replaying process uses an in process basic compositor, however.
          // Because layers will be passed to both compositors, we have to avoid
          // using features which aren't supported by the basic compositor.
-         !recordreplay::IsRecordingOrReplaying();
+         !recordreplay::IsRecordingOrReplaying("ClientLayerManager::AreComponentAlphaLayersEnabled");
 }
 
 void ClientLayerManager::SetIsFirstPaint() { mForwarder->SetIsFirstPaint(); }

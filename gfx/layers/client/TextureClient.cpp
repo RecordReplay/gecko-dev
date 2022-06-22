@@ -1102,7 +1102,7 @@ bool TextureClient::InitIPDLActor(CompositableForwarder* aForwarder) {
     LockActor();
   }
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("TextureClient::InitIPDLActor-Forwarder")) {
     recordreplay::RegisterTextureChild(mActor, mData, desc, GetFlags());
   }
 
@@ -1171,7 +1171,7 @@ bool TextureClient::InitIPDLActor(KnowsCompositor* aKnowsCompositor) {
     LockActor();
   }
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("TextureClient::InitIPDLActor-Compositor")) {
     recordreplay::RegisterTextureChild(mActor, mData, desc, GetFlags());
   }
 

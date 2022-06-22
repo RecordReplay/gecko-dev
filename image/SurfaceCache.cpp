@@ -64,7 +64,7 @@ static OrderedStaticMutex sInstanceMutex;
 
 // We need to initialize the mutex on a consistent thread when recording/replaying.
 void RecordReplayInitializeSurfaceCacheMutex() {
-  MOZ_ASSERT(recordreplay::IsRecordingOrReplaying());
+  MOZ_ASSERT(recordreplay::IsRecordingOrReplaying("RecordReplayInitializeSurfaceCacheMutext"));
   OrderedStaticMutexAutoLock lock(sInstanceMutex);
 }
 

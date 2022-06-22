@@ -6098,7 +6098,7 @@ bool Debugger::recordReplayProcessKind(JSContext* cx, unsigned argc,
                                        Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("Debugger::recordReplayProcessKind")) {
     JSString* str = JS_NewStringCopyZ(cx, "RecordingReplaying");
     if (!str) {
       return false;

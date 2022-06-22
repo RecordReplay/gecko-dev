@@ -924,7 +924,7 @@ Maybe<gfx::IntRect> BasicCompositor::BeginFrameForWindow(
       LayoutDeviceIntRegion::FromUnknownRegion(mInvalidRegion);
   BufferMode bufferMode = BufferMode::BUFFERED;
   RefPtr<DrawTarget> dt;
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("BasicCompositor::BeginFrameForWindow")) {
     bufferMode = BufferMode::BUFFER_NONE;
     dt = recordreplay::DrawTargetForRemoteDrawing(aRenderBounds);
   } else {
@@ -1202,7 +1202,7 @@ void BasicCompositor::EndRemoteDrawing() {
         mFrontBuffer, LayoutDeviceIntRegion::FromUnknownRegion(mInvalidRegion));
 
     mFrontBuffer = nullptr;
-  } else if (!recordreplay::IsRecordingOrReplaying()) {
+  } else if (!recordreplay::IsRecordingOrReplaying("BasicCompositor::EndRemoteDrawing")) {
     mWidget->EndRemoteDrawingInRegion(
         mRenderTarget->mDrawTarget,
         LayoutDeviceIntRegion::FromUnknownRegion(mInvalidRegion));

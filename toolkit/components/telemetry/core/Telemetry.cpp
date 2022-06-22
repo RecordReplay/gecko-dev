@@ -1059,7 +1059,7 @@ TelemetryImpl::GetCanRecordBase(bool* ret) {
 
 NS_IMETHODIMP
 TelemetryImpl::SetCanRecordBase(bool canRecord) {
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("TelemetryImpl::SeteCanRecordBase")) {
     return NS_OK;
   }
 #ifndef FUZZING
@@ -1088,7 +1088,7 @@ TelemetryImpl::GetCanRecordExtended(bool* ret) {
 
 NS_IMETHODIMP
 TelemetryImpl::SetCanRecordExtended(bool canRecord) {
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("TelemetryImpl::SetCanRecordExtend")) {
     return NS_OK;
   }
 #ifndef FUZZING
@@ -1141,7 +1141,7 @@ already_AddRefed<nsITelemetry> TelemetryImpl::CreateTelemetryInstance() {
       // because the resulting measurements might be biased and because
       // measurements might occur at non-deterministic points in execution
       // (e.g. garbage collections).
-      !recordreplay::IsRecordingOrReplaying()) {
+      !recordreplay::IsRecordingOrReplaying("TelemetryImpl::CreateTelemetryInstance")) {
     useTelemetry = true;
   }
 #endif

@@ -1034,7 +1034,7 @@ struct MOZ_STACK_CLASS BytecodeEmitter {
   // Controls whether execution progress and the corresponding instrumentation
   // opcodes will be emitted for tracking execution when recording/replaying.
   bool shouldEmitInstrumentation() {
-    if (mozilla::recordreplay::IsRecordingOrReplaying() &&
+    if (mozilla::recordreplay::IsRecordingOrReplaying("BytecodeEmitter::shouldEmitInstrumentation") &&
         instrumentationKinds &&
         mozilla::recordreplay::ShouldUpdateProgressCounter(parser->options().filename())) {
       MOZ_RELEASE_ASSERT(emitterMode != BytecodeEmitter::SelfHosting);

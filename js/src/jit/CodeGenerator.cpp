@@ -14346,7 +14346,7 @@ void CodeGenerator::visitInterruptCheck(LInterruptCheck* lir) {
   OutOfLineCode* ool =
       oolCallVM<Fn, InterruptCheck>(lir, ArgList(), StoreNothing());
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying() && gen->runtime->hasParentRuntime()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("CodeGenerator::visitInterruptCheck") && gen->runtime->hasParentRuntime()) {
     // Always call InterruptCheck in worker runtimes when recording/replaying,
     // to make sure NotifyActivity() is called regularly.
     masm.jump(ool->entry());

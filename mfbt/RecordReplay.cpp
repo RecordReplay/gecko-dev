@@ -20,6 +20,7 @@
 #endif
 
 #include <stdlib.h>
+#include <unordered_set>
 
 namespace mozilla {
 namespace recordreplay {
@@ -157,6 +158,50 @@ void Initialize(int* aArgc, char*** aArgv) {
 #undef INIT_SYMBOL_VOID
 
   initialize(aArgc, aArgv);
+}
+
+static const char* EXCLUDED_ISROR_ENV = "RECORD_REPLAY_EXCLUDED_ISROR";
+typedef std::unordered_set<std::string> ExcludedCheckSet;
+static ExcludedCheckSet* EXCLUDED_CHECKS = nullptr;
+static void FillExcludedChecksSet(const char* aFilename, ExcludedCheckSet* aExcluded) {
+  if (!aFilename) {
+    return;
+  }
+
+  // Treat the exclude string as a file path and read all lines
+  FILE* file = fopen(aFilename, "r");
+  if (!file) {
+    fprintf(stderr, "Could not open %s file: %s\n", EXCLUDED_ISROR_ENV, aFilename);
+    return;
+  }
+  char buf[128];
+  while (fgets(buf, 128, file)) {
+    // Zero-out any newline chars so the string terminates at end of line.
+    for (int i = 0; i < 128; i++) {
+      buf[i] = (buf[i] == '\r' || buf[i] == '\n') ? 0 : buf[i];
+    }
+    aExcluded->insert(std::string(buf));
+  }
+}
+static void InitExcludedChecks() {
+  if (EXCLUDED_CHECKS) {
+    return;
+  }
+  ExcludedCheckSet* excluded = new ExcludedCheckSet();
+  const char* excludeString = getenv(EXCLUDED_ISROR_ENV);
+  FillExcludedChecksSet(excludeString, excluded);
+  EXCLUDED_CHECKS = excluded;
+}
+
+bool InternalIsRecordingOrReplaying(const char* aLabel) {
+  if (!gIsRecordingOrReplaying) {
+    return false;
+  }
+  InitExcludedChecks();
+  if (EXCLUDED_CHECKS && EXCLUDED_CHECKS->find(aLabel) != EXCLUDED_CHECKS->end()) {
+    return false;
+  }
+  return true;
 }
 
 // Record/replay API functions can't GC, but we can't use

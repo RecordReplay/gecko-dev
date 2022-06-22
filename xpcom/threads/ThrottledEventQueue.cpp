@@ -214,7 +214,7 @@ class ThrottledEventQueue::Inner final : public nsISupports {
 #endif
 
     // Run any pending non-deterministic events.
-    if (recordreplay::IsRecordingOrReplaying()) {
+    if (recordreplay::IsRecordingOrReplaying("ThrottledEventQueue::ExecuteRunnable")) {
       recordreplay::AutoDisallowThreadEvents disallow;
       MutexAutoLock lock(mMutexNonDeterministic);
       while (true) {

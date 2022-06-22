@@ -1377,7 +1377,7 @@ bool GlobalHelperThreadState::ensureInitialized() {
   // thread tasks are scheduled at non-deterministic points and we don't support
   // scheduling non-deterministic tasks on gecko threads yet.
   // See https://github.com/RecordReplay/backend/issues/1091
-  useInternalThreadPool_ = !dispatchTaskCallback || mozilla::recordreplay::IsRecordingOrReplaying();
+  useInternalThreadPool_ = !dispatchTaskCallback || mozilla::recordreplay::IsRecordingOrReplaying("GlobalHelperThreadState::ensureInitialized");
   if (useInternalThreadPool(lock)) {
     if (!InternalThreadPool::Initialize(threadCount, lock)) {
       return false;
@@ -2676,7 +2676,7 @@ void PromiseHelperTask::runHelperThreadTask(AutoLockHelperThreadState& lock) {
 bool js::StartOffThreadPromiseHelperTask(JSContext* cx,
                                          UniquePtr<PromiseHelperTask> task) {
   // Execute synchronously if there are no helper threads.
-  if (!CanUseExtraThreads() || mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (!CanUseExtraThreads() || mozilla::recordreplay::IsRecordingOrReplaying("js::StartOffThreadPromiseHelperTask")) {
     task.release()->executeAndResolveAndDestroy(cx);
     return true;
   }

@@ -270,7 +270,7 @@ void ChromeUtils::AddProfilerMarker(
 
 /* static */
 bool ChromeUtils::IsRecordingOrReplaying(GlobalObject& aGlobal) {
-  return recordreplay::IsRecordingOrReplaying();
+  return recordreplay::IsRecordingOrReplaying("ChromeUtils");
 }
 
 /* static */

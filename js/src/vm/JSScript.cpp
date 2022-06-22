@@ -1107,7 +1107,7 @@ XDRResult js::XDRScript(XDRState<mode>* xdr, HandleScope scriptEnclosingScope,
 
   // When recording/replaying, whether globals are instrumented can vary between
   // recording and replaying.
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("js::XDRScript")) {
     return xdr->fail(JS::TranscodeResult::Failure);
   }
 
@@ -3085,7 +3085,7 @@ XDRResult ScriptSource::xdrData(XDRState<mode>* const xdr,
 
 // Note the content of sources decoded when recording or replaying.
 static bool MaybeNoteContentParse(JSContext* cx, ScriptSource* ss) {
-  if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (!mozilla::recordreplay::IsRecordingOrReplaying("js::MaybeNoteContentParse")) {
     return true;
   }
   if (!ss->hasSourceText()) {

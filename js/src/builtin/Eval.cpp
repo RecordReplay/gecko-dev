@@ -270,7 +270,7 @@ static bool EvalKernel(JSContext* cx, HandleValue v, EvalType evalType,
       // The eval cache is purged at non-deterministic points during GC, and affects
       // when the debugger's new script notification fires. Disable the cache when
       // recording/replaying to avoid this non-determinism.
-      !mozilla::recordreplay::IsRecordingOrReplaying()) {
+      !mozilla::recordreplay::IsRecordingOrReplaying("js::EvalKernel")) {
     esg.lookupInEvalCache(linearStr, callerScript, pc);
   }
 

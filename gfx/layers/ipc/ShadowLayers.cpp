@@ -700,7 +700,7 @@ bool ShadowLayerForwarder::EndTransaction(
   // finish. If it does we don't have to delay messages at all.
   GetCompositorBridgeChild()->PostponeMessagesIfAsyncPainting();
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("ShadowLayerForwarder::EndTransaction")) {
     recordreplay::SendUpdate(mShadowManager, info);
   }
 
@@ -772,7 +772,7 @@ void ShadowLayerForwarder::ReleaseLayer(const LayerHandle& aHandle) {
   if (!IPCOpen()) {
     return;
   }
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("ShadowLayerForwarder::ReleaseLayer")) {
     recordreplay::SendReleaseLayer(mShadowManager, aHandle);
   }
   Unused << mShadowManager->SendReleaseLayer(aHandle);
@@ -818,7 +818,7 @@ void ShadowLayerForwarder::Connect(CompositableClient* aCompositable,
   aCompositable->InitIPDL(handle);
   mShadowManager->SendNewCompositable(handle, aCompositable->GetTextureInfo());
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("ShadowLayerForwarder::Connect")) {
     recordreplay::SendNewCompositable(mShadowManager, handle,
                                       aCompositable->GetTextureInfo());
   }
@@ -1040,7 +1040,7 @@ void ShadowLayerForwarder::ReleaseCompositable(
     if (!IPCOpen()) {
       return;
     }
-    if (recordreplay::IsRecordingOrReplaying()) {
+    if (recordreplay::IsRecordingOrReplaying("ShadowLayerForwarder::ReleaseCompositable")) {
       recordreplay::SendReleaseCompositable(mShadowManager, aHandle);
     }
     mShadowManager->SendReleaseCompositable(aHandle);

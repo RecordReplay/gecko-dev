@@ -491,7 +491,7 @@ PLDHashTable::ComputeKeyHash(const void* aKey) const {
 
   PLDHashNumber keyHash = mozilla::ScrambleHashCode(mOps->hashKey(aKey));
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("PLDHashTable::ComputeKeyHash")) {
     keyHash = recordreplay::LookupStableHashCode(this, aKey, keyHash, nullptr);
   }
 

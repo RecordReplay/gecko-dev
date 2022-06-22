@@ -65,7 +65,7 @@ static bool CanDoOffThread(JSContext* cx, const ReadOnlyCompileOptions& options,
   }
 
   return cx->runtime()->canUseParallelParsing() && CanUseExtraThreads() &&
-         !mozilla::recordreplay::IsRecordingOrReplaying();
+         !mozilla::recordreplay::IsRecordingOrReplaying("js::CanDoOffThread");
 }
 
 JS_PUBLIC_API bool JS::CanCompileOffThread(

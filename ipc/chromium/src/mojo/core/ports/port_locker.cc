@@ -33,7 +33,7 @@ void UpdateTLS(PortLocker* old_locker, PortLocker* new_locker) {
 static uintptr_t GetPortId(Port* port) {
   // When recording/replaying the sorted order of ports need to be consistent,
   // so we use the ID associated with the port via RegisterThing for sorting.
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("mojo::core::ports::GetPortId")) {
     uintptr_t id = mozilla::recordreplay::ThingIndex(port);
     CHECK(id);
     return id;

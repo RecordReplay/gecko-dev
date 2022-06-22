@@ -281,7 +281,7 @@ void DebugState::clearBreakpointsIn(JSFreeOp* fop, WasmInstanceObject* instance,
 void DebugState::toggleDebugTrap(uint32_t offset, bool enabled) {
   // Refuse to enable debug traps when recording/replaying. Sometimes these get
   // enabled for unclear reasons, causing large performance degradations.
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("DebugState::toggleDebugTrap")) {
     enabled = false;
   }
 

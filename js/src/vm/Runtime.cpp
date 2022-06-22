@@ -996,7 +996,7 @@ JS_PUBLIC_API void JS::RecordReplayCheckTrackedObject(JSContext* cx, HandleObjec
 }
 
 bool js::RecordReplayAssertValue(JSContext* cx, HandlePropertyName name, HandleValue value) {
-  if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (!mozilla::recordreplay::IsRecordingOrReplaying("js::RecordReplayAssertValue")) {
     MOZ_RELEASE_ASSERT(gForceEmitRecordReplayAsserts);
     return true;
   }

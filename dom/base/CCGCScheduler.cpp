@@ -207,7 +207,7 @@ void CCGCScheduler::PokeShrinkingGC() {
 
 void CCGCScheduler::PokeFullGC() {
   // GC timers aren't supported when recording/replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("PokeFullGC")) {
     return;
   }
 
@@ -266,7 +266,7 @@ void CCGCScheduler::EnsureGCRunner(uint32_t aDelay) {
   }
 
   // Incremental GC is disabled when recording/replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("EnsureGCRunner")) {
     return;
   }
 
@@ -322,7 +322,7 @@ void CCGCScheduler::EnsureCCRunner(TimeDuration aDelay, TimeDuration aBudget) {
   MOZ_ASSERT(!mDidShutdown);
 
   // Incremental CC is disabled when recording/replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("EnsureCCRunner")) {
     return;
   }
 

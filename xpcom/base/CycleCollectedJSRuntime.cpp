@@ -1083,7 +1083,7 @@ void CycleCollectedJSRuntime::GCSliceCallback(JSContext* aContext,
       JS::dbg::FireOnGarbageCollectionHookRequired(aContext) &&
       // GCs happen at non-deterministic points, so we can't consistently
       // inform the debugger when a GC has occurred.
-      !recordreplay::IsRecordingOrReplaying()) {
+      !recordreplay::IsRecordingOrReplaying("CycleCollectedJSRuntime::GCSliceCallback")) {
     JS::GCReason reason = aDesc.reason_;
     Unused << NS_WARN_IF(
         NS_FAILED(DebuggerOnGCRunnable::Enqueue(aContext, aDesc)) &&
@@ -1640,7 +1640,7 @@ void IncrementalFinalizeRunnable::ReleaseNow(bool aLimited) {
                "We should have at least ReleaseSliceNow to run");
     MOZ_ASSERT(mFinalizeFunctionToRun < mDeferredFinalizeFunctions.Length(),
                "No more finalizers to run?");
-    if (recordreplay::IsRecordingOrReplaying()) {
+    if (recordreplay::IsRecordingOrReplaying("IncrementalFinalizeRunnable::ReleaseNow")) {
       aLimited = false;
     }
 

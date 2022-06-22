@@ -289,7 +289,7 @@ XDRResult XDRState<mode>::codeScript(MutableHandleScript scriptp) {
   // XDR is not supported when recording/replaying, as script contents differ
   // when recording/replaying due to execution progress and instrumentation
   // opcodes.
-  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying("XDRState::codeScript")) {
     return fail(JS::TranscodeResult::Failure);
   }
 

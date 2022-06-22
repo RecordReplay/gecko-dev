@@ -667,7 +667,7 @@ void GlobalStyleSheetCache::BuildPreferenceSheet(
   // The shared memory cache is disabled when recording/replaying. We can't
   // reliably ensure that fixed addresses in an area not already reserved
   // will be consistently mapped when replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("GlobalStyleSheetCache::SetSharedMemory")) {
     return;
   }
 

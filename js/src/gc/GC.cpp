@@ -2137,7 +2137,7 @@ bool GCRuntime::shouldCompact() {
 bool GCRuntime::isCompactingGCEnabled() const {
   return compactingEnabled &&
          rt->mainContextFromOwnThread()->compactingDisabledCount == 0 &&
-         !mozilla::recordreplay::IsRecordingOrReplaying();
+         !mozilla::recordreplay::IsRecordingOrReplaying("GCRuntime::isCompactingGCEnabled");
 }
 
 AutoDisableCompactingGC::AutoDisableCompactingGC(JSContext* cx) : cx(cx) {
@@ -8964,7 +8964,7 @@ JS_PUBLIC_API void JS::DisableIncrementalGC(JSContext* cx) {
 JS_PUBLIC_API bool JS::IsIncrementalGCEnabled(JSContext* cx) {
   GCRuntime& gc = cx->runtime()->gc;
   return gc.isIncrementalGCEnabled() && gc.isIncrementalGCAllowed() &&
-         !mozilla::recordreplay::IsRecordingOrReplaying();
+         !mozilla::recordreplay::IsRecordingOrReplaying("JS::IsIncrementalGCEnabled");
 }
 
 JS_PUBLIC_API bool JS::IsIncrementalGCInProgress(JSContext* cx) {

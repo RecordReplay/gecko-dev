@@ -80,7 +80,7 @@ class SharedArrayRawBuffer {
         preparedForWasm_(preparedForWasm),
         waiters_(nullptr) {
     MOZ_ASSERT(buffer == dataPointerShared());
-    MOZ_RELEASE_ASSERT(!mozilla::recordreplay::IsRecordingOrReplaying());
+    MOZ_RELEASE_ASSERT(!mozilla::recordreplay::IsRecordingOrReplaying("SharedArrayRawBuffer::SharedArrayRawBuffer"));
   }
 
   // Allocate a SharedArrayRawBuffer for either Wasm or other users.

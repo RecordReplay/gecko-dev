@@ -1508,7 +1508,7 @@ void nsJSContext::EndCycleCollectionCallback(CycleCollectorResults& aResults) {
 bool CCGCScheduler::CCRunnerFired(TimeStamp aDeadline) {
   bool didDoWork = false;
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("CCRunnerFired")) {
     return false;
   }
 

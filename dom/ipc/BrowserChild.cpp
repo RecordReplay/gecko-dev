@@ -1264,7 +1264,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvUpdateDimensions(
     const DimensionInfo& aDimensionInfo) {
   // When recording/replaying we need to make sure the dimensions are up to
   // date on the compositor used in this process.
-  if (mLayersConnected.isNothing() && !recordreplay::IsRecordingOrReplaying()) {
+  if (mLayersConnected.isNothing() && !recordreplay::IsRecordingOrReplaying("RecvUpdateDimensions")) {
     return IPC_OK();
   }
 
@@ -1637,7 +1637,7 @@ void BrowserChild::FlushAllCoalescedMouseData() {
 mozilla::ipc::IPCResult BrowserChild::RecvRealMouseMoveEvent(
     const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
     const uint64_t& aInputBlockId) {
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("RecvRealMouseMoveEvent")) {
     recordreplay::OnMouseEvent(this, aEvent);
   }
 
@@ -1712,7 +1712,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvNormalPrioritySynthMouseMoveEvent(
 mozilla::ipc::IPCResult BrowserChild::RecvRealMouseButtonEvent(
     const WidgetMouseEvent& aEvent, const ScrollableLayerGuid& aGuid,
     const uint64_t& aInputBlockId) {
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("RecvRealMouseButtonEvent")) {
     recordreplay::OnMouseEvent(this, aEvent);
   }
 
@@ -2124,7 +2124,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvRealKeyEvent(
   MOZ_ASSERT_IF(aEvent.mMessage == eKeyPress,
                 aEvent.AreAllEditCommandsInitialized());
 
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("RecvRealKeyEvent")) {
     recordreplay::OnKeyboardEvent(this, aEvent);
   }
 
@@ -3741,7 +3741,7 @@ NS_IMETHODIMP BrowserChild::OnLocationChange(nsIWebProgress* aWebProgress,
         "Toplevel content BrowsingContext which isn't GetBrowsingContext()?");
 
     // Record top-level document navigation in the browser child.
-    if (recordreplay::IsRecordingOrReplaying()) {
+    if (recordreplay::IsRecordingOrReplaying("OnLocationChange")) {
       recordreplay::OnLocationChange(this, aLocation, aFlags);
     }
 

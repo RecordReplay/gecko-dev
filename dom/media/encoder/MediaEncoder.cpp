@@ -661,7 +661,7 @@ already_AddRefed<MediaEncoder> MediaEncoder::CreateEncoder(
   AUTO_PROFILER_LABEL("MediaEncoder::CreateEncoder", OTHER);
 
   // Media encoding isn't supported when recording/replaying.
-  if (recordreplay::IsRecordingOrReplaying()) {
+  if (recordreplay::IsRecordingOrReplaying("MediaEncoder::CreateEncoder")) {
     recordreplay::ReportUnsupportedFeature("Media encoding", 706);
     return nullptr;
   }

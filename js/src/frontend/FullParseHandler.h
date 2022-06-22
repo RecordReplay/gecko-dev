@@ -1091,7 +1091,7 @@ class FullParseHandler {
   bool disableWarnings() const {
     // Full parsing occurs at non-deterministic points when recording/replaying,
     // so warnings are not emitted.
-    return mozilla::recordreplay::IsRecordingOrReplaying();
+    return mozilla::recordreplay::IsRecordingOrReplaying("FullParseHandler::disableWarnings");
   }
 
   bool canSkipLazyInnerFunctions() { return !!lazyOuterFunction_; }
