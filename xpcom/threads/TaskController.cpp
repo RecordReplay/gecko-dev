@@ -423,6 +423,13 @@ void TaskController::ProcessPendingMTTask(bool aMayWait) {
   MOZ_ASSERT(NS_IsMainThread());
   MutexAutoLock lock(mGraphMutex);
 
+  // [RecordReplay-Diagnostic]
+  // Mismatch with MaybePokeCC
+  // https://github.com/RecordReplay/backend/issues/4404
+  mozilla::recordreplay::RecordReplayAssert(
+    "ProcessPendingMTTask: aMayWait=%s",
+    aMayWait ? "yes" : "no");
+
   for (;;) {
     // We only ever process one event here. However we may sometimes
     // not actually process a real event because of suspended tasks.
@@ -451,6 +458,11 @@ void TaskController::ProcessPendingMTTask(bool aMayWait) {
   if (mMayHaveMainThreadTask) {
     EnsureMainThreadTasksScheduled();
   }
+
+  // [RecordReplay-Diagnostic]
+  // Mismatch with MaybePokeCC
+  // https://github.com/RecordReplay/backend/issues/4404
+  mozilla::recordreplay::RecordReplayAssert("ProcessPendingMTTask: End");
 }
 
 void TaskController::ReprioritizeTask(Task* aTask, uint32_t aPriority) {

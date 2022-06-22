@@ -17,6 +17,7 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/Telemetry.h"     // for Telemetry
 #include "mozilla/dom/DocGroup.h"  // for DocGroup
+#include "mozilla/RecordReplay.h"
 #include "nsCRTGlue.h"
 #include "nsError.h"
 
@@ -118,6 +119,10 @@ imgRequestProxy::imgRequestProxy()
       mValidating(false),
       mHadListener(false),
       mHadDispatch(false) {
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::RegisterThing(this);
+
   /* member initializers and constructor code */
   LOG_FUNC(gImgLog, "imgRequestProxy::imgRequestProxy");
 }
@@ -161,6 +166,9 @@ imgRequestProxy::~imgRequestProxy() {
 
   RemoveFromLoadGroup();
   LOG_FUNC(gImgLog, "imgRequestProxy::~imgRequestProxy");
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::UnregisterThing(this);
 }
 
 nsresult imgRequestProxy::Init(imgRequest* aOwner, nsILoadGroup* aLoadGroup,
@@ -309,6 +317,13 @@ void imgRequestProxy::AddToOwner(Document* aLoadingDocument) {
 
 void imgRequestProxy::RemoveFromOwner(nsresult aStatus) {
   imgRequest* owner = GetOwner();
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  mozilla::recordreplay::RecordReplayAssert(
+    "imgRequestProcy::RemoveFromOwner owner=%d mValidating=%s",
+    owner ? mozilla::recordreplay::ThingIndex(owner) : -1,
+    mValidating ? "yes" : "no");
+
   if (owner) {
     if (mValidating) {
       imgCacheValidator* validator = owner->GetValidator();

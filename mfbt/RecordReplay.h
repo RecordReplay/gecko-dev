@@ -330,6 +330,10 @@ MFBT_API void AddProfilerEvent(const char* aEvent, const char* aJSON);
 // Label executable code with a kind. Used while profiling.
 MFBT_API void LabelExecutableCode(const void* aCode, size_t aSize, const char* aKind);
 
+// Set a callback to invoke whenever a fault is encountered.
+typedef bool (*FaultCallback)(void** aPRIP, void* aRBP, void* aRSP);
+MFBT_API void SetFaultCallback(FaultCallback aCallback);
+
 ///////////////////////////////////////////////////////////////////////////////
 // Gecko interface
 ///////////////////////////////////////////////////////////////////////////////

@@ -40,6 +40,7 @@
 #include "nsProperties.h"
 
 #include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/SizeOfState.h"
 
 using namespace mozilla;
@@ -71,6 +72,9 @@ imgRequest::imgRequest(imgLoader* aLoader, const ImageCacheKey& aCacheKey)
       mNewPartPending(false),
       mHadInsecureRedirect(false) {
   LOG_FUNC(gImgLog, "imgRequest::imgRequest()");
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  mozilla::recordreplay::RegisterThing(this);
 }
 
 imgRequest::~imgRequest() {
@@ -81,6 +85,9 @@ imgRequest::~imgRequest() {
     LOG_FUNC_WITH_PARAM(gImgLog, "imgRequest::~imgRequest()", "keyuri", mURI);
   } else
     LOG_FUNC(gImgLog, "imgRequest::~imgRequest()");
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  mozilla::recordreplay::UnregisterThing(this);
 }
 
 nsresult imgRequest::Init(nsIURI* aURI, nsIURI* aFinalURI,

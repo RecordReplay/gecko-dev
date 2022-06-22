@@ -1670,6 +1670,12 @@ void nsJSContext::LowMemoryGC() {
 
 // static
 void nsJSContext::MaybePokeCC() {
+
+  // [RecordReplay-Diagnostic]
+  // Mismatch with MaybePokeCC
+  // https://github.com/RecordReplay/backend/issues/4404
+  mozilla::recordreplay::RecordReplayAssert("nsJSContext::MaybePokeCC");
+
   sScheduler.MaybePokeCC(TimeStamp::Now(), nsCycleCollector_suspectedCount());
 }
 

@@ -1188,8 +1188,9 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult) {
   // Mismatch with MaybePokeCC
   // https://github.com/RecordReplay/backend/issues/4404
   mozilla::recordreplay::RecordReplayAssert(
-    "nsThread::ProcessNextEvent(): callScriptObserver=%s",
-    callScriptObserver ? "true" : "false"
+    "nsThread::ProcessNextEvent(): callScriptObserver=%s mScriptObserver=%s",
+    callScriptObserver ? "yes" : "no",
+    mScriptObserver ? "yes" : "no"
   );
 
   if (callScriptObserver) {

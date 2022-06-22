@@ -1510,8 +1510,26 @@ void nsImageLoadingContent::ClearCurrentRequest(
   // Clean up the request.
   UntrackImage(mCurrentRequest, aNonvisibleAction);
   ClearScriptedRequests(CURRENT_REQUEST, aReason);
+
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  size_t thingIndex = recordreplay::ThingIndex(mCurrentRequest.get());
+  recordreplay::RecordReplayAssert(
+    "nsImageLoadingContent::ClearCurrentRequest before CancelAndForgetObserver %u",
+    thingIndex);
+
   mCurrentRequest->CancelAndForgetObserver(aReason);
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::RecordReplayAssert(
+    "nsImageLoadingContent::ClearCurrentRequest after CancelAndForgetObserver %u",
+    thingIndex);
+
   mCurrentRequest = nullptr;
+
+  // Diagnostic for https://github.com/RecordReplay/backend/issues/822
+  recordreplay::RecordReplayAssert(
+    "nsImageLoadingContent::ClearCurrentRequest after ~imgRequestProxy");
   mCurrentRequestFlags = 0;
 }
 

@@ -95,7 +95,9 @@ namespace recordreplay {
   Macro(InternalNotifyActivity, (), ())                                        \
   Macro(AddProfilerEvent, (const char* aEvent, const char* aJSON), (aEvent, aJSON)) \
   Macro(LabelExecutableCode, (const void* aCode, size_t aSize, const char* aKind), \
-        (aCode, aSize, aKind))
+        (aCode, aSize, aKind))                                                 \
+  Macro(SetFaultCallback, (FaultCallback aCallback), (aCallback))
+
 // clang-format on
 
 #define DECLARE_SYMBOL(aName, aReturnType, aFormals, _) \
