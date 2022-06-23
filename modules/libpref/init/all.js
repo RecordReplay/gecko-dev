@@ -836,6 +836,10 @@ pref("devtools.recordreplay.user-token", "");
 // Whether to upload source maps and original sources to the cloud server.
 pref("devtools.recordreplay.uploadSourceMaps", true);
 
+// Whether to skip the logic in the rr `onNewScript` handler.
+// Defaults to false (don't skip, do execute logic).
+pref("devtools.recordreplay.diagnostic.skipOnNewScript", false);
+
 // Set this to submit recordings to the test server instead of replaying them.
 pref("devtools.recordreplay.submitTestRecordings", false);
 
