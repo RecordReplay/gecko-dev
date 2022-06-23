@@ -1157,7 +1157,7 @@ class MozPromise : public MozPromiseBase {
     // Avoid calling AssertIsDead when recording/replaying, as the point when
     // this function runs can vary between recording and replaying,
     // and AssertIsDead takes an ordered lock.
-    if (!recordreplay::IsRecordingOrReplaying("~MozPromise")) {
+    if (!recordreplay::IsRecordingOrReplaying()) {
       AssertIsDead();
     }
 

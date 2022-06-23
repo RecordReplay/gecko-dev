@@ -252,6 +252,6 @@ bool IdlePeriodState::ShouldGetIdleToken() {
          XRE_IsContentProcess() &&
          // Disable when recording/replaying, as IdleSchedulerChild uses mutable
          // shared memory which needs special handling.
-         !recordreplay::IsRecordingOrReplaying("IdlePeriodState::ShouldGetIdleToken");
+         !recordreplay::IsRecordingOrReplaying();
 }
 }  // namespace mozilla

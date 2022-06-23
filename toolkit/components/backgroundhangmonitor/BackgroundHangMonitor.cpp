@@ -650,7 +650,7 @@ void BackgroundHangMonitor::Startup() {
   }
 
   // Disable when recording/replaying, as with other kinds of telemetry.
-  if (recordreplay::IsRecordingOrReplaying("BackgroundHangMonitor::Startup")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     BackgroundHangManager::sDisabled = true;
     return;
   }

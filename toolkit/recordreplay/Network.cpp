@@ -63,7 +63,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(ResponseRequestObserver)
 
 NS_IMETHODIMP
 ResponseRequestObserver::OnStartRequest(nsIRequest* request) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("Network::ResponseRequestObserver::OnStartRequest"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
 
   nsCOMPtr<nsIIdentChannel> channel = do_QueryInterface(request);
   nsCOMPtr<nsIObserverService> obsService = mozilla::services::GetObserverService();
@@ -84,7 +84,7 @@ ResponseRequestObserver::OnStopRequest(nsIRequest* request, nsresult status) {
 }
 
 already_AddRefed<nsIStreamListener> WrapNetworkStreamListener(nsIStreamListener* listener) {
-  if (!IsRecordingOrReplaying("Network::WrapNetworkStreamListener")) {
+  if (!IsRecordingOrReplaying()) {
     return nsCOMPtr(listener).forget();
   }
 
@@ -412,7 +412,7 @@ already_AddRefed<nsIInputStream> WrapNetworkRequestBodyStream(nsIHttpChannel* aC
                                                               int64_t aLength) {
   nsCOMPtr stream(aStream);
 
-  if (!IsRecordingOrReplaying("Network::WrapNetworkRequestBodyStream")) {
+  if (!IsRecordingOrReplaying()) {
     return stream.forget();
   }
 

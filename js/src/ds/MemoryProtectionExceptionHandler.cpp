@@ -126,7 +126,7 @@ bool MemoryProtectionExceptionHandler::isDisabled() {
 #elif defined(__wasi__)
   return true;
 #else
-  if (mozilla::recordreplay::IsRecordingOrReplaying("MemoryProtectionExceptionHandler::isDisabled")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return true;
   }
   return false;

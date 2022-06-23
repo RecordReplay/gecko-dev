@@ -1818,7 +1818,7 @@ enum ComparatorMatchResult {
  */
 static ComparatorMatchResult MatchNumericComparator(JSContext* cx,
                                                     JSObject* obj) {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("js::Array::MatchNumericComparator")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return Match_None;
   }
 

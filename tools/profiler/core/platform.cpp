@@ -5170,7 +5170,7 @@ void profiler_start(PowerOfTwo32 aCapacity, double aInterval,
   // and there's no reasonable justification for running gecko
   // profiler while recording or replaying.
   // See issue https://github.com/RecordReplay/gecko-dev/issues/702
-  if (recordreplay::IsRecordingOrReplaying("profiler_start")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

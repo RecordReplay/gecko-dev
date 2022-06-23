@@ -2177,7 +2177,7 @@ bool BaselineCodeGen<Handler>::emit_LoopHead() {
 
 template <typename Handler>
 bool BaselineCodeGen<Handler>::emit_ExecutionProgress() {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("BaselineCodeGen<Handler>::emit_ExecutionProgress")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     if (ExecutionProgressHook) {
       Register scratch = R0.scratchReg();
       loadScript(scratch);
@@ -6975,7 +6975,7 @@ bool BaselineInterpreterGenerator::generate(BaselineInterpreter& interpreter) {
     }
 
     // Register code with the record/replay profiler.
-    if (mozilla::recordreplay::IsRecordingOrReplaying("BaselineInterpreterGenerator::generate") || mozilla::recordreplay::IsProfiling()) {
+    if (mozilla::recordreplay::IsRecordingOrReplaying() || mozilla::recordreplay::IsProfiling()) {
       mozilla::recordreplay::LabelExecutableCode(code->raw(), code->instructionsSize(),
                                                  "SpiderMonkey:BaselineInterpreter");
     }

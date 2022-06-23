@@ -235,7 +235,7 @@ static bool GetBoolEnvVar(const char* name, const char* helpMessage) {
 bool js::Nursery::init(AutoLockGCBgAlloc& lock) {
   // The nursery is permanently disabled when recording or replaying. Nursery
   // collections may occur at non-deterministic points in execution.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("js::Nursery::init")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return true;
   }
 
@@ -265,7 +265,7 @@ js::Nursery::~Nursery() { disable(); }
 void js::Nursery::enable() {
   MOZ_ASSERT(isEmpty());
   MOZ_ASSERT(!gc->isVerifyPreBarriersEnabled());
-  if (isEnabled() || mozilla::recordreplay::IsRecordingOrReplaying("js::Nursery::enable")) {
+  if (isEnabled() || mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

@@ -5852,7 +5852,7 @@ bool JS::AutoDebuggerJobQueueInterruption::init(JSContext* cx) {
   // at different places between recording and replay. Because nested event
   // loops aren't pushed in debugger callbacks when recording/replaying, the
   // job queue does not need to be saved during debugger callbacks.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("JS::AutoDebuggerJobQueueInterruption::init")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return true;
   }
 
@@ -5863,7 +5863,7 @@ bool JS::AutoDebuggerJobQueueInterruption::init(JSContext* cx) {
 }
 
 void JS::AutoDebuggerJobQueueInterruption::runJobs() {
-  if (!mozilla::recordreplay::IsRecordingOrReplaying("JS::AutoDebuggerJobQueueInterruption::runJobs")) {
+  if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
     JS::AutoSaveExceptionState ases(cx);
     cx->jobQueue->runJobs(cx);
   }

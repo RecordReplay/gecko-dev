@@ -131,18 +131,18 @@ bool CompositableParentManager::ReceiveCompositableUpdate(
             tileDesc.get_TexturedTileDescriptor();
 
         RefPtr<TextureHost> texture;
-        if (recordreplay::IsRecordingOrReplaying("CompositableParentManager::ReceiveCompositableUpdate")) {
+        if (recordreplay::IsRecordingOrReplaying()) {
           texture = recordreplay::CreateTextureHost(texturedDesc.textureChild());
         } else {
           texture = TextureHost::AsTextureHost(texturedDesc.textureParent());
         }
-        if (texture && !recordreplay::IsRecordingOrReplaying("CompositableParentManager::ReceiveCompositableUpdate")) {
+        if (texture && !recordreplay::IsRecordingOrReplaying()) {
           texture->SetLastFwdTransactionId(mFwdTransactionId);
           // Make sure that each texture was handled by the compositable
           // because the recycling logic depends on it.
           MOZ_ASSERT(texture->NumCompositableRefs() > 0);
         }
-        if (recordreplay::IsRecordingOrReplaying("CompositableParentManager::ReceiveCompositableUpdate")) {
+        if (recordreplay::IsRecordingOrReplaying()) {
           if (texturedDesc.textureOnWhiteChild().isSome()) {
             texture = recordreplay::CreateTextureHost(texturedDesc.textureOnWhiteChild().ref());
           }
@@ -177,7 +177,7 @@ bool CompositableParentManager::ReceiveCompositableUpdate(
       AutoTArray<CompositableHost::TimedTexture, 4> textures;
       for (auto& timedTexture : op.textures()) {
         CompositableHost::TimedTexture* t = textures.AppendElement();
-        if (recordreplay::IsRecordingOrReplaying("CompositableParentManager::ReceiveCompositableUpdate")) {
+        if (recordreplay::IsRecordingOrReplaying()) {
           t->mTexture = recordreplay::CreateTextureHost(timedTexture.textureChild());
         } else {
           t->mTexture = TextureHost::AsTextureHost(timedTexture.textureParent());
@@ -215,7 +215,7 @@ bool CompositableParentManager::ReceiveCompositableUpdate(
       const OpUseComponentAlphaTextures& op =
           aDetail.get_OpUseComponentAlphaTextures();
       RefPtr<TextureHost> texOnBlack, texOnWhite;
-      if (recordreplay::IsRecordingOrReplaying("CompositableParentManager::ReceiveCompositableUpdate")) {
+      if (recordreplay::IsRecordingOrReplaying()) {
         texOnBlack = recordreplay::CreateTextureHost(op.textureOnBlackChild());
         texOnWhite = recordreplay::CreateTextureHost(op.textureOnWhiteChild());
       } else {

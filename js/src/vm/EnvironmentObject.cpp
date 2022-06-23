@@ -2663,7 +2663,7 @@ void DebugEnvironments::takeFrameSnapshot(
 
   // Disable frame snapshots when recording/replaying. These aren't used and
   // this function has caused crashes that seem unrelated to recording/replaying.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("DebugEnvironments::takeFrameSnapshot")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

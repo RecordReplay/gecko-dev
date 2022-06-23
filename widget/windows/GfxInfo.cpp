@@ -770,7 +770,7 @@ nsresult GfxInfo::Init() {
   // if found.
   // For now we skip this when recording/replaying, because the GPU won't be
   // used and because calling CreateDXGIFactory isn't supported yet.
-  if (mHasDualGPU && !recordreplay::IsRecordingOrReplaying("GfxInfo::Init")) {
+  if (mHasDualGPU && !recordreplay::IsRecordingOrReplaying()) {
     nsModuleHandle dxgiModule(LoadLibrarySystem32(L"dxgi.dll"));
     decltype(CreateDXGIFactory)* createDXGIFactory =
         (decltype(CreateDXGIFactory)*)GetProcAddress(dxgiModule,

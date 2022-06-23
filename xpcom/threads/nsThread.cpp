@@ -1331,7 +1331,7 @@ void NS_DispatchMemoryPressure();
 void nsThread::DoMainThreadSpecificProcessing() const {
   MOZ_ASSERT(mIsMainThread);
 
-  if (recordreplay::IsRecordingOrReplaying("nsThread::DoMainThreadSpecificProcessing")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     recordreplay::MaybeCreateCheckpoint();
   }
 

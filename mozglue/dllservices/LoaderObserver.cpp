@@ -64,7 +64,7 @@ void LoaderObserver::OnEndDllLoad(void* aContext, NTSTATUS aNtStatus,
                                   ModuleLoadInfo&& aModuleLoadInfo) {
   // LoaderObserver functionality is suppressed for now when recording/replaying,
   // as DLL load events will not be triggered when replaying.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("LoaderObserver::OnEndDllLoad")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 
@@ -118,7 +118,7 @@ void LoaderObserver::Forward(nt::LoaderObserver* aNext) {
 }
 
 void LoaderObserver::Forward(detail::DllServicesBase* aNext) {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("LoaderObserver::Forward")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

@@ -178,14 +178,14 @@ class LocalAccessible : public nsISupports, public Accessible {
     // When recording or replaying, use an ID which will be consistent when
     // recording/replaying (pointer values are not consistent), so that IPC
     // messages from the parent process can be handled when replaying.
-    if (recordreplay::IsRecordingOrReplaying("UniqueID")) {
+    if (recordreplay::IsRecordingOrReplaying()) {
       return reinterpret_cast<void*>(recordreplay::ThingIndex(this));
     }
     return static_cast<void*>(this);
   }
 
   static LocalAccessible* FromUniqueID(uint64_t aId) {
-    if (recordreplay::IsRecordingOrReplaying("FromUniqueID")) {
+    if (recordreplay::IsRecordingOrReplaying()) {
       return reinterpret_cast<LocalAccessible*>(recordreplay::IndexThing(aId));
     }
     return reinterpret_cast<LocalAccessible*>(aId);

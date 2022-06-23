@@ -575,7 +575,7 @@ static void DoInitTraceLog(const char* aProcType) {
 
   // Don't trace refcounts while recording or replaying, these are not
   // required to match up between the two executions.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("nsTraceRefcnt::DoInitTraceLog")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

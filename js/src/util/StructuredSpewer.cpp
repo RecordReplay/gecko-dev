@@ -41,7 +41,7 @@ bool StructuredSpewer::ensureInitializationAttempted() {
   if (!outputInitializationAttempted_) {
     // We cannot call getenv during record replay, so disable
     // the spewer.
-    if (!mozilla::recordreplay::IsRecordingOrReplaying("StructuredSpewer::ensureInitializationAttempted")) {
+    if (!mozilla::recordreplay::IsRecordingOrReplaying()) {
       char filename[2048] = {0};
       // For ease of use with Treeherder
       if (getenv("SPEW_UPLOAD") && getenv("MOZ_UPLOAD_DIR")) {
@@ -106,7 +106,7 @@ bool StructuredSpewer::enabled(JSScript* script) {
   }
 
   // We cannot call getenv under record/replay.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("StructuredSpewer::enabled")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return false;
   }
   static const char* pattern = getenv("SPEW_FILTER");

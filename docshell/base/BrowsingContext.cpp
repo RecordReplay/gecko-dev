@@ -3011,7 +3011,7 @@ mozilla::dom::TouchEventsOverride BrowsingContext::TouchEventsOverride() const {
 // We map `watchedByDevTools` WebIDL attribute to `watchedByDevToolsInternal`
 // BC field. And we map it to the top level BrowsingContext.
 bool BrowsingContext::WatchedByDevTools() {
-  if (recordreplay::IsRecordingOrReplaying("WatchedByDevTools")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return true;
   }
   return Top()->GetWatchedByDevToolsInternal();

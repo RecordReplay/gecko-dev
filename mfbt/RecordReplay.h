@@ -80,10 +80,7 @@ extern MFBT_DATA bool gIsReplaying;
 extern MFBT_DATA bool gIsProfiling;
 
 // Get the kind of recording/replaying process this is, if any.
-MFBT_API bool InternalIsRecordingOrReplaying(const char* aLabel);
-static inline bool IsRecordingOrReplaying(const char* aLabel) {
-  return InternalIsRecordingOrReplaying(aLabel);
-}
+static inline bool IsRecordingOrReplaying() { return gIsRecordingOrReplaying; }
 static inline bool IsRecording() { return gIsRecording; }
 static inline bool IsReplaying() { return gIsReplaying; }
 
@@ -391,7 +388,7 @@ bool BuildJSON(size_t aNumProperties,
 #  define MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(aName, aFormals, aActuals) \
     MFBT_API void Internal##aName aFormals;                              \
     static inline void aName aFormals {                                  \
-      if (IsRecordingOrReplaying("RecordReplayWrapper")) {               \
+      if (IsRecordingOrReplaying()) {                                    \
         Internal##aName aActuals;                                        \
       }                                                                  \
     }
@@ -400,7 +397,7 @@ bool BuildJSON(size_t aNumProperties,
                                          aFormals, aActuals)                \
     MFBT_API aReturnType Internal##aName aFormals;                          \
     static inline aReturnType aName aFormals {                              \
-      if (IsRecordingOrReplaying("RecordReplayWrapper")) {                  \
+      if (IsRecordingOrReplaying()) {                                       \
         return Internal##aName aActuals;                                    \
       }                                                                     \
       return aDefaultValue;                                                 \
@@ -457,7 +454,7 @@ MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(AddOrderedSRWLock,
 MFBT_API void InternalRecordReplayAssert(const char* aFormat, va_list aArgs);
 
 static inline void RecordReplayAssert(const char* aFormat, ...) {
-  if (IsRecordingOrReplaying("RecordReplayAssert")) {
+  if (IsRecordingOrReplaying()) {
     va_list ap;
     va_start(ap, aFormat);
     InternalRecordReplayAssert(aFormat, ap);
@@ -468,7 +465,7 @@ static inline void RecordReplayAssert(const char* aFormat, ...) {
 MFBT_API void InternalPrintLog(const char* aFormat, va_list aArgs);
 
 static inline void PrintLog(const char* aFormat, ...) {
-  if (IsRecordingOrReplaying("RecordReplay::PrintLog")) {
+  if (IsRecordingOrReplaying()) {
     va_list ap;
     va_start(ap, aFormat);
     InternalPrintLog(aFormat, ap);
@@ -479,7 +476,7 @@ static inline void PrintLog(const char* aFormat, ...) {
 MFBT_API void InternalDiagnostic(const char* aFormat, va_list aArgs);
 
 static inline void Diagnostic(const char* aFormat, ...) {
-  if (IsRecordingOrReplaying("RecordReplay::Diagnostic")) {
+  if (IsRecordingOrReplaying()) {
     va_list ap;
     va_start(ap, aFormat);
     InternalDiagnostic(aFormat, ap);

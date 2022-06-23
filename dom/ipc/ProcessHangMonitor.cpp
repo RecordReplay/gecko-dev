@@ -339,7 +339,7 @@ bool HangMonitorChild::InterruptCallback() {
   // The interrupt callback is triggered at non-deterministic points when
   // recording/replaying, so don't perform any operations that can interact
   // with the recording.
-  if (recordreplay::IsRecordingOrReplaying("HangMonitorChild::InterruptCallback")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return true;
   }
 

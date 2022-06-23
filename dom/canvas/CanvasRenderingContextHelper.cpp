@@ -167,7 +167,7 @@ already_AddRefed<nsISupports> CanvasRenderingContextHelper::GetContext(
   if (!CanvasUtils::GetCanvasContextType(aContextId, &contextType))
     return nullptr;
 
-  if (recordreplay::IsRecordingOrReplaying("CanvasRenderingContextHelper::GetContext")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     // GL/GPU contexts are not supported when recording/replaying.
     if (contextType == CanvasContextType::WebGL1 ||
         contextType == CanvasContextType::WebGL2 ||

@@ -221,7 +221,7 @@ void HelperThread::ThreadMain(InternalThreadPool* pool, HelperThread* helper) {
 }
 
 void HelperThread::ensureRegisteredWithProfiler() {
-  if (profilingStack || mozilla::recordreplay::IsRecordingOrReplaying("HelperThread::ensureRegisteredWithProfiler")) {
+  if (profilingStack || mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

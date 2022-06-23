@@ -50,7 +50,7 @@ static StaticInfallibleVector<RecordingOperation> gRecordingOperations;
 static StaticMutex gRecordingOperationsMutex;
 
 void AddRecordingOperation(const char* aKind, const char* aValue) {
-  if (!recordreplay::IsRecordingOrReplaying("JSControl::AddRecordingOperation")) {
+  if (!recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 
@@ -223,24 +223,24 @@ extern "C" {
 
 MOZ_EXPORT void RecordReplayInterface_BeginContentParse(
     const void* aToken, const char* aURL, const char* aContentType) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("JSControl::RecordReplayInterface_BeginContentParse"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
   MOZ_RELEASE_ASSERT(aToken);
 }
 
 MOZ_EXPORT void RecordReplayInterface_AddContentParseData8(
     const void* aToken, const Utf8Unit* aUtf8Buffer, size_t aLength) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("JSControl::RecordReplayInterface_AddContentParse8"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
   MOZ_RELEASE_ASSERT(aToken);
 }
 
 MOZ_EXPORT void RecordReplayInterface_AddContentParseData16(
     const void* aToken, const char16_t* aBuffer, size_t aLength) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("JSControl::RecordReplayInterface_AddContentParseData16"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
   MOZ_RELEASE_ASSERT(aToken);
 }
 
 MOZ_EXPORT void RecordReplayInterface_EndContentParse(const void* aToken) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("JSControl::RecordReplayInterface_EndContentParse"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
   MOZ_RELEASE_ASSERT(aToken);
 }
 
@@ -990,7 +990,7 @@ static void PossibleBreakpointsCallback(const char* aSourceId) {
 ///////////////////////////////////////////////////////////////////////////////
 
 bool DefineRecordReplayControlObject(JSContext* aCx, JS::HandleObject object) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("JSControl::DefineRecordReplayControlObject"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
 
   RootedObject staticObject(aCx, JS_NewObject(aCx, nullptr));
   if (!staticObject ||
@@ -1042,7 +1042,7 @@ void OnRepaintNeeded(const char* aWhy) {
 void OnTestCommand(const char* aString) {
   // Ignore commands to finish the current test if we aren't recording/replaying.
   if (!strcmp(aString, "RecReplaySendAsyncMessage Example__Finished") &&
-      !IsRecordingOrReplaying("JSControl::OnTestCommand")) {
+      !IsRecordingOrReplaying()) {
     return;
   }
 

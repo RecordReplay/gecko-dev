@@ -913,14 +913,14 @@ void CompositorBridgeParent::CompositeToTarget(VsyncId aId, DrawTarget* aTarget,
 
   mCompositionManager->ComputeRotation();
 
-  SampleTime time = recordreplay::IsRecordingOrReplaying("CompositorBridgeParent::CompositeToTarget")
+  SampleTime time = recordreplay::IsRecordingOrReplaying()
     ? SampleTime::FromTest(recordreplay::CompositeTime())
     : (mTestTime ? SampleTime::FromTest(*mTestTime)
                  : mCompositorScheduler->GetLastComposeTime());
   bool requestNextFrame =
       mCompositionManager->TransformShadowTree(time, mVsyncRate);
 
-  if (requestNextFrame && !recordreplay::IsRecordingOrReplaying("CompositorBridgeParent::CompositeToTarget")) {
+  if (requestNextFrame && !recordreplay::IsRecordingOrReplaying()) {
     ScheduleComposition();
   }
 
@@ -1401,7 +1401,7 @@ void CompositorBridgeParent::InitializeLayerManager(
 void CompositorBridgeParent::SetLayerManager(HostLayerManager* aLayerManager) {
   mLayerManager = aLayerManager;
 
-  if (recordreplay::IsRecordingOrReplaying("CompositorBridgeParent::SetLayerManager")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     mCompositionManager = new AsyncCompositionManager(this, mLayerManager);
   }
 }

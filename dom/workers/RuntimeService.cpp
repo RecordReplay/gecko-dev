@@ -511,7 +511,7 @@ bool InterruptCallback(JSContext* aCx) {
   // As with the main thread, the interrupt callback is triggered
   // non-deterministically when recording/replaying, so return early to avoid
   // performing any recorded events.
-  if (recordreplay::IsRecordingOrReplaying("InterruptCallback")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return true;
   }
 

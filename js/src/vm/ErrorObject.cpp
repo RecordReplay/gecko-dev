@@ -213,7 +213,7 @@ static void exn_finalize(JSFreeOp* fop, JSObject* obj) {
 uint32_t js::NewTimeWarpTarget(JSContext* cx) {
   // When recording/replaying and running on the main thread, get a counter
   // which the devtools can use to warp to this point in the future.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("js::NewTimeWarpTarget") &&
+  if (mozilla::recordreplay::IsRecordingOrReplaying() &&
       !cx->runtime()->parentRuntime) {
     uint64_t warpTarget = mozilla::recordreplay::NewTimeWarpTarget();
 

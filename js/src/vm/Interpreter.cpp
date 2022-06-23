@@ -755,7 +755,7 @@ bool js::ExecuteKernel(JSContext* cx, HandleScript script,
     script->setHasRunOnce();
   }
 
-  if (script->isEmpty() && !mozilla::recordreplay::IsRecordingOrReplaying("js::ExecuteKernel")) {
+  if (script->isEmpty() && !mozilla::recordreplay::IsRecordingOrReplaying()) {
     result.setUndefined();
     return true;
   }

@@ -1633,7 +1633,7 @@ nsresult ScriptLoader::StartLoad(ScriptLoadRequest* aRequest) {
       !js::GlobalHasInstrumentation(globalObject->GetGlobalJSObject()) &&
       // When recording/replaying, scripts have instrumentation when replaying
       // but not when recording.
-      !recordreplay::IsRecordingOrReplaying("ScriptLoader::StartLoad") &&
+      !recordreplay::IsRecordingOrReplaying() &&
       // Bug 1436400: no bytecode cache support for modules yet.
       !aRequest->IsModuleRequest()) {
     MOZ_ASSERT(!aRequest->GetWebExtGlobal(),

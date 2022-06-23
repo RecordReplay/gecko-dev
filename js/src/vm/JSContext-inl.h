@@ -258,7 +258,7 @@ MOZ_ALWAYS_INLINE bool CallNativeImpl(JSContext* cx, NativeImpl impl,
 MOZ_ALWAYS_INLINE bool CheckForInterrupt(JSContext* cx) {
   MOZ_ASSERT(!cx->isExceptionPending());
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying("js::CheckForInterrupt") &&
+  if (mozilla::recordreplay::IsRecordingOrReplaying() &&
       cx->runtime()->parentRuntime) {
     // Let the record/replay driver know when a long-running operation might be
     // taking place while running off the main thread.

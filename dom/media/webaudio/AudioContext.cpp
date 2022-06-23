@@ -253,7 +253,7 @@ already_AddRefed<AudioContext> AudioContext::Constructor(
     const GlobalObject& aGlobal, const AudioContextOptions& aOptions,
     ErrorResult& aRv) {
   // Audio playback is not yet supported when recording or replaying.
-  if (recordreplay::IsRecordingOrReplaying("AudioContext::Constructor")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     recordreplay::ReportUnsupportedFeature("WebAudio", 55);
     aRv.Throw(NS_ERROR_NOT_AVAILABLE);
     return nullptr;
@@ -307,7 +307,7 @@ already_AddRefed<AudioContext> AudioContext::Constructor(
     const GlobalObject& aGlobal, uint32_t aNumberOfChannels, uint32_t aLength,
     float aSampleRate, ErrorResult& aRv) {
   // Audio playback is not yet supported when recording or replaying.
-  if (recordreplay::IsRecordingOrReplaying("AudioContext::Constructor2")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     recordreplay::ReportUnsupportedFeature("WebAudio", 55);
     aRv.Throw(NS_ERROR_NOT_AVAILABLE);
     return nullptr;

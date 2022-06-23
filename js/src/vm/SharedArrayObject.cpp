@@ -254,7 +254,7 @@ SharedArrayBufferObject* SharedArrayBufferObject::New(JSContext* cx,
                                                       size_t length,
                                                       HandleObject proto) {
   // SharedArrayBuffer is not supported when recording/replaying.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("SharedArrayObject::New")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     mozilla::recordreplay::ReportUnsupportedFeature("SharedArrayBuffer", 499);
     JS_ReportErrorASCII(cx, "Creating SharedArrayBuffer is not supported when recording/replaying");
     return nullptr;
