@@ -159,7 +159,7 @@ void js::DateTimeInfo::internalResetTimeZone(ResetTimeZoneMode mode) {
   }
 
   // Don't reset time zone status when recording/replaying, see DateTimeInfo().
-  if (mozilla::recordreplay::IsRecordingOrReplaying("js::DateTimeInfo::internalResetTimeZone")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 
@@ -230,7 +230,7 @@ js::DateTimeInfo::DateTimeInfo() {
   // When recording/replaying the timezone is intialized on startup and never
   // changes afterwards, to avoid problems when updating the time zone
   // non-deterministically from different threads.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("js::DateTimeInfo::DateTimeInfo")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     updateTimeZone();
   }
 }

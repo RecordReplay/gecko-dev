@@ -131,7 +131,7 @@ extern size_t PRMJ_FormatTime(char* buf, size_t buflen, const char* fmt,
 
 #  include <intrin.h>
 static __inline uint64_t ReadTimestampCounter(void) {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("ReadTimestampCounter")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return 0;
   }
   return __rdtsc();
@@ -140,7 +140,7 @@ static __inline uint64_t ReadTimestampCounter(void) {
 #elif defined(__i386__)
 
 static __inline__ uint64_t ReadTimestampCounter(void) {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("ReadTimestampCounter")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return 0;
   }
   uint64_t x;
@@ -151,7 +151,7 @@ static __inline__ uint64_t ReadTimestampCounter(void) {
 #elif defined(__x86_64__)
 
 static __inline__ uint64_t ReadTimestampCounter(void) {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("ReadTimestampCounter")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     return 0;
   }
   unsigned hi, lo;

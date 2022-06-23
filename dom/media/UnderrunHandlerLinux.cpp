@@ -24,7 +24,7 @@ void InstallSoftRealTimeLimitHandler() {
   // For now this is disabled when recording/replaying, as the
   // tests of the sigaction() result will behave differently
   // when replaying.
-  if (recordreplay::IsRecordingOrReplaying("InstallSoftRealTimeLimitHandler")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return;
   }
 

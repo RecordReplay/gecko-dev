@@ -434,7 +434,7 @@ bool wasm::StreamingCompilationAvailable(JSContext* cx) {
          cx->runtime()->offThreadPromiseState.ref().initialized() &&
          CanUseExtraThreads() && cx->runtime()->consumeStreamCallback &&
          cx->runtime()->reportStreamErrorCallback &&
-         !mozilla::recordreplay::IsRecordingOrReplaying("wasm::StreamingCompilationAvailable");
+         !mozilla::recordreplay::IsRecordingOrReplaying();
 }
 
 bool wasm::CodeCachingAvailable(JSContext* cx) {
@@ -4141,7 +4141,7 @@ static bool EnsureStreamSupport(JSContext* cx) {
   // When recording/replaying, promise tasks used by streaming can execute on
   // JS helper threads. These interact with the recording, and are not currently
   // supported.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("wasm::EnsureStreamSupport")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     mozilla::recordreplay::ReportUnsupportedFeature("WasmStreaming", 501);
     JS_ReportErrorASCII(cx,
                         "WebAssembly streaming not supported when recording/replaying");

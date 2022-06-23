@@ -976,7 +976,7 @@ static MOZ_THREAD_LOCAL(uint32_t) gNumRecordReplayAssertMessageContents;
 static std::atomic<bool> gNumRecordReplayAssertMessageContentsInitialized;
 
 AutoRecordReplayAssertMessageContents::AutoRecordReplayAssertMessageContents() {
-  if (recordreplay::IsRecordingOrReplaying("AutoRecordReplayAssertMessageContents::AutoRecordReplayAssertMessageContents")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     if (!gNumRecordReplayAssertMessageContentsInitialized) {
       // Hopefully this won't race...
       gNumRecordReplayAssertMessageContents.init();
@@ -987,13 +987,13 @@ AutoRecordReplayAssertMessageContents::AutoRecordReplayAssertMessageContents() {
 }
 
 AutoRecordReplayAssertMessageContents::~AutoRecordReplayAssertMessageContents() {
-  if (recordreplay::IsRecordingOrReplaying("AutoRecordReplayAssertMessageContents::~AutoRecordReplayAssertMessageContents")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     gNumRecordReplayAssertMessageContents.set(gNumRecordReplayAssertMessageContents.get() - 1);
   }
 }
 
 bool ShouldRecordReplayAssertMessageContents() {
-  if (recordreplay::IsRecordingOrReplaying("ShouldRecordReplayAssertMessageContents")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return gNumRecordReplayAssertMessageContentsInitialized &&
       gNumRecordReplayAssertMessageContents.get() > 0;
   }

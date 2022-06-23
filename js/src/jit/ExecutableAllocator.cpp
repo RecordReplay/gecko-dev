@@ -74,7 +74,7 @@ void* ExecutablePool::alloc(size_t n, CodeKind kind) {
   void* result = m_freePtr;
   m_freePtr += n;
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying("ExecutablePool::alloc") || mozilla::recordreplay::IsProfiling()) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying() || mozilla::recordreplay::IsProfiling()) {
     const char* kindStr = nullptr;
     switch (kind) {
       case CodeKind::Ion:

@@ -159,7 +159,7 @@ NS_IMETHODIMP_(MozExternalRefCountType) SharedThreadPool::Release(void) {
 
   // When recording/replaying this destruction code runs non-deterministically.
   // Rather than forcing this to run deterministically, let the pools leak.
-  if (recordreplay::IsRecordingOrReplaying("SharedThreadPool::Release")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return count;
   }
 

@@ -249,7 +249,7 @@ bool WebGLContext::CreateAndInitGL(
   const FuncScope funcScope(*this, "<Create>");
 
   // WebGL can't be used when recording/replaying.
-  if (recordreplay::IsRecordingOrReplaying("CreateAndInitGL")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     recordreplay::ReportUnsupportedFeature("WebGL", 58);
     FailureReason reason;
     reason.info =

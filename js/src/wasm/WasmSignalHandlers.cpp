@@ -830,7 +830,7 @@ void wasm::EnsureEagerProcessSignalHandlers() {
 
   sAlreadyHandlingTrap.infallibleInit();
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying("EnsureSignalHandlers")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     mozilla::recordreplay::SetFaultCallback(RecordReplayFaultCallback);
     eagerInstallState->success = true;
     return;
@@ -953,7 +953,7 @@ bool wasm::EnsureFullSignalHandlers(JSContext* cx) {
     }
   }
 
-  if (mozilla::recordreplay::IsRecordingOrReplaying("EnsureSignalHandlers")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     cx->wasm().haveSignalHandlers = true;
     return true;
   }

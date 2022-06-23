@@ -187,7 +187,7 @@ FinalizationWitnessService::Make(const char* aTopic, const char16_t* aValue,
                                  JS::MutableHandle<JS::Value> aRetval) {
   // Finalize witnesses are not created when recording or replaying, as
   // finalizations occur non-deterministically in the recording.
-  if (recordreplay::IsRecordingOrReplaying("FinalizationWitnessService::Make")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 

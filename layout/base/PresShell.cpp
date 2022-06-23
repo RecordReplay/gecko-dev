@@ -5853,7 +5853,7 @@ void PresShell::DecApproximateVisibleCount(
   for (nsIFrame* frame : aFrames) {
     framesArray.AppendElement(frame);
   }
-  if (recordreplay::IsRecordingOrReplaying("PresShell::DecApproximateVisibleCount")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     std::sort(framesArray.begin(), framesArray.end(),
               [](nsIFrame* a, nsIFrame* b) {
                 return recordreplay::ThingIndex(a) < recordreplay::ThingIndex(b);

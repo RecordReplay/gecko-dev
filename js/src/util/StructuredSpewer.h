@@ -128,7 +128,7 @@ class StructuredSpewer {
         json_(mozilla::Nothing()),
         selectedChannel_() {
     // If we are recording or replaying, we cannot use getenv
-    if (mozilla::recordreplay::IsRecordingOrReplaying("StructuredSpewer::StructuredSpewer")) {
+    if (mozilla::recordreplay::IsRecordingOrReplaying()) {
       return;
     }
     if (getenv("SPEW")) {

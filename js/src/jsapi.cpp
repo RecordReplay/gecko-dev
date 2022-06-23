@@ -407,7 +407,7 @@ JS_PUBLIC_API JSContext* JS_NewContext(uint32_t maxbytes,
 
   // When recording/replaying, force instantiation of lazy wasm signal ahndler
   // state at a consistent point.
-  if (mozilla::recordreplay::IsRecordingOrReplaying("JS_NewContext")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     wasm::HasPlatformSupport(cx);
   }
 

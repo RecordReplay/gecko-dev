@@ -689,7 +689,7 @@ class gfxPlatform : public mozilla::layers::MemoryPressureListener {
   virtual mozilla::gfx::VsyncSource* GetHardwareVsync() {
     MOZ_ASSERT(mVsyncSource != nullptr);
     MOZ_ASSERT(XRE_IsParentProcess() ||
-               mozilla::recordreplay::IsRecordingOrReplaying("gfxPlatform::GetHardwareVsync"));
+               mozilla::recordreplay::IsRecordingOrReplaying());
     return mVsyncSource;
   }
 

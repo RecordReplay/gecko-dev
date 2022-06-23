@@ -113,12 +113,12 @@ void CompositorVsyncDispatcher::Shutdown() {
 RefreshTimerVsyncDispatcher::RefreshTimerVsyncDispatcher(
     gfx::VsyncSource::Display* aDisplay)
     : mDisplay(aDisplay), mRefreshTimersLock("RefreshTimers lock") {
-  MOZ_ASSERT(XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying("RefreshTimerVsyncDispatcher::RefreshTimerVsyncDispatcher"));
+  MOZ_ASSERT(XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying());
   MOZ_ASSERT(NS_IsMainThread());
 }
 
 RefreshTimerVsyncDispatcher::~RefreshTimerVsyncDispatcher() {
-  MOZ_ASSERT(XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying("RefreshTimerVsyncDispatcher::~RefreshTimerVsyncDispatcher"));
+  MOZ_ASSERT(XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying());
   MOZ_ASSERT(NS_IsMainThread());
 }
 

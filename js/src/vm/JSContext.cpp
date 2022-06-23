@@ -321,7 +321,7 @@ static void snprintf_append(char** aBuf, size_t* aSize, const char* aFormat, ...
 }
 
 void js::ReportOverRecursed(JSContext* maybecx, unsigned errorNumber) {
-  if (mozilla::recordreplay::IsRecordingOrReplaying("ReportOverRecursed")) {
+  if (mozilla::recordreplay::IsRecordingOrReplaying()) {
     char buf[1024];
     buf[sizeof(buf) - 1] = 0;
 

@@ -357,7 +357,7 @@ class RefreshDriverTimer {
     TickRefreshDrivers(aId, now, mContentRefreshDrivers);
     TickRefreshDrivers(aId, now, mRootRefreshDrivers);
 
-    if (recordreplay::IsRecordingOrReplaying("nsRefreshDriver::Tick")) {
+    if (recordreplay::IsRecordingOrReplaying()) {
       recordreplay::OnPaint();
     }
 

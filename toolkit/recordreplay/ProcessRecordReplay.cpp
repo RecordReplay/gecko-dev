@@ -532,7 +532,7 @@ MOZ_EXPORT void RecordReplayInterface_InternalRecordReplayAssertBytes(
 }
 
 MOZ_EXPORT void RecordReplayAssertFromC(const char* aFormat, ...) {
-  if (IsRecordingOrReplaying("RecordReplayAssertFromC")) {
+  if (IsRecordingOrReplaying()) {
     va_list args;
     va_start(args, aFormat);
     gAssert(aFormat, args);
@@ -690,7 +690,7 @@ MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedPthreadMutex(const char*
 }
 
 MOZ_EXPORT void RecordReplayAddOrderedPthreadMutexFromC(const char* aName, pthread_mutex_t* aMutex) {
-  if (IsRecordingOrReplaying("RecordReplayAddOrderedPthreadMutexFromC")) {
+  if (IsRecordingOrReplaying()) {
     gAddOrderedPthreadMutex(aName, aMutex);
   }
 }
@@ -702,7 +702,7 @@ MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedCriticalSection(const ch
 }
 
 MOZ_EXPORT void RecordReplayAddOrderedCriticalSectionFromC(const char* aName, PCRITICAL_SECTION aCS) {
-  if (IsRecordingOrReplaying("RecordReplayAddOrderedCriticalSectionFromC")) {
+  if (IsRecordingOrReplaying()) {
     gAddOrderedCriticalSection(aName, aCS);
   }
 }
@@ -836,7 +836,7 @@ bool HasCheckpoint() {
 // Note: This should be called even if we aren't recording/replaying, to report
 // cases where recording is unsupported to the UI process.
 void CreateCheckpoint() {
-  if (!IsRecordingOrReplaying("RecordReplay::CreateCheckpoint")) {
+  if (!IsRecordingOrReplaying()) {
     if (gRecordingUnsupported) {
       js::EnsureModuleInitialized();
       js::SendRecordingUnsupported(gRecordingUnsupported);
@@ -972,43 +972,43 @@ void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFl
 }
 
 void NewStableHashTable(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate) {
-  if (IsRecordingOrReplaying("RecordReplay::NewStableHashTable")) {
+  if (IsRecordingOrReplaying()) {
     gNewStableHashTable(aTable, aKeyEqualsEntry, aPrivate);
   }
 }
 
 void MoveStableHashTable(const void* aTableSrc, const void* aTableDst) {
-  if (IsRecordingOrReplaying("RecordReplay::MoveStableHashTable")) {
+  if (IsRecordingOrReplaying()) {
     gMoveStableHashTable(aTableSrc, aTableDst);
   }
 }
 
 void DeleteStableHashTable(const void* aTable) {
-  if (IsRecordingOrReplaying("RecordReplay::DeleteStableHashTable")) {
+  if (IsRecordingOrReplaying()) {
     gDeleteStableHashTable(aTable);
   }
 }
 
 uint32_t LookupStableHashCode(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
                               bool* aFoundMatch) {
-  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying("RecordReplay::LookupStableHashCode"));
+  MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
   return gLookupStableHashCode(aTable, aKey, aUnstableHashCode, aFoundMatch);
 }
 
 void StableHashTableAddEntryForLastLookup(const void* aTable, const void* aEntry) {
-  if (IsRecordingOrReplaying("RecordReplay::StableHashTableAddEntryForLastLookup")) {
+  if (IsRecordingOrReplaying()) {
     gStableHashTableAddEntryForLastLookup(aTable, aEntry);
   }
 }
 
 void StableHashTableMoveEntry(const void* aTable, const void* aEntrySrc, const void* aEntryDst) {
-  if (IsRecordingOrReplaying("RecordReplay::StableHashTableMoveEntry")) {
+  if (IsRecordingOrReplaying()) {
     gStableHashTableMoveEntry(aTable, aEntrySrc, aEntryDst);
   }
 }
 
 void StableHashTableDeleteEntry(const void* aTable, const void* aEntry) {
-  if (IsRecordingOrReplaying("RecordReplay::StableHashTableDeleteEntry")) {
+  if (IsRecordingOrReplaying()) {
     gStableHashTableDeleteEntry(aTable, aEntry);
   }
 }

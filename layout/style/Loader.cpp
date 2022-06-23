@@ -1517,7 +1517,7 @@ Loader::Completed Loader::ParseSheet(const nsACString& aBytes,
 
   // Tell the record/replay system about any sheets that are being parsed,
   // so that devtools code can find them later.
-  if (recordreplay::IsRecordingOrReplaying("Loader::ParseSheet") && aLoadData.mURI) {
+  if (recordreplay::IsRecordingOrReplaying() && aLoadData.mURI) {
     recordreplay::NoteContentParse(
         &aLoadData, aLoadData.mURI->GetSpecOrDefault().get(), "text/css",
         reinterpret_cast<const Utf8Unit*>(aBytes.BeginReading()),

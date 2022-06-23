@@ -55,7 +55,7 @@ JSDebugger::AddClass(JS::Handle<JS::Value> global, JSContext* cx) {
     return NS_ERROR_FAILURE;
   }
 
-  if (recordreplay::IsRecordingOrReplaying("JSDebugger::AddClass")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     if (!recordreplay::DefineRecordReplayControlObject(cx, obj)) {
       return NS_ERROR_FAILURE;
     }

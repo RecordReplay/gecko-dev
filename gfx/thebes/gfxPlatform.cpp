@@ -818,7 +818,7 @@ void gfxPlatform::Init() {
 
   gfxConfig::Init();
 
-  if (XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying("gfxPlatform::Init")) {
+  if (XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying()) {
     GPUProcessManager::Initialize();
     RDDProcessManager::Initialize();
 
@@ -1321,12 +1321,12 @@ void gfxPlatform::InitLayersIPC() {
   sLayersIPCIsUp = true;
 
   if (XRE_IsContentProcess()) {
-    if (gfxVars::UseOMTP() && !recordreplay::IsRecordingOrReplaying("gfxPlatform::InitLayersIPC")) {
+    if (gfxVars::UseOMTP() && !recordreplay::IsRecordingOrReplaying()) {
       layers::PaintThread::Start();
     }
   }
 
-  if (XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying("gfxPlatform::InitLayersIPC")) {
+  if (XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying()) {
     if (!gfxConfig::IsEnabled(Feature::GPU_PROCESS) && UseWebRender()) {
       wr::RenderThread::Start();
       image::ImageMemoryReporter::InitForWebRender();
@@ -1351,7 +1351,7 @@ void gfxPlatform::ShutdownLayersIPC() {
       layers::ImageBridgeChild::ShutDown();
     }
 
-    if (gfxVars::UseOMTP() && !recordreplay::IsRecordingOrReplaying("gfxPlatform::ShutdownLayersIPC")) {
+    if (gfxVars::UseOMTP() && !recordreplay::IsRecordingOrReplaying()) {
       layers::PaintThread::Shutdown();
     }
   } else if (XRE_IsParentProcess()) {
@@ -2616,7 +2616,7 @@ void gfxPlatform::InitCompositorAccelerationPrefs() {
   // universally disable compositing as otherwise our disable below will be
   // overwritten later during initialization.
 #ifndef XP_WIN
-  if (recordreplay::IsRecordingOrReplaying("gfxPlatform::InitCompositorAccelerationPrefs"))
+  if (recordreplay::IsRecordingOrReplaying())
 #endif
   {
     feature.ForceDisable(
@@ -2675,7 +2675,7 @@ void gfxPlatform::InitWebRenderConfig() {
   if (!XRE_IsParentProcess()) {
     // Force-disable WebRender in recording/replaying child processes, which
     // have their own compositor.
-    if (recordreplay::IsRecordingOrReplaying("gfxPlatform::InitCompositorAccelerationPrefs")) {
+    if (recordreplay::IsRecordingOrReplaying()) {
       gfxVars::SetUseWebRender(false);
     }
 
@@ -2726,7 +2726,7 @@ void gfxPlatform::InitWebRenderConfig() {
 
   // gfxFeature is not usable in the GPU process, so we use gfxVars to transmit
   // this feature
-  if (hasWebRender && !recordreplay::IsRecordingOrReplaying("gfxPlatform::InitWebRenderConfig")) {
+  if (hasWebRender && !recordreplay::IsRecordingOrReplaying()) {
     gfxVars::SetUseWebRender(true);
     reporter.SetSuccessful();
 
@@ -3049,7 +3049,7 @@ bool gfxPlatform::IsInLayoutAsapMode() {
 /* static */
 bool gfxPlatform::ForceSoftwareVsync() {
   return StaticPrefs::layout_frame_rate() > 0 ||
-         recordreplay::IsRecordingOrReplaying("gfxPlatform::ForceSoftwareVsync");
+         recordreplay::IsRecordingOrReplaying();
 }
 
 /* static */
@@ -3066,7 +3066,7 @@ int gfxPlatform::GetDefaultFrameRate() { return 60; }
 
 /* static */
 void gfxPlatform::ReInitFrameRate() {
-  if (XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying("gfxPlatform::ReInitFrameRate")) {
+  if (XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying()) {
     RefPtr<VsyncSource> oldSource = gPlatform->mVsyncSource;
 
     // Start a new one:

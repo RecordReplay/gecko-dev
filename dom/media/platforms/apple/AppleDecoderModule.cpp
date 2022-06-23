@@ -126,7 +126,7 @@ bool AppleDecoderModule::IsVideoSupported(
 
 /* static */
 bool AppleDecoderModule::CanCreateVP9Decoder() {
-  if (recordreplay::IsRecordingOrReplaying("CanCreateVP9Decoder")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return false;
   }
 
@@ -157,7 +157,7 @@ bool AppleDecoderModule::CanCreateVP9Decoder() {
 
 /* static */
 bool AppleDecoderModule::RegisterSupplementalVP9Decoder() {
-  if (recordreplay::IsRecordingOrReplaying("RegisterSupplementalVP9Decoder")) {
+  if (recordreplay::IsRecordingOrReplaying()) {
     return false;
   }
   static bool sRegisterIfAvailable = []() {
