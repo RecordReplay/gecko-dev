@@ -323,7 +323,7 @@ const gSourceRoots = new ArrayMap();
 
 gDebugger.onNewScript = (script) => {
   if (
-    !Services.prefs.getBoolPref("devtools.recordreplay.diagnostic.skipOnNewScript") ||
+    Services.prefs.getBoolPref("devtools.recordreplay.diagnostic.skipOnNewScript") ||
     !isRecordingOrReplaying ||
     RecordReplayControl.areThreadEventsDisallowed()
   ) {
