@@ -847,6 +847,7 @@ class ScriptSource {
   }
 
   JSLinearString* substring(JSContext* cx, size_t start, size_t stop);
+  JSLinearString* hash(JSContext* cx);
   JSLinearString* substringDontDeflate(JSContext* cx, size_t start,
                                        size_t stop);
 

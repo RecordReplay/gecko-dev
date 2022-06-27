@@ -218,7 +218,7 @@ function setSourceMap({
   window,
   object,
   objectURL,
-  objectText,
+  objectHash,
   objectMapURL: url
 }) {
   if (!Services.prefs.getBoolPref("devtools.recordreplay.uploadSourceMaps") || !url) {
@@ -262,10 +262,10 @@ function setSourceMap({
     // available or if it has no URL, we can still make a best-effort match
     // for the map. This won't be specific enough on its own if the page
     // was loaded multiple times with different maps, but that's all we can do.
-    targetMapURLHash: makeAPIHash(sourceMapURL),
+    targetMapURLHash: sourceMapURL.startsWith("data:") ? undefined : makeAPIHash(sourceMapURL),
 
     // Attempt to be more specific by matching on the script's URL and content.
-    targetContentHash: typeof objectText === "string" ? makeAPIHash(objectText) : undefined,
+    targetContentHash: objectHash,
     targetURLHash: typeof objectURL === "string" ? makeAPIHash(objectURL) : undefined,
   });
 }
@@ -385,12 +385,13 @@ function registerSource(source) {
 
   RecordReplayControl.recordReplayAssert(`RegisterSource #2 ${sourceURL}`);
 
-  if (source.text !== "[wasm]") {
+  const sourceHash = source.hash;
+  if (sourceHash.length > 0) {
     setSourceMap({
       window,
       object: source,
       objectURL: sourceURL,
-      objectText: source.text,
+      objectHash: `sha256:${sourceHash}`,
       objectMapURL: source.sourceMapURL,
     });
   }
@@ -467,7 +468,7 @@ getWindow().docShell.chromeEventHandler.addEventListener(
       window: getStylesheetWindow(stylesheet),
       object: stylesheet,
       objectURL: stylesheet.href,
-      objectText: undefined,
+      objectHash: undefined,
       objectMapURL: stylesheet.sourceMapURL,
     });
   },

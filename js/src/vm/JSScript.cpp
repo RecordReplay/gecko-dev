@@ -73,10 +73,12 @@
 #include "vm/Opcodes.h"
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/SelfHosting.h"
+#include "vm/SHA256.h"
 #include "vm/Shape.h"
 #include "vm/SharedImmutableStringsCache.h"
 #include "vm/Warnings.h"  // js::WarnNumberLatin1
 #include "vm/Xdr.h"
+
 #ifdef MOZ_VTUNE
 #  include "vtune/VTuneWrapper.h"
 #endif
@@ -2182,6 +2184,60 @@ JSLinearString* ScriptSource::substring(JSContext* cx, size_t start,
   }
 
   return NewStringCopyN<CanGC>(cx, units.asChars(), len);
+}
+
+static JSLinearString* StringifySHA256Bytes(JSContext* cx, const uint8_t *sha256Bytes) {
+  char HEXMAP[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+  char buf[64];
+  for (int i = 0; i < 32; i++) {
+    uint8_t byte = sha256Bytes[i];
+    buf[i*2] = HEXMAP[(byte >> 4) & 0xf];
+    buf[i*2 + 1] = HEXMAP[byte & 0xf];
+  }
+  return NewStringCopyUTF8N<CanGC>(cx, JS::UTF8Chars(buf, 64));
+}
+
+JSLinearString* ScriptSource::hash(JSContext* cx) {
+  UncompressedSourceCache::AutoHoldEntry holder;
+
+  size_t len = this->length();
+
+  // UTF-8 source text.
+  if (hasSourceType<Utf8Unit>()) {
+    PinnedUnits<Utf8Unit> units(cx, this, holder, 0, len);
+    if (!units.asChars()) {
+      return nullptr;
+    }
+
+    SHA256 hasher;
+    hasher.update(reinterpret_cast<const uint8_t*>(units.asChars()), len);
+    return StringifySHA256Bytes(cx, hasher.digest());
+  }
+
+  // UTF-16 source text.
+  PinnedUnits<char16_t> units(cx, this, holder, 0, len);
+  if (!units.asChars()) {
+    return nullptr;
+  }
+
+  SHA256 hasher;
+
+  // Convert 1024 bytes at a time, using an on-stack conversion buffer to
+  // avoid allocating memory.
+  const char16_t* char16s = units.asChars();
+  size_t converted = 0;
+  char outBuf[1024];
+  while (converted < len) {
+    mozilla::Tuple<size_t, size_t> result = mozilla::ConvertUtf16toUtf8Partial(
+      mozilla::Span(char16s + converted, len - converted),
+      mozilla::Span(outBuf, sizeof(outBuf))
+    );
+    size_t unitsRead = mozilla::Get<0>(result);
+    size_t bytesWritten = mozilla::Get<1>(result);
+    hasher.update(reinterpret_cast<const uint8_t*>(outBuf), bytesWritten);
+    converted += unitsRead;
+  }
+  return StringifySHA256Bytes(cx, hasher.digest());
 }
 
 JSLinearString* ScriptSource::substringDontDeflate(JSContext* cx, size_t start,
