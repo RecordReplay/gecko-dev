@@ -412,3 +412,5 @@ uint32_t sctp_secs_to_ticks(uint32_t);
 
 #endif				/* _KERNEL */
 #endif
+
+extern void RecordReplayAssertFromC(const char* aFormat, ...);

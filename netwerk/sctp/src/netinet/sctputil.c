@@ -2263,6 +2263,9 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	uint32_t to_ticks;
 	uint32_t rndval, jitter;
 
+  // https://linear.app/replay/issue/GTM-259
+  RecordReplayAssertFromC("sctp_timer_start start %d", t_type);
+
 	KASSERT(stcb == NULL || stcb->sctp_ep == inp,
 	        ("sctp_timer_start of type %d: inp = %p, stcb->sctp_ep %p",
 	         t_type, stcb, stcb->sctp_ep));
@@ -2649,6 +2652,10 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 #if defined(__FreeBSD__) && !defined(__Userspace__)
 	tmr->vnet = (void *)curvnet;
 #endif
+
+  // https://linear.app/replay/issue/GTM-259
+  RecordReplayAssertFromC("sctp_timer_start #10");
+
 	tmr->ticks = sctp_get_tick_count();
 	if (SCTP_OS_TIMER_START(&tmr->timer, to_ticks, sctp_timeout_handler, tmr) == 0) {
 		SCTPDBG(SCTP_DEBUG_TIMER2,
