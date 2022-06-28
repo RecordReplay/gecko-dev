@@ -252,6 +252,9 @@ function setSourceMap({
     baseUrl: sourceMapBaseURL
   });
 
+  if (sourceMapURL.startsWith("data:")) {
+    return;
+  }
   Services.cpmm.sendAsyncMessage("RecordReplayGeneratedSourceWithSourceMap", {
     recordingId,
     isUploadingRecording: RecordReplayControl.isUploadingRecording(),
@@ -262,7 +265,7 @@ function setSourceMap({
     // available or if it has no URL, we can still make a best-effort match
     // for the map. This won't be specific enough on its own if the page
     // was loaded multiple times with different maps, but that's all we can do.
-    targetMapURLHash: sourceMapURL.startsWith("data:") ? undefined : makeAPIHash(sourceMapURL),
+    targetMapURLHash: makeAPIHash(sourceMapURL),
 
     // Attempt to be more specific by matching on the script's URL and content.
     targetContentHash: objectHash,
