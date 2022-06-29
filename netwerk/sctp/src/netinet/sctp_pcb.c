@@ -806,15 +806,9 @@ sctp_del_addr_from_vrf(uint32_t vrf_id, struct sockaddr *addr,
 	struct sctp_vrf *vrf;
 	struct sctp_ifa *sctp_ifap = NULL;
 
-  // https://linear.app/replay/issue/GTM-259
-  RecordReplayAssertFromC("sctp_del_addr_from_vrf start");
-
 	SCTP_IPI_ADDR_WLOCK();
 	vrf = sctp_find_vrf(vrf_id);
 	if (vrf == NULL) {
-    // https://linear.app/replay/issue/GTM-259
-    RecordReplayAssertFromC("sctp_del_addr_from_vrf #1");
-
 		SCTPDBG(SCTP_DEBUG_PCB4, "Can't find vrf_id 0x%x\n", vrf_id);
 		goto out_now;
 	}
@@ -876,18 +870,11 @@ sctp_del_addr_from_vrf(uint32_t vrf_id, struct sockaddr *addr,
 
  out_now:
 	SCTP_IPI_ADDR_WUNLOCK();
-
-  // https://linear.app/replay/issue/GTM-259
-  RecordReplayAssertFromC("sctp_del_addr_from_vrf #2 %d", !!sctp_ifap);
-
 	if (sctp_ifap) {
 		struct sctp_laddr *wi;
 
 		wi = SCTP_ZONE_GET(SCTP_BASE_INFO(ipi_zone_laddr), struct sctp_laddr);
 		if (wi == NULL) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_del_addr_from_vrf #3");
-
 			/*
 			 * Gak, what can we do? We have lost an address
 			 * change can you say HOSED?
@@ -909,19 +896,12 @@ sctp_del_addr_from_vrf(uint32_t vrf_id, struct sockaddr *addr,
 		 * newest first :-0
 		 */
 		LIST_INSERT_HEAD(&SCTP_BASE_INFO(addr_wq), wi, sctp_nxt_addr);
-
-    // https://linear.app/replay/issue/GTM-259
-    RecordReplayAssertFromC("sctp_del_addr_from_vrf #4");
-
 		sctp_timer_start(SCTP_TIMER_TYPE_ADDR_WQ,
 				 (struct sctp_inpcb *)NULL,
 				 (struct sctp_tcb *)NULL,
 				 (struct sctp_nets *)NULL);
 		SCTP_WQ_ADDR_UNLOCK();
 	}
-
-  // https://linear.app/replay/issue/GTM-259
-  RecordReplayAssertFromC("sctp_del_addr_from_vrf done");
 	return;
 }
 

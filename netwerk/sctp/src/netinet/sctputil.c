@@ -2263,9 +2263,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	uint32_t to_ticks;
 	uint32_t rndval, jitter;
 
-  // https://linear.app/replay/issue/GTM-259
-  RecordReplayAssertFromC("sctp_timer_start start %d", t_type);
-
 	KASSERT(stcb == NULL || stcb->sctp_ep == inp,
 	        ("sctp_timer_start of type %d: inp = %p, stcb->sctp_ep %p",
 	         t_type, stcb, stcb->sctp_ep));
@@ -2285,8 +2282,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 			SCTPDBG(SCTP_DEBUG_TIMER2,
 				"Timer type %d not started: inp=%p, stcb=%p, net=%p (stcb deleted).\n",
 				t_type, inp, stcb, net);
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #1");
 			return;
 		}
 		/* Don't restart timer on net that's been removed. */
@@ -2294,8 +2289,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 			SCTPDBG(SCTP_DEBUG_TIMER2,
 				"Timer type %d not started: inp=%p, stcb=%p, net=%p (net deleted).\n",
 				t_type, inp, stcb, net);
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #2");
 			return;
 		}
 	}
@@ -2303,8 +2296,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	case SCTP_TIMER_TYPE_SEND:
 		/* Here we use the RTO timer. */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #3");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2325,8 +2316,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * second.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #4");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2347,8 +2336,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * ususually about 200ms.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #5");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2362,8 +2349,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	case SCTP_TIMER_TYPE_SHUTDOWN:
 		/* Here we use the RTO of the destination. */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #6");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2385,8 +2370,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * PLUS a random jitter.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #7");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2396,8 +2379,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		}
 		if ((net->dest_state & SCTP_ADDR_NOHB) &&
 		    !(net->dest_state & SCTP_ADDR_UNCONFIRMED)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #8");
 			SCTPDBG(SCTP_DEBUG_TIMER2,
 			        "Timer type %d not started: inp=%p, stcb=%p, net=%p.\n",
 			        t_type, inp, stcb, net);
@@ -2433,8 +2414,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * be using the RTO initial value.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2455,8 +2434,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * minutes.
 		 */
 		if ((inp == NULL) || (stcb != NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.1");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2473,8 +2450,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * about 10 minutes.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.2");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2483,8 +2458,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 #endif
 		}
 		if (net->dest_state & SCTP_ADDR_NO_PMTUD) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.3");
 			SCTPDBG(SCTP_DEBUG_TIMER2,
 			        "Timer type %d not started: inp=%p, stcb=%p, net=%p.\n",
 			        t_type, inp, stcb, net);
@@ -2496,8 +2469,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	case SCTP_TIMER_TYPE_SHUTDOWNACK:
 		/* Here we use the RTO of the destination. */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.4");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2518,8 +2489,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * the net's RTO.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.5");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2540,8 +2509,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * about 3 minutes.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.6");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2562,8 +2529,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		break;
 	case SCTP_TIMER_TYPE_AUTOCLOSE:
 		if ((inp == NULL) || (stcb == NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.7");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2580,8 +2545,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * the net's RTO.
 		 */
 		if ((inp == NULL) || (stcb == NULL) || (net == NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.8");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2603,8 +2566,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		 * state.
 		 */
 		if ((inp == NULL) || (stcb != NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.9");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2617,8 +2578,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		break;
 	case SCTP_TIMER_TYPE_ASOCKILL:
 		if ((inp == NULL) || (stcb == NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.10");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2631,8 +2590,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		break;
 	case SCTP_TIMER_TYPE_ADDR_WQ:
 		if ((inp != NULL) || (stcb != NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.11");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2646,8 +2603,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		break;
 	case SCTP_TIMER_TYPE_PRIM_DELETED:
 		if ((inp == NULL) || (stcb == NULL) || (net != NULL)) {
-      // https://linear.app/replay/issue/GTM-259
-      RecordReplayAssertFromC("sctp_timer_start #9.12");
 #ifdef INVARIANTS
 			panic("sctp_timer_start of type %d: inp = %p, stcb = %p, net = %p",
 			      t_type, inp, stcb, net);
@@ -2659,8 +2614,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		to_ticks = sctp_msecs_to_ticks(stcb->asoc.initial_rto);
 		break;
 	default:
-    // https://linear.app/replay/issue/GTM-259
-    RecordReplayAssertFromC("sctp_timer_start #9.13");
 #ifdef INVARIANTS
 		panic("Unknown timer type %d", t_type);
 #else
@@ -2676,8 +2629,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	SCTP_TIMERQ_UNLOCK();
 
 	if (pending) {
-    // https://linear.app/replay/issue/GTM-259
-    RecordReplayAssertFromC("sctp_timer_start #9.14");
 		/*
 		 * We do NOT allow you to have it already running. If it is,
 		 * we leave the current one up unchanged.
@@ -2704,10 +2655,6 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 #if defined(__FreeBSD__) && !defined(__Userspace__)
 	tmr->vnet = (void *)curvnet;
 #endif
-
-  // https://linear.app/replay/issue/GTM-259
-  RecordReplayAssertFromC("sctp_timer_start #10");
-
 	tmr->ticks = sctp_get_tick_count();
 	if (SCTP_OS_TIMER_START(&tmr->timer, to_ticks, sctp_timeout_handler, tmr) == 0) {
 		SCTPDBG(SCTP_DEBUG_TIMER2,
