@@ -166,7 +166,6 @@ struct MOZ_STACK_CLASS DebuggerSource::CallData {
   CallData(JSContext* cx, const CallArgs& args, HandleDebuggerSource obj)
       : cx(cx), args(args), obj(obj), referent(cx, obj->getReferent()) {}
 
-  bool getHash();
   bool getText();
   bool getBinary();
   bool getURL();
@@ -201,42 +200,6 @@ bool DebuggerSource::CallData::ToNative(JSContext* cx, unsigned argc,
 
   CallData data(cx, args, obj);
   return (data.*MyMethod)();
-}
-
-class DebuggerSourceGetHashMatcher {
-  JSContext* cx_;
-
- public:
-  explicit DebuggerSourceGetHashMatcher(JSContext* cx) : cx_(cx) {}
-
-  using ReturnType = JSString*;
-
-  ReturnType match(HandleScriptSourceObject sourceObject) {
-    ScriptSource* ss = sourceObject->source();
-    bool hasSourceText;
-    if (!ScriptSource::loadSource(cx_, ss, &hasSourceText)) {
-      return nullptr;
-    }
-    if (!hasSourceText) {
-      return NewStringCopyZ<CanGC>(cx_, "");
-    }
-    return ss->hash(cx_);
-  }
-
-  ReturnType match(Handle<WasmInstanceObject*> instanceObj) {
-    return NewStringCopyZ<CanGC>(cx_, "");
-  }
-};
-
-bool DebuggerSource::CallData::getHash() {
-  DebuggerSourceGetHashMatcher matcher(cx);
-  JSString* str = referent.match(matcher);
-  if (!str) {
-    return false;
-  }
-
-  args.rval().setString(str);
-  return true;
 }
 
 class DebuggerSourceGetTextMatcher {
@@ -707,7 +670,6 @@ bool DebuggerSource::CallData::reparse() {
 }
 
 const JSPropertySpec DebuggerSource::properties_[] = {
-    JS_DEBUG_PSG("hash", getHash),
     JS_DEBUG_PSG("text", getText),
     JS_DEBUG_PSG("binary", getBinary),
     JS_DEBUG_PSG("url", getURL),

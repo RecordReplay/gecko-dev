@@ -428,7 +428,6 @@ UNIFIED_SOURCES += [
     "vm/SavedStacks.cpp",
     "vm/Scope.cpp",
     "vm/SelfHosting.cpp",
-    "vm/SHA256.cpp",
     "vm/Shape.cpp",
     "vm/ShapeZone.cpp",
     "vm/SharedArrayObject.cpp",
