@@ -2669,7 +2669,13 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	}
 	KASSERT(tmr != NULL, ("tmr is NULL for timer type %d", t_type));
 	KASSERT(to_ticks > 0, ("to_ticks == 0 for timer type %d", t_type));
-	if (SCTP_OS_TIMER_PENDING(&tmr->timer)) {
+
+	// Use an ordered lock to avoid inconsistent values read from the pending flag.
+	SCTP_TIMERQ_LOCK();
+	int pending = SCTP_OS_TIMER_PENDING(&tmr->timer);
+	SCTP_TIMERQ_UNLOCK();
+
+	if (pending) {
     // https://linear.app/replay/issue/GTM-259
     RecordReplayAssertFromC("sctp_timer_start #9.14");
 		/*
