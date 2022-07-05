@@ -198,79 +198,89 @@ static const char* GetTempDirectory() {
 #endif
 }
 
+static DriverHandle DoLoadDriverHandle(const char* aPath) {
+#ifndef XP_WIN
+  return dlopen(aPath, RTLD_LAZY);
+#else
+  return LoadLibraryA(aPath);
+#endif
+}
+
 static DriverHandle OpenDriverHandle() {
   const char* driver = getenv("RECORD_REPLAY_DRIVER");
-  bool temporaryDriver = false;
+  if (driver) {
+    return DoLoadDriverHandle(driver);
+  }
 
-  if (!driver) {
-    const char* tmpdir = GetTempDirectory();
-    if (!tmpdir) {
-      fprintf(stderr, "Can't figure out temporary directory, can't create driver.\n");
-      return nullptr;
-    }
+  const char* tmpdir = GetTempDirectory();
+  if (!tmpdir) {
+    fprintf(stderr, "Can't figure out temporary directory, can't create driver.\n");
+    return nullptr;
+  }
 
-    char filename[1024];
+  char filename[1024];
 #ifndef XP_WIN
-    snprintf(filename, sizeof(filename), "%s/recordreplay.so-XXXXXX", tmpdir);
-    int fd = mkstemp(filename);
+  snprintf(filename, sizeof(filename), "%s/recordreplay-%s.so", tmpdir, gBuildId);
 #else
-    int fd;
-    for (int i = 0; i < 10; i++) {
-      snprintf(filename, sizeof(filename), "%s\\recordreplay.dll-XXXXXX", tmpdir);
-      _mktemp(filename);
-      fd = _open(filename, O_CREAT | O_TRUNC | O_WRONLY | O_BINARY);
-      if (fd >= 0) {
-        break;
-      }
-    }
-    #define write _write
-    #define close _close
+  snprintf(filename, sizeof(filename), "%s\\recordreplay-%s.dll", tmpdir, gBuildId);
 #endif
-    if (fd < 0) {
-      fprintf(stderr, "mkstemp failed, can't create driver.\n");
-      return nullptr;
-    }
 
-    int nbytes = write(fd, gRecordReplayDriver, gRecordReplayDriverSize);
-    if (nbytes != gRecordReplayDriverSize) {
-      fprintf(stderr, "write to driver temporary file failed, can't create driver.\n");
-      return nullptr;
-    }
+  DriverHandle handle = DoLoadDriverHandle(filename);
+  if (handle) {
+    return handle;
+  }
 
-    temporaryDriver = true;
-    driver = strdup(filename);
-    close(fd);
+  char tmpFilename[1024];
+#ifndef XP_WIN
+  snprintf(tmpFilename, sizeof(tmpFilename), "%s/recordreplay.so-XXXXXX", tmpdir);
+  int fd = mkstemp(tmpFilename);
+#else
+  int fd;
+  for (int i = 0; i < 10; i++) {
+    snprintf(tmpFilename, sizeof(tmpFilename), "%s\\recordreplay.dll-XXXXXX", tmpdir);
+    _mktemp(tmpFilename);
+    fd = _open(tmpFilename, O_CREAT | O_TRUNC | O_WRONLY | O_BINARY);
+    if (fd >= 0) {
+      break;
+    }
+  }
+  #define write _write
+  #define close _close
+#endif
+  if (fd < 0) {
+    fprintf(stderr, "mkstemp failed, can't create driver.\n");
+    return nullptr;
+  }
+
+  int nbytes = write(fd, gRecordReplayDriver, gRecordReplayDriverSize);
+  if (nbytes != gRecordReplayDriverSize) {
+    fprintf(stderr, "write to driver temporary file failed, can't create driver.\n");
+    return nullptr;
+  }
+
+  close(fd);
 
 #ifdef XP_MACOSX
-    // Strip any quarantine flag on the written file, if necessary, so that
-    // the file can be run or loaded into a process. macOS quarantines any
-    // files created by the browser even if they are related to the update
-    // process.
-    char* args[] = {
-      (char*)"/usr/bin/xattr",
-      (char*)"-d",
-      (char*)"com.apple.quarantine",
-      strdup(driver),
-    };
-    pid_t pid;
-    LaunchChildMac(4, args, &pid);
+  // Strip any quarantine flag on the written file, if necessary, so that
+  // the file can be run or loaded into a process. macOS quarantines any
+  // files created by the browser even if they are related to the update
+  // process.
+  char* args[] = {
+    (char*)"/usr/bin/xattr",
+    (char*)"-d",
+    (char*)"com.apple.quarantine",
+    tmpFilename,
+  };
+  pid_t pid;
+  LaunchChildMac(4, args, &pid);
 #endif // XP_MACOSX
+
+  int rv = rename(tmpFilename, filename);
+  if (rv < 0) {
+    fprintf(stderr, "renaming temporary driver failed\n");
   }
 
-#ifndef XP_WIN
-  DriverHandle handle = dlopen(driver, RTLD_LAZY);
-#else
-  DriverHandle handle = LoadLibraryA(driver);
-  if (!handle) {
-    fprintf(stderr, "LoadLibraryA failed %s: %u\n", driver, GetLastError());
-  }
-#endif
-
-  if (temporaryDriver) {
-    unlink(driver);
-  }
-
-  return handle;
+  return DoLoadDriverHandle(filename);
 }
 
 static void FreeCallback(void* aPtr) {
@@ -374,8 +384,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 
   gDriverHandle = OpenDriverHandle();
   if (!gDriverHandle) {
-    fprintf(stderr, "Loading driver failed, crashing.\n");
-    MOZ_CRASH("RECORD_REPLAY_DRIVER loading failed");
+    fprintf(stderr, "Loading recorder library failed.\n");
+    return;
   }
 
   LoadSymbol("RecordReplayAttach", gAttach);
