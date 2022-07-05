@@ -338,7 +338,19 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
   NS_ENSURE_ARG_POINTER(aArgv[0]);
   MOZ_ASSERT(aChildData);
 
+  mozilla::TimeStamp beforeRRInit = mozilla::TimeStamp::Now();
   recordreplay::Initialize(&aArgc, &aArgv);
+  mozilla::TimeStamp afterRRInit = ([]() {
+    mozilla::recordreplay::AutoPassThroughThreadEvents pt;
+    return mozilla::TimeStamp::NowUnfuzzed();
+  })();
+  // Only print init-time message when not replaying.
+  if (!recordreplay::IsReplaying()) {
+    double initTime = (afterRRInit - beforeRRInit).ToMilliseconds();
+    recordreplay::PrintLog("RecordReplay IsRecording=%s InitTime=%.2f\n",
+      recordreplay::IsRecording() ? "yes" : "no",
+      initTime);
+  }
 
   NS_SetCurrentThreadName("MainThread");
 
