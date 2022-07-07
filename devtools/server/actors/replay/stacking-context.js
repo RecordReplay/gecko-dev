@@ -192,6 +192,13 @@ StackingContext.prototype = {
   // Add node and its descendants to this stacking context.
   add(node, parentElem, offset) {
     const style = this.window.getComputedStyle(node);
+    if (!style) {
+      // It's not 100% clear why this is sometimes null, but it seems like
+      // this can happen if DOM commands are sent when the window is shutting
+      // down in some way or another.
+      return;
+    }
+
     const position = style.getPropertyValue("position");
     let clipBounds;
     if (position == "absolute") {
