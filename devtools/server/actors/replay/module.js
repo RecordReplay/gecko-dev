@@ -64,6 +64,10 @@ const { evalExpression } = ChromeUtils.import("resource://devtools/server/actors
 
 const { StackingContext } = require("devtools/server/actors/replay/stacking-context");
 
+const { getenv } = ChromeUtils.import(
+  "resource://devtools/server/actors/replay/env.js"
+);
+
 let gWindow;
 function getWindow() {
   if (!gWindow) {
@@ -483,8 +487,12 @@ gNewGlobalHooks.push(dbgWindow => {
 
   const window = dbgWindow.unsafeDereference();
   if (window.parent === window && window.location.href.match(/https?:\/\//)) {
-    initReactDevtools(dbgWindow, RecordReplayControl);
-    initReduxDevtools(dbgWindow, RecordReplayControl);
+    if (!getenv("RECORD_REPLAY_DISABLE_REACT_DEVTOOLS")) {
+      initReactDevtools(dbgWindow, RecordReplayControl);
+    }
+    if (!getenv("RECORD_REPLAY_DISABLE_REDUX_DEVTOOLS")) {
+      initReduxDevtools(dbgWindow, RecordReplayControl);
+    }
   }
 });
 
