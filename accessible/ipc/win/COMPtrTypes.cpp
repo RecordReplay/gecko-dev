@@ -47,6 +47,15 @@ IAccessibleHolder CreateHolderFromAccessible(
                                   mscom::ToInterceptorTargetPtr(iaToProxy));
   }
 
+  // Wrapping COM interfaces while replaying is not currently supported.
+  // See also HandlerProvider::ToWrappedObject. Work around this by creating a bogus
+  // IAccessible pointer.
+  if (recordreplay::IsReplaying()) {
+    ProxyUniquePtr<IAccessible> intercepted((IAccessible*)0xDEADBEEF);
+    return IAccessibleHolder(std::move(intercepted));
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   ProxyUniquePtr<IAccessible> intercepted;
   HRESULT hr = MainThreadHandoff::WrapInterface(
       std::move(iaToProxy), payload,

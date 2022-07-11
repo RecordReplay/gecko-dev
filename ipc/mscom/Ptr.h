@@ -92,7 +92,13 @@ struct MTAReleaseInChildProcess {
     // current scope, we are in effect moving our strong ref into the lambda.
     void* ptr = aPtr;
     EnsureMTA::AsyncOperation(
-        [ptr]() -> void { reinterpret_cast<T*>(ptr)->Release(); });
+        [ptr]() -> void {
+          // Pointers being released might not be valid when replaying.
+          if (!recordreplay::IsReplaying()) {
+            recordreplay::AutoPassThroughThreadEvents pt;
+            reinterpret_cast<T*>(ptr)->Release();
+          }
+        });
   }
 };
 
