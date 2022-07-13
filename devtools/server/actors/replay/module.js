@@ -21,7 +21,7 @@ addDebuggerToGlobal(this);
 );
 const { Debugger, RecordReplayControl, Services, InspectorUtils } = sandbox;
 
-const { setTimeout, clearTimeout } = ChromeUtils.import(
+const { setInterval, clearInterval } = ChromeUtils.import(
   "resource://gre/modules/Timer.jsm"
 );
 
@@ -229,8 +229,6 @@ function setSourceMap({
     return;
   }
 
-  const recordingId = RecordReplayControl.recordingId();
-
   let sourceBaseURL;
   if (typeof objectURL === "string" && isValidBaseURL(objectURL)) {
     sourceBaseURL = objectURL;
@@ -260,7 +258,7 @@ function setSourceMap({
     return;
   }
   Services.cpmm.sendAsyncMessage("RecordReplayGeneratedSourceWithSourceMap", {
-    recordingId,
+    recordingId: RecordReplayControl.recordingId(),
     isUploadingRecording: RecordReplayControl.isUploadingRecording(),
     sourceMapURL,
     sourceMapBaseURL,
@@ -279,13 +277,14 @@ function setSourceMap({
 
 function checkRecordingCreated() {
   if (RecordReplayControl.isRecordingCreated()) {
-    clearTimeout(timer);
+    clearInterval(interval);
     Services.cpmm.sendAsyncMessage("RecordReplayRecordingCreated", {
       recordingId: RecordReplayControl.recordingId(),
     });
   }
 }
-const timer = setTimeout(checkRecordingCreated, 250);
+
+const interval = setInterval(checkRecordingCreated, 250);
 checkRecordingCreated();
 
 function makeAPIHash(content) {

@@ -769,6 +769,10 @@ MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(FaultCallback aCallback) 
 }  // extern "C"
 
 bool IsRecordingCreated() {
+  if (!gUploadingRecording) {
+    return true;
+  }
+
   return gIsRecordingCreated();
 }
 
@@ -881,9 +885,11 @@ void MaybeCreateCheckpoint() {
 static bool gTearingDown;
 
 void FinishRecording() {
-  // Ensure that the driver connected and created the recording, if it is
-  // configured to do so. Otherwise we will never notify the user that the
-  // recording is unusable.
+  // SendRecordingFinished will inform the parent process if the recording is
+  // finished or unusable, but we don't want to do that until we are sure
+  // that the connection has either:
+  //  a) opened and created the recording in our DB
+  //  b) failed and marked the recording as unusable
   gWaitForRecordingCreated();
 
   js::SendRecordingFinished();
