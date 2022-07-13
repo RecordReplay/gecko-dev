@@ -129,6 +129,8 @@ static uint32_t (*gLookupStableHashCode)(const void* aTable, const void* aKey, u
 static void (*gStableHashTableAddEntryForLastLookup)(const void* aTable, const void* aEntry);
 static void (*gStableHashTableMoveEntry)(const void* aTable, const void* aEntrySrc, const void* aEntryDst);
 static void (*gStableHashTableDeleteEntry)(const void* aTable, const void* aEntry);
+static bool (*gIsRecordingCreated)();
+static bool (*gWaitForRecordingCreated)();
 
 #ifndef XP_WIN
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
@@ -442,6 +444,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayStableHashTableAddEntryForLastLookup", gStableHashTableAddEntryForLastLookup);
   LoadSymbol("RecordReplayStableHashTableMoveEntry", gStableHashTableMoveEntry);
   LoadSymbol("RecordReplayStableHashTableDeleteEntry", gStableHashTableDeleteEntry);
+  LoadSymbol("RecordReplayIsRecordingCreated", gIsRecordingCreated);
+  LoadSymbol("RecordReplayWaitForRecordingCreated", gWaitForRecordingCreated);
 
   if (apiKey) {
     gSetApiKey(apiKey->c_str());
@@ -764,6 +768,10 @@ MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(FaultCallback aCallback) 
 
 }  // extern "C"
 
+bool IsRecordingCreated() {
+  return gIsRecordingCreated();
+}
+
 bool IsUploadingRecording() {
   return gUploadingRecording;
 }
@@ -873,6 +881,11 @@ void MaybeCreateCheckpoint() {
 static bool gTearingDown;
 
 void FinishRecording() {
+  // Ensure that the driver connected and created the recording, if it is
+  // configured to do so. Otherwise we will never notify the user that the
+  // recording is unusable.
+  gWaitForRecordingCreated();
+
   js::SendRecordingFinished();
 
   gFinishRecording();
