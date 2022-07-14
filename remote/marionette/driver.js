@@ -930,36 +930,48 @@ GeckoDriver.prototype.execute_ = async function(
  *     Not available in current context.
  */
 GeckoDriver.prototype.navigateTo = async function(cmd) {
-  assert.content(this.context);
-  const browsingContext = assert.open(this.getBrowsingContext({ top: true }));
-  await this._handleUserPrompts();
+  for (let i = 0; i < 10; i++) {
+    assert.content(this.context);
+    const browsingContext = assert.open(this.getBrowsingContext({ top: true }));
+    await this._handleUserPrompts();
 
-  let validURL;
-  try {
-    validURL = new URL(cmd.parameters.url);
-  } catch (e) {
-    throw new error.InvalidArgumentError(`Malformed URL: ${e.message}`);
-  }
-
-  // Switch to the top-level browsing context before navigating
-  this.currentSession.contentBrowsingContext = browsingContext;
-
-  const loadEventExpected = navigate.isLoadEventExpected(
-    this._getCurrentURL(),
-    {
-      future: validURL,
+    let validURL;
+    try {
+      validURL = new URL(cmd.parameters.url);
+    } catch (e) {
+      throw new error.InvalidArgumentError(`Malformed URL: ${e.message}`);
     }
-  );
 
-  await navigate.waitForNavigationCompleted(
-    this,
-    () => {
-      navigate.navigateTo(browsingContext, validURL);
-    },
-    { loadEventExpected }
-  );
+    // Switch to the top-level browsing context before navigating
+    this.currentSession.contentBrowsingContext = browsingContext;
 
-  this.curBrowser.contentBrowser.focus();
+    const loadEventExpected = navigate.isLoadEventExpected(
+      this._getCurrentURL(),
+      {
+        future: validURL,
+      }
+    );
+
+    await navigate.waitForNavigationCompleted(
+      this,
+      () => {
+        navigate.navigateTo(browsingContext, validURL);
+      },
+      { loadEventExpected }
+    );
+
+    this.curBrowser.contentBrowser.focus();
+
+    // Workaround for a problem where navigations triggered by cypress could still
+    // be on a moz-extension page instead of the destination URL after navigating.
+    if (this._getCurrentURL() &&
+        this._getCurrentURL().href.includes("moz-extension") &&
+        !validURL.href.includes("moz-extension")) {
+      continue;
+    }
+
+    break;
+  }
 };
 
 /**
