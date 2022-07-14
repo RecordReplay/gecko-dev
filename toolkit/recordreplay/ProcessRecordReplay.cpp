@@ -769,10 +769,6 @@ MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(FaultCallback aCallback) 
 }  // extern "C"
 
 bool IsRecordingCreated() {
-  if (!gUploadingRecording) {
-    return true;
-  }
-
   return gIsRecordingCreated();
 }
 
