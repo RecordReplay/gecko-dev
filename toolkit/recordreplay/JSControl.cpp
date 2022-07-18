@@ -430,6 +430,8 @@ static bool Method_OnNewSource(JSContext* aCx, unsigned aArgc, Value* aVp) {
   if (gRecordAllContent && !gHasInterestingContent && IsInterestingSource(urlRaw)) {
     gHasInterestingContent = true;
 
+    PrintLog("Found interesting source %s, remembering recording...", urlRaw ? urlRaw : "");
+
     // We found some interesting content, add the recording to the file at this env var.
     char* env = getenv("RECORD_REPLAY_RECORDING_ID_FILE");
     if (env) {
