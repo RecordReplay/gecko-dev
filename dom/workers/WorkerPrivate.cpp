@@ -1456,7 +1456,7 @@ nsresult WorkerPrivate::Dispatch(already_AddRefed<WorkerRunnable> aRunnable,
                                  nsIEventTarget* aSyncLoopTarget) {
   // May be called on any thread!
   MutexAutoLockMaybeEventsDisallowed lock(mMutex);
-  return DispatchLockHeld(std::move(aRunnable), aSyncLoopTarget, lock);
+  return DispatchLockHeld(std::move(aRunnable), aSyncLoopTarget, lock.get());
 }
 
 nsresult WorkerPrivate::DispatchLockHeld(
