@@ -67,9 +67,6 @@ class WorkerRunnable : public nsIRunnable, public nsICancelableRunnable {
   // thread. To be safe we're using an atomic but it's likely overkill.
   Atomic<uint32_t> mCanceled;
 
-  // For issue https://github.com/RecordReplay/backend/issues/5799
-  recordreplay::AutoRegisterThing mRecordReplayAutoReg;
-
  private:
   // Whether or not Cancel() is currently being called from inside the Run()
   // method. Avoids infinite recursion when a subclass calls Run() from inside

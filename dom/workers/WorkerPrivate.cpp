@@ -1455,7 +1455,7 @@ void WorkerPrivate::Traverse(nsCycleCollectionTraversalCallback& aCb) {
 nsresult WorkerPrivate::Dispatch(already_AddRefed<WorkerRunnable> aRunnable,
                                  nsIEventTarget* aSyncLoopTarget) {
   // May be called on any thread!
-  MutexAutoLock lock(mMutex);
+  MutexAutoLockMaybeEventsDisallowed lock(mMutex);
   return DispatchLockHeld(std::move(aRunnable), aSyncLoopTarget, lock);
 }
 
@@ -4228,9 +4228,6 @@ void WorkerPrivate::PostMessageToParent(
     const Sequence<JSObject*>& aTransferable, ErrorResult& aRv) {
   AssertIsOnWorkerThread();
   MOZ_DIAGNOSTIC_ASSERT(IsDedicatedWorker());
-
-  // For issue https://github.com/RecordReplay/backend/issues/5799
-  recordreplay::RecordReplayAssert("WorkerPrivate::PostMessageToParent start");
 
   JS::Rooted<JS::Value> transferable(aCx, JS::UndefinedValue());
 
