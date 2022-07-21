@@ -301,11 +301,6 @@ void SendRecordingFinished() {
   // When recording all content, we don't notify the UI process about the
   // new recording. The driver will save information about the recording to disk.
   if (gRecordAllContent) {
-    // If we aren't interested in the recording, mark it as unusable
-    // so the driver doesn't bother with uploading it.
-    if (!gHasInterestingContent) {
-      InvalidateRecording("No interesting content");
-    }
     return;
   }
 
@@ -431,6 +426,8 @@ static bool Method_OnNewSource(JSContext* aCx, unsigned aArgc, Value* aVp) {
     gHasInterestingContent = true;
 
     PrintLog("Found interesting source %s, remembering recording...", urlRaw ? urlRaw : "");
+
+    RememberRecording();
 
     // We found some interesting content, add the recording to the file at this env var.
     char* env = getenv("RECORD_REPLAY_RECORDING_ID_FILE");
