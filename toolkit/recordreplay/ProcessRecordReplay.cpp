@@ -93,6 +93,7 @@ static void* (*gIdPointer)(size_t id);
 static void (*gAssert)(const char* format, va_list);
 static void (*gAssertBytes)(const char* why, const void*, size_t);
 static void (*gSaveRecording)(const char* dir);
+static void (*gRememberRecording)();
 static void (*gFinishRecording)();
 static uint64_t* (*gProgressCounter)();
 static void (*gSetProgressCallback)(void (*aCallback)(uint64_t));
@@ -401,6 +402,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayPrint", gPrintVA);
   LoadSymbol("RecordReplayDiagnostic", gDiagnosticVA);
   LoadSymbol("RecordReplaySaveRecording", gSaveRecording);
+  LoadSymbol("RecordReplayRememberRecording", gRememberRecording);
   LoadSymbol("RecordReplayFinishRecording", gFinishRecording);
   LoadSymbol("RecordReplayRegisterPointer", gRegisterPointer);
   LoadSymbol("RecordReplayUnregisterPointer", gUnregisterPointer);
@@ -859,6 +861,14 @@ void CreateCheckpoint() {
 
   gRecordReplayNewCheckpoint();
   gHasCheckpoint = true;
+
+  // When recording all content, we won't remember the recording until it has loaded
+  // some interesting source. See Method_OnNewSource. Otherwise we want to make sure
+  // the recording has at least one checkpoint, which won't be the case for
+  // preallocated recording processes which aren't in use yet.
+  if (!gRecordAllContent) {
+    RememberRecording();
+  }
 }
 
 void MaybeCreateCheckpoint() {
@@ -868,6 +878,10 @@ void MaybeCreateCheckpoint() {
   if (HasCheckpoint()) {
     gRecordReplayNewCheckpoint();
   }
+}
+
+void RememberRecording() {
+  gRememberRecording();
 }
 
 static bool gTearingDown;

@@ -4251,9 +4251,6 @@ void WorkerPrivate::PostMessageToParent(
   AssertIsOnWorkerThread();
   MOZ_DIAGNOSTIC_ASSERT(IsDedicatedWorker());
 
-  // For issue https://github.com/RecordReplay/backend/issues/5799
-  recordreplay::RecordReplayAssert("WorkerPrivate::PostMessageToParent start");
-
   JS::Rooted<JS::Value> transferable(aCx, JS::UndefinedValue());
 
   aRv = nsContentUtils::CreateJSValueFromSequenceOfObject(aCx, aTransferable,

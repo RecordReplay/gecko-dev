@@ -32,6 +32,7 @@ static inline bool TestEnv(const char* env) {
 
 void InitializeGraphics();
 bool HasCheckpoint();
+void RememberRecording();
 void FinishRecording();
 bool IsUploadingRecording();
 const char* GetRecordingId();

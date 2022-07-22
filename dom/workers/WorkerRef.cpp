@@ -201,6 +201,14 @@ ThreadSafeWorkerRef::ThreadSafeWorkerRef(StrongWorkerRef* aRef) : mRef(aRef) {
 ThreadSafeWorkerRef::~ThreadSafeWorkerRef() {
   // Let's release the StrongWorkerRef on the correct thread.
   if (!mRef->mWorkerPrivate->IsOnWorkerThread()) {
+    // Worker references can be released at non-deterministic points. Unfortunately,
+    // worker control runnables must be dispatched at deterministic points. For now
+    // we workaround this dilemma by letting the references leak.
+    if (recordreplay::IsRecordingOrReplaying()) {
+      mRef.forget();
+      return;
+    }
+
     WorkerPrivate* workerPrivate = mRef->mWorkerPrivate;
     RefPtr<ReleaseRefControlRunnable> r =
         new ReleaseRefControlRunnable(workerPrivate, mRef.forget());
