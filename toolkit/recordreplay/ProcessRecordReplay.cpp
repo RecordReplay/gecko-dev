@@ -198,11 +198,20 @@ static const char* GetTempDirectory() {
 #endif
 }
 
-static DriverHandle DoLoadDriverHandle(const char* aPath) {
+static DriverHandle DoLoadDriverHandle(const char* aPath, bool aPrintError = true) {
 #ifndef XP_WIN
-  return dlopen(aPath, RTLD_LAZY);
+  void* handle = dlopen(aPath, RTLD_LAZY);
+  if (!handle && aPrintError) {
+    char* error = dlerror();
+    fprintf(stderr, "DoLoadDriverHandle: dlopen failed %s: %s\n", aPath, error ? error : "<no error>");
+  }
+  return handle;
 #else
-  return LoadLibraryA(aPath);
+  HMODULE handle = LoadLibraryA(aPath);
+  if (!handle && aPrintError) {
+    fprintf(stderr, "DoLoadDriverHandle: LoadLibraryA failed %s: %u\n", aPath, GetLastError());
+  }
+  return handle;
 #endif
 }
 
@@ -225,7 +234,7 @@ static DriverHandle OpenDriverHandle() {
   snprintf(filename, sizeof(filename), "%s\\recordreplay-%s.dll", tmpdir, gBuildId);
 #endif
 
-  DriverHandle handle = DoLoadDriverHandle(filename);
+  DriverHandle handle = DoLoadDriverHandle(filename, /* aPrintError */ false);
   if (handle) {
     return handle;
   }
