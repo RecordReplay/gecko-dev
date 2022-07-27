@@ -34,6 +34,7 @@ void InitializeGraphics();
 bool HasCheckpoint();
 void RememberRecording();
 void FinishRecording();
+bool IsRecordingCreated();
 bool IsUploadingRecording();
 const char* GetRecordingId();
 

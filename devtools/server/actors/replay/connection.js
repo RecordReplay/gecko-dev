@@ -430,6 +430,10 @@ class Recording extends EventEmitter {
     this._pmm.addMessageListener("RecordReplayGeneratedSourceWithSourceMap", {
       receiveMessage: msg => this._onNewSourcemap(msg.data),
     });
+    this._pmm.addMessageListener("RecordReplayRecordingCreated", {
+      receiveMessage: msg => this._onRecordingCreated(msg.data),
+    });
+
     this._pmm.addMessageListener("RecordingFinished", {
       receiveMessage: msg => this._onFinished(msg.data),
     });
@@ -531,6 +535,11 @@ class Recording extends EventEmitter {
         });
       }));
     }
+  }
+
+  _onRecordingCreated(data) {
+    // Once this arrives, _then_ send API requeests to upload sourcemaps
+
   }
 
   async _onFinished(data) {

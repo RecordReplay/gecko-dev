@@ -21,6 +21,10 @@ addDebuggerToGlobal(this);
 );
 const { Debugger, RecordReplayControl, Services, InspectorUtils } = sandbox;
 
+const { setInterval, clearInterval } = ChromeUtils.import(
+  "resource://gre/modules/Timer.jsm"
+);
+
 // This script can be loaded into non-recording/replaying processes during automated tests.
 // In non-recording/replaying processes there are no properties on RecordReplayControl.
 const isRecordingOrReplaying = !!RecordReplayControl.onNewSource;
@@ -229,8 +233,6 @@ function setSourceMap({
     return;
   }
 
-  const recordingId = RecordReplayControl.recordingId();
-
   let sourceBaseURL;
   if (typeof objectURL === "string" && isValidBaseURL(objectURL)) {
     sourceBaseURL = objectURL;
@@ -260,7 +262,7 @@ function setSourceMap({
     return;
   }
   Services.cpmm.sendAsyncMessage("RecordReplayGeneratedSourceWithSourceMap", {
-    recordingId,
+    recordingId: RecordReplayControl.recordingId(),
     isUploadingRecording: RecordReplayControl.isUploadingRecording(),
     sourceMapURL,
     sourceMapBaseURL,
@@ -276,6 +278,18 @@ function setSourceMap({
     targetURLHash: typeof objectURL === "string" ? makeAPIHash(objectURL) : undefined,
   });
 }
+
+function checkRecordingCreated() {
+  if (RecordReplayControl.isRecordingCreated()) {
+    clearInterval(interval);
+    Services.cpmm.sendAsyncMessage("RecordReplayRecordingCreated", {
+      recordingId: RecordReplayControl.recordingId(),
+    });
+  }
+}
+
+const interval = setInterval(checkRecordingCreated, 250);
+checkRecordingCreated();
 
 function makeAPIHash(content) {
   assert(typeof content === "string");

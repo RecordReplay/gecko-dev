@@ -700,6 +700,12 @@ static bool Method_RecordingId(JSContext* aCx, unsigned aArgc, Value* aVp) {
   return true;
 }
 
+static bool Method_IsRecordingCreated(JSContext* aCx, unsigned aArgc, Value* aVp) {
+  CallArgs args = CallArgsFromVp(aArgc, aVp);
+  args.rval().setBoolean(IsRecordingCreated());
+  return true;
+}
+
 static bool Method_IsUploadingRecording(JSContext* aCx, unsigned aArgc, Value* aVp) {
   CallArgs args = CallArgsFromVp(aArgc, aVp);
   args.rval().setBoolean(IsUploadingRecording());
@@ -898,6 +904,7 @@ static const JSFunctionSpec gRecordReplayMethods[] = {
   JS_FN("onConsoleMessage", Method_OnConsoleMessage, 1, 0),
   JS_FN("onAnnotation", Method_OnAnnotation, 2, 0),
   JS_FN("recordingId", Method_RecordingId, 0, 0),
+  JS_FN("isRecordingCreated", Method_IsRecordingCreated, 0, 0),
   JS_FN("isUploadingRecording", Method_IsUploadingRecording, 0, 0),
   JS_FN("addMetadata", Method_AddMetadata, 1, 0),
   JS_FN("recordingOperations", Method_RecordingOperations, 0, 0),

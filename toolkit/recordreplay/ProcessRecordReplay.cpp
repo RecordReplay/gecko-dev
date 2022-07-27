@@ -130,6 +130,8 @@ static uint32_t (*gLookupStableHashCode)(const void* aTable, const void* aKey, u
 static void (*gStableHashTableAddEntryForLastLookup)(const void* aTable, const void* aEntry);
 static void (*gStableHashTableMoveEntry)(const void* aTable, const void* aEntrySrc, const void* aEntryDst);
 static void (*gStableHashTableDeleteEntry)(const void* aTable, const void* aEntry);
+static bool (*gIsRecordingCreated)();
+static bool (*gWaitForRecordingCreated)();
 
 #ifndef XP_WIN
 static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
@@ -199,11 +201,20 @@ static const char* GetTempDirectory() {
 #endif
 }
 
-static DriverHandle DoLoadDriverHandle(const char* aPath) {
+static DriverHandle DoLoadDriverHandle(const char* aPath, bool aPrintError = true) {
 #ifndef XP_WIN
-  return dlopen(aPath, RTLD_LAZY);
+  void* handle = dlopen(aPath, RTLD_LAZY);
+  if (!handle && aPrintError) {
+    char* error = dlerror();
+    fprintf(stderr, "DoLoadDriverHandle: dlopen failed %s: %s\n", aPath, error ? error : "<no error>");
+  }
+  return handle;
 #else
-  return LoadLibraryA(aPath);
+  HMODULE handle = LoadLibraryA(aPath);
+  if (!handle && aPrintError) {
+    fprintf(stderr, "DoLoadDriverHandle: LoadLibraryA failed %s: %u\n", aPath, GetLastError());
+  }
+  return handle;
 #endif
 }
 
@@ -226,7 +237,7 @@ static DriverHandle OpenDriverHandle() {
   snprintf(filename, sizeof(filename), "%s\\recordreplay-%s.dll", tmpdir, gBuildId);
 #endif
 
-  DriverHandle handle = DoLoadDriverHandle(filename);
+  DriverHandle handle = DoLoadDriverHandle(filename, /* aPrintError */ false);
   if (handle) {
     return handle;
   }
@@ -444,6 +455,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayStableHashTableAddEntryForLastLookup", gStableHashTableAddEntryForLastLookup);
   LoadSymbol("RecordReplayStableHashTableMoveEntry", gStableHashTableMoveEntry);
   LoadSymbol("RecordReplayStableHashTableDeleteEntry", gStableHashTableDeleteEntry);
+  LoadSymbol("RecordReplayIsRecordingCreated", gIsRecordingCreated);
+  LoadSymbol("RecordReplayWaitForRecordingCreated", gWaitForRecordingCreated);
 
   if (apiKey) {
     gSetApiKey(apiKey->c_str());
@@ -766,6 +779,10 @@ MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(FaultCallback aCallback) 
 
 }  // extern "C"
 
+bool IsRecordingCreated() {
+  return gIsRecordingCreated();
+}
+
 bool IsUploadingRecording() {
   return gUploadingRecording;
 }
@@ -887,6 +904,13 @@ void RememberRecording() {
 static bool gTearingDown;
 
 void FinishRecording() {
+  // SendRecordingFinished will inform the parent process if the recording is
+  // finished or unusable, but we don't want to do that until we are sure
+  // that the connection has either:
+  //  a) opened and created the recording in our DB
+  //  b) failed and marked the recording as unusable
+  gWaitForRecordingCreated();
+
   js::SendRecordingFinished();
 
   gFinishRecording();
