@@ -407,11 +407,11 @@ if (ReplayAuth.hasOriginalApiKey()) {
   ensureAccessTokenStateSynchronized();
 }
 
-const beginRecordingResourceUpload = wrapRetryCommand(recordingId => {
+const beginRecordingResourceUpload = recordingId => {
   return sendCommand("Internal.beginRecordingResourceUpload", {
     recordingId: recordingId,
   });
-});
+};
 
 const SEEN_MANAGERS = new WeakSet();
 class Recording extends EventEmitter {
@@ -424,16 +424,18 @@ class Recording extends EventEmitter {
 
     this._pmm = pmm;
     this._resourceUploads = [];
+    this._recordingCreatedPromise = new Promise(resolve => {
+      this._recordingCreatedResolve = resolve;
+    });
 
     this._recordingResourcesUpload = null;
 
+    this._pmm.addMessageListener("RecordReplayRecordingCreated", {
+      receiveMessage: msg => this._onRecordingCreated(),
+    });
     this._pmm.addMessageListener("RecordReplayGeneratedSourceWithSourceMap", {
       receiveMessage: msg => this._onNewSourcemap(msg.data),
     });
-    this._pmm.addMessageListener("RecordReplayRecordingCreated", {
-      receiveMessage: msg => this._onRecordingCreated(msg.data),
-    });
-
     this._pmm.addMessageListener("RecordingFinished", {
       receiveMessage: msg => this._onFinished(msg.data),
     });
@@ -469,9 +471,15 @@ class Recording extends EventEmitter {
       return;
     }
 
-    this._recordingResourcesUpload = beginRecordingResourceUpload(recordingId).then(
-      params => params.key,
-      err => {
+    this._recordingResourcesUpload = (async () => {
+      if (!await this._recordingCreatedPromise) {
+        return null;
+      }
+
+      try {
+        const { key } = await beginRecordingResourceUpload(recordingId);
+        return key;
+      } catch (err) {
         console.error("Failed to tell the server about in-progress resource uploading", err);
         pingTelemetry("sourcemap-upload", "lock-exception", {
           message: err?.message,
@@ -482,8 +490,8 @@ class Recording extends EventEmitter {
         // might still succeed in the background, it'll just be a race and the sourcemaps
         // may not apply until the user creates a second debugging session.
         return null;
-      },
-    );
+      }
+    })();
   }
 
   _unlockRecording(recordingId) {
@@ -513,36 +521,44 @@ class Recording extends EventEmitter {
     if (params.isUploadingRecording) {
       this._lockRecording(params.recordingId);
 
-      this._resourceUploads.push(uploadAllSourcemapAssets(params, this.browser).catch(err => {
-        console.error("Exception while processing sourcemap", err, params);
+      this._resourceUploads.push(
+        uploadAllSourcemapAssets(
+          params,
+          this.browser,
+          this._recordingCreatedPromise
+        ).catch(err => {
+          console.error("Exception while processing sourcemap", err, params);
 
-        pingTelemetry("sourcemap-upload", "upload-exception", {
-          message: err?.message,
-          stack: err?.stack,
-          recordingId: params.recordingId,
-          commandErrorData: err instanceof CommandError ? err.data : undefined,
-        });
-      }));
+          pingTelemetry("sourcemap-upload", "upload-exception", {
+            message: err?.message,
+            stack: err?.stack,
+            recordingId: params.recordingId,
+            commandErrorData: err instanceof CommandError ? err.data : undefined,
+          });
+        })
+      );
     } else {
-      this._resourceUploads.push(writeAllSourcemapAssets(params, this.browser).catch(err => {
-        console.error("Exception while writing sourcemap", err, params);
+      this._resourceUploads.push(
+        writeAllSourcemapAssets(params, this.browser).catch(err => {
+          console.error("Exception while writing sourcemap", err, params);
 
-        pingTelemetry("sourcemap-write", "write-exception", {
-          message: err?.message,
-          stack: err?.stack,
-          recordingId: params.recordingId,
-          commandErrorData: err instanceof CommandError ? err.data : undefined,
-        });
-      }));
+          pingTelemetry("sourcemap-write", "write-exception", {
+            message: err?.message,
+            stack: err?.stack,
+            recordingId: params.recordingId,
+            commandErrorData: err instanceof CommandError ? err.data : undefined,
+          });
+        })
+      );
     }
   }
-
-  _onRecordingCreated(data) {
-    // Once this arrives, _then_ send API requeests to upload sourcemaps
-
+  _onRecordingCreated() {
+    this._recordingCreatedResolve(true);
   }
 
   async _onFinished(data) {
+    this._recordingCreatedResolve(true);
+
     const recordingMetadata = {
       id: data.id,
       url: data.url,
@@ -590,6 +606,7 @@ class Recording extends EventEmitter {
   }
 
   _onUnusable(data) {
+    this._recordingCreatedResolve(false);
     this._unlockRecording(null);
 
     this.emit("unusable", data);
@@ -1168,7 +1185,7 @@ function uploadSourceMap(
 ) {
   return withUploadedResource(
     mapText,
-    wrapRetryCommand(async (resource) => {
+    async (resource) => {
       const result = await sendCommand("Recording.addSourceMap", {
         recordingId,
         resource,
@@ -1178,7 +1195,7 @@ function uploadSourceMap(
         targetMapURLHash,
       })
       return result.id;
-    })
+    }
   );
 }
 
@@ -1189,7 +1206,7 @@ async function uploadAllSourcemapAssets({
   targetMapURLHash,
   sourceMapURL,
   sourceMapBaseURL
-}, browser) {
+}, browser, recordingCreatedPromise) {
   const contentPrincipal = browser.contentPrincipal;
   const result = await fetchText(contentPrincipal, recordingId, sourceMapURL);
   if (!result) {
@@ -1204,11 +1221,17 @@ async function uploadAllSourcemapAssets({
   let mapIdPromise;
   function ensureMapUploading() {
     if (!mapIdPromise) {
-      mapIdPromise = uploadSourceMap(recordingId, mapText, sourceMapBaseURL, {
-        targetContentHash,
-        targetURLHash,
-        targetMapURLHash
-      });
+      mapIdPromise = (async () => {
+        if (!await recordingCreatedPromise) {
+          return null;
+        }
+
+        await uploadSourceMap(recordingId, mapText, sourceMapBaseURL, {
+          targetContentHash,
+          targetURLHash,
+          targetMapURLHash
+        });
+      })();
       mapIdPromise.catch(() => {
         mapUploadFailed = true;
       });
@@ -1236,7 +1259,7 @@ async function uploadAllSourcemapAssets({
         ensureMapUploading(),
         withUploadedResource(
           result.text,
-          wrapRetryCommand(async (resource) => {
+          async (resource) => {
             let parentId;
             try {
               parentId = await ensureMapUploading();
@@ -1247,13 +1270,18 @@ async function uploadAllSourcemapAssets({
               return;
             }
 
+            if (!parentId) {
+              // No-op if the driver failed to create the recording.
+              return;
+            }
+
             await sendCommand("Recording.addOriginalSource", {
               recordingId,
               resource,
               parentId,
               parentOffset: offset,
             });
-          })
+          }
         )
       ]);
     })),
@@ -1540,30 +1568,6 @@ async function withUploadedResource(text, callback) {
   }
 
   return callback(await uploadResource(text));
-}
-
-const READY_RETRY_COUNT = 5;
-
-function wrapRetryCommand(callback) {
-  return async (...args) => {
-    for (let i = 0; i < READY_RETRY_COUNT - 1; i++) {
-      try {
-        return await callback(...args);
-      } catch (err) {
-        // If the command fail with an "Invalid Recording ID", that may be because
-        // the backend hasn't finished creating the recording yet so we retry a
-        // few times to allow that process to finish.
-        if (err instanceof CommandError && err.code === 9) {
-          console.error("Recording is not ready yet, retrying", err);
-          await new Promise(resolve => setTimeout(resolve, 250));
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    return callback(...args);
-  };
 }
 
 Services.ppmm.addMessageListener("RecordingStarting", {
