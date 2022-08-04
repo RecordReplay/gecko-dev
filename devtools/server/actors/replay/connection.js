@@ -1476,7 +1476,7 @@ async function fetchText(contentPrincipal, recordingId, url) {
   }
 
   try {
-    const {inputStream, resultCode, statusCode} = await new Promise((resolve, reject) => {
+    const {inputStream, resultCode, statusCode, charset} = await new Promise((resolve, reject) => {
       const channel = NetUtil.newChannel({
         uri: urlObj.toString(),
         loadingPrincipal: contentPrincipal,
@@ -1498,6 +1498,7 @@ async function fetchText(contentPrincipal, recordingId, url) {
           inputStream,
           resultCode,
           statusCode,
+          charset: channel.contentCharset || undefined,
         });
       });
     });
@@ -1515,7 +1516,7 @@ async function fetchText(contentPrincipal, recordingId, url) {
       return null;
     }
 
-    const str = NetUtil.readInputStreamToString(inputStream, inputStream.available());
+    const str = NetUtil.readInputStreamToString(inputStream, inputStream.available(), { charset });
     inputStream.close();
 
     return {
