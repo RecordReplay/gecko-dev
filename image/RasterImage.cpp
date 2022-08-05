@@ -83,6 +83,13 @@ RasterImage::RasterImage(nsIURI* aURI /* = nullptr */)
 
 //******************************************************************************
 RasterImage::~RasterImage() {
+  // RasterImages may be destroyed nondeterministically, but take
+  // incidental locks on the cache to remove items, where ordering
+  // shouldn't matter.
+  // See issue822, and linear #BAC-978.
+  // https://linear.app/replay/issue/BAC-978/mismatch-orderedlock-imgrequest
+  mozilla::recordreplay::AutoDisallowThreadEvents disallowThreadEvents;
+
   // Make sure our SourceBuffer is marked as complete. This will ensure that any
   // outstanding decoders terminate.
   if (!mSourceBuffer->IsComplete()) {
