@@ -504,7 +504,8 @@ gNewGlobalHooks.push(dbgWindow => {
     if (!getenv("RECORD_REPLAY_DISABLE_REACT_DEVTOOLS")) {
       initReactDevtools(dbgWindow, RecordReplayControl);
     }
-    if (!getenv("RECORD_REPLAY_DISABLE_REDUX_DEVTOOLS")) {
+    if (Services.prefs.getBoolPref("devtools.recordreplay.enableReduxDevTools")
+        && !getenv("RECORD_REPLAY_DISABLE_REDUX_DEVTOOLS")) {
       initReduxDevtools(dbgWindow, RecordReplayControl);
     }
   }
