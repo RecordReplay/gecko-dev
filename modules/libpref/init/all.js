@@ -71,7 +71,9 @@ pref("security.password_lifetime",       30);
 // This preference takes precedence over "security.enterprise_roots.enabled".
 pref("security.family_safety.mode", 2);
 
-pref("security.enterprise_roots.enabled", false);
+// [Replay] we enable it by default so that enterprise customers
+// can use their cerftificates by default
+pref("security.enterprise_roots.enabled", true);
 
 // If true, attempt to load the osclientcerts PKCS#11 module at startup on a
 // background thread. This module allows Firefox to use client certificates
