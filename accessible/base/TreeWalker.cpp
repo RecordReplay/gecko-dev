@@ -314,6 +314,10 @@ LocalAccessible* TreeWalker::Prev() {
 
 LocalAccessible* TreeWalker::AccessibleFor(nsIContent* aNode, uint32_t aFlags,
                                            bool* aSkipSubtree) {
+  // https://linear.app/replay/issue/RUN-462
+  recordreplay::RecordReplayAssert("TreeWalker::AccessibleFor id=%zu",
+                                    recordreplay::ThingIndex(aNode));
+
   // Ignore the accessible and its subtree if it was repositioned by means
   // of aria-owns.
   LocalAccessible* child = mDoc->GetAccessible(aNode);

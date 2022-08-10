@@ -2048,6 +2048,11 @@ bool InsertIterator::Next() {
 
   while (mNodesIdx < mNodes->Length()) {
     nsIContent* node = mNodes->ElementAt(mNodesIdx++);
+
+    // https://linear.app/replay/issue/RUN-462
+    recordreplay::RecordReplayAssert("InsertIterator::Next #2 index=%u id=%zu",
+                                     mNodesIdx - 1, recordreplay::ThingIndex(node));
+
     // Check to see if we already processed this node with this iterator.
     // this can happen if we get two redundant insertions in the case of a
     // text and frame insertion.
