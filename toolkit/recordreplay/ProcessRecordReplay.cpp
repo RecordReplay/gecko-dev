@@ -498,13 +498,6 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
     gIsReplaying = gRecordReplayIsReplaying();
   }
 
-  const char* logFile = getenv("RECORD_REPLAY_CRASH_LOG");
-  if (logFile) {
-    void (*SetCrashLogFile)(const char*);
-    LoadSymbol("RecordReplaySetCrashLogFile", SetCrashLogFile);
-    SetCrashLogFile(logFile);
-  }
-
   void (*SetFreeCallback)(void (*aCallback)(void*));
   LoadSymbol("RecordReplaySetFreeCallback", SetFreeCallback);
   SetFreeCallback(FreeCallback);
