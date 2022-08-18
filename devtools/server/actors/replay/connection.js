@@ -1493,12 +1493,16 @@ async function fetchText(contentPrincipal, recordingId, url) {
           // This will throw if the statuscode is unavailable.
           statusCode = request.responseStatus;
         } catch { }
+        let charset = undefined;
+        try {
+          charset = channel.contentCharset || undefined;
+        } catch { }
         clearTimeout(timer);
         resolve({
           inputStream,
           resultCode,
           statusCode,
-          charset: channel.contentCharset || undefined,
+          charset,
         });
       });
     });
