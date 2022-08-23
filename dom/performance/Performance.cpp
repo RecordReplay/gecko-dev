@@ -98,6 +98,9 @@ DOMHighResTimeStamp Performance::TimeStampToDOMHighResForRendering(
 }
 
 DOMHighResTimeStamp Performance::Now() {
+  // https://linear.app/replay/issue/FE-589
+  recordreplay::AssertScriptedCaller("Performance::Now");
+
   DOMHighResTimeStamp rawTime = NowUnclamped();
 
   // XXX: Remove this would cause functions in pkcs11f.h to fail.

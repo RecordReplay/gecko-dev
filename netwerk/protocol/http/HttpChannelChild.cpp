@@ -91,6 +91,9 @@ HttpChannelChild::HttpChannelChild()
       mSuspendedByWaitingForPermissionCookie(false) {
   LOG(("Creating HttpChannelChild @%p\n", this));
 
+  // https://linear.app/replay/issue/FE-589
+  recordreplay::RecordReplayAssert("HttpChannelChild::HttpChannelChild");
+
   mChannelCreationTime = PR_Now();
   mChannelCreationTimestamp = TimeStamp::Now();
   mLastStatusReported =
