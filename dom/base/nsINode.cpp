@@ -206,14 +206,12 @@ nsINode::nsINode(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
       mPreviousOrLastSibling(nullptr),
       mSubtreeRoot(this),
       mSlots(nullptr) {
-  recordreplay::RegisterThing(this);
 }
 #endif
 
 nsINode::~nsINode() {
   MOZ_ASSERT(!HasSlots(), "LastRelease was not called?");
   MOZ_ASSERT(mSubtreeRoot == this, "Didn't restore state properly?");
-  recordreplay::UnregisterThing(this);
 }
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED

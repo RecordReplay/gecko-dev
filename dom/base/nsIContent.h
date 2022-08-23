@@ -58,6 +58,7 @@ class nsIContent : public nsINode {
       : nsINode(std::move(aNodeInfo)) {
     MOZ_ASSERT(mNodeInfo);
     MOZ_ASSERT(static_cast<nsINode*>(this) == reinterpret_cast<nsINode*>(this));
+    mozilla::recordreplay::RegisterThing(this);
     SetNodeIsContent();
   }
 #endif  // MOZILLA_INTERNAL_API
@@ -767,7 +768,9 @@ class nsIContent : public nsINode {
    */
   nsAtom* DoGetID() const;
 
-  ~nsIContent() = default;
+  ~nsIContent() {
+    mozilla::recordreplay::UnregisterThing(this);
+  }
 
  public:
 #if defined(DEBUG) || defined(MOZ_DUMP_PAINTING)
