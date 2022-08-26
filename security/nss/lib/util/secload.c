@@ -2,12 +2,32 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#define _GNU_SOURCE
+#include <dlfcn.h>
+
 #include "secport.h"
 #include "nspr.h"
 
 #ifdef XP_UNIX
 #include <unistd.h>
 #define BL_MAXSYMLINKS 20
+
+static void (*gRecordReplayAssertFn)(const char*, va_list);
+
+static void RecordReplayAssertFromC(const char* aFormat, ...) {
+  if (!gRecordReplayAssertFn) {
+    void* fnptr = dlsym(RTLD_DEFAULT, "RecordReplayAssert");
+    if (!fnptr) {
+      return;
+    }
+    gRecordReplayAssertFn = fnptr;
+  }
+
+  va_list ap;
+  va_start(ap, aFormat);
+  gRecordReplayAssertFn(aFormat, ap);
+  va_end(ap);
+}
 
 /*
  * If 'link' is a symbolic link, this function follows the symbolic links
@@ -19,6 +39,8 @@
 static char*
 loader_GetOriginalPathname(const char* link)
 {
+    RecordReplayAssertFromC("loader_GetOriginalPathname Start %s", link);
+
     char* resolved = NULL;
     char* input = NULL;
     PRUint32 iterations = 0;
@@ -40,13 +62,21 @@ loader_GetOriginalPathname(const char* link)
         return NULL;
     }
     strcpy(input, link);
+
+    RecordReplayAssertFromC("loader_GetOriginalPathname #1 %s", input);
+
     while ((iterations++ < BL_MAXSYMLINKS) &&
            ((retlen = readlink(input, resolved, len - 1)) > 0)) {
         char* tmp = input;
         resolved[retlen] = '\0'; /* NULL termination */
         input = resolved;
         resolved = tmp;
+
+        RecordReplayAssertFromC("loader_GetOriginalPathname #2 %s", input);
     }
+
+    RecordReplayAssertFromC("loader_GetOriginalPathname Done %s", link);
+
     PR_Free(resolved);
     if (iterations == 1 && retlen < 0) {
         PR_Free(input);
