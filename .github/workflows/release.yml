@@ -9,10 +9,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Connect to Tailscale
-        uses: tailscale/github-action@effa99fe9dc68518c77d0e7c00879f6599714d39
+        uses: tailscale/github-action@e870a1112fcc1faeeeeea3c1b0ce544e5ad01844
         with:
           authkey: ${{ secrets.TAILSCALE_API_KEY }}
-          version: "1.26.0"
+          version: "1.28.0"
       - uses: actions/checkout@v2
         with:
           ref: replay-playwright
@@ -22,6 +22,6 @@ jobs:
       - uses: ./.github/actions/release
         env:
           BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
-          BUILD_TEST_HOSTNAME: build-server.replay.prod
+          BUILD_TEST_HOSTNAME: a49855c191a944333918aea7ad31bc76-6a8a830d89921d8a.elb.us-east-2.amazonaws.com
           BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
