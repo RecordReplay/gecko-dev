@@ -410,6 +410,27 @@ PR_LoadLibrary(const char *name)
     return PR_LoadLibraryWithFlags(libSpec, 0);
 }
 
+#ifndef WIN32
+
+static void (*gRecordReplayDiagnosticFn)(const char*, va_list);
+
+static void RecordReplayDiagnosticFromC(const char* aFormat, ...) {
+  if (!gRecordReplayDiagnosticFn) {
+    void* fnptr = dlsym(RTLD_DEFAULT, "RecordReplayDiagnostic");
+    if (!fnptr) {
+      return;
+    }
+    gRecordReplayDiagnosticFn = fnptr;
+  }
+
+  va_list ap;
+  va_start(ap, aFormat);
+  gRecordReplayDiagnosticFn(aFormat, ap);
+  va_end(ap);
+}
+
+#endif // !WIN32
+
 /*
 ** Dynamically load a library. Only load libraries once, so scan the load
 ** map first.
@@ -626,6 +647,9 @@ pr_LoadLibraryByPathname(const char *name, PRIntn flags)
 
 unlock:
     if (result == NULL) {
+#ifndef WIN32
+        RecordReplayDiagnosticFromC("pr_LoadLibraryByPathname failed %s", name);
+#endif
         PR_SetError(PR_LOAD_LIBRARY_ERROR, oserr);
         DLLErrorInternal(oserr);  /* sets error text */
     }
