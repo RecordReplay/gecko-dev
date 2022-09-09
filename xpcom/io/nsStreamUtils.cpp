@@ -233,7 +233,7 @@ class nsAStreamCopier : public nsIInputStreamCallback,
 
   nsAStreamCopier()
       : CancelableRunnable("nsAStreamCopier"),
-        mLock("nsAStreamCopier.mLock"),
+        mLock("nsAStreamCopier.mLock", /* aOrdered */ true),
         mCallback(nullptr),
         mProgressCallback(nullptr),
         mClosure(nullptr),
