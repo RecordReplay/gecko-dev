@@ -1628,7 +1628,7 @@ nsPipeOutputStream::AddRef() {
   // Ensure the pipe is closed at a consistent point when replaying by only
   // modifying the refcount within an ordered lock.
   {
-    ReentrantMonitorAutoEnter mon(mPipe->mReentrantMonitor);
+    ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mPipe->mReentrantMonitor);
     ++mWriterRefCnt;
   }
   return mPipe->AddRef();
