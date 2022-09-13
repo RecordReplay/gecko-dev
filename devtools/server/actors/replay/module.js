@@ -1145,10 +1145,14 @@ function Target_getSourceMapURL({ sourceId }) {
 function Debugger_getSourceContents({ sourceId }) {
   const source = protocolSourceIdToSource(sourceId);
 
+  log(`GET_SOURCE_CONTENTS START`);
+
   let contents = source.text;
   if (source.startLine > 1) {
     contents = "\n".repeat(source.startLine - 1) + contents;
   }
+
+  log(`GET_SOURCE_CONTENTS DONE`);
 
   return {
     contents,
