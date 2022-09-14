@@ -1632,6 +1632,9 @@ nsPipeOutputStream::AddRef() {
 NS_IMETHODIMP_(MozExternalRefCountType)
 nsPipeOutputStream::Release() {
   if (--mWriterRefCnt == 0) {
+    // Because the refcount is threadsafe, the final release can occur at
+    // non-deterministic points.
+    recordreplay::AutoDisallowThreadEvents disallow;
     Close();
   }
   return mPipe->Release();
