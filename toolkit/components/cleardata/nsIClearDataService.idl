@@ -276,11 +276,6 @@ interface nsIClearDataService : nsISupports
   const uint32_t CLEAR_CLIENT_AUTH_REMEMBER_SERVICE = 1 << 24;
 
   /**
-   * Clear the CORS preflight cache.
-   */
-  const uint32_t CLEAR_PREFLIGHT_CACHE = 1 << 24;
-
-  /**
    * Use this value to delete all the data.
    */
   const uint32_t CLEAR_ALL = 0xFFFFFFFF;

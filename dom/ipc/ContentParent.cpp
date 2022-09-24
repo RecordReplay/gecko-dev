@@ -1515,7 +1515,8 @@ already_AddRefed<RemoteBrowser> ContentParent::CreateBrowser(
           aContext.JSPluginId(), PROCESS_PRIORITY_FOREGROUND);
     } else {
       constructorSender = GetNewOrUsedBrowserProcess(
-          remoteType, aBrowsingContext->Group(), PROCESS_PRIORITY_FOREGROUND, recording);
+          remoteType, aBrowsingContext->Group(), PROCESS_PRIORITY_FOREGROUND,
+          /* aPreferUsed */ true, recording);
     }
     if (!constructorSender) {
       return nullptr;

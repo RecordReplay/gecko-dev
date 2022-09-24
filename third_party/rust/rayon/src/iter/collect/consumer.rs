@@ -1,7 +1,6 @@
 use super::super::plumbing::*;
 use crate::SendPtr;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
 use std::ptr;
 use std::slice;
 

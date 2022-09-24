@@ -75,13 +75,6 @@ bool WindowContext::IsInBFCache() {
   return TopWindowContext()->GetWindowStateSaved();
 }
 
-bool WindowContext::IsInBFCache() {
-  if (mozilla::SessionHistoryInParent()) {
-    return mBrowsingContext->IsInBFCache();
-  }
-  return TopWindowContext()->GetWindowStateSaved();
-}
-
 nsGlobalWindowInner* WindowContext::GetInnerWindow() const {
   return mWindowGlobalChild ? mWindowGlobalChild->GetWindowGlobal() : nullptr;
 }

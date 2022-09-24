@@ -192,9 +192,9 @@ already_AddRefed<nsISupports> CanvasRenderingContextHelper::GetOrCreateContext(
   if (!mCurrentContext) {
     if (recordreplay::IsRecordingOrReplaying()) {
       // GL/GPU contexts are not supported when recording/replaying.
-      if (contextType == CanvasContextType::WebGL1 ||
-          contextType == CanvasContextType::WebGL2 ||
-          contextType == CanvasContextType::WebGPU) {
+      if (aContextType == CanvasContextType::WebGL1 ||
+          aContextType == CanvasContextType::WebGL2 ||
+          aContextType == CanvasContextType::WebGPU) {
         recordreplay::ReportUnsupportedFeature("WebGL", 58);
         return nullptr;
       }

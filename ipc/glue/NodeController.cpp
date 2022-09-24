@@ -770,7 +770,7 @@ std::tuple<ScopedPort, RefPtr<NodeChannel>> NodeController::InviteChildProcess(
   }
 
   nodeChannel->Start(/* aCallConnect */ false);
-  return std::tuple{std::move(ports.first), std::move(nodeChannel)};
+  return std::tuple<ScopedPort, RefPtr<NodeChannel>>{std::move(ports.first), std::move(nodeChannel)};
 }
 
 void NodeController::InitBrokerProcess() {

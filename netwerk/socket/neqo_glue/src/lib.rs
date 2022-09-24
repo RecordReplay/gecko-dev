@@ -31,7 +31,6 @@ use std::str;
 #[cfg(feature = "fuzzing")]
 use std::time::Duration;
 use std::time::Instant;
-use std::borrow::Cow;
 use thin_vec::ThinVec;
 #[cfg(windows)]
 use winapi::shared::ws2def::{AF_INET, AF_INET6};

@@ -211,8 +211,6 @@
 //! options during builds. For more information, see the [Performance
 //! guide](https://rust-lang-nursery.github.io/packed_simd/perf-guide/)
 
-#![cfg_attr(const_generics, feature(const_generics))]
-#![cfg_attr(not(const_generics), feature(adt_const_params))]
 #![feature(
     adt_const_params,
     repr_simd,

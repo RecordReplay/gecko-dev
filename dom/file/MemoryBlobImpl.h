@@ -128,12 +128,6 @@ class MemoryBlobImpl final : public BaseBlobImpl {
     DataOwnerAdapter(DataOwner* aDataOwner, Span<const char> aData)
         : mDataOwner(aDataOwner), mData(aData) {}
 
-    template <typename M>
-    void SerializeInternal(mozilla::ipc::InputStreamParams& aParams,
-                           FileDescriptorArray& aFileDescriptors,
-                           bool aDelayedStart, uint32_t aMaxSize,
-                           uint32_t* aSizeUsed, M* aManager);
-
     RefPtr<DataOwner> mDataOwner;
     Span<const char> mData;
   };

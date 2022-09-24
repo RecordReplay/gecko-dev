@@ -392,16 +392,9 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
       mWillChangeProcess(false),
       mIsNavigating(false),
       mSuspendMediaWhenInactive(false),
-<<<<<<< HEAD
-      mForcedAutodetection(false),
-      mNeedToReportActiveAfterLoadingBecomesActive(false) {
-||||||| 7a0b6967f65c
-      mForcedAutodetection(false) {
-=======
       mForcedAutodetection(false),
       mCheckingSessionHistory(false),
       mNeedToReportActiveAfterLoadingBecomesActive(false) {
->>>>>>> esr102
   // If no outer window ID was provided, generate a new one.
   recordreplay::RegisterThing(this);
   if (aContentWindowID == 0) {

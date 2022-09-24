@@ -680,61 +680,6 @@ impl<T: ?Sized + Pointable> Atomic<T> {
     /// value is the same as `current`. The tag is also taken into account, so two pointers to the
     /// same object, but with different tags, will not be considered equal.
     ///
-    /// The return value is a result indicating whether the new pointer was written. On success the
-    /// pointer that was written is returned. On failure the actual current value and `new` are
-    /// returned.
-    ///
-    /// This method takes a [`CompareAndSetOrdering`] argument which describes the memory
-    /// ordering of this operation.
-    ///
-    /// # Migrating to `compare_exchange`
-    ///
-    /// `compare_and_set` is equivalent to `compare_exchange` with the following mapping for
-    /// memory orderings:
-    ///
-    /// Original | Success | Failure
-    /// -------- | ------- | -------
-    /// Relaxed  | Relaxed | Relaxed
-    /// Acquire  | Acquire | Acquire
-    /// Release  | Release | Relaxed
-    /// AcqRel   | AcqRel  | Acquire
-    /// SeqCst   | SeqCst  | SeqCst
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #![allow(deprecated)]
-    /// use crossbeam_epoch::{self as epoch, Atomic, Owned, Shared};
-    /// use std::sync::atomic::Ordering::SeqCst;
-    ///
-    /// let a = Atomic::new(1234);
-    ///
-    /// let guard = &epoch::pin();
-    /// let curr = a.load(SeqCst, guard);
-    /// let res1 = a.compare_and_set(curr, Shared::null(), SeqCst, guard);
-    /// let res2 = a.compare_and_set(curr, Owned::new(5678), SeqCst, guard);
-    /// ```
-    // TODO: remove in the next major version.
-    #[allow(deprecated)]
-    #[deprecated(note = "Use `compare_exchange` instead")]
-    pub fn compare_and_set<'g, O, P>(
-        &self,
-        current: Shared<'_, T>,
-        new: P,
-        ord: O,
-        guard: &'g Guard,
-    ) -> Result<Shared<'g, T>, CompareAndSetError<'g, T, P>>
-    where
-        O: CompareAndSetOrdering,
-        P: Pointer<T>,
-    {
-        self.compare_exchange(current, new, ord.success(), ord.failure(), guard)
-    }
-
-    /// Stores the pointer `new` (either `Shared` or `Owned`) into the atomic pointer if the current
-    /// value is the same as `current`. The tag is also taken into account, so two pointers to the
-    /// same object, but with different tags, will not be considered equal.
-    ///
     /// Unlike [`compare_and_set`], this method is allowed to spuriously fail even when comparison
     /// succeeds, which can result in more efficient code on some platforms.  The return value is a
     /// result indicating whether the new pointer was written. On success the pointer that was

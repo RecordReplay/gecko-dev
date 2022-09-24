@@ -124,9 +124,6 @@ class WindowContext : public nsISupports, public nsWrapperCache {
   // Returns `true` if this WindowContext is currently in the BFCache.
   bool IsInBFCache();
 
-  // Returns `true` if this WindowContext is currently in the BFCache.
-  bool IsInBFCache();
-
   bool IsInProcess() const { return mIsInProcess; }
 
   bool HasBeforeUnload() const { return GetHasBeforeUnload(); }

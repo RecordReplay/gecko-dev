@@ -28,7 +28,7 @@ AnimationSurfaceProvider::AnimationSurfaceProvider(
       mImage(aImage.get()),
       mDecodingMutex("AnimationSurfaceProvider::mDecoder"),
       mDecoder(aDecoder.get()),
-      mFramesMutex("AnimationSurfaceProvider::mFrames", /* aOrdered */ true) {
+      mFramesMutex("AnimationSurfaceProvider::mFrames", /* aOrdered */ true),
       mCompositedFrameRequested(false),
       mSharedAnimation(MakeRefPtr<SharedSurfacesAnimation>()) {
   MOZ_ASSERT(!mDecoder->IsMetadataDecode(),

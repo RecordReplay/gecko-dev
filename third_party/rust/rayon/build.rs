@@ -9,7 +9,4 @@ fn main() {
     if ac.probe_path("std::ops::ControlFlow") {
         autocfg::emit("has_control_flow");
     }
-    if ac.probe_expression("{ fn foo<const N: usize>() {} }") {
-        autocfg::emit("min_const_generics");
-    }
 }

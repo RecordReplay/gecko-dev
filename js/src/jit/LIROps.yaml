@@ -278,6 +278,15 @@
   call_instruction: true
   mir_op: true
 
+- name: ExecutionProgress
+  gen_boilerplate: false
+
+- name: TrackObject
+  gen_boilerplate: false
+
+- name: RecordReplayAssertValue
+  gen_boilerplate: false
+
 - name: CheckOverRecursed
   mir_op: true
 

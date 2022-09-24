@@ -1236,7 +1236,7 @@ class SurfaceCacheImpl final : public nsIMemoryReporter {
 
   already_AddRefed<CachedSurface> GetSurfaceForResetAnimation(
       const ImageKey aImageKey, const SurfaceKey& aSurfaceKey,
-      const StaticMutexAutoLock& aAutoLock) {
+      const OrderedStaticMutexAutoLock& aAutoLock) {
     RefPtr<CachedSurface> surface;
 
     RefPtr<ImageSurfaceCache> cache = GetImageCache(aImageKey);
@@ -1797,7 +1797,7 @@ bool SurfaceCache::InvalidateImage(const ImageKey aImageKey) {
   nsTArray<RefPtr<CachedSurface>> discard;
   bool rv = false;
   {
-    StaticMutexAutoLock lock(sInstanceMutex);
+    OrderedStaticMutexAutoLock lock(sInstanceMutex);
     if (sInstance) {
       rv = sInstance->InvalidateImage(aImageKey, lock);
       sInstance->TakeDiscard(discard, lock);
@@ -1824,7 +1824,7 @@ void SurfaceCache::ResetAnimation(const ImageKey aImageKey,
   RefPtr<CachedSurface> surface;
   nsTArray<RefPtr<CachedSurface>> discard;
   {
-    StaticMutexAutoLock lock(sInstanceMutex);
+    OrderedStaticMutexAutoLock lock(sInstanceMutex);
     if (!sInstance) {
       return;
     }

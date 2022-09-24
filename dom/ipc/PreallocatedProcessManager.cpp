@@ -42,7 +42,7 @@ class PreallocatedProcessManagerImpl final : public nsIObserver {
   static void AddBlocker();
   static void RemoveBlocker();
   already_AddRefed<ContentParent> Take(const nsACString& aRemoteType);
-  bool Erase(ContentParent* aParent);
+  void Erase(ContentParent* aParent);
 
  private:
   static const char* const kObserverTopics[];
@@ -52,8 +52,7 @@ class PreallocatedProcessManagerImpl final : public nsIObserver {
 
   static nsresult GetReplayDispatchServer(nsAString& dispatchServer);
 
-  PreallocatedProcessManagerImpl();
-  PreallocatedProcessManagerImpl(const nsAString& aRecordingDispatchAddress);
+  PreallocatedProcessManagerImpl(const nsAString& aRecordingDispatchAddress = nsString());
   ~PreallocatedProcessManagerImpl();
   PreallocatedProcessManagerImpl(const PreallocatedProcessManagerImpl&) =
       delete;
@@ -141,7 +140,7 @@ PreallocatedProcessManagerImpl::SingletonForRecording() {
 
 NS_IMPL_ISUPPORTS(PreallocatedProcessManagerImpl, nsIObserver)
 
-PreallocatedProcessManagerImpl::PreallocatedProcessManagerImpl(const nsAString& aRecordingDispatchAddress = nsString())
+PreallocatedProcessManagerImpl::PreallocatedProcessManagerImpl(const nsAString& aRecordingDispatchAddress)
     : mEnabled(false), mNumberPreallocs(1), mRecordingDispatchAddress(aRecordingDispatchAddress) {}
 
 PreallocatedProcessManagerImpl::~PreallocatedProcessManagerImpl() {

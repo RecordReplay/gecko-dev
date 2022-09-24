@@ -357,7 +357,7 @@ bool IonGetNameIC::update(JSContext* cx, HandleScript outerScript,
     return false;
   }
 
-  if (HasTrailingTypeOf(pc)) {
+  if (JSOp(*GetNextPc(pc)) == JSOp::Typeof) {
     return FetchName<GetNameMode::TypeOf>(cx, obj, holder, name, prop, res);
   }
 

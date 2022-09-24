@@ -1303,24 +1303,6 @@ void RasterImage::RecoverFromInvalidFrames(const OrientedIntSize& aSize,
 
 bool RasterImage::CanDownscaleDuringDecode(const OrientedIntSize& aSize,
                                            uint32_t aFlags) {
-  {
-    // [Replay-Diagnostic] Mismatch under RasterImage::LookupFrame
-    // https://github.com/RecordReplay/backend/issues/4719
-    UnorientedIntSize ourSize = ToUnoriented(mSize);
-    mozilla::recordreplay::RecordReplayAssert(
-      "RasterImage::CanDownscaleDuringDecode():"
-      " loadHasSize=%d loadTransient=%d haveSkia=%d "
-      " imageDownscaleEnabled=%d hqScaling=%d"
-      " animationState=%d aWidth=%d aHeight=%d ourWidth=%d ourHeight=%d",
-      (int) LoadHasSize(), (int) LoadTransient(), (int) HaveSkia(),
-      (int) StaticPrefs::image_downscale_during_decode_enabled(),
-      (int) (aFlags & imgIContainer::FLAG_HIGH_QUALITY_SCALING),
-      (int) !!mAnimationState,
-      aSize.width, aSize.height,
-      ourSize.width, ourSize.height
-    );
-  }
-
   // Check basic requirements: downscale-during-decode is enabled, Skia is
   // available, this image isn't transient, we have all the source data and know
   // our size, and the flags allow us to do it.

@@ -36,8 +36,8 @@ inline JSObject* js::ErrorObject::stack() const {
 }
 
 inline uint64_t js::ErrorObject::timeWarpTarget() const {
-  const HeapSlot& slot = getReservedSlotRef(TIME_WARP_SLOT);
-  return slot.isNumber() ? slot.toNumber() : 0;
+  Value val = getReservedSlot(TIME_WARP_SLOT);
+  return val.isNumber() ? val.toNumber() : 0;
 }
 
 #endif /* vm_ErrorObject_inl_h */

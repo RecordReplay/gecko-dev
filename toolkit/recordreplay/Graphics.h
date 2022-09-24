@@ -9,13 +9,9 @@
 #ifndef mozilla_recordreplay_Graphics_h
 #define mozilla_recordreplay_Graphics_h
 
-#include "mozilla/layers/BasicCompositor.h"
 #include "mozilla/layers/BufferTexture.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/ImageDataSerializer.h"
-#include "mozilla/layers/LayerManagerComposite.h"
-#include "mozilla/layers/LayerTransactionChild.h"
-#include "mozilla/layers/LayerTransactionParent.h"
 #include "mozilla/layers/LayersMessages.h"
 
 namespace mozilla::recordreplay {
@@ -30,16 +26,6 @@ void RegisterTextureChild(layers::PTextureChild* aChild,
 layers::TextureHost* CreateTextureHost(layers::PTextureChild* aChild);
 
 TimeStamp CompositeTime();
-
-void SendUpdate(layers::LayerTransactionChild* aChild,
-                const layers::TransactionInfo& aInfo);
-void SendNewCompositable(layers::LayerTransactionChild* aChild,
-                         const layers::CompositableHandle& aHandle,
-                         const layers::TextureInfo& aInfo);
-void SendReleaseCompositable(layers::LayerTransactionChild* aChild,
-                             const layers::CompositableHandle& aHandle);
-void SendReleaseLayer(layers::LayerTransactionChild* aChild,
-                      const layers::LayerHandle& aHandle);
 
 } // namespace mozilla::recordreplay
 

@@ -15,6 +15,7 @@ namespace mozilla {
 namespace dom {
 
 class BlobImpl;
+class ContentChild;
 class ContentParent;
 class ContentProcess;
 

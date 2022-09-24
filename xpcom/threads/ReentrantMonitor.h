@@ -14,6 +14,8 @@
 #endif  // defined( MOZILLA_INTERNAL_API) && !defined(DEBUG)
 
 #include "mozilla/BlockingResourceBase.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/ThreadSafety.h"
 #include "nsISupports.h"
 //

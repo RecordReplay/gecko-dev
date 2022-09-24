@@ -20,6 +20,7 @@
 
 #include "builtin/Array.h"
 #include "gc/Barrier.h"
+#include "gc/WeakMap.h"
 #include "js/GCVariant.h"
 #include "js/TelemetryTimers.h"
 #include "js/UniquePtr.h"
@@ -220,7 +221,6 @@ struct IteratorHashPolicy {
 };
 
 class DebugEnvironments;
-class ObjectValueWeakMap;
 class ObjectWeakMap;
 class WeakMapBase;
 

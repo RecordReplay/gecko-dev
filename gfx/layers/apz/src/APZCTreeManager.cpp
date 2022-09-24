@@ -1419,7 +1419,7 @@ APZEventResult APZCTreeManager::ReceiveInputEvent(
   // replaying. APZ does not work with the special layers constructed by
   // the middleman processes being communicated with here.
   if (dom::BrowserParent::AreRecordReplayTabsActive()) {
-    return state.Finish();
+    return state.Finish(*this, std::move(aCallback));
   }
 
   // Use a RAII class for updating the focus sequence number of this event
